@@ -20,8 +20,8 @@ use iroha_data_model::{
         consensus::SumeragiLanePayloadOwnership,
     },
     prelude::{
-        Account, AccountId, AssetDefinition, BlockHeader, Domain, HashOf, Level, Log,
-        SignedTransaction, TransactionBuilder,
+        Account, AccountId, AssetDefinition, BlockHeader, Domain, Level, Log, SignedTransaction,
+        TransactionBuilder,
     },
 };
 use iroha_model_base::chain::ChainId;
@@ -30,7 +30,6 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
-use std::sync::Arc;
 fn checked_random_bls_batch_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("generate checked BLS batch keypair")
@@ -67,25 +66,14 @@ fn mk_state_with_bls_batch() -> (State, NetworkId, AccountId, KeyPair) {
     state.set_crypto(crypto_cfg);
     (state, network_id, account_id, kp)
 }
-fn seed_genesis(state: &State) -> (HashOf<BlockHeader>, KeyPair) {
-    let kp = lane_authority_fixture::leader();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut builder = BlockBuilder::new(header);
-    let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
-    builder.set_da_proof_policies(Some(proof_policies));
-    let block = builder
-        .build_with_signature(0, kp.private_key())
-        .canonical_resultless_proposal();
-    let mut state_block = state.block(block.header());
-    let valid = ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    let _ = state_block.apply_without_execution(&committed, lane_authority_fixture::peers());
-    state_block
-        .kura()
-        .store_block(Arc::new(committed.clone().into()))
-        .expect("store genesis");
-    state_block.commit().expect("genesis commit");
-    (committed.as_ref().hash(), kp)
+fn seed_genesis(state: &State) -> (BlockHeader, KeyPair) {
+    (
+        state
+            .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+            .expect("publish authenticated genesis")
+            .header(),
+        lane_authority_fixture::leader(),
+    )
 }
 fn make_tx(
     network_id: &NetworkId,
@@ -163,10 +151,16 @@ fn push_single_tx_with_context(
 #[test]
 fn bls_batch_block_validates_with_pop() {
     let (state, network_id, account, kp) = mk_state_with_bls_batch();
-    let (genesis_hash, peer_kp) = seed_genesis(&state);
+    let (genesis_header, peer_kp) = seed_genesis(&state);
     let tx = make_tx(&network_id, &account, &kp, true);
     let height = nonzero!(2_u64);
-    let header = BlockHeader::new(height, Some(genesis_hash), None, 1, 0);
+    let header = BlockHeader::new(
+        height,
+        Some(genesis_header.hash()),
+        None,
+        u64::try_from(genesis_header.creation_time().as_millis()).unwrap() + 1,
+        0,
+    );
     let mut builder = BlockBuilder::new(header);
     push_single_tx_with_context(&mut builder, tx, &state, height);
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
@@ -180,7 +174,7 @@ fn bls_batch_block_validates_with_pop() {
         block,
         &topology,
         &account,
-        &TimeSource::new_system(),
+        &TimeSource::new_fixed(header.creation_time()),
         &mut state_block,
     )
     .unpack(|_| {})
@@ -189,10 +183,16 @@ fn bls_batch_block_validates_with_pop() {
 #[test]
 fn bls_batch_block_validates_without_pop_fallback() {
     let (state, network_id, account, kp) = mk_state_with_bls_batch();
-    let (genesis_hash, peer_kp) = seed_genesis(&state);
+    let (genesis_header, peer_kp) = seed_genesis(&state);
     let tx = make_tx(&network_id, &account, &kp, false);
     let height = nonzero!(2_u64);
-    let header = BlockHeader::new(height, Some(genesis_hash), None, 1, 0);
+    let header = BlockHeader::new(
+        height,
+        Some(genesis_header.hash()),
+        None,
+        u64::try_from(genesis_header.creation_time().as_millis()).unwrap() + 1,
+        0,
+    );
     let mut builder = BlockBuilder::new(header);
     push_single_tx_with_context(&mut builder, tx, &state, height);
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
@@ -207,7 +207,7 @@ fn bls_batch_block_validates_without_pop_fallback() {
         block,
         &topology,
         &account,
-        &TimeSource::new_system(),
+        &TimeSource::new_fixed(header.creation_time()),
         &mut state_block,
     )
     .unpack(|_| {})
@@ -216,10 +216,16 @@ fn bls_batch_block_validates_without_pop_fallback() {
 #[test]
 fn bls_batch_block_rejects_missing_proof_policies() {
     let (state, network_id, account, kp) = mk_state_with_bls_batch();
-    let (genesis_hash, peer_kp) = seed_genesis(&state);
+    let (genesis_header, peer_kp) = seed_genesis(&state);
     let tx = make_tx(&network_id, &account, &kp, true);
     let height = nonzero!(2_u64);
-    let header = BlockHeader::new(height, Some(genesis_hash), None, 1, 0);
+    let header = BlockHeader::new(
+        height,
+        Some(genesis_header.hash()),
+        None,
+        u64::try_from(genesis_header.creation_time().as_millis()).unwrap() + 1,
+        0,
+    );
     let mut builder = BlockBuilder::new(header);
     push_single_tx_with_context(&mut builder, tx, &state, height);
     let block = builder
@@ -231,7 +237,7 @@ fn bls_batch_block_rejects_missing_proof_policies() {
         block,
         &topology,
         &account,
-        &TimeSource::new_system(),
+        &TimeSource::new_fixed(header.creation_time()),
         &mut state_block,
     )
     .unpack(|_| {})

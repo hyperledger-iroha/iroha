@@ -689,7 +689,7 @@ state_test!(consensus_stack future_historical_merge_rejects_reservation_and_payl
     reason = "one future-carrier fixture isolates reservation framing, immutable bindings, and authenticated payload commitments"
 )]
 fn future_historical_merge_rejects_reservation_and_payload_drift_on_consensus_stack() {
-    let (state, entry, _) = autonomous_merge_transfer_commit_authorization_fixture();
+    let (state, entry, _) = autonomous_transfer_evidence_fixture(QueuePlanTransferFixture::Single);
     let batch = entry
         .execution_batch
         .as_ref()
@@ -936,7 +936,8 @@ state_test!(consensus_stack sealed_reveal_fastpq_transcripts_bind_inner_call_to_
     sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity_on_consensus_stack();
 );
 fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity_on_consensus_stack() {
-    let (state, entry, carrier) = autonomous_merge_transfer_commit_authorization_fixture();
+    let (state, entry, carrier) =
+        autonomous_transfer_evidence_fixture(QueuePlanTransferFixture::Single);
     let lane = &entry
         .execution_batch
         .as_ref()
@@ -1001,9 +1002,8 @@ state_test!(consensus_stack sealed_reveal_batch_outcomes_bind_inner_call_to_oute
     sealed_reveal_batch_outcomes_bind_inner_call_to_outer_result_leaf_on_consensus_stack();
 );
 fn sealed_reveal_batch_outcomes_bind_inner_call_to_outer_result_leaf_on_consensus_stack() {
-    let (state, entry, carrier) = autonomous_merge_batch_transfer_commit_authorization_fixture(
-        QueuePlanTransferFixture::AtomicBatch,
-    );
+    let (state, entry, carrier) =
+        autonomous_transfer_evidence_fixture(QueuePlanTransferFixture::AtomicBatch);
     let lane = &entry
         .execution_batch
         .as_ref()
@@ -1052,7 +1052,8 @@ state_test!(consensus_stack unbound_fastpq_transcript_remains_a_fail_closed_comm
     unbound_fastpq_transcript_remains_a_fail_closed_commit_surface_on_consensus_stack();
 );
 fn unbound_fastpq_transcript_remains_a_fail_closed_commit_surface_on_consensus_stack() {
-    let (state, entry, carrier) = autonomous_merge_transfer_commit_authorization_fixture();
+    let (state, entry, carrier) =
+        autonomous_transfer_evidence_fixture(QueuePlanTransferFixture::Single);
     let lane = &entry
         .execution_batch
         .as_ref()
@@ -1081,9 +1082,8 @@ state_test!(consensus_stack unbound_batch_transfer_outcome_remains_a_fail_closed
     unbound_batch_transfer_outcome_remains_a_fail_closed_commit_surface_on_consensus_stack();
 );
 fn unbound_batch_transfer_outcome_remains_a_fail_closed_commit_surface_on_consensus_stack() {
-    let (state, entry, carrier) = autonomous_merge_batch_transfer_commit_authorization_fixture(
-        QueuePlanTransferFixture::AtomicBatch,
-    );
+    let (state, entry, carrier) =
+        autonomous_transfer_evidence_fixture(QueuePlanTransferFixture::AtomicBatch);
     let lane = &entry
         .execution_batch
         .as_ref()
@@ -1753,22 +1753,39 @@ fn autonomous_execution_finality_rejects_unbound_event_surface_drift_on_consensu
 }
 
 fn configured_two_lane_merge_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, SignedBlock) {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+    configured_two_lane_merge_state_with_participant_dataspace(DataSpaceId::UNIVERSAL)
+}
+
+fn configured_two_lane_merge_state_with_participant_dataspace(
+    participant_dataspace: DataSpaceId,
+) -> (State, Vec<KeyPair>, Vec<KeyPair>, SignedBlock) {
     let lane_one = LaneConfig {
         id: LaneId::new(1),
         alias: "replaceable-lane".to_owned(),
+        dataspace_id: participant_dataspace,
         ..LaneConfig::default()
     };
     let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane_one])
         .expect("two-lane merge fixture catalog");
-    state
-        .set_nexus(iroha_config::parameters::actual::Nexus {
+    let mut dataspaces = vec![DataSpaceMetadata::default()];
+    if participant_dataspace != DataSpaceId::UNIVERSAL {
+        dataspaces.push(DataSpaceMetadata {
+            id: participant_dataspace,
+            alias: "participant".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        });
+    }
+    let state = State::new_with_nexus_for_testing(
+        World::default(),
+        iroha_config::parameters::actual::Nexus {
             lane_catalog,
+            dataspace_catalog: DataSpaceCatalog::new(dataspaces).expect("fixture dataspaces"),
             ..iroha_config::parameters::actual::Nexus::default()
-        })
-        .expect("enable two-lane Nexus merge fixture");
+        },
+        LiveQueryStore::start_test(),
+    );
+    let kura = Arc::clone(&state.kura);
     let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validator_keypairs);
     install_lane_manifest_registry(
@@ -1779,7 +1796,7 @@ fn configured_two_lane_merge_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, Sign
                 DataSpaceId::UNIVERSAL,
                 validator_ids.clone(),
             ),
-            (LaneId::new(1), DataSpaceId::UNIVERSAL, validator_ids),
+            (LaneId::new(1), participant_dataspace, validator_ids),
         ],
     );
     let commit_keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
@@ -3861,12 +3878,14 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
                 application_header.clone(),
                 vec![source.clone()],
             )
+            .expect("fixture hash admission")
             .is_none(),
         "an availability-certified source remains ineligible while its binding is absent from pre-carrier WSV"
     );
     seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
     let batch = state
         .build_merge_execution_batch_from_source_prefix(1, application_header.clone(), vec![source])
+        .expect("fixture hash admission")
         .expect("the otherwise-identical source is eligible with exact pre-carrier authority");
     let lifecycle = state.lane_consensus_lifecycle_snapshot();
     let active_lanes = lifecycle
@@ -4122,7 +4141,7 @@ fn queue_plan_validation_waiting_for_state_generation_does_not_pin_block_hashes(
     let observation_deadline = std::time::Instant::now() + Duration::from_millis(250);
     let mut block_hashes_pinned = false;
     while std::time::Instant::now() < observation_deadline {
-        if state.block_hashes.inner.try_write().is_none() {
+        if !state.block_hashes.writer_available() {
             block_hashes_pinned = true;
             break;
         }
@@ -4453,12 +4472,16 @@ fn pending_queue_plan_admission_checks_historical_predecessor_roster_and_incarna
 
 #[test]
 fn pending_queue_plan_admission_checks_historical_native_amx_participant_sources() {
-    let (state, validator_keypairs, _, parent) = configured_two_lane_merge_state();
+    // Static lanes sharing a dataspace must share its authority pool. Give the
+    // participant its own dataspace so an independent roster rotation is valid.
+    let participant_dataspace = DataSpaceId::new(7);
+    let (state, validator_keypairs, _, parent) =
+        configured_two_lane_merge_state_with_participant_dataspace(participant_dataspace);
     let participant_lane = LaneId::new(1);
     let routing_plan = crate::queue::RoutingPlan::native_amx(
         crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
         vec![crate::queue::RouteLeg::new(
-            crate::queue::RoutingDecision::new(participant_lane, DataSpaceId::UNIVERSAL),
+            crate::queue::RoutingDecision::new(participant_lane, participant_dataspace),
             crate::queue::RouteLegRole::Participant,
         )],
     );
@@ -4502,7 +4525,7 @@ fn pending_queue_plan_admission_checks_historical_native_amx_participant_sources
             ),
             (
                 participant_lane,
-                DataSpaceId::UNIVERSAL,
+                participant_dataspace,
                 replacement_validator_ids,
             ),
         ],
@@ -4524,7 +4547,7 @@ fn pending_queue_plan_admission_checks_historical_native_amx_participant_sources
             ),
             (
                 participant_lane,
-                DataSpaceId::UNIVERSAL,
+                participant_dataspace,
                 original_validator_ids,
             ),
         ],
@@ -4944,13 +4967,14 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog_on_consen
         let mut prefix_batch = batch.clone();
         prefix_batch.lanes = vec![batch.lanes[0].clone(); prefix];
         prefix_batch.entrypoint_count *= u64::try_from(prefix).unwrap();
-        Some(prefix_batch)
+        Ok(Some(prefix_batch))
     };
     let mut two_source_candidate = template.clone();
-    two_source_candidate.execution_batch = build_batch(2);
+    two_source_candidate.execution_batch = build_batch(2).unwrap();
     let unsigned_limit = two_source_candidate.canonical_bytes().len();
     let selected =
         State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, build_batch)
+            .expect("fixture hash admission")
             .expect("exactly fitting two-source prefix");
     assert_eq!(selected.execution_batch.unwrap().lanes.len(), 2);
 
@@ -4979,6 +5003,7 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog_on_consen
         unsigned_limit,
         build_batch,
     )
+    .expect("fixture hash admission")
     .expect("smaller prefix still fits with a larger authority catalog");
     assert_eq!(
         selected.lane_authority_catalog,
@@ -4987,17 +5012,37 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog_on_consen
     assert_eq!(selected.execution_batch.unwrap().lanes.len(), 1);
     assert!(
         State::select_merge_execution_candidate_prefix(&expanded_catalog, 3, 0, build_batch,)
+            .expect("fixture hash admission")
             .is_none(),
         "an uncarryable first source must never produce a candidate"
     );
     assert!(
         State::select_merge_execution_candidate_prefix(&template, 0, unsigned_limit, build_batch,)
+            .expect("fixture hash admission")
             .is_none()
     );
     assert!(
-        State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, |_| None,)
+        State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, |_| Ok(None),)
+            .expect("fixture hash admission")
             .is_none(),
         "failed source construction remains fail-closed"
+    );
+    let notification = concread::release::ReleaseNotification::default();
+    let original = notification.observe();
+    let mut attempts = 0;
+    let refused =
+        State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, |_| {
+            attempts += 1;
+            Err(crate::state::BlockHashAdmissionError::Busy(
+                original.clone(),
+            ))
+        });
+    assert_eq!(
+        attempts, 1,
+        "local pressure cannot trigger smaller source retries"
+    );
+    assert!(
+        matches!(refused, Err(crate::state::BlockHashAdmissionError::Busy(wait)) if wait == original)
     );
 }
 

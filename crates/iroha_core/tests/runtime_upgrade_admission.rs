@@ -495,7 +495,9 @@ fn active_manifest_hash_mismatch_rejects_block_construction() {
     // an ABI surface that differs from the local binary.
     let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     match state.try_block(header2) {
-        Err(IvmAdmissionError::ManifestAbiHashMismatch(info)) => {
+        Err(iroha_core::state::StateBlockStartError::Stage(
+            IvmAdmissionError::ManifestAbiHashMismatch(info),
+        )) => {
             assert_eq!(info.expected, Hash::prehashed(manifest.abi_hash));
         }
         Err(other) => panic!("Expected ManifestAbiHashMismatch, got {other:?}"),

@@ -678,6 +678,9 @@ Root {
             0,
         ),
         blocks_in_memory: 1024,
+        block_hash_history_bytes: Bytes(
+            268435456,
+        ),
         lane_history_retention: 512,
         replica_advert: KuraReplicaAdvertPolicy {
             eviction_required_replicas: 3,

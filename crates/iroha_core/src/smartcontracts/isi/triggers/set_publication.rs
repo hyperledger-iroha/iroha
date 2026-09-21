@@ -1,7 +1,10 @@
 //! Prepare all original trigger journals before publishing any component.
 
 use super::*;
-use mv::{PublicationPreparationError, storage::PreparedPublication};
+use mv::{
+    PublicationPreparationError,
+    storage::{PreparedPublication, PublishedPublication},
+};
 use std::convert::Infallible;
 
 /// A local preparation refusal retains the entire original trigger journal.
@@ -40,6 +43,31 @@ pub(crate) struct PreparedSet<'target, Admission, Installation> {
     installation: Installation,
 }
 
+/// Original released trigger participants and their enclosing resource owners.
+/// Retain through the entire State publication interval before cleanup.
+pub(crate) struct PublishedSet<Admission, Installation> {
+    _data_triggers: PublishedPublication<TriggerId, LoadedAction<DataEventFilter>, (), ()>,
+    _pipeline_triggers:
+        PublishedPublication<TriggerId, LoadedAction<PipelineEventFilterBox>, (), ()>,
+    _time_triggers: PublishedPublication<TriggerId, LoadedAction<TimeEventFilter>, (), ()>,
+    _by_call_triggers:
+        PublishedPublication<TriggerId, LoadedAction<ExecuteTriggerEventFilter>, (), ()>,
+    _ids: PublishedPublication<TriggerId, TriggeringEventType, (), ()>,
+    _active_data_trigger_ids: PublishedPublication<TriggerId, (), (), ()>,
+    _active_pipeline_trigger_ids: PublishedPublication<TriggerId, (), (), ()>,
+    _active_time_trigger_ids: PublishedPublication<TriggerId, (), (), ()>,
+    _active_by_call_trigger_ids: PublishedPublication<TriggerId, (), (), ()>,
+    _contracts: PublishedPublication<HashOf<IvmBytecode>, IvmBytecodeEntry, (), ()>,
+    _admission: Admission,
+    _installation: Installation,
+}
+
+/// Original abort notifications retained until every enclosing writer unlocks.
+pub(crate) struct AbortedSet<Installation> {
+    _components: [Option<mv::PublicationCleanup<()>>; 10],
+    _installation: Option<Installation>,
+}
+
 // Each failure consumes earlier prepared writers back into their exact original
 // journals. No placeholder journal, mutable SetBlock, or reexecution is needed.
 macro_rules! prepare_components {
@@ -47,12 +75,16 @@ macro_rules! prepare_components {
         [$($done:ident,)*]; [$next:ident, $($rest:ident,)*]) => {{
         let $next = match $next.try_prepare_publication(&$target.$next, |_, _| Ok::<_, Infallible>(())) {
             Ok(prepared) => prepared,
-            Err(($next, cause)) => {
+            Err(($next, cause, refused)) => {
                 $(let $done = $done.abort();)*
-                drop($installation);
+                // Release every acquired component before any original notification.
+                let retirement = AbortedSet {
+                    _components: [$(Some($done.1),)* Some(refused), $({ let _ = stringify!($rest); None },)*],
+                    _installation: Some($installation),
+                };
                 return Err((DetachedSet {
-                    mode: $mode, $($done,)* $next, $($rest,)* admission: $admission,
-                }, SetPublicationError::Component { field: stringify!($next), cause }));
+                    mode: $mode, $($done: $done.0,)* $next, $($rest,)* admission: $admission,
+                }, SetPublicationError::Component { field: stringify!($next), cause }, retirement));
             }
         };
         prepare_components!($target, $mode, $admission, $installation;
@@ -74,10 +106,22 @@ impl<Admission> DetachedSet<Admission> {
         self,
         target: &'target Set,
         admit: impl FnOnce(&Self, &Set) -> Result<Installation, E>,
-    ) -> Result<PreparedSet<'target, Admission, Installation>, (Self, SetPublicationError<E>)> {
+    ) -> Result<
+        PreparedSet<'target, Admission, Installation>,
+        (Self, SetPublicationError<E>, AbortedSet<Installation>),
+    > {
         let installation = match admit(&self, target) {
             Ok(installation) => installation,
-            Err(error) => return Err((self, SetPublicationError::Admission(error))),
+            Err(error) => {
+                return Err((
+                    self,
+                    SetPublicationError::Admission(error),
+                    AbortedSet {
+                        _components: std::array::from_fn(|_| None),
+                        _installation: None,
+                    },
+                ));
+            }
         };
         let Self {
             mode,
@@ -108,19 +152,14 @@ macro_rules! consume_components {
     }};
     (@abort $mode:ident, $admission:ident, $installation:ident; [$($field:ident,)*]) => {{
         $(let $field = $field.abort();)*
-        drop($installation);
-        DetachedSet { mode: $mode, $($field,)* admission: $admission }
-    }};
-    (@publish $mode:ident, $admission:ident, $installation:ident; [$($field:ident,)*]) => {{
-        let _ = $mode;
-        $($field.publish();)*
-        ($admission, $installation)
+        let retirement = AbortedSet { _components: [$(Some($field.1),)*], _installation: Some($installation) };
+        (DetachedSet { mode: $mode, $($field: $field.0,)* admission: $admission }, retirement)
     }};
 }
 
 impl<Admission, Installation> PreparedSet<'_, Admission, Installation> {
     /// Release every writer, returning the original ten journals and retention guard.
-    pub(crate) fn abort(self) -> DetachedSet<Admission> {
+    pub(crate) fn abort(self) -> (DetachedSet<Admission>, AbortedSet<Installation>) {
         consume_components!(self, abort; [
             data_triggers, pipeline_triggers, time_triggers, by_call_triggers, ids,
             active_data_trigger_ids, active_pipeline_trigger_ids, active_time_trigger_ids,
@@ -129,11 +168,20 @@ impl<Admission, Installation> PreparedSet<'_, Admission, Installation> {
     }
 
     /// Consume each exact prepared component and return both resource guards.
-    pub(crate) fn publish(self) -> (Admission, Installation) {
-        consume_components!(self, publish; [
-            data_triggers, pipeline_triggers, time_triggers, by_call_triggers, ids,
-            active_data_trigger_ids, active_pipeline_trigger_ids, active_time_trigger_ids,
-            active_by_call_trigger_ids, contracts,
-        ])
+    pub(crate) fn publish(self) -> PublishedSet<Admission, Installation> {
+        PublishedSet {
+            _data_triggers: self.data_triggers.publish(),
+            _pipeline_triggers: self.pipeline_triggers.publish(),
+            _time_triggers: self.time_triggers.publish(),
+            _by_call_triggers: self.by_call_triggers.publish(),
+            _ids: self.ids.publish(),
+            _active_data_trigger_ids: self.active_data_trigger_ids.publish(),
+            _active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.publish(),
+            _active_time_trigger_ids: self.active_time_trigger_ids.publish(),
+            _active_by_call_trigger_ids: self.active_by_call_trigger_ids.publish(),
+            _contracts: self.contracts.publish(),
+            _admission: self.admission,
+            _installation: self.installation,
+        }
     }
 }

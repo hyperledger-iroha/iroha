@@ -572,7 +572,7 @@ fn queue_plan_live_validation_holds_no_block_hash_guard_while_waiting_for_snapsh
         );
         std::thread::yield_now();
     }
-    let block_hash_writer_available = state.block_hashes.inner.try_write().is_some();
+    let block_hash_writer_available = state.block_hashes.writer_available();
 
     drop(generation);
     drop(state_write_lock);

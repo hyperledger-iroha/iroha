@@ -806,6 +806,8 @@ pub mod kura {
     pub const STORE_DIR: &str = "./storage";
     /// Number of blocks cached in memory to accelerate lookups.
     pub const BLOCKS_IN_MEMORY: NonZeroUsize = nonzero!(1024_usize);
+    /// Requested allocation bytes retained by State's block-hash generations.
+    pub const BLOCK_HASH_HISTORY_BYTES: Bytes = Bytes(256 * 1024 * 1024);
     /// Number of recent lane-history entries retained alongside the block store.
     pub const LANE_HISTORY_RETENTION: NonZeroUsize = nonzero!(512_usize);
     /// Distinct remote peers that must advertise a canonical block before local body eviction.

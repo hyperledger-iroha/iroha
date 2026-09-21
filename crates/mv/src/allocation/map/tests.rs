@@ -59,7 +59,7 @@ fn construction_and_writer_refusal_use_only_the_original_finite_pool() {
     assert_eq!(zero.reserved_bytes(), 0);
     let pool = AllocationBudget::new(1 << 20);
     let map =
-        pool.with_deferred_refund_notifications(|| Map::try_new_with_node_custody(&pool).unwrap());
+        pool.with_deferred_refund_notifications(|_| Map::try_new_with_node_custody(&pool).unwrap());
     let initial = pool.reserved_bytes();
     assert!(initial > 0);
     let blocker = pool
@@ -68,12 +68,12 @@ fn construction_and_writer_refusal_use_only_the_original_finite_pool() {
     let held = pool.reserved_bytes();
     assert!(matches!(
         without_allocations(|| map.try_write()),
-        Err(InsertAdmissionError::Refused(
+        Err(MapAdmissionError::Refused(
             AllocationRefusal::Capacity { .. }
         ))
     ));
     assert_eq!(pool.reserved_bytes(), held);
-    pool.with_deferred_refund_notifications(|| {
+    pool.with_deferred_refund_notifications(|_| {
         drop(blocker);
         let writer = map
             .try_write()
@@ -82,7 +82,7 @@ fn construction_and_writer_refusal_use_only_the_original_finite_pool() {
         without_allocations(|| drop(writer));
     });
     assert_eq!(pool.reserved_bytes(), initial);
-    without_allocations(|| pool.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| pool.with_deferred_refund_notifications(|_| drop(map)));
     assert_eq!(pool.reserved_bytes(), 0);
 }
 
@@ -90,13 +90,13 @@ fn construction_and_writer_refusal_use_only_the_original_finite_pool() {
 fn foreign_pool_refuses_before_busy_map_acquisition_and_returns_original_successor() {
     let source_pool = AllocationBudget::new(1 << 20);
     let target_pool = AllocationBudget::new(1 << 20);
-    let source = source_pool.with_deferred_refund_notifications(|| {
+    let source = source_pool.with_deferred_refund_notifications(|_| {
         Map::try_new_with_node_custody(&source_pool).unwrap()
     });
-    let target = target_pool.with_deferred_refund_notifications(|| {
+    let target = target_pool.with_deferred_refund_notifications(|_| {
         Map::try_new_with_node_custody(&target_pool).unwrap()
     });
-    let owned = source_pool.with_deferred_refund_notifications(|| {
+    let owned = source_pool.with_deferred_refund_notifications(|_| {
         let mut writer = source
             .try_write()
             .unwrap_or_else(|_| panic!("source writer"));
@@ -104,7 +104,7 @@ fn foreign_pool_refuses_before_busy_map_acquisition_and_returns_original_success
         writer.detach()
     });
     let original_source_bytes = source_pool.reserved_bytes();
-    let owned = target_pool.with_deferred_refund_notifications(|| {
+    let owned = target_pool.with_deferred_refund_notifications(|_| {
         let busy = target
             .try_write()
             .unwrap_or_else(|_| panic!("target writer"));
@@ -118,7 +118,7 @@ fn foreign_pool_refuses_before_busy_map_acquisition_and_returns_original_success
         without_allocations(|| drop(busy));
         owned
     });
-    source_pool.with_deferred_refund_notifications(|| {
+    source_pool.with_deferred_refund_notifications(|_| {
         let writer = without_allocations(|| {
             source
                 .try_write_owned(owned)
@@ -127,8 +127,8 @@ fn foreign_pool_refuses_before_busy_map_acquisition_and_returns_original_success
         assert_eq!(writer.get(&7), Some(&21));
         without_allocations(|| writer.commit());
     });
-    source_pool.with_deferred_refund_notifications(|| drop(source));
-    target_pool.with_deferred_refund_notifications(|| drop(target));
+    source_pool.with_deferred_refund_notifications(|_| drop(source));
+    target_pool.with_deferred_refund_notifications(|_| drop(target));
     assert_eq!(source_pool.reserved_bytes(), 0);
     assert_eq!(target_pool.reserved_bytes(), 0);
 }
@@ -136,7 +136,7 @@ fn foreign_pool_refuses_before_busy_map_acquisition_and_returns_original_success
 #[test]
 fn equal_pool_does_not_rebind_a_successor_to_another_physical_map() {
     let pool = AllocationBudget::new(1 << 20);
-    pool.with_deferred_refund_notifications(|| {
+    pool.with_deferred_refund_notifications(|_| {
         let source = Map::try_new_with_node_custody(&pool).unwrap();
         let foreign = Map::try_new_with_node_custody(&pool.clone()).unwrap();
         let mut writer = source
@@ -168,7 +168,7 @@ fn equal_pool_does_not_rebind_a_successor_to_another_physical_map() {
 #[test]
 fn nested_original_checkpoints_preserve_pool_preimages_and_parent_rollback() {
     let pool = AllocationBudget::new(1 << 20);
-    pool.with_deferred_refund_notifications(|| {
+    pool.with_deferred_refund_notifications(|_| {
         let map = Map::try_new_with_node_custody(&pool).unwrap();
         let mut writer = map
             .try_write()

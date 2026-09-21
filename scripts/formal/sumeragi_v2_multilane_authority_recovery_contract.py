@@ -917,9 +917,11 @@ AUTHORITY_RECOVERY_BINDINGS += (('SumeragiV2AutoscaleLifecycle',
    'canonical_runtime.commit();',
    'Some(prepared.publish(state_ref, &_view_generation, !replay_prevalidation))',
    'world.commit();',
-   'block_hashes.commit();',
+   'hash_retirement = block_hashes.publish();',
    'if let Some(post) = lifecycle_post_publication {',
-   'drop(autoscale_lifecycle_guard);')))
+   'drop(autoscale_lifecycle_guard);',
+   'drop(_state_commit_lock);',
+   'drop(hash_retirement);')))
 
 def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str]) -> None:
     """Require the reviewed predicates and their authority-before-use order."""
@@ -1028,7 +1030,7 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
         # Follow the real lexical generation scope, not a later occurrence of
         # the same publish token. Both physical State writer and generation
         # must be gone before disk work; the original outer fences remain.
-        opening = code.find(_code("block_hashes.prepare_commit(); {"))
+        opening = code.find(_code("let mut lifecycle_post_publication = None; {"))
         first = code.find("{", opening) if opening >= 0 else -1
         depth = 0
         last = -1
@@ -1041,11 +1043,13 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
         publication = code[first:last + 1] if last >= 0 else ""
         operations = tuple(map(_code, (
             "let _state_write_lock = state_write_lock.lock();",
+            "block_hashes.detach().try_prepare_publication(",
+            ".map_err(|(_, _)| TransactionsBlockError::SnapshotObservationChanged)?;",
             "let _view_generation = state_ref.begin_state_view_write();",
             "canonical_runtime.commit();",
             "Some(prepared.publish(state_ref, &_view_generation, !replay_prevalidation))",
             "Some(effects.publish(state_ref, &_view_generation, !replay_prevalidation))",
-            "world.commit();", "block_hashes.commit();",
+            "world.commit();", "hash_retirement = block_hashes.publish();",
         )))
         positions = [publication.find(operation) for operation in operations]
         post = _code("if let Some(post) = lifecycle_post_publication { post.publish(state_ref); }")
@@ -1054,7 +1058,12 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
                 or not code[last + 1:].startswith(post)
                 or "drop(_view_generation)" in publication
                 or "drop(_state_write_lock)" in publication
-                or "drop(_state_commit_lock)" in code):
+                or "drop(hash_retirement)" in publication
+                or "drop(_state_commit_lock)" in publication
+                or code.count("drop(_state_commit_lock)") != 1
+                or code.count("drop(hash_retirement)") != 1
+                or not code[last + 1:].find("drop(hash_retirement)") > code[last + 1:].find("drop(_state_commit_lock)") >= 0
+                or not 0 <= code.find("lethash_retirement;") < code.find("let_state_commit_lock=")):
             errors.append("authority/recovery item lifecycle publication loses generation/outer-fence ordering")
     if symbol == "read_native_amx_participant_application_history":
         # The existing caller owns the ordinary locking path. A successful

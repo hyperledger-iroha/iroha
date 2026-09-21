@@ -177,3 +177,68 @@ def test_native_publication_source_cap_parity_is_checked(captured, path, old, ne
         assert any("source cap parity" in e for e in validate(captured))
     finally:
         source.write_text(before)
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("NativeAmxParticipantApplicationPrepublicationToken", "    original_kura:", "    pub original_kura:"),
+    ("NativeAmxParticipantApplicationPrepublicationToken::from_plan", "            original_kura,", "            original_kura: other_identity,"),
+    ("Kura::reauthenticate_native_amx_prepublication", "        drop(sidecar);", "        // drop(sidecar);"),
+    ("Kura::reauthenticate_native_amx_prepublication", "let canonical = self.canonical_chain_lock.lock();", "let canonical = other.canonical_chain_lock.lock();"),
+    ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "if !token.original_kura.matches(self)", "if false"),
+    ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "if !token.authenticates_state_frontiers(block, manifest, finality, frontiers)", "if false"),
+    ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "token.application_block_height,", "other_height,"),
+    ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "!= token.finality_artifact_hash", "== token.finality_artifact_hash"),
+    ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "artifacts.len() != token.identities.len()", "artifacts.len() > token.identities.len()"),
+    ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "artifacts.iter().zip(&token.identities)", "artifacts.iter().take(1).zip(&token.identities)"),
+    ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "expected_manifest, expected_receipt, false,", "expected_manifest, expected_receipt, true,"),
+    ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "if actual != *expected_identity", "if actual == *expected_identity"),
+    ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "        self.ensure_prune_recovery_not_required()?;", "        let _reentrant = self.prune_lock.lock();\n        self.ensure_prune_recovery_not_required()?;"),
+    ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "        self.ensure_prune_recovery_not_required()?;", "        if manifest.entries().is_empty() { return Ok(()); }\n        self.ensure_prune_recovery_not_required()?;"),
+    ("authenticate_native_amx_participant_application_prepublication_under_publication_guards", "        let descriptor =", "        let _reentrant = self.canonical_chain_lock.lock();\n        let descriptor ="),
+    ("V2ApplyService::validate_and_apply", ".reauthenticate_native_amx_prepublication(", ".skip_participant_readback("),
+    ("V2ApplyService::validate_and_apply", '"pre-WSV Native AMX participant custody reauthentication",\n                        &error,\n                    )\n                })?;', '"pre-WSV Native AMX participant custody reauthentication",\n                        &error,\n                    )\n                });'),
+])
+def test_native_participant_custody_rejects_changed_owner_or_incomplete_readback(
+    captured, symbol, old, new,
+):
+    original = captured[3]
+    key = next(k for k in original if k[2] == symbol)
+    assert old in original[key], (symbol, old)
+    changed = dict(original)
+    changed[key] = changed[key].replace(old, new, 1)
+    assert validate(captured, altered=changed), symbol
+
+
+def test_native_participant_custody_checks_actual_lock_and_state_staging_order(captured):
+    original = captured[3]
+    cases = (
+        ("Kura::reauthenticate_native_amx_prepublication",
+         "        let canonical = self.canonical_chain_lock.lock();\n        let geometry = self.lane_geometry_lock.lock();",
+         "        let geometry = self.lane_geometry_lock.lock();\n        let canonical = self.canonical_chain_lock.lock();"),
+        ("V2ApplyService::validate_and_apply",
+         "        if let Some(token) = native_amx_prepublication.as_ref() {",
+         "        state_block.authorize_execution_output_publication(&committed_block, &witness)?;\n        if let Some(token) = native_amx_prepublication.as_ref() {"),
+    )
+    for symbol, old, new in cases:
+        key = next(k for k in original if k[2] == symbol)
+        assert old in original[key], symbol
+        changed = dict(original)
+        changed[key] = changed[key].replace(old, new, 1)
+        assert any("custody" in error for error in validate(captured, altered=changed)), symbol
+
+
+@pytest.mark.parametrize("retry", [True, False])
+def test_native_participant_token_minting_requires_original_kura_in_both_paths(captured, retry):
+    _, checker, _, original = captured
+    c = checker.native_publication_contract
+    key = (c.KURA, "fn", c.PERSIST)
+    prefix, repeated, fresh = c.publication_branches(original[key], c.PERSIST, [])
+    changed = dict(original)
+    if retry:
+        assert "self.instance_identity()" in repeated
+        repeated = repeated.replace("self.instance_identity()", "other.instance_identity()", 1)
+    else:
+        assert "self.instance_identity()" in fresh
+        fresh = fresh.replace("self.instance_identity()", "other.instance_identity()", 1)
+    changed[key] = prefix + "if !publication_required {" + repeated + "}" + fresh
+    assert any("from_plan" in error for error in validate(captured, altered=changed))

@@ -9550,16 +9550,13 @@
           "kind": "fn",
           "symbol": "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
           "required_tokens": [
-            "require_active_lane_artifact",
-            "read_native_amx_participant_application_manifest_from_paths_locked",
-            "read_native_amx_participant_application_receipt_from_paths_locked",
-            "decode_bound_native_amx_participant_receipt_latest_index_locked",
-            "require_post_apply_metadata",
-            "native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards",
-            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
-            "latest.matches_receipt",
-            "latest.matches_manifest",
-            "progress_mutation_namespace_unchanged"
+            "canonical_chain_lock.lock()",
+            "lane_geometry_lock.lock()",
+            "sidecar_lock.lock()",
+            "self.authenticate_native_amx_participant_application_prepublication_under_publication_guards(",
+            "expected_manifest,",
+            "expected_receipt,",
+            "require_post_apply_metadata,"
           ]
         },
         {
@@ -10282,6 +10279,7 @@
             "prepublish_native_amx_participant_application_evidence",
             "State::native_amx_participant_frontier_markers_and_merge_entry",
             "token.authenticates_state_frontiers",
+            "reauthenticate_native_amx_prepublication",
             "apply_without_execution_with_verified_v2_finality",
             "let staged_merge_queue_reservation_hashes = certified_merge_queue_reservation_hashes(",
             "state_block.staged_merge_entry(),",
@@ -11052,7 +11050,7 @@
           "kind": "struct",
           "symbol": "TransactionsBlock",
           "required_tokens": [
-            "_guard: mv::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>",
+            "_guard:\n            concread::release::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>",
             "latest_block_ref: &'storage ArcSwapOption<BlockInfo>",
             "blocks_ref: &'storage DashMap<Key, Value>"
           ]
@@ -11129,15 +11127,20 @@
             "next_identity",
             "let changes_identity = !matches!(&publication, MembershipPublication::Repeated)",
             "if changes_identity",
-            "**block._guard = next_identity;",
+            "std::mem::replace(&mut **block._guard, next_identity)",
             "MembershipPublication::Repeated",
             "MembershipPublication::Replace",
             ".retain(|_, height| *height < current.height)",
             "MembershipPublication::Advance",
-            "if let Some(previous) = previous",
+            "if let Some(previous) = &previous",
             "block.blocks_ref.insert(transaction, previous.height)",
-            "block.latest_block_ref.store(Some(current))",
-            "drop(block)"
+            "block.latest_block_ref.swap(Some(current))",
+            "_guard.release_deferred(drop)",
+            "TransactionsPublicationRetirement {",
+            "_tip: tip",
+            "_staged: current_block",
+            "_identity: identity",
+            "_release: release"
           ]
         },
         {
@@ -11621,11 +11624,7 @@
           "symbol": "PreparedTransactionsBlock::detach",
           "required_tokens": [
             "fn detach(self)",
-            "predecessor_identity: Arc::clone(&block._guard)",
-            "predecessor: block.latest_block_ref.load_full()",
-            "revert: block.revert",
-            "drop(block)",
-            "detached"
+            "self.detach_retaining().0"
           ]
         },
         {
@@ -11647,7 +11646,7 @@
           "symbol": "TransactionsStorage",
           "required_tokens": [
             "write_lock: Mutex<Arc<()>>",
-            "released: mv::ReleaseNotification"
+            "released: concread::release::ReleaseNotification"
           ]
         },
         {
@@ -11748,7 +11747,7 @@
           "required_tokens": [
             "let state = &mut *self.state",
             "!self.prefix.retains_closed_state(state)",
-            "state.block_hashes.pending.as_slice() != [state._curr_block.hash()]",
+            "!state\n                .block_hashes\n                .pending()\n                .iter()\n                .copied()\n                .eq([state._curr_block.hash()])",
             "state.validate_canonical_runtime_projection()?",
             "state.verify_lane_consensus_contexts_publication()?",
             "validate_merge_carrier_entrypoint_binding()",
@@ -12689,6 +12688,8 @@
           "kind": "fn",
           "symbol": "try_prepare_physical",
           "required_tokens": [
+            "Err((runtime, error, runtime_retirement)) => {\n                        let (transactions, transactions_retirement) = transactions.abort();\n                        let (block_hashes, block_hashes_retirement) = block_hashes.abort();\n                        drop(fences.release_for_completion());\n                        drop((\n                            runtime_retirement,\n                            transactions_retirement,\n                            block_hashes_retirement,\n                        ));",
+            "Err((world, error, world_retirement)) => {\n                    let (runtime, runtime_retirement) = runtime.abort();\n                    let (transactions, transactions_retirement) = transactions.abort();\n                    let (block_hashes, block_hashes_retirement) = block_hashes.abort();\n                    drop(fences.release_for_completion());\n                    drop((\n                        world_retirement,\n                        runtime_retirement,\n                        transactions_retirement,\n                        block_hashes_retirement,\n                    ));",
             "admit: impl FnOnce(&Self, &State)",
             "admit(&original, target)",
             "if !original\n            .journals\n            .geometry\n            .matches_publication_target(target, original.block().header())\n        {\n            drop(installation);\n            return Err((original, CarrierPhysicalPreparationError::ForeignTarget));\n        }",
@@ -12698,7 +12699,15 @@
             "target.kura.try_publication_lease()",
             "SourceAuthenticatedCarrier::try_new(original, kura)",
             "reauthenticate_execution_witness(authenticated.decision.finality.artifact())",
+            "if original.journals.geometry.requires_queue_custody()",
+            "None => Some(CarrierQueueRetirementError::Missing)",
+            "Some(source) if !source.belongs_to(target)",
+            "Some(CarrierQueueRetirementError::ForeignState)",
+            "match source.try_observe()",
             "StateFences::try_acquire(target)",
+            ".try_into_cut()",
+            "CarrierQueueRetirement::try_new(\n                            target,\n                            &authenticated.decision.journals.geometry,\n                            authenticated.decision.block().header(),\n                            source,\n                            cut,\n                        )",
+            "_queue: queue",
             "journals.try_map_components(",
             "Ok(PhysicallyPreparedCarrier {\n                target,\n                decision: retain!(journals),\n                installation,\n            })"
           ]
@@ -12727,7 +12736,7 @@
             "_pending: Option<PendingAutoscaleLaneLifecycle>",
             "raw: Option<crate::kura::RawGeometryAttempt>",
             "tiered: Option<tiered::TieredGeometryAttempt>",
-            "state_owner: Arc<BlockHashOwner>",
+            "state_owner: NativeLaneStateOwner",
             "kura: Arc<Kura>"
           ]
         },
@@ -12743,7 +12752,7 @@
             "_pending: self.pending_autoscale_lifecycle.clone()",
             "raw: None",
             "tiered: None",
-            "state_owner: Arc::clone(&self.state_ref.block_hashes.owner)",
+            "state_owner: self.state_ref.native_lane_state_owner().ok_or_else(|| {\n                LaneLifecycleError::RuntimeCatalog(\"read-only State cannot publish geometry\".into())\n            })?",
             "kura: Arc::clone(&self.state_ref.kura)"
           ]
         },
@@ -12752,7 +12761,7 @@
           "kind": "method",
           "symbol": "PreparedCarrierGeometry::matches_publication_target",
           "required_tokens": [
-            "self._header == header && Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)"
+            "self._header == header && self.state_owner.matches_state(target)"
           ]
         },
         {
@@ -12790,6 +12799,7 @@
             "target: &State",
             "header: BlockHeader",
             "lease: &'geometry crate::kura::KuraPublicationLease<'kura>",
+            "queue: Option<&carrier_preparation::queue_retirement::CarrierQueueRetirement<'_>>",
             "if !self.matches_publication_target(target, header)",
             "if !self.has_queue_custody(target, header, queue)",
             "return Err(LaneLifecycleError::Storage(",
@@ -12841,11 +12851,15 @@
           "kind": "method",
           "symbol": "CarrierFences::release_for_completion",
           "required_tokens": [
-            "drop(write)",
-            "drop(lifecycle)",
-            "drop(queue)",
-            "drop(kura)",
-            "commit"
+            "write.release_deferred()",
+            "lifecycle.release_deferred()",
+            "queue.map(CarrierQueueRetirement::release_deferred)",
+            "kura.release_deferred()",
+            "CompletionFences {",
+            "_commit: commit",
+            "_state: state",
+            "_queue: queue",
+            "_kura: kura"
           ]
         },
         {
@@ -12853,13 +12867,15 @@
           "kind": "method",
           "symbol": "PhysicallyPreparedCarrier::publish",
           "required_tokens": [
+            "queue.ensure_available().err()",
+            "Some(CarrierPublicationError::QueueRetirement(error))",
             "journals.effects.replay_prevalidation",
             "journals\n            .source_prefix\n            .retains_carrier(journals.valid.as_ref(), &journals.context)",
             "journals.effects.header != journals.valid.as_ref().header()",
             "journals.staged_legacy_source()",
             "journals\n            .geometry\n            .matches_publication_target(self.target, journals.effects.header)",
             "journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()",
-            "journals.geometry.has_queue_custody(\n            self.target,\n            journals.effects.header,\n            journals.components._fences._queue.as_ref(),\n        )",
+            "!journals.geometry.has_queue_custody(\n            self.target,\n            journals.effects.header,\n            journals.components._fences._queue.as_ref(),\n        )",
             "Some(CarrierPublicationError::QueueRetirementRequired)",
             "journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())",
             "self\n            .decision\n            .journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())",
@@ -12878,7 +12894,7 @@
             "let lifecycle_post_publication = effects\n            .lifecycle\n            .take()\n            .map(|effects| effects.publish(target, &generation, true))",
             "let da_post_publication = effects\n            .da_commitments\n            .take()\n            .map(|effects| effects.publish(target, &generation, true))",
             "target.install_sccp_registry_cache(std::sync::Arc::clone(&effects.sccp_registry))",
-            "block_hashes.publish()",
+            "hash_retirement = block_hashes.publish()",
             "target.update_latest_block_header_cache(effects.header)",
             "drop(generation)",
             "if let Some(post) = da_post_publication {\n            post.publish(target);\n        }",
@@ -12891,6 +12907,8 @@
             "target.persist_query_index_status(height, Some(effects.header.hash()))",
             "publication_events.append(&mut extra_events)",
             "drop(commit)",
+            "drop(membership_retirement)",
+            "drop(hash_retirement)",
             "Ok(PublishedCarrier {",
             "source: source_prefix",
             "_admission: admission,\n            _binding: binding,\n            _installation: installation"
@@ -12972,7 +12990,7 @@
           "kind": "method",
           "symbol": "Queue::try_lock_lane_retirement_observer",
           "required_tokens": [
-            "Result<QueueLaneRetirementObserver<'_>, mv::ReleaseWait>",
+            "Result<QueueLaneRetirementObserver<'_>, concread::release::ReleaseWait>",
             "let guard = self.lane_reservation_transition_lock.try_lock_or_wait()?;",
             "Ok(QueueLaneRetirementObserver {\n            queue: self,\n            _reservation_transition_guard: guard,\n        })"
           ]
@@ -13049,7 +13067,7 @@
           "symbol": "QueueRetirementBusy",
           "required_tokens": [
             "pub(crate) field: &'static str",
-            "pub(crate) wait: mv::ReleaseWait"
+            "pub(crate) wait: concread::release::ReleaseWait"
           ]
         },
         {
@@ -13079,7 +13097,7 @@
           "symbol": "PublicationMutex",
           "required_tokens": [
             "inner: parking_lot::Mutex<T>",
-            "released: mv::ReleaseNotification"
+            "released: concread::release::ReleaseNotification"
           ]
         },
         {
@@ -13087,7 +13105,7 @@
           "kind": "struct",
           "symbol": "PublicationGuard",
           "required_tokens": [
-            "inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>"
+            "inner: concread::release::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>"
           ]
         },
         {
@@ -13097,7 +13115,7 @@
           "required_tokens": [
             "fn new(value: T) -> Self",
             "inner: parking_lot::Mutex::new(value)",
-            "released: mv::ReleaseNotification::default()"
+            "released: concread::release::ReleaseNotification::default()"
           ]
         },
         {
@@ -13821,32 +13839,13 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
-          "kind": "method",
-          "symbol": "RetainedBodyValidationService::descriptor_layouts",
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "struct",
+          "symbol": "CarrierFences",
           "required_tokens": [
-            "Layout::array::<Candidate<P::Owner>>(limit)\n                .map_err(|_| AllocationRefusal::DemandOverflow)?",
-            "Layout::array::<Marker>(limit).map_err(|_| AllocationRefusal::DemandOverflow)?"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
-          "kind": "method",
-          "symbol": "RetainedBodyValidationService::descriptor_bytes",
-          "required_tokens": [
-            "Self::descriptor_layouts(limit)?",
-            ".try_fold(0, |total: usize, layout|",
-            "total\n                    .checked_add(layout.size())\n                    .ok_or(AllocationRefusal::DemandOverflow)"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_body_store/retained_validation.rs",
-          "kind": "method",
-          "symbol": "V2BodyStore::retained_validation_descriptor_bytes",
-          "required_tokens": [
-            "RetainedBodyValidationService::<P>::descriptor_bytes(self.capacity.max_body_entries)",
-            ".map_err(super::super::v2_apply::validation_custody::CarrierCustodyError::from)",
-            ".map_err(V2BodyStoreError::from)"
+            "_state: StateFences<'target>",
+            "_queue: Option<CarrierQueueRetirement<'target>>",
+            "_kura: KuraPublicationLease<'target>"
           ]
         },
         {
@@ -13871,8 +13870,9 @@
           "kind": "method",
           "symbol": "OriginalCarrierQueue::new",
           "required_tokens": [
-            "pub(super) fn new(state: &'service State, queue: &'service Queue) -> Self",
-            "Self { state, queue }"
+            "pub(super) fn new(state: &'service State, queue: &'service Queue)",
+            "Self { state, queue }",
+            "pub(super) fn new(state: &'service State, queue: &'service Queue) -> Self"
           ]
         },
         {
@@ -13886,18 +13886,18 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_apply/carrier_queue_retirement.rs",
           "kind": "method",
-          "symbol": "OriginalCarrierQueue::owns_cut",
+          "symbol": "OriginalCarrierQueue::try_observe",
           "required_tokens": [
-            "cut.belongs_to(self.queue)"
+            "self.queue.try_lock_lane_retirement_observer()",
+            "Result<QueueLaneRetirementObserver<'service>, concread::release::ReleaseWait>"
           ]
         },
         {
           "path": "crates/iroha_core/src/sumeragi/v2_apply/carrier_queue_retirement.rs",
           "kind": "method",
-          "symbol": "OriginalCarrierQueue::try_observe",
+          "symbol": "OriginalCarrierQueue::owns_cut",
           "required_tokens": [
-            "Result<QueueLaneRetirementObserver<'service>, mv::ReleaseWait>",
-            "self.queue.try_lock_lane_retirement_observer()"
+            "cut.belongs_to(self.queue)"
           ]
         },
         {
@@ -13919,17 +13919,668 @@
         {
           "path": "crates/iroha_core/src/queue.rs",
           "kind": "method",
-          "symbol": "QueueLaneRetirementObserver::durability_faulted",
+          "symbol": "QueueLaneRetirementCut::lane_pending_work_release",
           "required_tokens": [
-            "self.queue.transaction_selection_durability_faulted()"
+            "self.observer.queue.lane_pending_work_release_locked(",
+            "&self.reservations,",
+            "lane_id,",
+            "dataspace_id,",
+            "lane_incarnation",
+            "self.observer.queue.lane_pending_work_release_locked(\n            &self.reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        )"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
+          "kind": "struct",
+          "symbol": "CarrierQueueRetirement",
+          "required_tokens": [
+            "state_owner: NativeLaneStateOwner",
+            "header: BlockHeader",
+            "routes: Vec<(LaneId, DataSpaceId, Hash)>",
+            "_cut: QueueLaneRetirementCut<'queue>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
+          "kind": "method",
+          "symbol": "CarrierQueueRetirement::try_new",
+          "required_tokens": [
+            "if !source.belongs_to(target) || !geometry.matches_publication_target(target, header)",
+            "return Err(CarrierQueueRetirementError::ForeignState)",
+            "if !source.owns_cut(&cut)",
+            "return Err(CarrierQueueRetirementError::ForeignQueue)",
+            ".for_each_retirement_route(|lane, dataspace, incarnation|",
+            "routes.push((lane, dataspace, incarnation))",
+            "cut.lane_pending_work_release(lane, dataspace, incarnation)",
+            "Ok(None) => {}",
+            "Ok(Some(wait)) =>",
+            "return Err(CarrierQueueRetirementError::Pending {",
+            "Err(error) => return Err(CarrierQueueRetirementError::Unavailable(error))",
+            "state_owner: target\n                .native_lane_state_owner()\n                .ok_or(CarrierQueueRetirementError::ForeignState)?",
+            "_cut: cut",
+            "geometry\n            .for_each_retirement_route(|lane, dataspace, incarnation| {\n                routes.push((lane, dataspace, incarnation));\n                Ok(())\n            })",
+            ".map_err(CarrierQueueRetirementError::Geometry)?",
+            "for &(lane, dataspace, incarnation) in &routes",
+            "match cut.lane_pending_work_release(lane, dataspace, incarnation)",
+            "Ok(Some(wait)) => {\n                    return Err(CarrierQueueRetirementError::Pending {\n                        lane,\n                        dataspace,\n                        incarnation,\n                        wait,\n                    });\n                }",
+            "header,\n            routes,\n            _cut: cut"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
+          "kind": "method",
+          "symbol": "CarrierQueueRetirement::ensure_available",
+          "required_tokens": [
+            "if self._cut.durability_faulted()",
+            "QueueLaneRetirementUnavailable::DurabilityFault",
+            "Err(CarrierQueueRetirementError::Unavailable(\n                QueueLaneRetirementUnavailable::DurabilityFault,\n            ))",
+            "else {\n            Ok(())\n        }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
+          "kind": "method",
+          "symbol": "CarrierQueueRetirement::authenticates",
+          "required_tokens": [
+            "self.ensure_available().is_err()",
+            "!self.state_owner.matches_state(target)",
+            "self.header != header",
+            "!geometry.matches_publication_target(target, header)",
+            "return false;",
+            "geometry.for_each_retirement_route(|lane, dataspace, incarnation|",
+            "self.routes.get(index) != Some(&(lane, dataspace, incarnation))",
+            "index += 1;",
+            "result.is_ok() && index == self.routes.len()",
+            "if self.ensure_available().is_err()\n            || !self.state_owner.matches_state(target)\n            || self.header != header\n            || !geometry.matches_publication_target(target, header)",
+            "return false",
+            "let mut index = 0",
+            "let result = geometry.for_each_retirement_route(|lane, dataspace, incarnation|",
+            "if self.routes.get(index) != Some(&(lane, dataspace, incarnation))",
+            "return Err(LaneLifecycleError::Storage(",
+            "index += 1",
+            "Ok(())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "PreparedCarrierGeometry::for_each_retirement_route",
+          "required_tokens": [
+            "pending.plan.retire.iter().chain(",
+            ".replaced_lane_ids",
+            ".filter(|lane| !pending.plan.retire.contains(lane))",
+            ".previous_catalog",
+            ".find(|entry| entry.id == *lane)",
+            ".previous_lane_incarnations",
+            ".filter(|incarnation| !lane_incarnation_is_zero(*incarnation))",
+            "visit(*lane, previous.dataspace_id, incarnation)?",
+            "let Some(pending) = &self._pending else {\n            return Ok(());\n        }",
+            "let update = &pending.catalog_update",
+            "pending.plan.retire.iter().chain(\n            update\n                .replaced_lane_ids\n                .iter()\n                .filter(|lane| !pending.plan.retire.contains(lane)),\n        )",
+            "update\n                .previous_catalog\n                .lanes()\n                .iter()\n                .find(|entry| entry.id == *lane)\n                .ok_or_else(||",
+            "update\n                .previous_lane_incarnations\n                .get(lane)\n                .copied()\n                .filter(|incarnation| !lane_incarnation_is_zero(*incarnation))\n                .ok_or_else(||"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "PreparedCarrierGeometry::has_queue_custody",
+          "required_tokens": [
+            "!self.requires_queue_custody()",
+            "queue.is_some_and(|queue| queue.authenticates(target, self, header))",
+            "!self.requires_queue_custody()\n            || queue.is_some_and(|queue| queue.authenticates(target, self, header))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "method",
+          "symbol": "RetainedBodyValidationService::descriptor_layouts",
+          "required_tokens": [
+            "Layout::array::<Candidate<P::Owner>>(limit)\n                .map_err(|_| AllocationRefusal::DemandOverflow)?",
+            "Layout::array::<Marker>(limit).map_err(|_| AllocationRefusal::DemandOverflow)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "NativeLaneStateOwner::matches_state",
+          "required_tokens": [
+            "state\n            .block_hashes\n            .map()\n            .is_some_and(|map| self.0.matches(map))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "NativeLaneStateOwner::same_family",
+          "required_tokens": [
+            "self.0.same_family(&other.0)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "State::native_lane_state_owner",
+          "required_tokens": [
+            "-> Option<NativeLaneStateOwner>",
+            "self.block_hashes\n            .map()\n            .map(|map| NativeLaneStateOwner(map.family()))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "BlockHashes::map",
+          "required_tokens": [
+            "BlockHashStorage::Owned(map) => Some(map)",
+            "BlockHashStorage::EmergencyFastMapped(_) | BlockHashStorage::EmergencyFastEmpty => None"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "BlockHashesBlock::pending",
+          "required_tokens": [
+            "BlockHashRange {\n            source: self,\n            start: self.visible_len,\n            end: self.len(),\n        }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "DetachedBlockHashes::matches_block_predecessor",
+          "required_tokens": [
+            "self.mode == block.mode",
+            "self\n                .work\n                .predecessor()\n                .same_predecessor(&block.work.predecessor())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/output_publication.rs",
+          "kind": "struct",
+          "symbol": "BlockHashSurface",
+          "required_tokens": [
+            "predecessor:\n        concread::bptree::BptreeMapRetainedPredecessor<usize, HashOf<BlockHeader>, BlockHashMode>",
+            "mode: mv::BlockMode",
+            "visible_len: usize",
+            "pending: Vec<HashOf<BlockHeader>>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/output_publication.rs",
+          "kind": "method",
+          "symbol": "BlockHashSurface::capture",
+          "required_tokens": [
+            "!std::ptr::eq(block.inner, expected) || block.visible_len > block.len()",
+            "predecessor: block.work.predecessor().retain()",
+            "mode: block.mode",
+            "visible_len: block.visible_len",
+            "pending: block.pending().iter().copied().collect()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_publication.rs",
+          "kind": "struct",
+          "symbol": "PreparedBlockHashes",
+          "required_tokens": [
+            "owner: NativeLaneStateOwner",
+            "prepared: BptreeMapPreparedCommit<'target, usize, HashOf<BlockHeader>, BlockHashMode>",
+            "notification: concread::release::ReleaseGuard<'target, ()>",
+            "installation: Installation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_publication.rs",
+          "kind": "method",
+          "symbol": "DetachedBlockHashes::try_prepare_publication",
+          "required_tokens": [
+            "if self.reserved_tip.is_some() {\n            return Err((self, mv::PublicationPreparationError::Changed));\n        }",
+            "let Some(map) = target.map() else {\n            return Err((self, mv::PublicationPreparationError::Changed));\n        }",
+            "let wait = map.observe_reader_release();\n        match self.observe_current(target)",
+            "let wait = target.released.observe();\n        let writer = match map.try_write_owned(work)",
+            "Ok(false) => return Err((self, mv::PublicationPreparationError::Changed))",
+            "Err(error) => return Err((self, refusal(error, wait)))",
+            "let installation = match admit(&self, target)",
+            "Err(error) => return Err((self, mv::PublicationPreparationError::Admission(error)))",
+            "let Self {\n            work,\n            mode,\n            visible_len,\n            reserved_tip,\n        } = self",
+            "match map.try_write_owned(work)",
+            "if error == OwnedWriteError::Changed {\n                    drop(target.released.guard(()));\n                }",
+            "let notification = target.released.guard(())",
+            "let wait = map.observe_reader_release();\n        let prepared = match writer.try_prepare_commit()",
+            "Err((writer, error)) => {\n                let work = writer.detach();\n                drop(notification);",
+            "Self {\n            work,\n            mode,\n            visible_len,\n            reserved_tip,\n        }",
+            "refusal(error, wait)",
+            "refusal(error, wait)",
+            "owner: NativeLaneStateOwner(map.family())",
+            "committed_height: &target.committed_height"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_publication.rs",
+          "kind": "method",
+          "symbol": "PreparedBlockHashes::state_owner",
+          "required_tokens": [
+            "self.owner.clone()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_publication.rs",
+          "kind": "method",
+          "symbol": "PreparedBlockHashes::abort",
+          "required_tokens": [
+            "let (writer, reader) = prepared.abort_retaining()",
+            "let work = writer.detach()",
+            "let ((), writer) = notification.release_deferred(drop)",
+            "AbortedBlockHashes {",
+            "_owner: owner",
+            "_release: [reader, writer]",
+            "_installation: installation",
+            "DetachedBlockHashes {",
+            "reserved_tip: None"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_publication.rs",
+          "kind": "method",
+          "symbol": "PreparedBlockHashes::publish",
+          "required_tokens": [
+            "let published = prepared.publish()",
+            "committed_height.store(height, Ordering::Release)",
+            "let retirement = published.release()",
+            "PublishedBlockHashes {",
+            "_retirement: retirement",
+            "_notification: notification",
+            "_installation: installation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_publication.rs",
+          "kind": "struct",
+          "symbol": "PublishedBlockHashes",
+          "required_tokens": [
+            "_retirement:\n        concread::bptree::BptreeMapCommitRetirement<usize, HashOf<BlockHeader>, BlockHashMode>",
+            "_notification: concread::release::ReleaseGuard<'a, ()>",
+            "_installation: Installation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "DetachedBlockHashes::observe_current",
+          "required_tokens": [
+            "let Some(map) = target.map() else {\n            return Ok(false);\n        };",
+            "self.work.try_matches_current(map)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "DetachedBlockHashes::matches_current",
+          "required_tokens": [
+            "self.observe_current(target) == Ok(true)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_admission.rs",
+          "kind": "method",
+          "symbol": "BlockHashPolicy::take_node_charge",
+          "required_tokens": [
+            "-> Self::Charge",
+            "self.0\n            .try_split(layout)\n            .expect(\"complete concrete hash edit plan\")"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_admission.rs",
+          "kind": "method",
+          "symbol": "BlockHashes::admit_successor",
+          "required_tokens": [
+            "existing: AllocationDemand",
+            "additional: AllocationDemand",
+            "existing\n            .bytes()\n            .checked_add(additional.bytes())",
+            "mv::allocation::AllocationRefusal::DemandOverflow",
+            "if required > self.budget.limit_bytes()",
+            "AllocationRefusal::ExceedsLimit",
+            "requested_bytes: required",
+            "limit_bytes: self.budget.limit_bytes()",
+            "self.admit(additional)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_admission.rs",
+          "kind": "method",
+          "symbol": "BlockHashes::admit",
+          "required_tokens": [
+            "self.budget\n            .try_reserve_bytes(demand.bytes())\n            .map(BlockHashPolicy)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_admission.rs",
+          "kind": "method",
+          "symbol": "BlockHashes::admission_error",
+          "required_tokens": [
+            "MapAdmissionError::Busy => BlockHashAdmissionError::Busy(wait)",
+            "MapAdmissionError::Poisoned => BlockHashAdmissionError::Poisoned",
+            "MapAdmissionError::Changed => BlockHashAdmissionError::Changed(wait)",
+            "MapAdmissionError::Planning(error) => BlockHashAdmissionError::Planning(error)",
+            "MapAdmissionError::Refused(error) => BlockHashAdmissionError::Capacity(error)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_admission.rs",
+          "kind": "method",
+          "symbol": "BlockHashes::try_new",
+          "required_tokens": [
+            "budget.with_deferred_refund_notifications(|_|",
+            "BlockHashMap::try_new_with_node_custody",
+            "budget\n                    .try_reserve_bytes(demand.bytes())\n                    .map(BlockHashPolicy)",
+            "budget: budget.clone()",
+            "initial.into_iter().enumerate()",
+            ".try_insert_admitted_with_footprint(index, hash, |existing, additional|",
+            "owner.admit_successor(existing, additional)",
+            "map\n                    .try_write_owned(work)",
+            "writer.prepare_commit().publish().release()",
+            "owner.committed_height.store(index + 1, Ordering::Release)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_admission.rs",
+          "kind": "method",
+          "symbol": "BlockHashes::try_next_block",
+          "required_tokens": [
+            "self.budget.with_deferred_refund_notifications(|_|",
+            "self.map().ok_or(BlockHashAdmissionError::ReadOnly)?",
+            "let wait = self.released.observe()",
+            "self.try_view().map_err(|error| match error",
+            "OwnedWriteError::Busy => {\n                    BlockHashAdmissionError::Busy(wait.clone())\n                }",
+            "OwnedWriteError::Poisoned => BlockHashAdmissionError::Poisoned",
+            "if replacement {\n                view.len().saturating_sub(1)\n            } else {\n                view.len()\n            }",
+            "BlockHashesViewInner::Owned(view) => view.predecessor().retain()",
+            "drop(view)",
+            "map.try_insert_admitted_with_footprint(",
+            "|existing, additional| self.admit_successor(existing, additional)",
+            "if !matches!(\n                result,\n                Err((_, MapAdmissionError::Busy | MapAdmissionError::Poisoned))\n            ) {\n                drop(self.released.guard(()));\n            }",
+            "if !predecessor.matches(&work.predecessor()) {\n                return Err(BlockHashAdmissionError::Changed(wait));\n            }",
+            "visible_len: prefix",
+            "reserved_tip: Some(prefix)",
+            "fixture_edits: false"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "BlockHashesBlock::push",
+          "required_tokens": [
+            "if let Some(index) = self.reserved_tip.take()",
+            "self.work\n                .try_update_private(&index, hash)",
+            "assert!(\n                self.fixture_edits",
+            "self.inner.budget.with_deferred_refund_notifications(|_|"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "BlockHashesBlock::detach",
+          "required_tokens": [
+            "work: self.work",
+            "mode: self.mode",
+            "visible_len: self.visible_len",
+            "reserved_tip: self.reserved_tip"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "macro",
+          "symbol": "work_hash_read",
+          "required_tokens": [
+            "self.work.len() - usize::from(self.reserved_tip.is_some())",
+            "(index < self.hash_count())\n                    .then(|| self.work.get(&index))\n                    .flatten()",
+            "assert!(start <= end && end <= self.len())",
+            "self.work.range(start..end)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+          "kind": "method",
+          "symbol": "V2ApplyService::classify_validation_failure",
+          "required_tokens": [
+            "BlockValidationError::BlockHashAdmission(refusal)",
+            "BlockHashAdmissionError::Busy(wait) | BlockHashAdmissionError::Changed(wait) => {\n                    Some(wait)\n                }",
+            "AllocationRefusal::Capacity { release, .. }",
+            "=> Some(release)",
+            "_ => None",
+            "V2ApplyError::LocalValidation(match wait",
+            "Some(wait) =>",
+            "LocalValidationRefusal::PhysicalBusy",
+            "wait.clone()",
+            "self.queue.sumeragi_waker()",
+            "None =>",
+            "LocalValidationRefusal::RecoveryRequired(\n                    refusal.to_string(),\n                )"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "fn",
+          "symbol": "map_block_err_to_reason",
+          "required_tokens": [
+            "BlockValidationError::LocalStorageRecoveryRequired { .. }\n            | BlockValidationError::BlockHashAdmission(_) => return None"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_admission.rs",
+          "kind": "method",
+          "symbol": "BlockHashAdmissionError::release_wait",
+          "required_tokens": [
+            "Self::Busy(wait) | Self::Changed(wait) => Some(wait)",
+            "Self::Capacity(mv::allocation::AllocationRefusal::Capacity { release, .. }) => {\n                Some(release)\n            }",
+            "_ => None"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/block_hashes_admission.rs",
+          "kind": "method",
+          "symbol": "StateBlockStartError::release_wait",
+          "required_tokens": [
+            "Self::History(error) => error.release_wait()",
+            "Self::Stage(_) => None"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "BlockHashes::new_emergency_fast_empty",
+          "required_tokens": [
+            "inner: BlockHashStorage::EmergencyFastEmpty",
+            "budget: mv::allocation::AllocationBudget::new(0)",
+            "committed_height: AtomicUsize::new(0)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/deserialize_core.rs",
+          "kind": "fn",
+          "symbol": "emergency_fast_block_hashes",
+          "required_tokens": [
+            "kura\n        .emergency_fast_snapshot_boundary(snapshot_height)",
+            "durable_height != snapshot_height || durable_tip != snapshot_tip",
+            "Some(mapping) => BlockHashes::new_emergency_fast_mapped(mapping, snapshot_height)",
+            "None if snapshot_height == 0 => BlockHashes::new_emergency_fast_empty()",
+            "None => {\n                return Err(json::Error::InvalidField"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/canonical_runtime.rs",
+          "kind": "method",
+          "symbol": "State::acquire_canonical_runtime_block",
+          "required_tokens": [
+            "let generation = self.state_view_generation()",
+            "if generation % 2 != 0",
+            "let block_hashes = self.block_hashes.try_next_block(replacement)?",
+            "self.world.block_and_revert()",
+            "self.world.block()",
+            "if !is_stable_state_view_generation(generation, self.state_view_generation())",
+            "drop(canonical_runtime)",
+            "drop(lane_consensus_contexts)",
+            "drop(prev_commit_topology)",
+            "drop(commit_topology)",
+            "drop(transactions)",
+            "drop(world)",
+            "drop(block_hashes)",
+            "return Ok(AcquiredRuntimeBlock {",
+            "block_hashes,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "State::block_and_revert_with_pristine_stage",
+          "required_tokens": [
+            "self.acquire_canonical_runtime_block(true)?",
+            "self.rewind_da_indexes_to_height(target_height)",
+            "let mut state_block = StateBlock {",
+            "block_hashes,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+          "kind": "method",
+          "symbol": "HistoryAdmissionWait::new",
+          "required_tokens": [
+            "let mut pending = Self(wait.wait_for_release())",
+            "if pending.is_ready(wake) {\n            wake.wake_by_ref();\n        }",
+            "pending"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+          "kind": "method",
+          "symbol": "HistoryAdmissionWait::is_ready",
+          "required_tokens": [
+            "std::future::Future::poll(",
+            "std::pin::Pin::new(&mut self.0)",
+            "&mut std::task::Context::from_waker(wake)",
+            ".is_ready()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "method",
+          "symbol": "LocalProposalState::history_admission_pending",
+          "required_tokens": [
+            "if let Some((pending_owner, pending)) = &mut self.history_wait",
+            "*pending_owner == owner",
+            "!pending.is_ready(wake)",
+            "return true",
+            "self.history_wait = None",
+            "false"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "method",
+          "symbol": "LocalProposalState::defer_history_admission",
+          "required_tokens": [
+            "let Some(wait) = error.release_wait() else {\n            return false;\n        }",
+            "self.history_wait = Some((\n            owner,\n            super::v2_body_store::HistoryAdmissionWait::new(wait.clone(), wake),\n        ))",
+            "true"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "fn",
+          "symbol": "schedule_local_proposal",
+          "required_tokens": [
+            "let owner = proposal_state.reconcile(LocalProposalOwner::from(directive))",
+            "if proposal_state.history_admission_pending(owner, &queue.sumeragi_waker()) {\n        return Ok(());\n    }",
+            "Err(error)\n                if proposal_state.defer_history_admission(\n                    LocalProposalOwner::from(current),\n                    &error,\n                    &queue.sumeragi_waker(),\n                ) =>\n            {\n                services\n                    .rearm_loaded_candidate_delivery(current.tag(), loaded_round, loaded_subject)\n                    .map_err(V2RunnerError::Service)?;\n                return Ok(());\n            }",
+            "Err(error) => {\n                return Err(super::v2_candidate::CandidateError::LocalStateAdmission(error).into());\n            }",
+            "Err(super::v2_candidate::CandidateError::LocalStateAdmission(error))\n                if proposal_state.defer_history_admission(\n                    owner,\n                    &error,\n                    &queue.sumeragi_waker(),\n                ) =>\n            {\n                return Ok(());\n            }",
+            "Err(V2RunnerError::CandidateBuild(\n                super::v2_candidate::CandidateError::LocalStateAdmission(error),\n            )) if proposal_state.defer_history_admission(\n                owner,\n                &error,\n                &queue.sumeragi_waker(),\n            ) =>\n            {\n                return Ok(());\n            }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "build_and_memoize_merge_execution_candidate",
+          "required_tokens": [
+            "crate::state::StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>",
+            ".build_merge_execution_candidate(application_block_header, self.context.mode)?",
+            "self.state.state_view_generation() == state_view_generation",
+            "Ok(Some(candidate))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "refresh_merge_candidates",
+          "required_tokens": [
+            "if let Some((view, pending)) = &mut self.merge_history_wait",
+            "if *view == active_view && !pending.is_ready(&wake) {\n                return Ok(self.defer_merge_candidate_work());\n            }",
+            "self.merge_history_wait = None",
+            "let Some(wait) = error.release_wait() else {\n                                return Err(V2LaneWorkError::StateAdmission(error));\n                            }",
+            "self\n                .lane_drain_queue\n                .as_ref()",
+            ".sumeragi_waker()",
+            "self.merge_history_wait = Some((\n                                active_view,\n                                super::v2_body_store::HistoryAdmissionWait::new(\n                                    wait.clone(),\n                                    &wake,\n                                ),\n                            ))",
+            "return Ok(self.defer_merge_candidate_work())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "fn",
+          "symbol": "candidate_attachments",
+          "required_tokens": [
+            ".derive_npos_consensus_effects(round_header)",
+            "if let Some(refusal) = error.downcast_ref::<crate::state::BlockHashAdmissionError>()",
+            "V2RunnerError::CandidateBuild(\n                    super::v2_candidate::CandidateError::LocalStateAdmission(\n                        crate::state::StateBlockStartError::History(refusal.clone()),\n                    ),\n                )",
+            "V2RunnerError::Candidate(error.to_string())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "classify_merge_state_validation",
+          "required_tokens": [
+            "Ok(()) => Ok(MergeCandidateValidation::Ready)",
+            "Err(crate::state::MergeLedgerCommitError::BlockHashAdmission(error)) =>",
+            "self.validated_merge_execution_candidate = None",
+            "let Some(wait) = error.release_wait() else {\n                    return Err(MergeCandidateValidationError::Frontier(error.to_string()));\n                }",
+            "self\n                    .lane_drain_queue\n                    .as_ref()",
+            ".sumeragi_waker()",
+            "self.merge_history_wait = Some((\n                    active_view,\n                    super::v2_body_store::HistoryAdmissionWait::new(wait.clone(), &wake),\n                ))",
+            "Ok(MergeCandidateValidation::Deferred)",
+            "Err(error) => Err(MergeCandidateValidationError::Invalid(error.to_string()))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "validate_merge_candidate_for_active_round",
+          "required_tokens": [
+            "return self.classify_merge_state_validation(active_view, validation)",
+            "if self.classify_merge_state_validation(active_view, validation)?\n            == MergeCandidateValidation::Deferred\n        {\n            return Ok(MergeCandidateValidation::Deferred);\n        }",
+            "self.validated_merge_execution_candidate = Some(validated)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "method",
+          "symbol": "RetainedBodyValidationService::descriptor_bytes",
+          "required_tokens": [
+            "Self::descriptor_layouts(limit)?",
+            ".try_fold(0, |total: usize, layout|",
+            "total\n                    .checked_add(layout.size())\n                    .ok_or(AllocationRefusal::DemandOverflow)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_body_store/retained_validation.rs",
+          "kind": "method",
+          "symbol": "V2BodyStore::retained_validation_descriptor_bytes",
+          "required_tokens": [
+            "RetainedBodyValidationService::<P>::descriptor_bytes(self.capacity.max_body_entries)",
+            ".map_err(super::super::v2_apply::validation_custody::CarrierCustodyError::from)",
+            ".map_err(V2BodyStoreError::from)"
           ]
         },
         {
           "path": "crates/iroha_core/src/queue.rs",
           "kind": "method",
-          "symbol": "QueueLaneRetirementCut::lane_pending_work_release",
+          "symbol": "QueueLaneRetirementObserver::durability_faulted",
           "required_tokens": [
-            "self.observer.queue.lane_pending_work_release_locked(\n            &self.reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        )"
+            "self.queue.transaction_selection_durability_faulted()"
           ]
         },
         {
@@ -13965,104 +14616,16 @@
         },
         {
           "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
-          "kind": "struct",
-          "symbol": "CarrierQueueRetirement",
-          "required_tokens": [
-            "state_owner: Arc<BlockHashOwner>",
-            "header: BlockHeader",
-            "routes: Vec<(LaneId, DataSpaceId, Hash)>",
-            "_cut: QueueLaneRetirementCut<'queue>"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
           "kind": "enum",
           "symbol": "CarrierQueueRetirementError",
           "required_tokens": [
             "Missing",
             "ForeignState",
             "ForeignQueue",
-            "Busy {\n        field: &'static str,\n        wait: mv::ReleaseWait,\n    }",
-            "Pending {\n        lane: LaneId,\n        dataspace: DataSpaceId,\n        incarnation: Hash,\n        wait: mv::ReleaseWait,\n    }",
+            "Busy {\n        field: &'static str,\n        wait: concread::release::ReleaseWait,\n    }",
+            "Pending {\n        lane: LaneId,\n        dataspace: DataSpaceId,\n        incarnation: Hash,\n        wait: concread::release::ReleaseWait,\n    }",
             "Unavailable(QueueLaneRetirementUnavailable)",
             "Geometry(LaneLifecycleError)"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
-          "kind": "method",
-          "symbol": "CarrierQueueRetirement::try_new",
-          "required_tokens": [
-            "if !source.belongs_to(target) || !geometry.matches_publication_target(target, header)",
-            "return Err(CarrierQueueRetirementError::ForeignState)",
-            "if !source.owns_cut(&cut)",
-            "return Err(CarrierQueueRetirementError::ForeignQueue)",
-            "geometry\n            .for_each_retirement_route(|lane, dataspace, incarnation| {\n                routes.push((lane, dataspace, incarnation));\n                Ok(())\n            })",
-            ".map_err(CarrierQueueRetirementError::Geometry)?",
-            "for &(lane, dataspace, incarnation) in &routes",
-            "match cut.lane_pending_work_release(lane, dataspace, incarnation)",
-            "Ok(None) => {}",
-            "Ok(Some(wait)) => {\n                    return Err(CarrierQueueRetirementError::Pending {\n                        lane,\n                        dataspace,\n                        incarnation,\n                        wait,\n                    });\n                }",
-            "Err(error) => return Err(CarrierQueueRetirementError::Unavailable(error))",
-            "state_owner: Arc::clone(&target.block_hashes.owner)",
-            "header,\n            routes,\n            _cut: cut"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
-          "kind": "method",
-          "symbol": "CarrierQueueRetirement::ensure_available",
-          "required_tokens": [
-            "if self._cut.durability_faulted()",
-            "Err(CarrierQueueRetirementError::Unavailable(\n                QueueLaneRetirementUnavailable::DurabilityFault,\n            ))",
-            "else {\n            Ok(())\n        }"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
-          "kind": "method",
-          "symbol": "CarrierQueueRetirement::authenticates",
-          "required_tokens": [
-            "if self.ensure_available().is_err()\n            || !Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)\n            || self.header != header\n            || !geometry.matches_publication_target(target, header)",
-            "return false",
-            "let mut index = 0",
-            "let result = geometry.for_each_retirement_route(|lane, dataspace, incarnation|",
-            "if self.routes.get(index) != Some(&(lane, dataspace, incarnation))",
-            "return Err(LaneLifecycleError::Storage(",
-            "index += 1",
-            "Ok(())",
-            "result.is_ok() && index == self.routes.len()"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
-          "kind": "method",
-          "symbol": "PreparedCarrierGeometry::for_each_retirement_route",
-          "required_tokens": [
-            "let Some(pending) = &self._pending else {\n            return Ok(());\n        }",
-            "let update = &pending.catalog_update",
-            "pending.plan.retire.iter().chain(\n            update\n                .replaced_lane_ids\n                .iter()\n                .filter(|lane| !pending.plan.retire.contains(lane)),\n        )",
-            "update\n                .previous_catalog\n                .lanes()\n                .iter()\n                .find(|entry| entry.id == *lane)\n                .ok_or_else(||",
-            "update\n                .previous_lane_incarnations\n                .get(lane)\n                .copied()\n                .filter(|incarnation| !lane_incarnation_is_zero(*incarnation))\n                .ok_or_else(||",
-            "visit(*lane, previous.dataspace_id, incarnation)?"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
-          "kind": "method",
-          "symbol": "PreparedCarrierGeometry::has_queue_custody",
-          "required_tokens": [
-            "!self.requires_queue_custody()\n            || queue.is_some_and(|queue| queue.authenticates(target, self, header))"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
-          "kind": "struct",
-          "symbol": "CarrierFences",
-          "required_tokens": [
-            "_state: StateFences<'target>",
-            "_queue: Option<CarrierQueueRetirement<'target>>",
-            "_kura: KuraPublicationLease<'target>"
           ]
         },
         {
@@ -14070,7 +14633,7 @@
           "kind": "struct",
           "symbol": "AcquiredCarrierComponents",
           "required_tokens": [
-            "_fences: CarrierFences<'target>"
+            "original: Option<AcquiredCarrierParticipants<'target>>"
           ]
         },
         {
@@ -14084,6 +14647,255 @@
             "let lifecycle = acquire(\"lane_lifecycle_lock\", &target.lane_lifecycle_lock)?",
             "let write = acquire(\"state_write_lock\", &target.state_write_lock)?",
             "_write: write,\n            _lifecycle: lifecycle,\n            _commit: commit"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "authenticate_native_amx_participant_application_prepublication_under_publication_guards",
+          "required_tokens": [
+            "require_active_lane_artifact",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "read_native_amx_participant_application_receipt_from_paths_locked",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "require_post_apply_metadata",
+            "native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards",
+            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
+            "latest.matches_receipt",
+            "latest.matches_manifest",
+            "progress_mutation_namespace_unchanged"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs",
+          "kind": "struct",
+          "symbol": "NativeAmxParticipantApplicationPrepublicationToken",
+          "required_tokens": [
+            "original_kura: KuraInstanceIdentity",
+            "identities: Vec<NativeAmxParticipantApplicationPrepublicationIdentity>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantApplicationPrepublicationToken::from_plan",
+          "required_tokens": [
+            "original_kura: KuraInstanceIdentity",
+            "if usize::try_from(plan.manifest_leaf_count).ok() != Some(identities.len())",
+            "Some(Self {\n            original_kura,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "Kura::reauthenticate_native_amx_prepublication",
+          "required_tokens": [
+            "let prune = self.prune_lock.lock();",
+            "let canonical = self.canonical_chain_lock.lock();",
+            "let geometry = self.lane_geometry_lock.lock();",
+            "let sidecar = self.sidecar_lock.lock();",
+            "let result = self.reauthenticate_native_amx_prepublication_under_publication_guards(\n            token, block, manifest, finality, frontiers,\n        );",
+            "drop(sidecar);\n        drop(geometry);\n        drop(canonical);\n        drop(prune);\n        result"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "Kura::reauthenticate_native_amx_prepublication_under_publication_guards",
+          "required_tokens": [
+            "if !token.original_kura.matches(self) {\n            return Err(",
+            "if !token.authenticates_state_frontiers(block, manifest, finality, frontiers) {\n            return Err(",
+            "v2_finality_artifact_with_archive_under_prune_and_canonical_guards(\n                token.application_block_height,\n            )?",
+            "if header != block.header()\n            || super::HashOf::new(&durable_finality) != token.finality_artifact_hash\n        {\n            return Err(",
+            "super::native_amx_participant_application_artifacts(\n            manifest,\n            token.finality_artifact_hash,\n        )",
+            "if artifacts.len() != token.identities.len() {\n            return Err(",
+            "for ((expected_manifest, expected_receipt), expected_identity) in\n            artifacts.iter().zip(&token.identities)",
+            "authenticate_native_amx_participant_application_prepublication_under_publication_guards(\n                    expected_manifest, expected_receipt, false,\n                )?",
+            "if actual != *expected_identity {\n                return Err("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "struct",
+          "symbol": "TransactionsPublicationRetirement",
+          "required_tokens": [
+            "_tip: Option<Arc<BlockInfo>>",
+            "_staged: Option<Arc<BlockInfo>>",
+            "_identity: Arc<()>",
+            "_release: concread::release::DeferredRelease"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "struct",
+          "symbol": "PublishedTransactions",
+          "required_tokens": [
+            "_retirement: TransactionsPublicationRetirement",
+            "_installation: Installation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "method",
+          "symbol": "PreparedDetachedTransactionsBlock::publish",
+          "required_tokens": [
+            "fn publish(self) -> PublishedTransactions<Installation>",
+            "PublishedTransactions {",
+            "_retirement: prepared.publish()",
+            "_installation: installation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationGuard::release_deferred",
+          "required_tokens": [
+            "self.inner.release_deferred(drop).1"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "KuraPublicationLease::release_deferred",
+          "required_tokens": [
+            "_sidecar.release_deferred()",
+            "_geometry.release_deferred()",
+            "_canonical.release_deferred()",
+            "_prune.release_deferred()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "QueueLaneRetirementCut::release_deferred",
+          "required_tokens": [
+            "reservations.release_deferred()",
+            "_mutation.release_deferred()",
+            "_reservation_transition_guard.release_deferred()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
+          "kind": "struct",
+          "symbol": "ReleasedCarrierQueue",
+          "required_tokens": [
+            "_routes: Vec<(LaneId, DataSpaceId, Hash)>",
+            "_state_owner: NativeLaneStateOwner",
+            "_released: [concread::release::DeferredRelease; 3]"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
+          "kind": "method",
+          "symbol": "CarrierQueueRetirement::release_deferred",
+          "required_tokens": [
+            "ReleasedCarrierQueue {",
+            "_released: _cut.release_deferred()",
+            "_routes: routes",
+            "_state_owner: state_owner"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "struct",
+          "symbol": "CompletionFences",
+          "required_tokens": [
+            "_commit: PublicationGuard<'target>",
+            "_state: [concread::release::DeferredRelease; 2]",
+            "_queue: Option<ReleasedCarrierQueue>",
+            "_kura: [concread::release::DeferredRelease; 4]"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "method",
+          "symbol": "PreparedTransactionsBlock::detach_retaining",
+          "required_tokens": [
+            "fn detach_retaining(\n            self,\n        )",
+            "predecessor_identity: Arc::clone(&block._guard)",
+            "predecessor: block.latest_block_ref.load_full()",
+            "revert: block.revert",
+            "_guard.release_deferred(drop)",
+            "(detached, release)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "struct",
+          "symbol": "AcquiredCarrierParticipants",
+          "required_tokens": [
+            "world: PreparedWorld<'target, (), ()>",
+            "runtime: PreparedRuntimeJournals<'target, (), ()>",
+            "transactions: PreparedDetachedTransactionsBlock<'target, ()>",
+            "block_hashes: PreparedBlockHashes<'target, ()>",
+            "_fences: CarrierFences<'target>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "method",
+          "symbol": "AcquiredCarrierComponents::into_original",
+          "required_tokens": [
+            "self.original.take().expect(\"original carrier participants\")"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "method",
+          "symbol": "AcquiredCarrierComponents::abort",
+          "required_tokens": [
+            "self.into_original().abort()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "method",
+          "symbol": "AcquiredCarrierComponents::drop",
+          "required_tokens": [
+            "if let Some(original) = self.original.take()",
+            "drop(original.abort())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "method",
+          "symbol": "AcquiredCarrierParticipants::abort",
+          "required_tokens": [
+            "let (world, world_retirement) = world.abort()",
+            "let (runtime, runtime_retirement) = runtime.abort()",
+            "let (transactions, transactions_retirement) = transactions.abort()",
+            "let (block_hashes, block_hashes_retirement) = block_hashes.abort()",
+            "drop(fences.release_for_completion())",
+            "world_retirement",
+            "runtime_retirement",
+            "transactions_retirement",
+            "block_hashes_retirement",
+            "DetachedCarrierComponents {"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_publication.rs",
+          "kind": "method",
+          "symbol": "DetachedWorld::try_prepare_publication",
+          "required_tokens": [
+            "Err((field, error)) => {",
+            "prepared.push(field);",
+            "prepared.release_all();",
+            "fields.extend(prepared.iter_mut().rev().map(|field| field.abort()));",
+            "let retirement = AbortedWorld {",
+            "_fields: prepared,",
+            "_installation: Some(installation)",
+            "WorldPublicationError::Field(error),",
+            "retirement"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_publication.rs",
+          "kind": "struct",
+          "symbol": "AbortedWorld",
+          "required_tokens": [
+            "_fields: PreparedWorldFields<'target>",
+            "_installation: Option<Installation>"
           ]
         }
       ]
@@ -15747,7 +16559,7 @@
         {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
-          "symbol": "build_merge_execution_candidate_for_consensus",
+          "symbol": "select_merge_execution_candidate_for_consensus",
           "required_tokens": [
             "canonical_merged_lane_frontier_from_world",
             "validate_merge_execution_predecessor_against_frontier",
@@ -15768,11 +16580,14 @@
             "MAX_MERGE_LEDGER_ENTRY_BYTES.saturating_sub(MAX_MERGE_QC_BYTES)",
             "sources[..prefix_len].to_vec()",
             "consensus.is_current(self).then_some(selected).flatten()",
-            "select_merge_execution_source_budget(\n            sources,\n            gas_limit_from_parameters(world.parameters()),",
+            "select_merge_execution_source_budget(\n                sources,\n                gas_limit_from_parameters(world.parameters())",
             "if sources.is_empty()",
             "self.build_merge_execution_batch_from_source_prefix(\n                    epoch_id,\n                    application_block_header.clone(),\n                    sources[..prefix_len].to_vec(),",
             "select_merge_execution_source_budget(",
-            "gas_limit_from_parameters(world.parameters())"
+            "gas_limit_from_parameters(world.parameters())",
+            "Result<Option<crate::merge::MergeLedgerCandidate>, BlockHashAdmissionError>",
+            "let selected = Self::select_merge_execution_candidate_prefix(\n            &candidate_template,\n            sources.len(),\n            MAX_MERGE_LEDGER_ENTRY_BYTES.saturating_sub(MAX_MERGE_QC_BYTES),\n            |prefix_len| {\n                if !consensus.is_current(self) {\n                    return Ok(None);\n                }\n                self.build_merge_execution_batch_from_source_prefix(\n                    epoch_id,\n                    application_block_header.clone(),\n                    sources[..prefix_len].to_vec(),\n                )\n            },\n        )?;",
+            "Ok(consensus.is_current(self).then_some(selected).flatten())"
           ]
         },
         {
@@ -15780,17 +16595,20 @@
           "kind": "fn",
           "symbol": "select_merge_execution_candidate_prefix",
           "required_tokens": [
+            "Result<Option<MergeExecutionBatch>, BlockHashAdmissionError>",
+            "Result<Option<crate::merge::MergeLedgerCandidate>, BlockHashAdmissionError>",
             "let mut lower = 1usize;",
             "let mut upper = source_count;",
             "while lower <= upper",
             "let midpoint = lower + (upper - lower) / 2;",
-            "build_batch(midpoint).and_then(|batch|",
+            "build_batch(midpoint)?.and_then(|batch|",
             "let mut candidate = candidate_template.clone();",
             "candidate.execution_batch = Some(batch);",
             "(candidate.canonical_bytes().len() <= unsigned_limit).then_some(candidate)",
             "best = Some(candidate);",
             "lower = midpoint.saturating_add(1);",
-            "None => upper = midpoint.saturating_sub(1)"
+            "None => upper = midpoint.saturating_sub(1)",
+            "Ok(best)"
           ]
         },
         {
@@ -15819,11 +16637,14 @@
             "expected_post_state_hash",
             "merge_execution_batch_hash",
             "sources.is_empty() || total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS",
-            ".sort_by_key(|source| merge_execution_canonical_order_key(&source.certified.proposal))",
+            ".sort_by_key(|source| {\n                merge_execution_canonical_order_key(&source.certified.proposal)\n            })",
             ".preexecute_merge_execution_sources(application_block_header.clone(), sources)",
             "validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)",
             "total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS",
-            "merge_execution_canonical_order_key(&source.certified.proposal)"
+            "merge_execution_canonical_order_key(&source.certified.proposal)",
+            "Result<Option<MergeExecutionBatch>, BlockHashAdmissionError>",
+            "Ok(prepared) => prepared,",
+            "Err(MergeLedgerCommitError::BlockHashAdmission(error)) => return Err(error),"
           ]
         },
         {
@@ -15980,7 +16801,7 @@
             "MergeExecutionCommitSurface::PostBlockPreVote",
             "has_exact_staged_block(height, &self.merge_carrier_entrypoints)",
             "MergeExecutionCommitSurface::FinalizedCarrier",
-            "self.block_hashes.pending.as_slice() != core::slice::from_ref(carrier_hash)",
+            "!self\n                    .block_hashes\n                    .pending()\n                    .iter()\n                    .copied()\n                    .eq([*carrier_hash])",
             "exact merge-only post-block/pre-vote",
             "exact finalized-carrier",
             "topology_metadata_invalid",
@@ -15997,7 +16818,7 @@
             "finalized carrier metadata authorization was already minted",
             "reference.matches_entry(entry)",
             "canonical_wsv_merge_commit_authorization_matches",
-            "self.block_hashes.pending.as_slice() != [carrier_hash]",
+            "!self\n            .block_hashes\n            .pending()\n            .iter()\n            .copied()\n            .eq([carrier_hash])",
             "has_exact_staged_block(carrier_storage_height, &self.merge_carrier_entrypoints)",
             "authorization.validated_publication_event_bytes.is_none()",
             "finalized autonomous carrier lacks a validated publication event surface",
@@ -16719,7 +17540,7 @@
           "kind": "struct",
           "symbol": "TransactionsBlock",
           "required_tokens": [
-            "_guard: mv::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>",
+            "_guard:\n            concread::release::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>",
             "latest_block_ref: &'storage ArcSwapOption<BlockInfo>",
             "blocks_ref: &'storage DashMap<Key, Value>"
           ]
@@ -16796,15 +17617,20 @@
             "next_identity",
             "let changes_identity = !matches!(&publication, MembershipPublication::Repeated)",
             "if changes_identity",
-            "**block._guard = next_identity;",
+            "std::mem::replace(&mut **block._guard, next_identity)",
             "MembershipPublication::Repeated",
             "MembershipPublication::Replace",
             ".retain(|_, height| *height < current.height)",
             "MembershipPublication::Advance",
-            "if let Some(previous) = previous",
+            "if let Some(previous) = &previous",
             "block.blocks_ref.insert(transaction, previous.height)",
-            "block.latest_block_ref.store(Some(current))",
-            "drop(block)"
+            "block.latest_block_ref.swap(Some(current))",
+            "_guard.release_deferred(drop)",
+            "TransactionsPublicationRetirement {",
+            "_tip: tip",
+            "_staged: current_block",
+            "_identity: identity",
+            "_release: release"
           ]
         },
         {
@@ -17072,11 +17898,7 @@
           "symbol": "PreparedTransactionsBlock::detach",
           "required_tokens": [
             "fn detach(self)",
-            "predecessor_identity: Arc::clone(&block._guard)",
-            "predecessor: block.latest_block_ref.load_full()",
-            "revert: block.revert",
-            "drop(block)",
-            "detached"
+            "self.detach_retaining().0"
           ]
         },
         {
@@ -17098,7 +17920,7 @@
           "symbol": "TransactionsStorage",
           "required_tokens": [
             "write_lock: Mutex<Arc<()>>",
-            "released: mv::ReleaseNotification"
+            "released: concread::release::ReleaseNotification"
           ]
         },
         {
@@ -17387,7 +18209,7 @@
           "kind": "fn",
           "symbol": "preexecute_merge_execution_sources",
           "required_tokens": [
-            "self.merge_preexecution_block(application_block_header)",
+            "self.try_merge_preexecution_block(application_block_header)?",
             "Self::preexecute_merge_execution_sources_into(&mut state_block, sources)?",
             "Ok((state_block, executions))"
           ]
@@ -17431,6 +18253,60 @@
             "self.outstanding_components",
             ".try_fold(self.prune_journal_bytes, |total, kind| {",
             "total.checked_add(*self.component_allocation_bytes.get(kind)?)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "build_merge_execution_candidate_for_consensus",
+          "required_tokens": [
+            "StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>",
+            "if self.deterministic_start_work_pending(&application_block_header)? != Some(false) {\n            return Ok(None);\n        }",
+            "self.select_merge_execution_candidate_for_consensus(\n            epoch_id,\n            application_block_header,\n            consensus,\n            frozen_mode,\n        )\n        .map_err(StateBlockStartError::History)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "struct",
+          "symbol": "TransactionsPublicationRetirement",
+          "required_tokens": [
+            "_tip: Option<Arc<BlockInfo>>",
+            "_staged: Option<Arc<BlockInfo>>",
+            "_identity: Arc<()>",
+            "_release: concread::release::DeferredRelease"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "struct",
+          "symbol": "PublishedTransactions",
+          "required_tokens": [
+            "_retirement: TransactionsPublicationRetirement",
+            "_installation: Installation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "method",
+          "symbol": "PreparedDetachedTransactionsBlock::publish",
+          "required_tokens": [
+            "fn publish(self) -> PublishedTransactions<Installation>",
+            "PublishedTransactions {",
+            "_retirement: prepared.publish()",
+            "_installation: installation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/storage_transactions.rs",
+          "kind": "method",
+          "symbol": "PreparedTransactionsBlock::detach_retaining",
+          "required_tokens": [
+            "fn detach_retaining(\n            self,\n        )",
+            "predecessor_identity: Arc::clone(&block._guard)",
+            "predecessor: block.latest_block_ref.load_full()",
+            "revert: block.revert",
+            "_guard.release_deferred(drop)",
+            "(detached, release)"
           ]
         }
       ]
@@ -18494,7 +19370,7 @@
           "symbol": "PublicationMutex",
           "required_tokens": [
             "inner: parking_lot::Mutex<T>,",
-            "released: mv::ReleaseNotification,"
+            "released: concread::release::ReleaseNotification,"
           ]
         },
         {
@@ -18502,7 +19378,7 @@
           "kind": "struct",
           "symbol": "PublicationGuard",
           "required_tokens": [
-            "inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,"
+            "inner: concread::release::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,"
           ]
         },
         {

@@ -23,7 +23,7 @@ fn prepare_trigger_publication<Admission>(
 ) -> super::super::publication::PreparedSet<'_, Admission, ()> {
     journal
         .try_prepare_publication(target, |_, _| Ok::<_, ()>(()))
-        .unwrap_or_else(|(_, error)| panic!("trigger publication: {error:?}"))
+        .unwrap_or_else(|(_, error, _)| panic!("trigger publication: {error:?}"))
 }
 
 #[test]
@@ -39,8 +39,12 @@ fn complete_trigger_publication_matches_all_ten_direct_current_and_undo_images()
     let journal = capture(original);
     let pointer = contract_touch_pointer(&journal);
     let prepared = prepare_trigger_publication(journal, &set);
-    assert_eq!(images(&set), before, "preparation publishes no component");
-    let journal = prepared.abort();
+    let journal = prepared.abort().0;
+    assert_eq!(
+        images(&set),
+        before,
+        "preparation and abort publish no component"
+    );
     assert_eq!(contract_touch_pointer(&journal), pointer);
     assert!(journal.matches_current(&set));
     assert_all_writers_released(&set);
@@ -93,10 +97,11 @@ fn busy_at_each_trigger_component_returns_all_original_journals_and_releases_ear
     macro_rules! busy {
         ($field:ident) => {{
             let busy = set.$field.block();
-            let (returned, error) = journal
+            let (returned, error, _cleanup) = journal
                 .try_prepare_publication(&set, |_, _| Ok::<_, ()>(()))
                 .err()
                 .expect("busy component");
+            drop(_cleanup);
             assert!(
                 matches!(
                     error,
@@ -140,16 +145,17 @@ fn trigger_installation_refusal_and_late_identity_change_keep_every_original_del
     mutate_all(&mut block);
     let journal = capture(block);
     let pointer = contract_touch_pointer(&journal);
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&set, |_, _| {
             assert_all_writers_released(&set);
             Err::<(), _>("capacity")
         })
         .err()
         .expect("resource refusal");
+    drop(_cleanup);
     assert!(matches!(error, SetPublicationError::Admission("capacity")));
     let installation_released = Arc::new(AtomicBool::new(false));
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&set, |_, target| {
             target.contracts.block().commit();
             Ok::<_, ()>(TriggerInstallation {
@@ -159,6 +165,7 @@ fn trigger_installation_refusal_and_late_identity_change_keep_every_original_del
         })
         .err()
         .expect("late changed component");
+    drop(_cleanup);
     assert!(matches!(
         error,
         SetPublicationError::Component {
@@ -207,7 +214,7 @@ fn trigger_resource_guards_outlive_all_writers_on_drop_abort_and_publication() {
         match action {
             0 => drop(prepared),
             1 => {
-                let journal = prepared.abort();
+                let journal = prepared.abort().0;
                 assert!(!capture_released.load(Ordering::SeqCst));
                 assert!(installation_released.load(Ordering::SeqCst));
                 assert!(journal.matches_current(&set));

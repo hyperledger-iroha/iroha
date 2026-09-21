@@ -1639,7 +1639,7 @@ v2_apply_test!(
         let mut hashes = fixture.state.block_hashes.block();
         hashes.push_for_tests(fixture.body.hash());
         hashes.push_for_tests(fixture.body.hash());
-        hashes.commit();
+        hashes.commit_for_tests();
         assert!(matches!(
             fixture
                 .service

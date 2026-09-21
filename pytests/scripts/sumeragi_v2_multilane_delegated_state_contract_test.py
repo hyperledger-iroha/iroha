@@ -78,7 +78,9 @@ def test_delegated_state_is_connected_to_release_gate():
     "stage_certified_merge_entry",
     "stage_certified_merge_entry_with_replay",
     "stage_certified_merge_reference_for_verified_replay",
+    "select_merge_execution_candidate_for_consensus",
     "build_merge_execution_candidate_for_consensus",
+    "select_merge_execution_candidate_prefix",
     "select_merge_execution_source_budget",
     "build_merge_execution_batch_from_source_prefix",
     "apply_without_execution_inner",
@@ -177,8 +179,13 @@ def test_merge_batch_delegation_preserves_original_owner_obligations(fixture):
 
 
 @pytest.mark.parametrize("symbol,old,new", [
-    ("build_merge_execution_candidate_for_consensus", "gas_limit_from_parameters(world.parameters())", "u64::MAX"),
-    ("build_merge_execution_candidate_for_consensus", "sources[..prefix_len].to_vec()", "sources.clone()"),
+    ("build_merge_execution_candidate_for_consensus", "deterministic_start_work_pending(&application_block_header)?", "deterministic_start_work_pending(&application_block_header).ok().flatten()"),
+    ("build_merge_execution_candidate_for_consensus", ".map_err(StateBlockStartError::History)", ".or_else(|_| Ok(None))"),
+    ("select_merge_execution_candidate_for_consensus", "        )?;", "        ).unwrap_or(None);"),
+    ("select_merge_execution_candidate_prefix", "build_batch(midpoint)?", "build_batch(midpoint).unwrap_or(None)"),
+    ("build_merge_execution_batch_from_source_prefix", "Err(MergeLedgerCommitError::BlockHashAdmission(error)) => return Err(error),", "Err(MergeLedgerCommitError::BlockHashAdmission(_)) => return Ok(None),"),
+    ("select_merge_execution_candidate_for_consensus", "gas_limit_from_parameters(world.parameters())", "u64::MAX"),
+    ("select_merge_execution_candidate_for_consensus", "sources[..prefix_len].to_vec()", "sources.clone()"),
     ("select_merge_execution_source_budget", "source.origin_proposal.descriptor.proposal_height", "source.certified.proposal.descriptor.proposal_height"),
     ("select_merge_execution_source_budget", "selected_entrypoints.checked_add(source.input.entrypoints.len())", "Some(0)"),
     ("select_merge_execution_source_budget", "next_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS", "false"),

@@ -168,7 +168,7 @@ fn replacement_limit_comes_from_reverted_world_and_its_own_stage() {
 #[test]
 fn no_hook_probe_refuses_time_before_event_or_maintenance_effects() {
     let state = state(2);
-    let mut probe = state.consensus_effects_probe_block(header());
+    let mut probe = state.consensus_effects_probe_block(header()).unwrap();
     let events = probe.world.external_event_buf.len();
     assert!(probe.time_trigger_invocation_limit().is_err());
     let error = probe.prepare_owned_time_phase(&header()).unwrap_err();
@@ -477,7 +477,9 @@ fn try_block_rejects_invalid_acquired_abi_and_releases_the_overlay() {
     }
     assert!(matches!(
         state.try_block(header()),
-        Err(IvmAdmissionError::ManifestMalformed)
+        Err(crate::state::StateBlockStartError::Stage(
+            IvmAdmissionError::ManifestMalformed
+        ))
     ));
     // A failed constructor releases every acquired guard and leaves the input
     // unchanged; repairing the actual fixture store permits a fresh constructor.

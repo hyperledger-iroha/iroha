@@ -809,7 +809,7 @@ impl LifecycleValidateTaskV1 {
 enum LifecycleValidateRetryQueueErrorV1 {
     Unavailable {
         task: LifecycleValidateTaskV1,
-        release: mv::ReleaseWait,
+        release: concread::release::ReleaseWait,
     },
     InvalidOwner(LifecycleValidateTaskV1),
 }
@@ -1121,7 +1121,7 @@ impl V2IoWorkDescriptor {
 /// consensus its suffix, and trusted control the final slot without reordering.
 struct V2IoAdmission {
     queued: AtomicUsize,
-    lifecycle_capacity_release: mv::ReleaseNotification,
+    lifecycle_capacity_release: concread::release::ReleaseNotification,
     lifecycle_capacity_generation: AtomicU64,
     lifecycle_capacity_generation_exhausted: AtomicBool,
     auxiliary_limit: usize,
@@ -1173,7 +1173,7 @@ impl V2IoAdmission {
             .ok_or_else(|| "Sumeragi v2 I/O queue capacity overflow".to_owned())?;
         Ok(Self {
             queued: AtomicUsize::new(0),
-            lifecycle_capacity_release: mv::ReleaseNotification::default(),
+            lifecycle_capacity_release: concread::release::ReleaseNotification::default(),
             lifecycle_capacity_generation: AtomicU64::new(0),
             lifecycle_capacity_generation_exhausted: AtomicBool::new(false),
             auxiliary_limit: auxiliary_capacity,
@@ -1192,7 +1192,7 @@ impl V2IoAdmission {
     fn unbounded_for_tests() -> Arc<Self> {
         Arc::new(Self {
             queued: AtomicUsize::new(0),
-            lifecycle_capacity_release: mv::ReleaseNotification::default(),
+            lifecycle_capacity_release: concread::release::ReleaseNotification::default(),
             lifecycle_capacity_generation: AtomicU64::new(0),
             lifecycle_capacity_generation_exhausted: AtomicBool::new(false),
             auxiliary_limit: usize::MAX,

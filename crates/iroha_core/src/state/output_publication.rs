@@ -62,49 +62,27 @@ pub(in crate::state) struct FinalizedPublicationSurface {
     replay_prevalidation: bool,
 }
 
-/// Retained identity compares allocations, never the contents of a shared owner.
-struct PublicationIdentity<T>(Arc<T>);
-
-impl<T> std::fmt::Debug for PublicationIdentity<T> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("PublicationIdentity")
-    }
-}
-
-impl<T> PartialEq for PublicationIdentity<T> {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-/// Original immutable hash-log prefix plus this block's exact appended suffix.
+/// Original tree family/predecessor and exact appended suffix.
 #[derive(Debug, PartialEq)]
 struct BlockHashSurface {
-    owner: PublicationIdentity<BlockHashOwner>,
-    publication: PublicationIdentity<BlockHashPublication>,
+    predecessor:
+        concread::bptree::BptreeMapRetainedPredecessor<usize, HashOf<BlockHeader>, BlockHashMode>,
     mode: mv::BlockMode,
     visible_len: usize,
     pending: Vec<HashOf<BlockHeader>>,
 }
-
 impl BlockHashSurface {
     fn capture(block: &BlockHashesBlock<'_>, expected: &BlockHashes) -> Result<Self, String> {
-        // The owner only exposes appends. Its original read guard freezes the
-        // historical prefix, so checking the appended suffix is sufficient.
-        if !Arc::ptr_eq(&block.owner, &expected.owner)
-            || block.guard.is_none()
-            || block.visible.get(block.visible_len..) != Some(block.pending.as_slice())
-        {
+        if !std::ptr::eq(block.inner, expected) || block.visible_len > block.len() {
             return Err(
                 "publication hash journal lost its original prefix or pending suffix".into(),
             );
         }
         Ok(Self {
-            owner: PublicationIdentity(Arc::clone(&block.owner)),
-            publication: PublicationIdentity(Arc::clone(&block.publication)),
+            predecessor: block.work.predecessor().retain(),
             mode: block.mode,
             visible_len: block.visible_len,
-            pending: block.pending.clone(),
+            pending: block.pending().iter().copied().collect(),
         })
     }
 }
@@ -671,18 +649,24 @@ mod tests {
     }
 
     #[test]
-    fn hash_publication_surface_rejects_detached_or_inconsistent_suffix() {
+    fn hash_publication_surface_binds_original_predecessor_and_suffix() {
         let hashes = BlockHashes::default();
         let mut block = hashes.block();
         let empty = BlockHashSurface::capture(&block, &hashes).unwrap();
         block.push(header().hash());
         assert_ne!(empty, BlockHashSurface::capture(&block, &hashes).unwrap());
-        block.visible.pop();
-        assert!(BlockHashSurface::capture(&block, &hashes).is_err());
-        block.visible.push(header().hash());
-        BlockHashSurface::capture(&block, &hashes).unwrap();
-        block.prepare_commit();
-        assert!(BlockHashSurface::capture(&block, &hashes).is_err());
+        let foreign = BlockHashes::default();
+        assert!(BlockHashSurface::capture(&block, &foreign).is_err());
+        let captured = BlockHashSurface::capture(&block, &hashes).unwrap();
+        hashes.block().commit();
+        assert_eq!(
+            captured,
+            BlockHashSurface::capture(&block, &hashes).unwrap()
+        );
+        assert_ne!(
+            captured,
+            BlockHashSurface::capture(&hashes.block(), &hashes).unwrap()
+        );
     }
 
     #[test]

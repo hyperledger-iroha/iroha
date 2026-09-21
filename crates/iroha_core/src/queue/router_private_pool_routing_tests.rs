@@ -44,8 +44,8 @@ fn private_pool_route_fixture_router() -> ConfigLaneRouter {
 fn private_pool_batch_route_matches_stateful_admission() {
     let (sponsor, signer) = gen_account_in("pool-route");
     let router = private_pool_route_fixture_router();
-    let state = blank_state();
-    install_router_nexus(&state, &router);
+    let mut state = blank_state();
+    install_router_nexus(&mut state, &router);
     for count in [2_u64, 3, 4] {
         for reverse in [false, true] {
             let mut instructions = (1..=count)
@@ -85,8 +85,8 @@ fn private_pool_batch_route_matches_stateful_admission() {
 fn private_pool_batch_executable_has_the_same_global_coordinator() {
     let (sponsor, signer) = gen_account_in("pool-route-batch");
     let router = private_pool_route_fixture_router();
-    let state = blank_state();
-    install_router_nexus(&state, &router);
+    let mut state = blank_state();
+    install_router_nexus(&mut state, &router);
     let tx = sample_executable_transaction(
         &sponsor,
         signer.private_key(),
@@ -114,8 +114,8 @@ fn private_pool_batch_executable_has_the_same_global_coordinator() {
 fn private_pool_single_dataspace_stays_local_with_repeated_pool_instructions() {
     let (sponsor, signer) = gen_account_in("pool-route-local");
     let router = private_pool_route_fixture_router();
-    let state = blank_state();
-    install_router_nexus(&state, &router);
+    let mut state = blank_state();
+    install_router_nexus(&mut state, &router);
     for count in [1, 2] {
         let tx = sample_transaction(
             &sponsor,

@@ -1932,7 +1932,7 @@ pub(crate) fn validate_persisted_moderation_schema_v1(
 /// the hash committed at that one-based height.
 pub(crate) fn validate_persisted_moderation_anchor_history_v1(
     world: &impl WorldReadOnly,
-    committed_block_hashes: &[iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>],
+    committed_block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
 ) -> Result<(), InstructionExecutionError> {
     let appeal_start = StatePath::from_str(APPEAL_STATE_KEY_PREFIX)
         .expect("static moderation appeal prefix is valid");
@@ -1953,7 +1953,7 @@ pub(crate) fn validate_persisted_moderation_anchor_history_v1(
             corrupt_state("persisted moderation sortition-anchor height exceeds index bounds")
         })?;
         let committed_hash = committed_block_hashes
-            .get(anchor_index)
+            .hash_at(anchor_index)
             .map(|hash| *hash.as_ref())
             .ok_or_else(|| {
                 corrupt_state(format!(

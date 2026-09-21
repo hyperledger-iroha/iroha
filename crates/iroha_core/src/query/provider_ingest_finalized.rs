@@ -6947,7 +6947,7 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
     #[error("finalized provider-ingest archive index is busy")]
     IndexBusy {
         /// Release Kura and State fences before awaiting this actual index owner.
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
     },
     /// An exact prepared capture retains the archive predecessor and capacity.
     #[error("finalized provider-ingest archive is reserved by a prepared capture")]

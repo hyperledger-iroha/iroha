@@ -604,6 +604,10 @@ struct LocalProposalState {
     submitted: Option<(LocalProposalOwner, wire::BlockSubject)>,
     non_empty_retry: Option<LocalProposalOwner>,
     candidate_work_wait: Option<CandidateWorkWait>,
+    history_wait: Option<(
+        LocalProposalOwner,
+        super::v2_body_store::HistoryAdmissionWait,
+    )>,
     pending_events: Option<PendingLocalEvents>,
     global_selection: Option<PendingGlobalSelection>,
 }
@@ -613,6 +617,7 @@ impl LocalProposalState {
             && self.submitted.is_none()
             && self.non_empty_retry.is_none()
             && self.candidate_work_wait.is_none()
+            && self.history_wait.is_none()
             && self.pending_events.is_none()
             && self.global_selection.is_none()
     }
@@ -679,6 +684,13 @@ impl LocalProposalState {
                 self.global_selection = None;
             }
         }
+        if self
+            .history_wait
+            .as_ref()
+            .is_some_and(|(pending, _)| *pending != owner)
+        {
+            self.history_wait = None;
+        }
         let continued_exact_work = self
             .submitted
             .is_some_and(|(candidate, _)| candidate == owner)
@@ -706,6 +718,35 @@ impl LocalProposalState {
             self.candidate_work_wait = None;
         }
         owner
+    }
+    fn history_admission_pending(
+        &mut self,
+        owner: LocalProposalOwner,
+        wake: &std::task::Waker,
+    ) -> bool {
+        if let Some((pending_owner, pending)) = &mut self.history_wait
+            && *pending_owner == owner
+            && !pending.is_ready(wake)
+        {
+            return true;
+        }
+        self.history_wait = None;
+        false
+    }
+    fn defer_history_admission<E: std::fmt::Debug>(
+        &mut self,
+        owner: LocalProposalOwner,
+        error: &crate::state::StateBlockStartError<E>,
+        wake: &std::task::Waker,
+    ) -> bool {
+        let Some(wait) = error.release_wait() else {
+            return false;
+        };
+        self.history_wait = Some((
+            owner,
+            super::v2_body_store::HistoryAdmissionWait::new(wait.clone(), wake),
+        ));
+        true
     }
     /// Keep retrying deferred autonomous work for the bounded observation
     /// window, then arm one ordinary non-empty recovery retry for this owner.
@@ -1325,6 +1366,10 @@ fn schedule_local_proposal(
 ) -> Result<(), V2RunnerError> {
     let directive = executor.local_proposal_directive()?;
     let duties = local_consensus_duties(directive, local_validator);
+    let owner = proposal_state.reconcile(LocalProposalOwner::from(directive));
+    if proposal_state.history_admission_pending(owner, &queue.sumeragi_waker()) {
+        return Ok(());
+    }
     // Lane authority is frozen independently from the successor global
     // roster. A configured validator removed from that roster must still
     // produce a lane payload when the exact current lane descriptor selects
@@ -1383,7 +1428,29 @@ fn schedule_local_proposal(
             .is_some_and(|parent_creation_time| {
                 state.time_trigger_clock_progress_required_fast(parent_creation_time)
             });
-        if !candidate_block_has_proposal_work(&block, state, time_trigger_clock_progress_required) {
+        let has_work = match candidate_block_has_proposal_work(
+            &block,
+            state,
+            time_trigger_clock_progress_required,
+        ) {
+            Ok(has_work) => has_work,
+            Err(error)
+                if proposal_state.defer_history_admission(
+                    LocalProposalOwner::from(current),
+                    &error,
+                    &queue.sumeragi_waker(),
+                ) =>
+            {
+                services
+                    .rearm_loaded_candidate_delivery(current.tag(), loaded_round, loaded_subject)
+                    .map_err(V2RunnerError::Service)?;
+                return Ok(());
+            }
+            Err(error) => {
+                return Err(super::v2_candidate::CandidateError::LocalStateAdmission(error).into());
+            }
+        };
+        if !has_work {
             return Err(V2RunnerError::EmptyProposalWork);
         }
         let lane_binding = if context.height == 1 {
@@ -1562,7 +1629,21 @@ fn schedule_local_proposal(
             &carrier_context_header,
             npos_beacon,
             queue_plan_admissions,
-        )?;
+        );
+        let attachments = match attachments {
+            Ok(attachments) => attachments,
+            Err(V2RunnerError::CandidateBuild(
+                super::v2_candidate::CandidateError::LocalStateAdmission(error),
+            )) if proposal_state.defer_history_admission(
+                owner,
+                &error,
+                &queue.sumeragi_waker(),
+            ) =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
         let assembly = assembler.assemble(CandidateRequest {
             context,
             directive,
@@ -1574,7 +1655,20 @@ fn schedule_local_proposal(
             output_guard,
             attachments,
             work_provider: &mut *lane_work,
-        })?;
+        });
+        let assembly = match assembly {
+            Ok(assembly) => assembly,
+            Err(super::v2_candidate::CandidateError::LocalStateAdmission(error))
+                if proposal_state.defer_history_admission(
+                    owner,
+                    &error,
+                    &queue.sumeragi_waker(),
+                ) =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
         let candidate = match assembly {
             CandidateAssemblyOutcome::Assembled(candidate) => candidate,
             CandidateAssemblyOutcome::AwaitingRequiredBeacon(_report) => {
@@ -2817,7 +2911,17 @@ fn candidate_attachments(
             None,
         )
         .derive_npos_consensus_effects(round_header)
-        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
+        .map_err(|error| {
+            if let Some(refusal) = error.downcast_ref::<crate::state::BlockHashAdmissionError>() {
+                V2RunnerError::CandidateBuild(
+                    super::v2_candidate::CandidateError::LocalStateAdmission(
+                        crate::state::StateBlockStartError::History(refusal.clone()),
+                    ),
+                )
+            } else {
+                V2RunnerError::Candidate(error.to_string())
+            }
+        })?
     } else {
         Default::default()
     };

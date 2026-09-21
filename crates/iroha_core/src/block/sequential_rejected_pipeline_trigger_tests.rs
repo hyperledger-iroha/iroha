@@ -51,6 +51,7 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
         )
         .expect("probe state must accept its explicit network id");
         install_test_lane_manifests(&probe_state);
+        probe_state.seed_genesis_for_testing().expect("authenticate rejected-probe predecessor");
         let probe_block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             external_signed.clone(),
         ))])
@@ -181,7 +182,8 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
     );
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+    let fixture_triggers = std::mem::take(&mut world.triggers);
+    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
         world,
         kura,
         query_handle,
@@ -190,10 +192,12 @@ fn block_validation_sequential_entrypoints_execute_rejected_transaction_pipeline
     )
     .expect("test state must accept its explicit network id");
     install_test_lane_manifests(&state);
+    state.seed_genesis_for_testing().expect("authenticate rejected Pipeline predecessor");
+    state.world.triggers = fixture_triggers;
     let metadata_key =
         Name::from_str("sequential_rejected_commitment_marker").expect("metadata key");
     let (commitment_entrypoint, _reveal_entrypoint) =
-        sealed_set_key_entrypoints(state.network_id, &authority, &keypair, 2, 4, metadata_key);
+        sealed_set_key_entrypoints(state.network_id, &authority, &keypair, 3, 4, metadata_key);
     let accepted_external = AcceptedTransaction::new_unchecked(Cow::Owned(external_signed));
     let accepted_commitment =
         AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));

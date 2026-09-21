@@ -741,8 +741,9 @@ mod tests {
                 fault_tolerance: 1,
             });
         }
-        state.nexus.write().dataspace_catalog =
-            DataSpaceCatalog::new(entries).expect("dataspace catalog");
+        state.set_dataspace_catalog_for_testing(
+            DataSpaceCatalog::new(entries).expect("dataspace catalog"),
+        );
     }
     #[test]
     fn publish_manifest_requires_permission() {
@@ -1114,13 +1115,15 @@ mod tests {
     #[test]
     fn publish_manifest_rejects_unknown_dataspace() {
         let mut state = test_state();
-        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::UNIVERSAL,
-            alias: "universal".to_string(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("dataspace catalog");
+        state.set_dataspace_catalog_for_testing(
+            DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+        );
         let authority = (*ALICE_ID).clone();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::unknown-publish"));
         let dataspace = DataSpaceId::new(404);
@@ -1143,13 +1146,15 @@ mod tests {
     #[test]
     fn revoke_manifest_rejects_unknown_dataspace() {
         let mut state = test_state();
-        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::UNIVERSAL,
-            alias: "universal".to_string(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("dataspace catalog");
+        state.set_dataspace_catalog_for_testing(
+            DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+        );
         let authority = (*ALICE_ID).clone();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::unknown-revoke"));
         let dataspace = DataSpaceId::new(405);
@@ -1176,13 +1181,15 @@ mod tests {
     #[test]
     fn expire_manifest_rejects_unknown_dataspace() {
         let mut state = test_state();
-        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::UNIVERSAL,
-            alias: "universal".to_string(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("dataspace catalog");
+        state.set_dataspace_catalog_for_testing(
+            DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+        );
         let authority = (*ALICE_ID).clone();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::unknown-expire"));
         let dataspace = DataSpaceId::new(406);

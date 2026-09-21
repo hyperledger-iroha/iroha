@@ -3357,7 +3357,41 @@ _PRODUCTION_RUNNER_SOURCE_RETAINED_DISPATCH_TOKENS = """match dispatch_lane_work
 # deterministic execution only while the exact height/signing/body identity,
 # stable committed-State generation, and durable parent frontier all remain
 # unchanged.  Relay/drain candidates continue through the live validator.
+_HISTORY_REFUSAL_CLASSIFICATION = """
+    fn classify_merge_state_validation(
+        &mut self,
+        active_view: wire::View,
+        validation: Result<(), crate::state::MergeLedgerCommitError>,
+    ) -> Result<MergeCandidateValidation, MergeCandidateValidationError> {
+        match validation {
+            Ok(()) => Ok(MergeCandidateValidation::Ready),
+            Err(crate::state::MergeLedgerCommitError::BlockHashAdmission(error)) => {
+                self.validated_merge_execution_candidate = None;
+                let Some(wait) = error.release_wait() else {
+                    return Err(MergeCandidateValidationError::Frontier(error.to_string()));
+                };
+                let wake = self
+                    .lane_drain_queue
+                    .as_ref()
+                    .ok_or_else(|| {
+                        MergeCandidateValidationError::Frontier(
+                            "history admission requires the installed runner Queue".to_owned(),
+                        )
+                    })?
+                    .sumeragi_waker();
+                self.merge_history_wait = Some((
+                    active_view,
+                    super::v2_body_store::HistoryAdmissionWait::new(wait.clone(), &wake),
+                ));
+                Ok(MergeCandidateValidation::Deferred)
+            }
+            Err(error) => Err(MergeCandidateValidationError::Invalid(error.to_string())),
+        }
+    }
+"""
+
 _PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256 = {
+    "V2LaneWorkAdapter::classify_merge_state_validation": "ced67001d3007cf8ea27e93cf3c9150b4099f3b716099ed82480cd3f9e970a8a",
     "V2LaneWorkAdapter::mark_global_body_locked": (
         "65e206bcb8a1103890de075b511c915d1f2a69dc47594fc6f7ea97eb3e6bd2eb"
     ),
@@ -3368,7 +3402,7 @@ _PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256 = {
         "158719d3bf443fb55ec5a1930ad47b18bc31f814793dd12c95166aecd53378e6"
     ),
     "V2LaneWorkAdapter::validate_merge_candidate_for_active_round": (
-        "26db87bffa9322377b7deada5806513fc351ea14ac3c4fdc898a394634d4d89b"
+        "3787f91d3f0135b40a1c35e020c86329a7710a51fe11fd230440f17dea7dcaa2"
     ),
     "V2LaneWorkAdapter::merge_execution_candidate_validation_memo": (
         "cd51dc01cb4eff2b917d3a444a590f6ea99c0984e498a6800f420468a99f5d51"
@@ -3377,10 +3411,10 @@ _PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256 = {
         "4d6c98834a10298ffd9a8bd6ae9cd270cb7511c2d1ae3704631a531082dd35ee"
     ),
     "V2LaneWorkAdapter::build_and_memoize_merge_execution_candidate": (
-        "e3b505c8d734dda676fba19fb76f33cb708eda4f007c2a8abb999dba45b40d8e"
+        "acd21744399baaee24a46c8ff53dcda63cf38f0e6af6da6b9da843a0f34111c3"
     ),
     "V2LaneWorkAdapter::refresh_merge_candidates": (
-        "6f6336cbbbb88cb43a93b37edeecd263ab62a3efd00ac8e57e19f28ef9efd665"
+        "87e6a82ee95ecc7c36c76541e63f8ca848e075e6b5c8b11429b6f3a1168e76e5"
     ),
 }
 
@@ -3393,6 +3427,7 @@ def _require_merge_execution_validation_cache_contract(
     """Bind duplicate-execution suppression to exact live validation authority."""
 
     expected_items = {
+        "classify_merge_state_validation": (),
         "mark_global_body_locked": ("#[must_use]",),
         "retain_merge_sidecars_for_global_view_guarded": (),
         "decode_and_validate_leader_candidate": (),
@@ -3500,6 +3535,11 @@ let digest = crate::merge::merge_qc_message_digest(
         "leader candidate digest rejection must precede any expensive execution validation",
         errors,
     )
+    _require_rust_token_sequence(
+        lane_path, items.get("classify_merge_state_validation"),
+        _HISTORY_REFUSAL_CLASSIFICATION,
+        "local history refusal must retain its exact release and never mint invalid or ready authority", errors,
+    )
     validation_item = items.get("validate_merge_candidate_for_active_round")
     _require_rust_token_sequence(
         lane_path,
@@ -3546,9 +3586,7 @@ if candidate.execution_batch.is_none() {
                 self.validated_merge_execution_candidate = None;
                 return Ok(MergeCandidateValidation::Deferred);
             }
-            return validation
-                .map(|()| MergeCandidateValidation::Ready)
-                .map_err(|error| MergeCandidateValidationError::Invalid(error.to_string()));
+            return self.classify_merge_state_validation(active_view, validation);
         }
 """,
         "relay and drain candidates must retain full live production validation",
@@ -3711,7 +3749,11 @@ let validation = self.state.validate_merge_candidate_for_global_round(
             self.validated_merge_execution_candidate = None;
             return Ok(MergeCandidateValidation::Deferred);
         }
-        validation.map_err(|error| MergeCandidateValidationError::Invalid(error.to_string()))?;
+        if self.classify_merge_state_validation(active_view, validation)?
+            == MergeCandidateValidation::Deferred
+        {
+            return Ok(MergeCandidateValidation::Deferred);
+        }
         self.validated_merge_execution_candidate = Some(validated);
         Ok(MergeCandidateValidation::Ready)
 """,
@@ -3723,9 +3765,12 @@ let validation = self.state.validate_merge_candidate_for_global_round(
         items.get("build_and_memoize_merge_execution_candidate"),
         """
 let state_view_generation = self.state.state_view_generation();
-        let candidate = self
+        let Some(candidate) = self
             .state
-            .build_merge_execution_candidate(application_block_header, self.context.mode)?;
+            .build_merge_execution_candidate(application_block_header, self.context.mode)?
+        else {
+            return Ok(None);
+        };
         if self.state.state_view_generation() == state_view_generation
             && state_view_generation % 2 == 0
             && let Ok(validated) = self.merge_execution_candidate_validation_memo(
@@ -3741,7 +3786,7 @@ let state_view_generation = self.state.state_view_generation();
         {
             self.validated_merge_execution_candidate = Some(validated);
         }
-        Some(candidate)
+        Ok(Some(candidate))
 """,
         "only State's validating builder may seed a memo after exact identity and stable-frontier reauthentication",
         errors,
@@ -3751,24 +3796,49 @@ let state_view_generation = self.state.state_view_generation();
         items.get("refresh_merge_candidates"),
         """
 let execution_candidate = if self
-    .state
-    .has_pending_merge_execution_sources(self.context.mode)
-{
-    let header = self.merge_carrier_context_header(active_view)?;
-    self.build_and_memoize_merge_execution_candidate(
-        header,
-        &parent_header,
-        active_view,
-    )
-} else {
-    None
-};
-execution_candidate.or_else(|| {
-    self.state
-        .merge_entry_candidates_from_lane_relays_for_view(active_view)
-        .into_iter()
-        .find(|candidate| candidate.epoch_id == expected_epoch)
-})
+                    .state
+                    .has_pending_merge_execution_sources(self.context.mode)
+                {
+                    let header = self.merge_carrier_context_header(active_view)?;
+                    match self.build_and_memoize_merge_execution_candidate(
+                        header,
+                        &parent_header,
+                        active_view,
+                    ) {
+                        Ok(candidate) => candidate,
+                        Err(error) => {
+                            let Some(wait) = error.release_wait() else {
+                                return Err(V2LaneWorkError::StateAdmission(error));
+                            };
+                            let wake = self
+                                .lane_drain_queue
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    V2LaneWorkError::InvalidContext(
+                                        "history admission requires the installed runner Queue"
+                                            .to_owned(),
+                                    )
+                                })?
+                                .sumeragi_waker();
+                            self.merge_history_wait = Some((
+                                active_view,
+                                super::v2_body_store::HistoryAdmissionWait::new(
+                                    wait.clone(),
+                                    &wake,
+                                ),
+                            ));
+                            return Ok(self.defer_merge_candidate_work());
+                        }
+                    }
+                } else {
+                    None
+                };
+                execution_candidate.or_else(|| {
+                    self.state
+                        .merge_entry_candidates_from_lane_relays_for_view(active_view)
+                        .into_iter()
+                        .find(|candidate| candidate.epoch_id == expected_epoch)
+                })
 """,
         "refresh may seed positive execution authority only through the State validating builder before relay fallback",
         errors,
@@ -3802,6 +3872,21 @@ execution_candidate.or_else(|| {
         if self.context.height == 1 {
             self.validated_merge_execution_candidate = None;
             return Ok(MergeRefreshOutcome::Ready);
+        }
+        if let Some((view, pending)) = &mut self.merge_history_wait {
+            let wake = self
+                .lane_drain_queue
+                .as_ref()
+                .ok_or_else(|| {
+                    V2LaneWorkError::InvalidContext(
+                        "history admission requires the installed runner Queue".to_owned(),
+                    )
+                })?
+                .sumeragi_waker();
+            if *view == active_view && !pending.is_ready(&wake) {
+                return Ok(self.defer_merge_candidate_work());
+            }
+            self.merge_history_wait = None;
         }
         let refresh_generation = self.state.state_view_generation();
         if self
@@ -3990,11 +4075,12 @@ self.retain_native_amx_for_global_view(view)?;
 _PRODUCTION_MERGE_FRONTIER_DEFERRAL_ITEM_SHA256 = {'defer_merge_candidate_work': '4a48a4a3afe761e5b2a0de2a8a413812bb59579131e67f12ef738919d6dc3613',
  'authorize_local_merge_claim': '2692fba717e2c89c29cc713cec0038e1295d5d04944bb9b89d7b07e0fecd0ba2',
  'accept_merge_signature': 'db8ddd45d7d6298e24f801a45006cbcc3238b1f72049ed05835201b346126ceb',
- 'prepare_certified_execution_carrier': '7e8174dac126b8c2800d28efbba4e22e4d5a5d7259bb8ca09c7f9e2cb355209a',
- 'prepare': '658859b95c600cad04880d758bb1ef5a9e655c17cf49f2cd3e9a7209297d229b',
- 'defer_merge_frontier': '061aac13eb01958d1665afea6ca200f570abb9d50e3d7a4401dd61dcbfae31a3'}
+ 'prepare_certified_execution_carrier': '7a66d5edabd7dd6d13e6c789e268b9850e3ba00b9f413a74eac2ab91e0d257f4',
+ 'prepare': 'a537d5dcde20aa2d5cdf04d6541f0cf6faa84214d8d5f2af7ae7818db3845ced',
+ 'defer_candidate_snapshot': '56803fbc00d2fe464861d8a016840094bb8c44060c1dd39663c5587bf6bd047f'}
 
-_MERGE_FRONTIER_DEFERRAL_OWNERS = {'decode_and_validate_leader_candidate': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+_MERGE_FRONTIER_DEFERRAL_OWNERS = {'classify_merge_state_validation': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs', (('impl', 'V2LaneWorkAdapter'),), (), '_PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256', 'V2LaneWorkAdapter::classify_merge_state_validation'),
+ 'decode_and_validate_leader_candidate': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
                                           (('impl', 'V2LaneWorkAdapter'),),
                                           (),
                                           '_PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256',
@@ -4044,11 +4130,11 @@ _MERGE_FRONTIER_DEFERRAL_OWNERS = {'decode_and_validate_leader_candidate': ('cra
                                 (),
                                 '_PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256',
                                 'V2LaneWorkAdapter::schedule_retransmission_at'),
- 'defer_merge_frontier': ('crates/iroha_core/src/sumeragi/v2_runner.rs',
+ 'defer_candidate_snapshot': ('crates/iroha_core/src/sumeragi/v2_runner.rs',
                           (('impl', 'LocalProposalState'),),
                           (),
                           '_PRODUCTION_MERGE_FRONTIER_DEFERRAL_ITEM_SHA256',
-                          'defer_merge_frontier'),
+                          'defer_candidate_snapshot'),
  'schedule_local_proposal': ('crates/iroha_core/src/sumeragi/v2_runner.rs',
                              (),
                              ('#[allow(clippy::too_many_arguments)]',),
@@ -4061,6 +4147,7 @@ _MERGE_FRONTIER_DEFERRAL_OWNERS = {'decode_and_validate_leader_candidate': ('cra
                                                'V2LaneWorkAdapter::new_with_output_guard_and_transport_inner')}
 
 _MERGE_FRONTIER_DEFERRAL_CLAUSES = (
+    ('classify_merge_state_validation', 'local history refusal preserves original wake and cannot authorize', _HISTORY_REFUSAL_CLASSIFICATION, 1),
     ('merge_parent_frontier_at_generation', 'odd or changing State generation defers without authority', """
 if state_view_generation % 2 != 0
             || self.state.state_view_generation() != state_view_generation
@@ -4160,7 +4247,11 @@ let validation = self.state.validate_merge_candidate_for_global_round(
             self.validated_merge_execution_candidate = None;
             return Ok(MergeCandidateValidation::Deferred);
         }
-        validation.map_err(|error| MergeCandidateValidationError::Invalid(error.to_string()))?;
+        if self.classify_merge_state_validation(active_view, validation)?
+            == MergeCandidateValidation::Deferred
+        {
+            return Ok(MergeCandidateValidation::Deferred);
+        }
         self.validated_merge_execution_candidate = Some(validated);
         Ok(MergeCandidateValidation::Ready)
 """, 1),
@@ -4451,18 +4542,18 @@ self.purge_queued_global_body_effects_except_committed_outputs()?;
 self.schedule_committed_lane_outputs()?;
 """, 1),
     ('prepare', 'provider completes the operation and returns unavailable on deferral', """
-Ok(MergeRefreshOutcome::Deferred) => { operation.complete(); return Err(all_unavailable(candidates.len(), "merge frontier is changing",)); }
+Ok(MergeRefreshOutcome::Deferred) => { operation.complete(); return Err(CandidateWorkError::Deferred(CandidateWorkDeferral::MergeFrontier,)); }
 """, 1),
     ('prepare', 'provider keeps refresh errors fatal', """
-Err(error) => { drop(operation); return Err(all_unavailable(candidates.len(), error.to_string())); }
+Err(error) => { drop(operation); return Err(CandidateWorkError::Failed(error.to_string())); }
 """, 1),
     ('prepare_certified_execution_carrier', 'provider completes the operation and returns unavailable on deferral', """
-Ok(MergeRefreshOutcome::Deferred) => { operation.complete(); return Err(all_unavailable(candidates.len(), "merge frontier is changing",)); }
+Ok(MergeRefreshOutcome::Deferred) => { operation.complete(); return Err(CandidateWorkError::Deferred(CandidateWorkDeferral::MergeFrontier,)); }
 """, 1),
     ('prepare_certified_execution_carrier', 'provider keeps refresh errors fatal', """
-Err(error) => return Err(all_unavailable(candidates.len(), error.to_string())),
+Err(error) => return Err(CandidateWorkError::Failed(error.to_string())),
 """, 1),
-    ('defer_merge_frontier', 'producer uses bounded recheck without arming non-empty retry', """
+    ('defer_candidate_snapshot', 'producer uses bounded recheck without arming non-empty retry', """
 let started_at = self
             .candidate_work_wait
             .filter(|wait| wait.owner == owner)
@@ -4474,9 +4565,17 @@ let started_at = self
         });
 """, 1),
     ('schedule_local_proposal', 'producer returns before admitting work after frontier deferral', """
-if lane_work.refresh_merge_candidates(directive.tag().view())? == super::v2_lane_work::MergeRefreshOutcome::Deferred {
- proposal_state.defer_merge_frontier(owner, Instant::now()); return Ok(());
-}
+CandidateAssemblyOutcome::WorkDeferred { report, reason } => {
+                proposal_state.defer_candidate_snapshot(owner, Instant::now());
+                iroha_logger::debug!(
+                    height = owner.tag.height(),
+                    view = owner.tag.view(),
+                    ?reason,
+                    ?report,
+                    "deferred Sumeragi v2 proposal because its complete work snapshot is unavailable"
+                );
+                return Ok(());
+            }
 """, 1),
  )
 
@@ -4519,7 +4618,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkLimits::new": "be6dab607a9d6656ec34deb79c2cc0aff0e75d59731c290051e0f6dc10ba6bd5",
     "RetainedMergeSidecars::rehydrate_for_successor": "709b44e4cf845ffe76903ad4d7f61b9fa174ccc1f0a1a793d6733a37a23cd0a6",
     "V2LaneWorkAdapter::new_with_output_guard_and_transport": "017c1afe0515ff169d85bd9fd1a9ba86689ea35405952fe7647c66f42dabc8dd",
-    "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": "67a13a6263ad5152b2ff1442958173e17df0be6e636a24bb75010647b89c33b4",
+    "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": "bdf2ee3a9ba048c4feba0901f6db9c1aeee880b21060968bf1eb09a9a7b72ef5",
     "V2LaneWorkAdapter::activate_after_lane_drain_queue_install": "638503cfcc9963213cb6146d16d82ab270016e6f5da7bbbc8b2918aea9120cb2",
     "V2LaneWorkAdapter::into_retained_merge_sidecars": "06eaad5f62f4aaf7e8175008a511110dcb3469099716961acb6fda4c5506b40a",
     "V2LaneWorkAdapter::accept_relay_message": "87420fc8a24b8fb713af40ba5ba2f2df0efa3a04cf2893b087b2f221f34a0603",

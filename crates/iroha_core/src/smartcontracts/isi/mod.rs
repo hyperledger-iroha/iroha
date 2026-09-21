@@ -3103,7 +3103,7 @@ mod tests {
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
-        let mut state_transaction = state_block.transaction();
+        let mut state_transaction = state_block.transaction_for_callback_testing();
         let account_id = ALICE_ID.clone();
         let (fake_account_id, _fake_account_keypair) = gen_account_in("wonderland");
         let trigger_id = "test_trigger_id".parse::<TriggerId>()?;
@@ -3134,7 +3134,9 @@ mod tests {
             Error::InvalidParameter(InvalidParameterError::SmartContract(message))
                 if message.contains("trigger cannot be executed manually")
         ));
-        state_transaction.apply();
+        state_transaction
+            .apply_callback_for_testing()
+            .expect("capture successful component callbacks");
         state_block.commit_world_overlay_for_testing().unwrap();
         Ok(())
     }

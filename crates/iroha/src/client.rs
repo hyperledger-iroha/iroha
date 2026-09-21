@@ -15174,6 +15174,46 @@ mod evidence_http_tests {
     }
     #[test]
     fn async_local_status_missing_stays_missing_without_global_fallback() {
+        use iroha_torii_shared::{
+            ErrorDetails, ErrorEnvelope, PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+            PipelineTransactionStatusNotFoundV1,
+        };
+
+        let hash = transaction_hash(0x49);
+        let envelope = ErrorEnvelope::new(
+            PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+            "Missing status.",
+        )
+        .with_details(ErrorDetails {
+            pipeline_transaction_status_not_found: Some(PipelineTransactionStatusNotFoundV1::new(
+                &hash, "local",
+            )),
+            ..ErrorDetails::default()
+        });
+        let body = norito::json::to_string(&envelope).expect("typed local absence JSON");
+        let (decoded, snapshot) =
+            capture_request(json_response(StatusCode::NOT_FOUND, &body), |transport| {
+                let client =
+                    client_with_base_url(base_url()).with_test_http_transport(transport.clone());
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(client.fetch_transaction_status_response_local(hash))
+            });
+        assert!(
+            decoded
+                .expect("local absence is not transport failure")
+                .is_none()
+        );
+        assert_status_scope(&snapshot, "local");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES
+        );
+    }
+    #[test]
+    fn async_local_status_rejects_untyped_absence_without_global_fallback() {
         let (decoded, snapshot) =
             capture_request(json_response(StatusCode::NOT_FOUND, "{}"), |transport| {
                 let client =
@@ -15186,11 +15226,7 @@ mod evidence_http_tests {
                         client.fetch_transaction_status_response_local(transaction_hash(0x49)),
                     )
             });
-        assert!(
-            decoded
-                .expect("local absence is not transport failure")
-                .is_none()
-        );
+        let _ = decoded.expect_err("untyped 404 cannot establish local absence");
         assert_status_scope(&snapshot, "local");
         assert_eq!(
             snapshot.max_response_bytes,

@@ -358,3 +358,78 @@ fn detached_values_outlive_the_storage_without_a_reader_pin() {
     assert_eq!(entry.after.unwrap(), "after");
     assert!(!journal.matches_current(&Storage::new()));
 }
+
+#[test]
+fn capture_and_abort_release_both_writers_before_native_wake_even_on_unwind() {
+    use std::{
+        future::Future,
+        task::{Context, Wake, Waker},
+    };
+    struct Probe {
+        storage: Arc<Storage<u64, u64>>,
+        calls: AtomicUsize,
+        panic_once: AtomicBool,
+    }
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            assert!(
+                self.storage.revert.try_write().is_some(),
+                "undo still held during release wake"
+            );
+            assert!(
+                self.storage.blocks.try_write().is_some(),
+                "current still held during release wake"
+            );
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            assert!(
+                !self.panic_once.swap(false, Ordering::SeqCst),
+                "wake interruption"
+            );
+        }
+    }
+    for abort in [false, true] {
+        for panic_wake in [false, true] {
+            let storage = Arc::new(Storage::<u64, u64>::new());
+            let mut block = storage.block();
+            block.insert(1, 10);
+            let (block, prepared) = if abort {
+                let journal = block.try_detach(|_| Ok::<_, ()>(())).unwrap();
+                let prepared = journal
+                    .try_prepare_publication(&storage, |_, _| Ok::<_, ()>(()))
+                    .unwrap_or_else(|_| panic!("original pair"));
+                (None, Some(prepared))
+            } else {
+                (Some(block), None)
+            };
+            let probe = Arc::new(Probe {
+                storage: Arc::clone(&storage),
+                calls: AtomicUsize::new(0),
+                panic_once: AtomicBool::new(panic_wake),
+            });
+            let waker = Waker::from(Arc::clone(&probe));
+            let mut context = Context::from_waker(&waker);
+            let mut current = std::pin::pin!(storage.blocks_released.observe().wait_for_release());
+            let mut undo = std::pin::pin!(storage.revert_released.observe().wait_for_release());
+            assert!(current.as_mut().poll(&mut context).is_pending());
+            assert!(undo.as_mut().poll(&mut context).is_pending());
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if let Some(block) = block {
+                    drop(block.try_detach(|_| Ok::<_, ()>(())).unwrap());
+                }
+                if let Some(prepared) = prepared {
+                    drop(prepared.abort());
+                }
+            }));
+            assert_eq!(result.is_err(), panic_wake);
+            assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+            assert!(current.as_mut().poll(&mut context).is_ready());
+            assert!(undo.as_mut().poll(&mut context).is_ready());
+            assert!(!storage.revert_released.observe().is_poisoned());
+            assert!(!storage.blocks_released.observe().is_poisoned());
+            assert!(!storage.revert.is_poisoned());
+            assert!(!storage.blocks.is_poisoned());
+            assert!(storage.view().is_empty());
+            storage.block().commit();
+        }
+    }
+}

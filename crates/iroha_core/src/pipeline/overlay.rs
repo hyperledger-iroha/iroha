@@ -7767,7 +7767,7 @@ seiyaku ProtectedProvedOverlay {
             zk::BackendTag,
         };
         use std::sync::Arc;
-        let (program, _header_len, _meta) = sample_program_zk_mode();
+        let (program, _header_len, _meta) = sample_metered_program_zk_mode(2);
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
@@ -7800,6 +7800,7 @@ seiyaku ProtectedProvedOverlay {
             vk_fixture.schema_hash,
             vk_commitment,
         );
+        vk_record.namespace = "universal".to_owned();
         vk_record.status = ConfidentialStatus::Active;
         vk_record.gas_schedule_id = Some("sched_0".to_owned());
         vk_record.max_proof_bytes = 8 * 1024 * 1024;
@@ -8247,7 +8248,7 @@ seiyaku ProtectedProvedOverlay {
             zk::BackendTag,
         };
         use std::sync::Arc;
-        let (program, _header_len, _meta) = sample_program_zk_mode();
+        let (program, _header_len, _meta) = sample_metered_program_zk_mode(2);
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> =
             vec![InstructionBox::from(Log {
@@ -8385,7 +8386,7 @@ seiyaku ProtectedProvedOverlay {
         let Executable::IvmProved(proved) = tx.instructions() else {
             panic!("proved fixture");
         };
-        let allowance = ivm::VmCycleBudget::new(core::num::NonZeroU64::new(1).unwrap());
+        let allowance = ivm::VmCycleBudget::new(core::num::NonZeroU64::new(2).unwrap());
         let mut work = IvmProvedReplayWork::default();
         let bounded_error = verify_ivm_proved_execution(
             &*execution_block(&state),
@@ -8400,7 +8401,7 @@ seiyaku ProtectedProvedOverlay {
             matches!(bounded_error, OverlayBuildError::IvmProvedReplay(ref message)
             if message.contains("deterministic IVM replay"))
         );
-        assert_eq!(allowance.consumed(), 1);
+        assert_eq!(allowance.consumed(), 2);
         assert!(!allowance.exhausted());
         assert_eq!(work.gas_used().unwrap(), Some(replay.gas_used));
         assert!(replay.gas_used > 0);
@@ -8895,17 +8896,7 @@ seiyaku ProtectedProved {
         // Exercise the real authorized replay VM. This fixture deliberately
         // does not claim cryptographic proof verification; the verifier's
         // post-replay rejection has its own authenticated-proof control above.
-        let mut program = ivm::ProgramMetadata {
-            max_cycles: 8,
-            version_minor: 1,
-            mode: ivm::ivm_mode::ZK,
-            ..ivm::ProgramMetadata::default()
-        }
-        .encode();
-        program.extend_from_slice(
-            &sample_contract_interface(ivm::CONTRACT_FEATURE_BIT_ZK).encode_section(),
-        );
-        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let (program, _, _) = sample_metered_program_zk_mode(8);
         let bytecode = IvmBytecode::from_compiled(program);
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
@@ -9007,8 +8998,8 @@ seiyaku ProtectedProved {
         assert!(short.exhausted());
         assert_eq!(
             short.consumed(),
-            1,
-            "completed HALT remains charged when padding is refused"
+            2,
+            "completed arithmetic and HALT remain charged when padding is refused"
         );
         let failed_gas = failed_work.gas_used().unwrap().unwrap();
         assert!(failed_gas > 0 && failed_gas < baseline.gas_used);
@@ -9027,6 +9018,26 @@ seiyaku ProtectedProved {
         );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let parsed = ivm::ProgramMetadata::parse(&program).expect("parse sample program");
+        (program, parsed.header_len, parsed.metadata)
+    }
+    /// A real metered instruction followed by HALT, with optional ZK padding.
+    fn sample_metered_program_zk_mode(max_cycles: u64) -> (Vec<u8>, usize, ivm::ProgramMetadata) {
+        let meta = ivm::ProgramMetadata {
+            max_cycles,
+            version_minor: 1,
+            mode: ivm::ivm_mode::ZK,
+            ..ivm::ProgramMetadata::default()
+        };
+        let mut program = meta.encode();
+        program.extend_from_slice(
+            &sample_contract_interface(ivm::CONTRACT_FEATURE_BIT_ZK).encode_section(),
+        );
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 5, 0, 1)
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse metered sample program");
         (program, parsed.header_len, parsed.metadata)
     }
     fn sample_contract_interface(features_bitmap: u64) -> ivm::EmbeddedContractInterfaceV1 {

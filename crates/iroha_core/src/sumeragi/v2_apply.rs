@@ -6,7 +6,6 @@
 //! sidecar. Restart may observe Kura/WSV already at the decided height while
 //! the sidecar is absent; that state is completed without re-applying the
 //! block or validating it against a later state.
-use mv::storage::StorageReadOnly as _;
 
 use super::{
     message::CanonicalExecutedBlockNeedV1,
@@ -4041,12 +4040,49 @@ impl V2ApplyService {
             },
         }
     }
+    fn classify_validation_failure(
+        &self,
+        merge_reference: Option<&CertifiedMergeLedgerReference>,
+        failed_block: &SignedBlock,
+        error: &BlockValidationError,
+    ) -> V2ApplyError {
+        use crate::state::BlockHashAdmissionError;
+        if let BlockValidationError::BlockHashAdmission(refusal) = error {
+            let wait = match refusal {
+                BlockHashAdmissionError::Busy(wait) | BlockHashAdmissionError::Changed(wait) => {
+                    Some(wait)
+                }
+                BlockHashAdmissionError::Capacity(
+                    mv::allocation::AllocationRefusal::Capacity { release, .. },
+                ) => Some(release),
+                _ => None,
+            };
+            return V2ApplyError::LocalValidation(match wait {
+                Some(wait) => super::v2_body_store::LocalValidationRefusal::PhysicalBusy(
+                    BodyValidationBusy::new(
+                        "block_hash_history",
+                        wait.clone(),
+                        self.queue.sumeragi_waker(),
+                    ),
+                ),
+                None => super::v2_body_store::LocalValidationRefusal::RecoveryRequired(
+                    refusal.to_string(),
+                ),
+            });
+        }
+        Self::classify_candidate_validation_error(merge_reference, failed_block, error)
+    }
     /// Preserve local candidate readiness separately from deterministic invalidity.
     pub(super) fn classify_candidate_validation_error(
         merge_reference: Option<&CertifiedMergeLedgerReference>,
         failed_block: &SignedBlock,
         error: &BlockValidationError,
     ) -> V2ApplyError {
+        if let BlockValidationError::BlockHashAdmission(reason) = error {
+            return V2ApplyError::LocalValidation(
+                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.to_string()),
+            );
+        }
         if let BlockValidationError::DaIndexHydration(reason) = error {
             return V2ApplyError::LocalCanonicalState(reason.clone());
         }
@@ -5134,7 +5170,10 @@ impl V2ApplyService {
         )
     }
     fn classify_autoscale_retirement_queue_release(
-        release: Result<Option<mv::ReleaseWait>, crate::queue::QueueLaneRetirementUnavailable>,
+        release: Result<
+            Option<concread::release::ReleaseWait>,
+            crate::queue::QueueLaneRetirementUnavailable,
+        >,
         wake: std::task::Waker,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -5186,11 +5225,7 @@ impl V2ApplyService {
             &mut voting_block,
         )
         .map_err(|(failed_block, error)| {
-            Self::classify_candidate_validation_error(
-                merge_reference,
-                failed_block.as_ref(),
-                error.as_ref(),
-            )
+            self.classify_validation_failure(merge_reference, failed_block.as_ref(), error.as_ref())
         })?;
         debug_assert_eq!(prepared.context(), context);
         self.try_validate_prospective_autoscale_retirement_queue(
@@ -5365,7 +5400,7 @@ impl V2ApplyService {
             )
             .unpack(|event| pipeline_events.push(event))
             .map_err(|(failed_block, error)| {
-                Self::classify_candidate_validation_error(
+                self.classify_validation_failure(
                     merge_reference.as_ref(),
                     failed_block.as_ref(),
                     error.as_ref(),
@@ -5512,6 +5547,27 @@ impl V2ApplyService {
                 "pre-WSV Native AMX participant evidence publication",
                 &"read-back token differs from the exact State frontier projection",
             ));
+        }
+        if let Some(token) = native_amx_prepublication.as_ref() {
+            // Rejoin the exact original Kura token under all publication fences.
+            // This blocking live boundary releases every Kura fence before any
+            // State method below; retaining them across geometry commit would
+            // recursively acquire Kura. The consuming retained publisher remains
+            // gated on its independent source and staged-frontier custody.
+            self.kura
+                .reauthenticate_native_amx_prepublication(
+                    token,
+                    committed_block.as_ref(),
+                    &native_amx_manifest,
+                    artifact,
+                    &native_amx_frontiers,
+                )
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "pre-WSV Native AMX participant custody reauthentication",
+                        &error,
+                    )
+                })?;
         }
         // `apply_without_execution_with_verified_v2_finality` stages the
         // Native participant frontiers in the State overlay. Do not construct

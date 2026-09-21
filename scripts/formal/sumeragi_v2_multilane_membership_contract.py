@@ -21,14 +21,14 @@ MODELS = (
 )
 MEMBERSHIP_BINDINGS = (
     (STORAGE, "struct", "TransactionsStorage", (
-        "write_lock: Mutex<Arc<()>>", "released: mv::ReleaseNotification",
+        "write_lock: Mutex<Arc<()>>", "released: concread::release::ReleaseNotification",
     )),
     (STORAGE, "method", "TransactionsStorage::block_impl", (
         "let guard = self.released.guard(self.write_lock.lock());",
         "_guard: guard",
     )),
     (STORAGE, "struct", "TransactionsBlock", (
-        "_guard: mv::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>",
+        "_guard:\n            concread::release::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>",
         "latest_block_ref: &'storage ArcSwapOption<BlockInfo>",
         "blocks_ref: &'storage DashMap<Key, Value>",
     )),
@@ -59,12 +59,26 @@ MEMBERSHIP_BINDINGS = (
     (STORAGE, "method", "PreparedTransactionsBlock::publish", (
         "fn publish(self)", "mut block,", "publication,", "next_identity",
         "let changes_identity = !matches!(&publication, MembershipPublication::Repeated)",
-        "if changes_identity", "**block._guard = next_identity;",
+        "if changes_identity", "std::mem::replace(&mut **block._guard, next_identity)",
         "MembershipPublication::Repeated", "MembershipPublication::Replace",
         ".retain(|_, height| *height < current.height)",
-        "MembershipPublication::Advance", "if let Some(previous) = previous",
+        "MembershipPublication::Advance", "if let Some(previous) = &previous",
         "block.blocks_ref.insert(transaction, previous.height)",
-        "block.latest_block_ref.store(Some(current))", "drop(block)",
+        "block.latest_block_ref.swap(Some(current))", "_guard.release_deferred(drop)",
+        "TransactionsPublicationRetirement {", "_tip: tip", "_staged: current_block",
+        "_identity: identity", "_release: release",
+    )),
+    (STORAGE, "struct", "TransactionsPublicationRetirement", (
+        "_tip: Option<Arc<BlockInfo>>", "_staged: Option<Arc<BlockInfo>>",
+        "_identity: Arc<()>", "_release: concread::release::DeferredRelease",
+    )),
+    (STORAGE, "struct", "PublishedTransactions", (
+        "_retirement: TransactionsPublicationRetirement", "_installation: Installation",
+    )),
+    (STORAGE, "method", "PreparedDetachedTransactionsBlock::publish", (
+        "fn publish(self) -> PublishedTransactions<Installation>",
+        "PublishedTransactions {",
+        "_retirement: prepared.publish()", "_installation: installation",
     )),
     (STORAGE, "struct", "DetachedTransactionsBlock", (
         "predecessor_identity: Arc<()>",
@@ -72,9 +86,12 @@ MEMBERSHIP_BINDINGS = (
         "revert: bool", "publication: MembershipPublication", "next_identity: Arc<()>",
     )),
     (STORAGE, "method", "PreparedTransactionsBlock::detach", (
-        "fn detach(self)", "predecessor_identity: Arc::clone(&block._guard)",
+        "fn detach(self)", "self.detach_retaining().0",
+    )),
+    (STORAGE, "method", "PreparedTransactionsBlock::detach_retaining", (
+        "fn detach_retaining(\n            self,\n        )", "predecessor_identity: Arc::clone(&block._guard)",
         "predecessor: block.latest_block_ref.load_full()", "revert: block.revert",
-        "drop(block)", "detached",
+        "_guard.release_deferred(drop)", "(detached, release)",
     )),
     (STORAGE, "method", "DetachedTransactionsBlock::observe_predecessor", (
         "storage.write_lock.try_lock()", "MembershipPredecessorStatus::Busy",
@@ -138,12 +155,13 @@ def validate_membership_contract(
             "if expected_current_height != current_height { return Err(TransactionsBlockError::HeightMismatch {")
     require("TransactionsBlock::admit_publication",
             "if self.revert { Ok(MembershipPublication::Replace { current: Arc::clone(current_block), }) } else { Ok(MembershipPublication::Advance { previous: previous_block, current: Arc::clone(current_block), }) }")
-    require("PreparedTransactionsBlock::publish", "MembershipPublication::Repeated => {}")
+    require("PreparedTransactionsBlock::publish", "MembershipPublication::Repeated => None")
     require("PreparedTransactionsBlock::publish",
             "let Self { mut block, publication, next_identity, } = self;")
     require("PreparedTransactionsBlock::publish",
-            "if changes_identity { **block._guard = next_identity; }")
-    require("PreparedTransactionsBlock::detach", "drop(block); detached")
+            "if changes_identity { std::mem::replace(&mut **block._guard, next_identity) } else { next_identity }")
+    require("PreparedTransactionsBlock::detach", "self.detach_retaining().0")
+    require("PreparedTransactionsBlock::detach_retaining", "let ((), release) = _guard.release_deferred(drop);")
     require("DetachedTransactionsBlock::observe_predecessor",
             "let Some(guard) = storage.write_lock.try_lock() else { return MembershipPredecessorStatus::Busy; }; let guard = storage.released.guard(guard); if Arc::ptr_eq(&guard, &self.predecessor_identity)")
     require("DetachedTransactionsBlock::try_prepare_publication",
@@ -170,15 +188,17 @@ def validate_membership_contract(
     commit = items.get("commit_inner", "")
     cursor = 0
     for relation in (
+        "let membership_retirement;",
         "let _state_commit_lock = state_ref.state_commit_lock.lock();",
         "let tx_validate_result = transactions.prepare_commit();",
         "let transactions = tx_validate_result?;",
         "let autoscale_lifecycle_guard",
         "autoscale_retirement_queue_veto.as_mut()",
         "state_ref.apply_committed_autoscale_lane_geometry(",
-        "transactions.publish();",
+        "membership_retirement = transactions.publish();",
         "canonical_runtime.commit();",
         "world.commit();",
+        "drop(_state_commit_lock);", "drop(membership_retirement);",
     ):
         normalized = _code(relation)
         position = commit.find(normalized, cursor)

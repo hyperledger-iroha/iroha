@@ -1546,16 +1546,13 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             }
         }
         CommandKind::NexusLaneMaintenance { options } => {
-            let json_stdout = options.json_output == Path::new("-");
             let report = nexus_lane_maintenance::run(options)?;
-            if !json_stdout {
-                println!(
-                    "surveyed {} configured lane(s), {} storage instance(s), {} unrecognized entry/entries; no retirement authority inferred",
-                    report.configured_lanes.len(),
-                    report.observed_instances.len(),
-                    report.unrecognized_entries.len()
-                );
-            }
+            eprintln!(
+                "surveyed {} declared lane(s), {} instance block path(s), and {} instance merge scaffold(s)",
+                report.declared_lanes.len(),
+                report.instance_blocks.len(),
+                report.instance_merge_scaffolds.len()
+            );
         }
         CommandKind::NexusLaneAudit { options } => {
             nexus::run_lane_audit(&options)?;
@@ -5286,7 +5283,6 @@ where
         }
         "nexus-lane-maintenance" => {
             let mut config: Option<PathBuf> = None;
-            let mut json_out: Option<PathBuf> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -5295,16 +5291,6 @@ where
                             return Err("expected path after --config".into());
                         };
                         config = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--json-out" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --json-out".into());
-                        };
-                        json_out = Some(if path == "-" {
-                            PathBuf::from("-")
-                        } else {
-                            normalize_path(Path::new(&path))?
-                        });
                     }
                     flag => {
                         return Err(
@@ -5315,14 +5301,8 @@ where
             }
             let config = config
                 .ok_or_else(|| "nexus-lane-maintenance requires --config <path>".to_string())?;
-            let json_output = json_out.unwrap_or_else(|| {
-                workspace_root()
-                    .join("artifacts")
-                    .join("nexus_lane_maintenance.json")
-            });
             let options = nexus_lane_maintenance::LaneMaintenanceOptions {
                 config_path: config,
-                json_output,
             };
             Ok(CommandKind::NexusLaneMaintenance { options })
         }
@@ -11474,6 +11454,65 @@ mod acceleration_state_tests {
     use serde_json::Value;
     use soranet_pq::MlDsaSuite;
     #[test]
+    fn parse_nexus_lane_maintenance_read_only_inventory() {
+        let command = parse_command(
+            ["xtask", "nexus-lane-maintenance", "--config", "config.toml"]
+                .into_iter()
+                .map(String::from),
+        )
+        .expect("read-only inventory command");
+        let CommandKind::NexusLaneMaintenance { options } = command else {
+            panic!("expected lane inventory");
+        };
+        assert!(options.config_path.ends_with("config.toml"));
+    }
+
+    #[test]
+    fn parse_nexus_lane_maintenance_rejects_file_output() {
+        let error = match parse_command(
+            [
+                "xtask",
+                "nexus-lane-maintenance",
+                "--config",
+                "config.toml",
+                "--json-out",
+                "blocks/canonical/blocks.data",
+            ]
+            .into_iter()
+            .map(String::from),
+        ) {
+            Ok(_) => panic!("read-only maintenance must not open an output file"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            "unknown flag for nexus-lane-maintenance: --json-out"
+        );
+    }
+
+    #[test]
+    fn parse_nexus_lane_maintenance_rejects_compaction() {
+        let error = match parse_command(
+            [
+                "xtask",
+                "nexus-lane-maintenance",
+                "--config",
+                "config.toml",
+                "--compact-retired",
+            ]
+            .into_iter()
+            .map(String::from),
+        ) {
+            Ok(_) => panic!("config-only storage mutation must not be accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            "unknown flag for nexus-lane-maintenance: --compact-retired"
+        );
+    }
+
+    #[test]
     fn parse_supports_acceleration_state_command() {
         let args = ["xtask", "acceleration-state", "--format", "json"];
         let iter = args.into_iter().map(String::from);
@@ -11627,43 +11666,6 @@ mod acceleration_state_tests {
             _ => panic!("expected fastpq-cuda-suite command"),
         }
     }
-    #[test]
-    fn parse_nexus_lane_maintenance_rejects_retired_compaction() {
-        let args = [
-            "xtask",
-            "nexus-lane-maintenance",
-            "--config",
-            "peer.toml",
-            "--compact-retired",
-        ];
-        let error = match parse_command(args.into_iter().map(String::from)) {
-            Ok(_) => panic!("config-only archival is not a supported maintenance operation"),
-            Err(error) => error,
-        };
-        assert_eq!(
-            error.to_string(),
-            "unknown flag for nexus-lane-maintenance: --compact-retired"
-        );
-    }
-
-    #[test]
-    fn parse_nexus_lane_maintenance_preserves_stdout_target() {
-        let args = [
-            "xtask",
-            "nexus-lane-maintenance",
-            "--config",
-            "peer.toml",
-            "--json-out",
-            "-",
-        ];
-        let command = parse_command(args.into_iter().map(String::from)).expect("inventory command");
-        let CommandKind::NexusLaneMaintenance { options } = command else {
-            panic!("expected lane maintenance inventory");
-        };
-        assert_eq!(options.json_output, Path::new("-"));
-        assert!(options.config_path.ends_with("peer.toml"));
-    }
-
     #[test]
     fn parse_sorafs_gateway_attest_verify_command() {
         let args = [

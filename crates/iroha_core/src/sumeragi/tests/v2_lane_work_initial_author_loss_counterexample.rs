@@ -9,15 +9,30 @@
 // production once the shared lane reducer owns initial author replacement.
 
 fn initial_author_loss_fixture(local_validator_index: usize) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
-    let (mut observer, keys) = fixture_at_height_inner_with_kura_and_local_index(
+    let (observer, keys) = fixture_at_height_inner_with_initial_lane(
         wire::ConsensusMode::Permissioned,
         9,
         true,
+        default_lane_work_test_limits(),
         locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
         Some(local_validator_index),
         false,
+        wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        },
+        Some(LaneConfig {
+            id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(7),
+            alias: "independent-lane".to_owned(),
+            ..LaneConfig::default()
+        }),
+        None,
     );
-    enable_multilane_nexus(&mut observer, &keys, LaneId::new(1), DataSpaceId::new(7));
     let context = observer.context.clone();
     let restart = LaneAdapterRestartParts::capture(&observer);
     drop(observer);

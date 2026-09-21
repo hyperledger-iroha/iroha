@@ -44,7 +44,7 @@ IMPL_WRAPPER_SHA256 = (
     "cf5a4a8c4e178c712694c622489aec289d65c54ea3d8c92511d50516bc8bd2f2"
 )
 IMPLEMENTERS_SHA256 = (
-    "891de225447dd959ac0e998fce636e6cb116dfe22bce72faf8a27a8622ac10ba"
+    "e0a9547a480a977f098557b9859cd7941e76624b2331428a7649f10e57b66b03"
 )
 
 GROUPS = (
@@ -409,7 +409,7 @@ def validate_source(source: str) -> None:
     if _sha256(impl_wrapper) != IMPL_WRAPPER_SHA256:
         raise GuardError("WorldReadOnly implementation wrapper changed")
     implementers = """impl_world_ro! {
-    WorldBlock<'_>, WorldTransaction<'_, '_>, WorldView<'_>
+    WorldBlock<'_>, WorldTransaction<'_, '_>, Box<WorldTransaction<'_, '_>>, WorldView<'_>
 }"""
     if source.count(implementers) != 1 or _sha256(implementers) != IMPLEMENTERS_SHA256:
         raise GuardError("WorldReadOnly implementer order changed")
@@ -476,8 +476,14 @@ class StateWorldReadOnlyAccessorSchemaSourceTests(unittest.TestCase):
         self.assert_rejected(_replace_once(self.source, original, replacement))
 
     def test_implementer_mutation_is_rejected(self) -> None:
-        original = "WorldBlock<'_>, WorldTransaction<'_, '_>, WorldView<'_>"
-        replacement = "WorldView<'_>, WorldTransaction<'_, '_>, WorldBlock<'_>"
+        original = (
+            "WorldBlock<'_>, WorldTransaction<'_, '_>, "
+            "Box<WorldTransaction<'_, '_>>, WorldView<'_>"
+        )
+        replacement = (
+            "WorldView<'_>, WorldTransaction<'_, '_>, "
+            "Box<WorldTransaction<'_, '_>>, WorldBlock<'_>"
+        )
         self.assert_rejected(_replace_once(self.source, original, replacement))
 
     def test_callback_escape_hatch_is_rejected(self) -> None:

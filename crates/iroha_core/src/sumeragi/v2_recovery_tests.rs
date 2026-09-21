@@ -307,10 +307,15 @@ fn autonomous_lane_carrier_block_for_recovery(
         BlockExecutionContextBundle::new(Vec::new()).with_autonomous_lane_payloads(vec![envelope]),
     ));
     let leader = usize::try_from(context.leader(0)).expect("leader index fits usize");
-    let signed = builder.build_with_signature(
+    let mut signed = builder.build_with_signature(
         u64::try_from(leader).expect("leader index fits u64"),
         keys[leader].private_key(),
     );
+    signed.set_execution_outputs(
+        Vec::new(), 1, Default::default(), Vec::new(), Default::default(),
+        Default::default(), Vec::new(),
+        &crate::execution_output_test_support::structural_output_limits(),
+    ).expect("autonomous recovery carrier has complete structural outputs");
     ValidBlock::new_unverified_for_tests(signed)
         .commit_unchecked()
         .unpack(|_| {})
@@ -1153,6 +1158,9 @@ fn audited_snapshot_prefix_classifies_retained_legacy_bodies_without_sidecars() 
 #[test]
 fn untyped_zero_length_placeholder_is_never_a_replay_exemption() {
     let kura = Kura::blank_kura_for_testing();
+    let _state = State::new_for_testing(
+        World::default(), Arc::clone(&kura), LiveQueryStore::start_test(),
+    );
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC4; 32]));
     kura.extend_hash_only_suffix_from_verified_snapshot(&[hash])
         .expect("publish local snapshot placeholder without audited import authority");

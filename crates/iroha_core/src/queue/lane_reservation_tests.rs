@@ -4572,7 +4572,7 @@ fn ambiguous_reservation_put_disables_global_and_lane_selection_until_restart_re
     }
 }
 
-fn poll_lane_retirement_release(wait: &mut mv::ReleaseFuture) -> std::task::Poll<()> {
+fn poll_lane_retirement_release(wait: &mut concread::release::ReleaseFuture) -> std::task::Poll<()> {
     std::future::Future::poll(
         std::pin::Pin::new(wait),
         &mut std::task::Context::from_waker(std::task::Waker::noop()),
@@ -4753,7 +4753,7 @@ fn lane_retirement_fault_wakes_waiters_and_is_not_retryable_contention() {
 /// `Queue::commit_lane_reservation_for_test`; the real journals own the release.
 pub(crate) fn lane_retirement_release_fixture_for_test() -> (
     Arc<Queue>,
-    mv::ReleaseWait,
+    concread::release::ReleaseWait,
     LaneQueueReservationKeyV1,
     tempfile::TempDir,
 ) {

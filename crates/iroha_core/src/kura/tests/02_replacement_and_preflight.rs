@@ -2627,6 +2627,7 @@ fn kura_config_for_path(path: &Path, blocks_in_memory: NonZeroUsize) -> KuraConf
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
         lane_history_retention: LANE_HISTORY_RETENTION,
+        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }

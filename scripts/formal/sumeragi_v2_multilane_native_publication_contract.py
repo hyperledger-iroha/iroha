@@ -16,6 +16,9 @@ DATA = "crates/iroha_data_model/src/block/consensus.rs"
 REPLICA = "crates/iroha_core/src/kura/retained_finality_replica_authority.rs"
 PHYSICAL = "crates/iroha_core/src/kura/physical_resource_accounting.rs"
 GUARD = "crates/iroha_core/src/kura/physical_resource_guard.rs"
+LEASE = "crates/iroha_core/src/kura/publication_lease.rs"
+TOKEN = "crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs"
+APPLY = "crates/iroha_core/src/sumeragi/v2_apply.rs"
 NATIVE = "SumeragiV2NativeApplicationEvidence"
 INFLIGHT = "SumeragiV2AutonomousReservationCarrier"
 PERSIST = "persist_native_amx_participant_application_evidence_under_publication_guard"
@@ -29,10 +32,40 @@ WRITE_LATEST = "write_native_amx_participant_receipt_latest_index_for_prepublica
 AUTHENTICATE = "authenticate_native_amx_participant_application_prepublication_under_publication_guard"
 CLEANUP = "cleanup_native_amx_participant_application_evidence_under_publication_guard"
 CONSUME = "consume_native_amx_publication_component_after_durable_publication"
+CUSTODY = "Kura::reauthenticate_native_amx_prepublication"
+CUSTODY_GUARDED = CUSTODY + "_under_publication_guards"
 
 # Existing constructor/private-field bindings are retained verbatim in the ledger.
 # These additional owners close the decoding, sizing and accounting delegations.
 BINDINGS = (
+    (NATIVE, TOKEN, "struct", "NativeAmxParticipantApplicationPrepublicationToken", (
+        "original_kura: KuraInstanceIdentity",
+        "identities: Vec<NativeAmxParticipantApplicationPrepublicationIdentity>",
+    )),
+    (NATIVE, TOKEN, "method", "NativeAmxParticipantApplicationPrepublicationToken::from_plan", (
+        "original_kura: KuraInstanceIdentity",
+        "if usize::try_from(plan.manifest_leaf_count).ok() != Some(identities.len())",
+        "Some(Self {\n            original_kura,",
+    )),
+    (NATIVE, LEASE, "method", CUSTODY, (
+        "let prune = self.prune_lock.lock();",
+        "let canonical = self.canonical_chain_lock.lock();",
+        "let geometry = self.lane_geometry_lock.lock();",
+        "let sidecar = self.sidecar_lock.lock();",
+        "let result = self.reauthenticate_native_amx_prepublication_under_publication_guards(\n            token, block, manifest, finality, frontiers,\n        );",
+        "drop(sidecar);\n        drop(geometry);\n        drop(canonical);\n        drop(prune);\n        result",
+    )),
+    (NATIVE, LEASE, "method", CUSTODY_GUARDED, (
+        "if !token.original_kura.matches(self) {\n            return Err(",
+        "if !token.authenticates_state_frontiers(block, manifest, finality, frontiers) {\n            return Err(",
+        "v2_finality_artifact_with_archive_under_prune_and_canonical_guards(\n                token.application_block_height,\n            )?",
+        "if header != block.header()\n            || super::HashOf::new(&durable_finality) != token.finality_artifact_hash\n        {\n            return Err(",
+        "super::native_amx_participant_application_artifacts(\n            manifest,\n            token.finality_artifact_hash,\n        )",
+        "if artifacts.len() != token.identities.len() {\n            return Err(",
+        "for ((expected_manifest, expected_receipt), expected_identity) in\n            artifacts.iter().zip(&token.identities)",
+        "authenticate_native_amx_participant_application_prepublication_under_publication_guards(\n                    expected_manifest, expected_receipt, false,\n                )?",
+        "if actual != *expected_identity {\n                return Err(",
+    )),
     (NATIVE, DATA, "method", "NativeAmxParticipantSettlement::try_from", (
         "Self::try_new(", "wire.lane_id", "wire.dataspace_id", "wire.lane_incarnation",
         "wire.participant_lane_block_height", "wire.authority_context_height",
@@ -89,6 +122,8 @@ BINDINGS = (
     )),
 )
 EXTRA_ITEMS = (
+    (APPLY, "method", "V2ApplyService::validate_and_apply"),
+    (KURA, "fn", AUTHENTICATE + "s"),
     (DATA, "struct", "NativeAmxParticipantSettlement"),
     (DATA, "method", "NativeAmxParticipantSettlement::try_new"),
     (DATA, "method", "NativeAmxParticipantSettlement::source_ids"),
@@ -105,7 +140,7 @@ EXTRA_ITEMS = (
 SOURCE_RELATIVES = (
     Path("scripts/formal/sumeragi_v2_multilane_native_publication_contract.py"),
     Path("pytests/scripts/sumeragi_v2_multilane_native_publication_contract_test.py"),
-    *(Path(p) for p in (KURA, DATA, REPLICA, PHYSICAL, GUARD,
+    *(Path(p) for p in (KURA, DATA, REPLICA, PHYSICAL, GUARD, LEASE, TOKEN, APPLY,
                        "crates/iroha_core/src/native_amx.rs",
                        "crates/iroha_core/src/lane_consensus.rs",
                        "crates/iroha_data_model/src/merge.rs")),
@@ -169,7 +204,7 @@ def validate_phases(binding_items, errors):
             require(retry, f"for &index in target_indices {{ let (manifest, receipt) = &plan.artifacts[index]; let _ = self.{AUTHENTICATE}(manifest, receipt, true)?; self.{CLEANUP}(receipt)?; }} return Ok(target_indices.len());")
         else:
             require(retry, f"for (manifest, receipt) in &plan.artifacts {{ identities.push(self.{AUTHENTICATE}(manifest, receipt, mode.requires_post_apply_metadata())?); }}")
-            require(retry, "NativeAmxParticipantApplicationPrepublicationToken::from_plan(plan, identities)")
+            require(retry, "NativeAmxParticipantApplicationPrepublicationToken::from_plan(self.instance_identity(), plan, identities,)")
             require(retry, f"if permit_cleanup {{ for (_, receipt) in &plan.artifacts {{ self.{CLEANUP}(receipt)?; }} }} return Ok(token);")
         loop = "for &index in target_indices { let (manifest, receipt) = &plan.artifacts[index];" if repair else "for (manifest, receipt) in &plan.artifacts {"
         policy = "true" if repair else "permit_cleanup"
@@ -181,6 +216,7 @@ def validate_phases(binding_items, errors):
             require(publish, f"{loop} let _ = self.{AUTHENTICATE}(manifest, receipt, true)?; }} for &index in target_indices {{ let (_, receipt) = &plan.artifacts[index]; self.{CLEANUP}(receipt)?; }}")
         else:
             require(publish, "if plan.artifacts.iter().any(|(manifest, _)| !manifest_readback.authenticates(plan, manifest)) { return Err(")
+            require(publish, "NativeAmxParticipantApplicationPrepublicationToken::from_plan(self.instance_identity(), plan, identities,)")
             require(publish, f"if permit_cleanup {{ for (_, receipt) in &plan.artifacts {{ self.{CLEANUP}(receipt)?; }} }}")
 
 
@@ -243,3 +279,41 @@ def validate_owners(root, models, errors, rust_binding_item):
     startup = "rebuild_native_amx_participant_receipt_latest_indexes_on_startup"
     require(startup, "self.complete_native_amx_evidence_prune_intent_locked(recovery.guard(), &entry, &namespace)?; self.recover_native_amx_evidence_publication_temp_locked(recovery.guard(), &entry, &namespace, NativeAmxEvidenceRecoveryPhase::Startup)?; recovery.finish();")
     require(startup, "self.prune_native_amx_evidence_pairs_locked(lane_resources.guard(), &entry, &namespace)?;")
+    validate_participant_custody(items, errors)
+
+
+def validate_participant_custody(items, errors):
+    """Keep original identity/readback and lock release before live State staging."""
+    wrapper = _code(items.get(CUSTODY, ""))
+    order = (
+        "let prune = self.prune_lock.lock();",
+        "let canonical = self.canonical_chain_lock.lock();",
+        "let geometry = self.lane_geometry_lock.lock();",
+        "let sidecar = self.sidecar_lock.lock();",
+        "let result = self.reauthenticate_native_amx_prepublication_under_publication_guards(",
+        "drop(sidecar);", "drop(geometry);", "drop(canonical);", "drop(prune);",
+    )
+    positions = [wrapper.find(_code(token)) for token in order]
+    if -1 in positions or positions != sorted(positions):
+        errors.append("Native participant custody lost original lock/release order")
+    guarded = _code(items.get(CUSTODY_GUARDED, ""))
+    for symbol in (CUSTODY_GUARDED, AUTHENTICATE + "s"):
+        owner = _code(items.get(symbol, ""))
+        if any(token in owner for token in (".lock(", ".try_lock(", ".try_lock_or_wait(")):
+            errors.append(f"Native participant custody {symbol} reacquires a held publication fence")
+    if guarded.count("Ok(())") != 1 or not guarded.endswith("Ok(())}"):
+        errors.append("Native participant custody requires complete readback before its sole success")
+    live = _code(items.get("V2ApplyService::validate_and_apply", ""))
+    if _code('if let Some(token) = native_amx_prepublication.as_ref() { self.kura .reauthenticate_native_amx_prepublication( token, committed_block.as_ref(), &native_amx_manifest, artifact, &native_amx_frontiers, ).map_err(|error| { V2ApplyError::committed_recovery_required("pre-WSV Native AMX participant custody reauthentication", &error,) })?; }') not in live:
+        errors.append("Native participant custody lost its exact live owner/projection join")
+    order = ("token.authenticates_state_frontiers(",
+             ".reauthenticate_native_amx_prepublication(",
+             ".authorize_execution_output_publication(",
+             ".apply_without_execution_with_verified_v2_finality(")
+    positions = [live.find(token) for token in order]
+    if -1 in positions or positions != sorted(positions):
+        errors.append("Native participant custody must finish before live State staging")
+    token = items.get("NativeAmxParticipantApplicationPrepublicationToken", "")
+    if "{" in token and re.search(r"\bpub(?:\([^)]*\))?\s+\w+\s*:",
+                                  _mask_rust_comments(token.split("{", 1)[1])):
+        errors.append("Native participant custody exposes caller-constructed identity")

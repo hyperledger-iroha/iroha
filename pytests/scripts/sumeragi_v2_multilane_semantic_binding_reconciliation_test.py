@@ -214,7 +214,7 @@ def test_autonomous_terminal_and_authority_contracts_use_current_declarations():
 STATE_MERGE_SYMBOLS = (
     "pending_autoscale_lane_drain_body",
     "pending_autoscale_lane_drain_body_with_frontier",
-    "build_merge_execution_candidate_for_consensus",
+    "select_merge_execution_candidate_for_consensus",
     "select_merge_execution_source_budget",
     "merge_execution_proposal_gas",
     "build_merge_execution_batch_from_source_prefix",
@@ -227,6 +227,8 @@ STATE_MERGE_SYMBOLS = (
     "stage_certified_merge_entry_with_replay",
     "validate_merge_execution_batch",
     "validate_merge_execution_batch_with_replay",
+    "build_merge_execution_candidate_for_consensus",
+    "select_merge_execution_candidate_prefix",
 )
 
 
@@ -263,8 +265,13 @@ STATE_MERGE_MUTATIONS = (
     ("pending_autoscale_lane_drain_body_with_frontier", "if !autoscale_lane_drain_state_matches_context(", "if autoscale_lane_drain_state_matches_context("),
     ("pending_autoscale_lane_drain_body_with_frontier", "state.intent.min_quorum != min_quorum", "state.intent.min_quorum < min_quorum"),
     ("pending_autoscale_lane_drain_body_with_frontier", "frontier(lane.id, lane.dataspace_id, incarnation)?", "frontier(lane.id, lane.dataspace_id, foreign_incarnation)?"),
-    ("build_merge_execution_candidate_for_consensus", "gas_limit_from_parameters(world.parameters())", "u64::MAX"),
-    ("build_merge_execution_candidate_for_consensus", "if descriptor.validator_set != authoritative", "if false"),
+    ("build_merge_execution_candidate_for_consensus", "deterministic_start_work_pending(&application_block_header)?", "deterministic_start_work_pending(&application_block_header).ok().flatten()"),
+    ("build_merge_execution_candidate_for_consensus", ".map_err(StateBlockStartError::History)", ".or_else(|_| Ok(None))"),
+    ("select_merge_execution_candidate_for_consensus", "        )?;", "        ).unwrap_or(None);"),
+    ("select_merge_execution_candidate_prefix", "build_batch(midpoint)?", "build_batch(midpoint).unwrap_or(None)"),
+    ("build_merge_execution_batch_from_source_prefix", "Err(MergeLedgerCommitError::BlockHashAdmission(error)) => return Err(error),", "Err(MergeLedgerCommitError::BlockHashAdmission(_)) => return Ok(None),"),
+    ("select_merge_execution_candidate_for_consensus", "gas_limit_from_parameters(world.parameters())", "u64::MAX"),
+    ("select_merge_execution_candidate_for_consensus", "if descriptor.validator_set != authoritative", "if false"),
     ("select_merge_execution_source_budget", "source.origin_proposal.descriptor.proposal_height,", "source.certified.proposal.descriptor.proposal_height,"),
     ("select_merge_execution_source_budget", "selected_entrypoints.checked_add(source.input.entrypoints.len())", "selected_entrypoints.saturating_add(source.input.entrypoints.len())"),
     ("select_merge_execution_source_budget", "!crate::gas::gas_components_fit_block_limit(gas_limit, [selected_gas, gas])", "false"),

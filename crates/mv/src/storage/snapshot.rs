@@ -1,27 +1,29 @@
 //! Borrowed current and undo maps for generation-fenced snapshot capture.
 
-use super::{Storage, View};
+use super::{Storage, StorageMode, View};
 use crate::{Key, Value};
-use concread::bptree::BptreeMapReadTxn;
+use concread::bptree::{BptreeMapReadTxn, Untracked};
 use std::collections::BTreeMap;
 
 /// Read guards retaining both serialized maps without consuming undo history.
 ///
 /// Acquisition is not atomic across the two maps. The owner must fence capture
 /// with its publication generation and discard it if that generation changes.
-pub struct Snapshot<'a, K: Key, V: Value> {
-    current: View<'a, K, V>,
-    revert: BptreeMapReadTxn<'a, K, Option<V>>,
+pub struct Snapshot<'a, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
+    current: View<'a, K, V, M>,
+    revert: BptreeMapReadTxn<'a, K, Option<V>, M>,
 }
 
-impl<K: Key, V: Value> Storage<K, V> {
+impl<K: Key, V: Value, M: StorageMode<K, V>> Storage<K, V, M> {
     /// Acquire current and undo guards for an externally generation-fenced capture.
-    pub fn snapshot(&self) -> Snapshot<'_, K, V> {
+    pub fn snapshot(&self) -> Snapshot<'_, K, V, M> {
         let revert = self.revert.read();
         let current = self.view();
         Snapshot { current, revert }
     }
+}
 
+impl<K: Key, V: Value> Storage<K, V> {
     /// Restore exact current entries and predecessor preimages from a snapshot.
     ///
     /// A `None` preimage records prior absence even when the key is also absent
@@ -29,6 +31,7 @@ impl<K: Key, V: Value> Storage<K, V> {
     /// constructor; neither undo nor deleted entries are inferred from current data.
     pub fn from_snapshot_parts(current: BTreeMap<K, V>, revert: BTreeMap<K, Option<V>>) -> Self {
         Self {
+            allocation: None,
             publication: crate::publication::Publication::new(),
             revert_released: crate::ReleaseNotification::default(),
             blocks_released: crate::ReleaseNotification::default(),
@@ -38,14 +41,14 @@ impl<K: Key, V: Value> Storage<K, V> {
     }
 }
 
-impl<'a, K: Key, V: Value> Snapshot<'a, K, V> {
+impl<'a, K: Key, V: Value, M: StorageMode<K, V>> Snapshot<'a, K, V, M> {
     /// Borrow the committed entries retained at acquisition.
-    pub fn current(&self) -> &View<'a, K, V> {
+    pub fn current(&self) -> &View<'a, K, V, M> {
         &self.current
     }
 
     /// Borrow exact touched keys, including deleted values and prior absence.
-    pub fn revert_map(&self) -> &BptreeMapReadTxn<'a, K, Option<V>> {
+    pub fn revert_map(&self) -> &BptreeMapReadTxn<'a, K, Option<V>, M> {
         &self.revert
     }
 }

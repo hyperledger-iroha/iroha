@@ -496,7 +496,7 @@ impl KuraSeed {
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
         let block_hashes: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
         let committed_height =
-            u64::try_from(block_hashes.len()).map_err(|_| json::Error::InvalidField {
+            u64::try_from(block_hashes.hash_count()).map_err(|_| json::Error::InvalidField {
                 field: "state.block_hashes".to_owned(),
                 message: "committed height does not fit u64".to_owned(),
             })?;
@@ -586,14 +586,12 @@ impl KuraSeed {
         }
         let mut predecessor_context_policy = None;
         if let Some(previous) = runtime_predecessor.get() {
-            let predecessor_len =
-                block_hashes
-                    .len()
-                    .checked_sub(1)
-                    .ok_or_else(|| json::Error::InvalidField {
-                        field: "nexus_runtime.revert".to_owned(),
-                        message: "height-zero runtime cannot retain predecessor undo".to_owned(),
-                    })?;
+            let predecessor_len = block_hashes.hash_count().checked_sub(1).ok_or_else(|| {
+                json::Error::InvalidField {
+                    field: "nexus_runtime.revert".to_owned(),
+                    message: "height-zero runtime cannot retain predecessor undo".to_owned(),
+                }
+            })?;
             let (mut prior_nexus, prior_incarnations, _, _, _) =
                 nexus_from_snapshot_runtime(previous.clone(), &block_hashes[..predecessor_len])?;
             let prior_world = world.block_and_revert();
@@ -706,7 +704,14 @@ impl KuraSeed {
             BuildStateInputs {
                 lane_manifests: self.lane_manifests,
                 world,
-                block_hashes: BlockHashes::new(block_hashes),
+                block_hashes: BlockHashes::try_new(
+                    block_hashes,
+                    self.kura.block_hash_history_budget(),
+                )
+                .map_err(|error| json::Error::InvalidField {
+                    field: "state.block_hashes".into(),
+                    message: error.to_string(),
+                })?,
                 transactions,
                 commit_topology,
                 prev_commit_topology,
@@ -766,13 +771,19 @@ fn emergency_fast_block_hashes(
                 message: format!("failed to map the Kura Fast hash prefix: {error}"),
             })? {
             Some(mapping) => BlockHashes::new_emergency_fast_mapped(mapping, snapshot_height),
-            None => BlockHashes::default(),
+            None if snapshot_height == 0 => BlockHashes::new_emergency_fast_empty(),
+            None => {
+                return Err(json::Error::InvalidField {
+                    field: "state.block_hashes".to_owned(),
+                    message: "nonempty Fast boundary has no durable hash mapping".to_owned(),
+                });
+            }
         },
     )
 }
 fn nexus_from_snapshot_runtime(
     runtime: SnapshotNexusRuntime,
-    committed_block_hashes: &[HashOf<BlockHeader>],
+    committed_block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
 ) -> Result<
     (
         iroha_config::parameters::actual::Nexus,
@@ -886,7 +897,7 @@ fn nexus_from_snapshot_runtime(
         lane_incarnations.insert(lane.id, entry.incarnation);
         lane_incarnation_activation_heights.insert(lane.id, entry.activation_height);
     }
-    let committed_height = u64::try_from(committed_block_hashes.len()).unwrap_or(u64::MAX);
+    let committed_height = u64::try_from(committed_block_hashes.hash_count()).unwrap_or(u64::MAX);
     validate_lane_incarnation_lineage(
         &catalog,
         &lane_incarnations,
@@ -1052,7 +1063,7 @@ fn restore_snapshot_nexus_owner_policy(
 }
 fn validate_snapshot_autoscale_sample_history(
     runtime: &SnapshotNexusRuntime,
-    committed_block_hashes: &[HashOf<BlockHeader>],
+    committed_block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
 ) -> Result<VecDeque<AutoscaleSampleRecord>, json::Error> {
     let field = "nexus_runtime.autoscale_sample_history";
     let cap = usize::try_from(runtime.autoscale_sample_history_cap).map_err(|_| {
@@ -1096,7 +1107,7 @@ fn validate_snapshot_autoscale_sample_history(
             ),
         });
     }
-    if committed_block_hashes.is_empty() {
+    if committed_block_hashes.hash_count() == 0 {
         if history.is_empty() {
             return Ok(VecDeque::new());
         }
@@ -1111,11 +1122,12 @@ fn validate_snapshot_autoscale_sample_history(
             message: "history must retain the latest committed block".to_owned(),
         });
     }
-    let committed_height =
-        u64::try_from(committed_block_hashes.len()).map_err(|_| json::Error::InvalidField {
+    let committed_height = u64::try_from(committed_block_hashes.hash_count()).map_err(|_| {
+        json::Error::InvalidField {
             field: field.to_owned(),
             message: "committed height does not fit u64".to_owned(),
-        })?;
+        }
+    })?;
     let history_len = u64::try_from(history.len()).map_err(|_| json::Error::InvalidField {
         field: field.to_owned(),
         message: "history length does not fit u64".to_owned(),
@@ -1160,7 +1172,7 @@ fn validate_snapshot_autoscale_sample_history(
                 message: format!("record {index} height does not fit this platform"),
             }
         })?;
-        if committed_block_hashes.get(hash_index) != Some(&record.block_hash) {
+        if committed_block_hashes.hash_at(hash_index) != Some(&record.block_hash) {
             return Err(json::Error::InvalidField {
                 field: field.to_owned(),
                 message: format!(
@@ -1434,7 +1446,7 @@ fn validate_capacity_declarations(
 }
 fn validate_replication_order_completion_anchors(
     world: &World,
-    block_hashes: &[HashOf<BlockHeader>],
+    block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
 ) -> Result<(), json::Error> {
     for (order_id, order) in world.replication_orders.view().iter() {
         let order_label = hex::encode(order_id.as_bytes());
@@ -1450,7 +1462,7 @@ fn validate_replication_order_completion_anchors(
                         hex::encode(completion.provider_id.as_bytes()),
                     ),
                 })?;
-            let Some(committed_hash) = block_hashes.get(index) else {
+            let Some(committed_hash) = block_hashes.hash_at(index) else {
                 return Err(json::Error::InvalidField {
                     field: "state.world.replication_orders".to_owned(),
                     message: format!(
@@ -2193,7 +2205,7 @@ fn validate_musubi_resolver_checkpoint_structure(
 }
 fn validate_musubi_resolver_checkpoint_anchors(
     world: &World,
-    block_hashes: &[HashOf<BlockHeader>],
+    block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
 ) -> Result<(), json::Error> {
     let current_revision = world.musubi_resolver_index_revision.view().get().get();
     validate_musubi_resolver_checkpoint_structure(
@@ -2202,7 +2214,7 @@ fn validate_musubi_resolver_checkpoint_anchors(
     )?;
     let checkpoints = world.musubi_resolver_index_checkpoints.view();
     let history_is_empty = checkpoints.is_empty();
-    if block_hashes.is_empty() {
+    if block_hashes.hash_count() == 0 {
         if !history_is_empty {
             return Err(invalid_musubi_state(
                 "musubi_resolver_index_checkpoints",
@@ -2223,7 +2235,7 @@ fn validate_musubi_resolver_checkpoint_anchors(
             .checked_sub(1)
             .and_then(|index| usize::try_from(index).ok());
         let canonical_hash = index
-            .and_then(|index| block_hashes.get(index))
+            .and_then(|index| block_hashes.hash_at(index))
             .map(|hash| *hash.as_ref());
         if canonical_hash != Some(checkpoint.finalized_block_hash) {
             return Err(invalid_musubi_state(

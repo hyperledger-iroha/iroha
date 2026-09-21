@@ -22,6 +22,7 @@ use std::sync::atomic::Ordering::{AcqRel, Acquire};
 
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
+use std::ptr::NonNull;
 use std::sync::{Mutex, MutexGuard};
 
 /// Explicitly unaccounted mode for callers that do not attach allocation custody.
@@ -120,7 +121,7 @@ where
     }
 }
 
-impl<T, Charge> EbrCellWriteTxn<'_, T, Charge>
+impl<'a, T, Charge> EbrCellWriteTxn<'a, T, Charge>
 where
     T: Clone + Sync + Send + 'static,
     Charge: Send + Sync + 'static,
@@ -135,8 +136,23 @@ where
     /// Commit the changes in this write transaction to the `EbrCell`. This will
     /// consume the transaction so that further changes can not be made to it
     /// after this function is called.
-    pub fn commit(mut self) {
-        self.caller.commit(self.data.take().unwrap());
+    pub fn commit(self) {
+        drop(self.prepare_commit().publish().release());
+    }
+
+    /// Validate the original writer before beginning an aggregate publication.
+    /// This neither pins the epoch collector nor changes the active generation.
+    pub fn prepare_commit(self) -> EbrCellPreparedCommit<'a, T, Charge> {
+        assert!(self.data.is_some(), "original unpublished allocation");
+        // SAFETY: this writer exclusively prevents replacement of active. Its
+        // borrowed cell cannot be destroyed, and active is never null in a live
+        // cell. No protected payload reference escapes this ownership phase.
+        let active = self
+            .caller
+            .active
+            .load(Acquire, unsafe { epoch::unprotected() });
+        assert!(!active.is_null(), "original initialized generation");
+        EbrCellPreparedCommit { writer: self }
     }
 
     /// Release this writer while retaining its exact unpublished allocation.
@@ -145,6 +161,115 @@ where
     pub fn detach(mut self) -> EbrCellOwned<T, Charge> {
         EbrCellOwned {
             data: self.data.take(),
+        }
+    }
+}
+
+/// Original validated writer ready for a publication that runs no collector work.
+#[must_use = "publish the original writer or abandon its private allocation"]
+pub struct EbrCellPreparedCommit<
+    'a,
+    T: Clone + Send + Sync + 'static,
+    Charge: Send + Sync + 'static = Untracked,
+> {
+    writer: EbrCellWriteTxn<'a, T, Charge>,
+}
+
+/// Published generation retaining its physical writer until aggregate release.
+#[must_use = "retain this writer until every aggregate component is installed"]
+pub struct EbrCellPublished<
+    'a,
+    T: Clone + Send + Sync + 'static,
+    Charge: Send + Sync + 'static = Untracked,
+> {
+    // Drop order also unlocks before reclamation if the staged owner is abandoned.
+    writer: EbrCellWriteTxn<'a, T, Charge>,
+    retirement: EbrCellRetirement<T, Charge>,
+}
+
+/// Sole unscheduled custody of an unlinked allocation and its original charge.
+///
+/// No reader can newly acquire this allocation after the publication swap.
+/// Existing readers remain protected by their epoch pins. Dropping this owner
+/// schedules reclamation only; actual destruction still waits for that grace
+/// period. Keep it until all enclosing physical/publication locks are released.
+#[must_use = "drop only after releasing all enclosing publication locks"]
+pub struct EbrCellRetirement<
+    T: Clone + Send + Sync + 'static,
+    Charge: Send + Sync + 'static = Untracked,
+> {
+    allocation: Option<NonNull<Allocation<T, Charge>>>,
+}
+
+// SAFETY: this move-only owner never dereferences the unlinked allocation.
+// Collection can already execute on any thread, and both payload and charge are
+// Send. Its sole pointer is submitted to the collector exactly once on Drop.
+unsafe impl<T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static> Send
+    for EbrCellRetirement<T, Charge>
+{
+}
+
+impl<'a, T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static>
+    EbrCellPreparedCommit<'a, T, Charge>
+{
+    /// Return the same unpublished writer without allocating or publishing.
+    /// Its original exclusive lock remains held for aggregate rollback.
+    pub fn abort(self) -> EbrCellWriteTxn<'a, T, Charge> {
+        self.writer
+    }
+
+    /// Install the already allocated successor, retaining the original writer.
+    /// No epoch pin, collector callback, payload clone or user destructor runs.
+    pub fn publish(mut self) -> EbrCellPublished<'a, T, Charge> {
+        let next = self
+            .writer
+            .data
+            .take()
+            .expect("prepared original allocation");
+        // SAFETY: the exclusive writer is the only possible unlinker of active.
+        // The old pointer is not dereferenced or destroyed here: retirement owns
+        // it unscheduled until a real post-unlock pin can defer its reclamation.
+        let previous = self
+            .writer
+            .caller
+            .active
+            .swap(next, AcqRel, unsafe { epoch::unprotected() });
+        EbrCellPublished {
+            writer: self.writer,
+            retirement: EbrCellRetirement {
+                allocation: NonNull::new(previous.as_raw().cast_mut()),
+            },
+        }
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static>
+    EbrCellPublished<'_, T, Charge>
+{
+    /// Unlock without reclaiming a payload, refunding a charge, or notifying.
+    pub fn release(self) -> EbrCellRetirement<T, Charge> {
+        let Self { writer, retirement } = self;
+        // The original allocation has moved to active, so writer Drop only
+        // releases its physical guard. Retirement remains separately owned.
+        drop(writer);
+        retirement
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static> Drop
+    for EbrCellRetirement<T, Charge>
+{
+    fn drop(&mut self) {
+        // Pinning may collect unrelated old generations and run arbitrary user
+        // destructors. It belongs after physical/publication release. If that
+        // cleanup panics, retain the unscheduled allocation/charge conservatively
+        // instead of freeing memory still protected by existing reader pins.
+        let guard = epoch::pin();
+        if let Some(allocation) = self.allocation.take() {
+            // SAFETY: this original pointer has been unlinked exactly once and
+            // remains unscheduled custody of this owner. The real guard defers
+            // conversion to Owned until all readers of the old generation exit.
+            unsafe { defer_reclaim(&guard, Shared::from(allocation.as_ptr().cast_const())) };
         }
     }
 }
@@ -380,9 +505,11 @@ where
         mguard: MutexGuard<'a, ()>,
         admit: impl FnOnce(&T, Layout) -> Result<Charge, E>,
     ) -> Result<EbrCellWriteTxn<'a, T, Charge>, E> {
-        let guard = epoch::pin();
-        let current = self.active.load(Acquire, &guard);
-        // SAFETY: this initialized allocation remains protected by our pin.
+        // SAFETY: mguard excludes every active replacement, while the borrowed
+        // cell excludes destruction. Thus the current allocation cannot be
+        // unlinked or collected during admission/clone. A fresh epoch pin here
+        // could collect unrelated garbage and run callbacks under this lock.
+        let current = self.active.load(Acquire, unsafe { epoch::unprotected() });
         let current = unsafe { current.deref() };
         // Do not refund if Clone panics: it may have leaked partially built data.
         let charge = ManuallyDrop::new(admit(&current.value, Self::allocation_layout())?);
@@ -395,26 +522,6 @@ where
             caller: self,
             _guard: mguard,
         })
-    }
-
-    /// This is an internal component of the commit cycle. It takes ownership
-    /// of the value stored in the writetxn, and commits it to the main EbrCell
-    /// safely.
-    ///
-    /// In theory you could use this as a "lock free" version, but you don't
-    /// know if you are trampling a previous change, so it's private and we
-    /// let the writetxn struct serialise and protect this interface.
-    fn commit(&self, element: Owned<Allocation<T, Charge>>) {
-        // Yield a read txn?
-        let guard = epoch::pin();
-
-        // The writer already owns the exact allocation. Commit allocates no new
-        // payload; its exclusive lock makes this the only possible replacement.
-        let prev_data = self.active.swap(element, AcqRel, &guard);
-        // SAFETY: the swap unlinked this original allocation, and the callback
-        // retains its charge through the collector's actual destruction/free.
-        unsafe { defer_reclaim(&guard, prev_data) };
-        // Then return the current data with a readtxn. Do we need a new guard scope?
     }
 
     /// Begin a read transaction. The returned [`EbrCellReadTxn`] guarantees
@@ -758,5 +865,205 @@ mod tests_linear {
     #[test]
     fn test_default() {
         EbrCell::<()>::default();
+    }
+}
+
+#[cfg(test)]
+mod staged_commit_tests {
+    use super::*;
+    use std::sync::{atomic::AtomicUsize, Arc};
+    use std::time::{Duration, Instant};
+
+    struct Counts {
+        clones: AtomicUsize,
+        payloads: [AtomicUsize; 3],
+        charges: [AtomicUsize; 3],
+    }
+
+    impl Counts {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                clones: AtomicUsize::new(0),
+                payloads: std::array::from_fn(|_| AtomicUsize::new(0)),
+                charges: std::array::from_fn(|_| AtomicUsize::new(0)),
+            })
+        }
+    }
+
+    struct Payload {
+        value: Box<u64>,
+        id: usize,
+        counts: Arc<Counts>,
+    }
+
+    impl Clone for Payload {
+        fn clone(&self) -> Self {
+            Self {
+                value: self.value.clone(),
+                id: self.counts.clones.fetch_add(1, AcqRel) + 1,
+                counts: Arc::clone(&self.counts),
+            }
+        }
+    }
+
+    impl Drop for Payload {
+        fn drop(&mut self) {
+            assert_eq!(self.counts.payloads[self.id].fetch_add(1, AcqRel), 0);
+        }
+    }
+
+    struct Charge {
+        id: usize,
+        counts: Arc<Counts>,
+    }
+
+    impl Drop for Charge {
+        fn drop(&mut self) {
+            assert_eq!(self.counts.payloads[self.id].load(Acquire), 1);
+            assert_eq!(self.counts.charges[self.id].fetch_add(1, AcqRel), 0);
+        }
+    }
+
+    fn charged(counts: &Arc<Counts>) -> EbrCell<Payload, Charge> {
+        EbrCell::new_charged(
+            Payload {
+                value: Box::new(10),
+                id: 0,
+                counts: Arc::clone(counts),
+            },
+            Charge {
+                id: 0,
+                counts: Arc::clone(counts),
+            },
+        )
+    }
+
+    fn collect_until(mut complete: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !complete() {
+            assert!(
+                Instant::now() < deadline,
+                "original retired allocation was not reclaimed"
+            );
+            let guard = epoch::pin();
+            guard.flush();
+            drop(guard);
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn staged_publication_moves_original_allocation_and_preserves_old_reader_charge() {
+        let counts = Counts::new();
+        let cell = charged(&counts);
+        let old = cell.read();
+        let mut writer = cell
+            .write_charged(|_, _| {
+                Ok::<_, ()>(Charge {
+                    id: 1,
+                    counts: Arc::clone(&counts),
+                })
+            })
+            .unwrap();
+        *writer.value = 11;
+        let successor = &**writer.data.as_ref().unwrap() as *const Allocation<Payload, Charge>;
+        let original = cell
+            .active
+            .load(Acquire, unsafe { epoch::unprotected() })
+            .as_raw();
+        let prepared = writer.prepare_commit();
+        assert!(cell.write.try_lock().is_err());
+        assert_eq!(
+            cell.active
+                .load(Acquire, unsafe { epoch::unprotected() })
+                .as_raw(),
+            original
+        );
+        let published = prepared.publish();
+        assert!(cell.write.try_lock().is_err());
+        assert_eq!(
+            cell.active
+                .load(Acquire, unsafe { epoch::unprotected() })
+                .as_raw(),
+            successor
+        );
+        assert_eq!(counts.clones.load(Acquire), 1);
+        let retirement = published.release();
+        assert!(cell.write.try_lock().is_ok());
+        assert_eq!(counts.payloads[0].load(Acquire), 0);
+        assert_eq!(counts.charges[0].load(Acquire), 0);
+        drop(retirement);
+        for _ in 0..8 {
+            let guard = epoch::pin();
+            guard.flush();
+        }
+        assert_eq!(*old.value, 10);
+        assert_eq!(counts.charges[0].load(Acquire), 0);
+        assert_eq!(*cell.read().value, 11);
+        drop(old);
+        collect_until(|| counts.charges[0].load(Acquire) == 1);
+        assert_eq!(counts.charges[1].load(Acquire), 0);
+        drop(cell);
+        collect_until(|| counts.charges[1].load(Acquire) == 1);
+    }
+
+    #[test]
+    fn abandoned_prepared_writer_reclaims_only_original_private_allocation() {
+        let counts = Counts::new();
+        let cell = charged(&counts);
+        let writer = cell
+            .write_charged(|_, _| {
+                Ok::<_, ()>(Charge {
+                    id: 1,
+                    counts: Arc::clone(&counts),
+                })
+            })
+            .unwrap();
+        drop(writer.prepare_commit());
+        assert_eq!(counts.clones.load(Acquire), 1);
+        assert_eq!(counts.charges[1].load(Acquire), 1);
+        assert_eq!(counts.charges[0].load(Acquire), 0);
+        assert!(!cell.is_poisoned());
+        assert_eq!(*cell.read().value, 10);
+        drop(cell);
+        collect_until(|| counts.charges[0].load(Acquire) == 1);
+    }
+
+    #[test]
+    fn published_owner_drop_unlocks_and_retirement_can_move_to_another_thread() {
+        let counts = Counts::new();
+        let cell = charged(&counts);
+        let mut writer = cell
+            .write_charged(|_, _| {
+                Ok::<_, ()>(Charge {
+                    id: 1,
+                    counts: Arc::clone(&counts),
+                })
+            })
+            .unwrap();
+        *writer.value = 12;
+        let retirement = writer.prepare_commit().publish().release();
+        assert!(cell.write.try_lock().is_ok());
+        std::thread::spawn(move || drop(retirement)).join().unwrap();
+        collect_until(|| counts.charges[0].load(Acquire) == 1);
+        let mut next = cell
+            .write_charged(|_, _| {
+                Ok::<_, ()>(Charge {
+                    id: 2,
+                    counts: Arc::clone(&counts),
+                })
+            })
+            .unwrap();
+        *next.value = 13;
+        // Abandoning the already published stage follows the same field order:
+        // physical writer first, then the unscheduled old-generation retirement.
+        drop(next.prepare_commit().publish());
+        assert!(cell.write.try_lock().is_ok());
+        assert_eq!(counts.clones.load(Acquire), 2);
+        assert_eq!(*cell.read().value, 13);
+        drop(cell);
+        collect_until(|| {
+            counts.charges[1].load(Acquire) == 1 && counts.charges[2].load(Acquire) == 1
+        });
     }
 }

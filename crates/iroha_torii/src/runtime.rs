@@ -2145,7 +2145,7 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn projection_archive_marker_is_derived_from_the_same_state_view_as_rows() {
-        let state = State::new_for_testing(
+        let mut state = State::new_for_testing(
             iroha_core::state::World::default(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
@@ -2154,8 +2154,8 @@ mod tests {
             iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
                 iroha_crypto::Hash::new([0xA7; iroha_crypto::Hash::LENGTH]),
             );
-        let mut view = state.query_view();
-        view.block_hashes.push(expected_hash);
+        state.push_block_hash_for_testing(expected_hash);
+        let view = state.query_view();
 
         let archive = build_accounts_projection_shard_archive(&view, 0, 1_714_002_777)
             .expect("build projection archive from one committed view");

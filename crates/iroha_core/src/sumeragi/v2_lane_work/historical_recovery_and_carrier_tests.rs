@@ -2357,10 +2357,16 @@ fn merge_sidecar_carrier_block(
         BlockExecutionContextBundle::new(Vec::new())
             .with_merge_entry(CertifiedMergeLedgerReference::new(entry)),
     ));
-    builder.build_with_signature(
+    let mut block = builder.build_with_signature(
         u64::try_from(leader).expect("historical carrier leader index fits u64"),
         keys[leader].private_key(),
-    )
+    );
+    block.set_execution_outputs(
+        Vec::new(), entry.lane_snapshots.len().try_into().expect("fixture fragments fit u64"),
+        Default::default(), Vec::new(), Default::default(), Default::default(), Vec::new(),
+        &crate::execution_output_test_support::structural_output_limits(),
+    ).expect("historical sidecar carrier retains complete structural result metadata");
+    block
 }
 fn verified_finality_for_context(
     context: &wire::HeightContext,
@@ -2446,12 +2452,30 @@ fn finalized_sidecar_server_fixture_with_lane_committee(
     apply_state: bool,
 ) -> HistoricalSidecarServerFixture {
     assert!(!advance_height || apply_state);
-    let (mut adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
-    if let Some(lane_keys) = lane_keys {
-        let lane_committee =
-            enable_multilane_nexus(&mut adapter, lane_keys, LaneId::new(1), DataSpaceId::new(7));
-        assert_eq!(lane_committee.len(), lane_keys.len());
-    }
+    let (adapter, keys) = fixture_at_height_inner_with_initial_lane(
+        wire::ConsensusMode::Permissioned,
+        2,
+        true,
+        default_lane_work_test_limits(),
+        locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
+        None,
+        true,
+        wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        },
+        lane_keys.map(|_| LaneConfig {
+            id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(7),
+            alias: "independent-lane".to_owned(),
+            ..LaneConfig::default()
+        }),
+        lane_keys.map(<[KeyPair]>::to_vec),
+    );
     let canonical_reference = holder_indices.map_or_else(
         || missing_sidecar_reference(&adapter, &keys, 1),
         |indices| missing_sidecar_reference_with_signers(&adapter, &keys, 1, indices),
@@ -3762,14 +3786,31 @@ fn current_height_sidecar_service_rejects_a_different_carrier_parent() {
 }
 #[test]
 fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() {
-    let (mut parent, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
     let autonomous_lane_id = LaneId::new(1);
     let autonomous_dataspace_id = DataSpaceId::new(7);
-    enable_multilane_nexus(
-        &mut parent,
-        &keys,
-        autonomous_lane_id,
-        autonomous_dataspace_id,
+    let (parent, keys) = fixture_at_height_inner_with_initial_lane(
+        wire::ConsensusMode::Permissioned,
+        1,
+        true,
+        default_lane_work_test_limits(),
+        locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
+        None,
+        true,
+        wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        },
+        Some(LaneConfig {
+            id: autonomous_lane_id,
+            dataspace_id: autonomous_dataspace_id,
+            alias: "independent-lane".to_owned(),
+            ..LaneConfig::default()
+        }),
+        None,
     );
     let autonomous_lane_entry = parent
         .state
@@ -4246,10 +4287,15 @@ fn finalized_carrier_malformed_cross_kind_fail_stops_proposal_and_payload_ingres
                 .with_autonomous_lane_payloads(vec![envelope]),
         ));
         let leader = usize::try_from(adapter.context.leader(0)).expect("global leader index");
-        let carrier = builder.build_with_signature(
+        let mut carrier = builder.build_with_signature(
             u64::try_from(leader).expect("global leader index fits u64"),
             keys[leader].private_key(),
         );
+        carrier.set_execution_outputs(
+            Vec::new(), 0, Default::default(), Vec::new(), Default::default(),
+            Default::default(), Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        ).expect("cross-kind evidence fixture retains complete result metadata");
         adapter
             .kura
             .store_block(carrier.clone())
@@ -4618,7 +4664,7 @@ fn former_producer_first_binds_view_zero_merge_body_after_view_change_with_owned
             &block,
             adapter.state.as_ref(),
             false,
-        )
+        ).unwrap()
     );
     let (round_zero, subject) = global_lock_for_block(&adapter, &block);
     assert_eq!(round_zero.view, 0);

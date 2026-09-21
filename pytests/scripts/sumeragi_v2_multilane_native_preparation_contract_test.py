@@ -635,13 +635,13 @@ def test_terminal_carrier_rejects_owner_mutation(fixture, owner, symbol, old, ne
 
 
 @pytest.mark.parametrize("owner,symbol,old,new", [
-    pytest.param("GEOMETRY_CARRIER", "prepare_carrier_geometry", "state_owner: Arc::clone(&self.state_ref.block_hashes.owner)", "state_owner: Arc::clone(&other.block_hashes.owner)", id="original-state-capture"),
+    pytest.param("GEOMETRY_CARRIER", "prepare_carrier_geometry", "self.state_ref.native_lane_state_owner()", "other.native_lane_state_owner()", id="original-state-capture"),
     pytest.param("GEOMETRY_CARRIER", "matches_publication_target", "self._header == header", "true", id="exact-header"),
-    pytest.param("GEOMETRY_CARRIER", "matches_publication_target", "Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)", "true", id="exact-state"),
+    pytest.param("GEOMETRY_CARRIER", "matches_publication_target", "self.state_owner.matches_state(target)", "true", id="exact-state"),
     pytest.param("GEOMETRY_CARRIER", "requires_queue_custody", "!pending.plan.retire.is_empty()", "false", id="retired-route"),
     pytest.param("GEOMETRY_CARRIER", "requires_queue_custody", "!pending.catalog_update.replaced_lane_ids.is_empty()", "false", id="replaced-route"),
     pytest.param("GEOMETRY_CARRIER", "complete_under", "!self.matches_publication_target(target, header)", "false", id="completion-binding"),
-    pytest.param("GEOMETRY_CARRIER", "complete_under", "!self.has_queue_custody(target, header, queue)", "false", id="completion-queue-proof"),
+    pytest.param("GEOMETRY_CARRIER", "complete_under", "!self.has_queue_custody(target, header, queue)", "false", id="completion-queue-refusal"),
     pytest.param("GEOMETRY_CARRIER", "complete_under", "raw.publish_catalog_under(lease, None)", "raw.publish_catalog_under(other_lease, None)", id="catalog-lease"),
     pytest.param("GEOMETRY_CARRIER", "complete_under", "raw.reauthenticate_catalog_under(lease)", "raw.reauthenticate_catalog_under(other_lease)", id="completed-catalog-lease"),
     pytest.param("GEOMETRY_CARRIER", "complete_under", "geometry: self,", "geometry: other,", id="completed-original-owner"),
@@ -651,6 +651,7 @@ def test_terminal_carrier_rejects_owner_mutation(fixture, owner, symbol, old, ne
     pytest.param("PHYSICAL_CARRIER", "try_complete_geometry", "let journals = &mut self.decision.journals;", "let journals = &mut self.decision.journals; let _fresh = self.target.kura.try_publication_lease()?;", id="no-fresh-kura-lease"),
     pytest.param("PHYSICAL_CARRIER", "try_complete_geometry", ".try_lock_or_wait()", ".lock()", id="no-blocking-backend-lock"),
     pytest.param("TERMINAL_CARRIER", "publish", "journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()", "false", id="exact-lifecycle-effects"),
+    pytest.param("TERMINAL_CARRIER", "publish", "!journals.geometry.has_queue_custody(\n            self.target,\n            journals.effects.header,\n            journals.components._fences._queue.as_ref(),\n        )", "false", id="publisher-queue-refusal"),
     pytest.param("TERMINAL_CARRIER", "publish", "journals.components._fences._queue.as_ref(),", "None,", id="publisher-original-queue-proof"),
     pytest.param("TERMINAL_CARRIER", "publish", ".sync_mapping(&effects.nexus.lane_config)", ".sync_mapping(&other_mapping)", id="accepted-mapping"),
     pytest.param("TERMINAL_CARRIER", "publish", ".lifecycle\n            .take()", ".lifecycle\n            .clone()", id="consume-lifecycle"),
@@ -836,7 +837,7 @@ def test_geometry_retirement_admission_precedes_retained_writer_transfer(fixture
     ("fn try_into_cut", "})?;", '}).expect("invalid refusal") ;'),
     ("fn try_into_cut", "_mutation: mutation,", "_mutation: other_mutation,"),
     ("fn try_into_cut", "observer: self,", "observer: other_observer,"),
-    ("struct QueueRetirementBusy", "pub(crate) wait: mv::ReleaseWait,", "pub(crate) wait: mv::ReleaseWait, retained: PublicationGuard<'static>,"),
+    ("struct QueueRetirementBusy", "pub(crate) wait: concread::release::ReleaseWait,", "pub(crate) wait: concread::release::ReleaseWait, retained: PublicationGuard<'static>,"),
     ("impl QueueLaneRetirementCut<'_>", "queue.transaction_selection_durability_faulted()", "false"),
     ("impl QueueLaneRetirementCut<'_>", "Queue::lane_retirement_reservation_snapshot(\n            &self.reservations,", "Queue::lane_retirement_reservation_snapshot(\n            &other_reservations,"),
     ("impl QueueLaneRetirementCut<'_>", "return true;", "return false;"),
@@ -901,15 +902,262 @@ def test_geometry_pending_capacity_snapshot_precedes_inner_fences(fixture):
 
 
 @pytest.mark.parametrize("owner,anchor,old,new", [
+    pytest.param("APPLY", "fn carrier_queue_source", "OriginalCarrierQueue::new(&self.state, &self.queue)", "OriginalCarrierQueue::new(&self.state, &other_queue)", id="service-original-queue"),
+    pytest.param("SERVICE_QUEUE", "impl<'service> OriginalCarrierQueue", "pub(super) fn new", "pub(crate) fn new", id="no-external-capability-construction"),
+    pytest.param("SERVICE_QUEUE", "fn belongs_to", "core::ptr::eq(self.state, state)", "true", id="capability-original-state"),
+    pytest.param("SERVICE_QUEUE", "fn try_observe", "self.queue.try_lock_lane_retirement_observer()", "other.try_lock_lane_retirement_observer()", id="original-observer"),
+    pytest.param("SERVICE_QUEUE", "fn owns_cut", "cut.belongs_to(self.queue)", "true", id="capability-original-cut"),
+    pytest.param("QUEUE_OWNER", "impl QueueLaneRetirementCut", "core::ptr::eq(self.observer.queue, queue)", "true", id="cut-original-queue"),
+    pytest.param("QUEUE_OWNER", "impl QueueLaneRetirementCut", "self.observer.durability_faulted()", "false", id="cut-sticky-fault"),
+    pytest.param("QUEUE_OWNER", "impl QueueLaneRetirementCut", "&self.reservations,", "&other_reservations,", id="cut-original-reservations"),
+    pytest.param("CARRIER_QUEUE", "fn try_new", "!source.belongs_to(target)", "false", id="foreign-state"),
+    pytest.param("CARRIER_QUEUE", "fn try_new", "!geometry.matches_publication_target(target, header)", "false", id="foreign-geometry"),
+    pytest.param("CARRIER_QUEUE", "fn try_new", "!source.owns_cut(&cut)", "false", id="foreign-cut"),
+    pytest.param("CARRIER_QUEUE", "fn try_new", "routes.push((lane, dataspace, incarnation))", "routes.push((lane, dataspace, Hash::zeroed()))", id="exact-predecessor-incarnation"),
+    pytest.param("CARRIER_QUEUE", "fn try_new", "cut.lane_pending_work_release(lane, dataspace, incarnation)", "Ok(None)", id="pending-predicate"),
+    pytest.param("CARRIER_QUEUE", "fn try_new", "Ok(Some(wait)) => {", "Ok(Some(wait)) if false => {", id="pending-cannot-authorize"),
+    pytest.param("CARRIER_QUEUE", "fn try_new", "Err(error) => return Err(CarrierQueueRetirementError::Unavailable(error))", "Err(_) => {}", id="unavailable-cannot-authorize"),
+    pytest.param("CARRIER_QUEUE", "fn try_new", "_cut: cut,", "_cut: other_cut,", id="retained-original-cut"),
+    pytest.param("CARRIER_QUEUE", "fn ensure_available", "self._cut.durability_faulted()", "false", id="retained-sticky-fault"),
+    pytest.param("CARRIER_QUEUE", "fn authenticates", "self.ensure_available().is_err()", "false", id="authentication-rechecks-fault"),
+    pytest.param("CARRIER_QUEUE", "fn authenticates", "!self.state_owner.matches_state(target)", "false", id="authentication-original-state"),
+    pytest.param("CARRIER_QUEUE", "fn authenticates", "self.header != header", "false", id="authentication-original-header"),
+    pytest.param("CARRIER_QUEUE", "fn authenticates", "!geometry.matches_publication_target(target, header)", "false", id="authentication-original-geometry"),
+    pytest.param("CARRIER_QUEUE", "fn authenticates", "self.routes.get(index) != Some(&(lane, dataspace, incarnation))", "false", id="authentication-exact-route"),
+    pytest.param("CARRIER_QUEUE", "fn authenticates", "result.is_ok() && index == self.routes.len()", "result.is_ok()", id="authentication-complete-route-set"),
+    pytest.param("GEOMETRY_CARRIER", "fn for_each_retirement_route", ".previous_catalog", ".updated_catalog", id="predecessor-catalog"),
+    pytest.param("GEOMETRY_CARRIER", "fn for_each_retirement_route", "!lane_incarnation_is_zero(*incarnation)", "true", id="nonzero-predecessor-incarnation"),
+    pytest.param("GEOMETRY_CARRIER", "fn has_queue_custody", "queue.is_some_and(|queue| queue.authenticates(target, self, header))", "queue.is_none_or(|queue| queue.authenticates(target, self, header))", id="absent-cut-refused"),
+    pytest.param("PHYSICAL_CARRIER", "fn try_prepare_physical", "None => Some(CarrierQueueRetirementError::Missing)", "None => None", id="physical-requires-capability"),
+    pytest.param("PHYSICAL_CARRIER", "fn try_prepare_physical", "Some(source) if !source.belongs_to(target)", "Some(source) if false", id="physical-original-service"),
+    pytest.param("PHYSICAL_CARRIER", "fn try_complete_geometry", "journals.components._fences._queue.as_ref(),", "None,", id="completion-original-cut"),
+    pytest.param("TERMINAL_CARRIER", "fn publish", "queue.ensure_available().err()", "None", id="terminal-sticky-fault"),
+    pytest.param("PHYSICAL_CARRIER", "struct CarrierFences", "_queue: Option<CarrierQueueRetirement<'target>>,", "_queue: Option<CarrierQueueRetirement<'target>>, second_queue: Queue,", id="no-secondary-queue"),
+])
+def test_original_service_queue_cut_rejects_authority_substitution(fixture, owner, anchor, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner), anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error or "retained carrier" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("anchor,old,new", [
+    pytest.param("fn descriptor_layouts", "Layout::array::<Candidate<P::Owner>>(limit)", "Layout::array::<Marker>(limit)", id="actual-candidate-layout"),
+    pytest.param("fn descriptor_layouts", "Layout::array::<Marker>(limit)", "Layout::array::<Marker>(1)", id="complete-marker-layout"),
+    pytest.param("fn descriptor_layouts", ".map_err(|_| AllocationRefusal::DemandOverflow)?", ".unwrap()", id="checked-layout-overflow"),
+    pytest.param("fn new", "budget.try_reserve_layouts(layouts)?", "other_budget.try_reserve_layouts(layouts)?", id="original-budget"),
+    pytest.param("fn new", "reservation.try_split(layouts[0])?", "reservation.try_split(layouts[1])?", id="candidate-charge"),
+    pytest.param("fn new", "reservation.try_split(layouts[1])?", "reservation.try_split(layouts[0])?", id="marker-charge"),
+    pytest.param("fn new", "_descriptor_admission: descriptor_admission,", "_descriptor_admission: other_admission,", id="original-retained-charges"),
+    pytest.param("fn new", "let mut candidates = Vec::new();", "let mut candidates = Vec::new(); let descriptor_admission = other_admission;", id="no-charge-shadow"),
+])
+def test_retained_descriptors_require_exact_prepaid_original_owners(fixture, anchor, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / checker.native_preparation_contract.VALIDATION_CUSTODY, anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error or "retained carrier" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("mutation", ["early-allocation", "charge-drops-first", "early-queue-release"])
+def test_retained_descriptor_and_cut_lifetimes_reject_early_release(fixture, mutation):
+    root, helper, checker, _ = fixture
+    contract = checker.native_preparation_contract
+    if mutation == "early-allocation":
+        path = root / contract.VALIDATION_CUSTODY
+        allocation = "let mut candidates = Vec::new();\n        candidates.try_reserve_exact(limit)?;"
+        helper.replace_once_after(path, "fn new", allocation, "")
+        helper.replace_once_after(path, "fn new", "let layouts = Self::descriptor_layouts(limit)?;",
+                                  allocation + "\n        let layouts = Self::descriptor_layouts(limit)?;")
+    elif mutation == "charge-drops-first":
+        path = root / contract.VALIDATION_CUSTODY
+        field = "    _descriptor_admission: [AllocationCharge; 2],"
+        helper.replace_once_after(path, "struct RetainedBodyValidationService", field, "")
+        helper.replace_once_after(path, "struct RetainedBodyValidationService", "    validator: P,", field + "\n    validator: P,")
+    else:
+        path = root / contract.PHYSICAL_CARRIER
+        helper.replace_once_after(path, "fn release_for_completion", "let queue = queue.map(CarrierQueueRetirement::release_deferred);", "")
+        helper.replace_once_after(path, "fn release_for_completion", "let state = [write.release_deferred(), lifecycle.release_deferred()];", "let queue = queue.map(CarrierQueueRetirement::release_deferred);\n        let state = [write.release_deferred(), lifecycle.release_deferred()];")
+    errors = validate(fixture)
+    assert any("executable relation" in error or "retained carrier" in error for error in errors), errors
+
+
+def test_native_preparation_ledger_tokens_match_exact_reviewed_items(fixture):
+    root, _, checker, _ = fixture
+    errors = []
+    with checker._reviewed_rust_source_cache():
+        for path, kind, symbol, tokens in checker.native_preparation_contract.PREPARATION_OWNER_BINDINGS:
+            item = checker._rust_binding_item(root, path, kind, symbol, "Native raw ledger", errors)
+            assert item is not None, errors
+            for token in tokens:
+                assert token in item, (symbol, token)
+    assert errors == []
+
+
+@pytest.mark.parametrize("owner,anchor,old,new", [
+    pytest.param("STATE", "type BlockHashFamily", "concread::bptree::BptreeMapFamily<usize, HashOf<BlockHeader>, BlockHashMode>", "Arc<()>", id="real-family-storage"),
+    pytest.param("STATE", "struct NativeLaneStateOwner", "(BlockHashFamily)", "(Arc<()>)", id="no-synthetic-owner"),
+    pytest.param("STATE", "fn matches_state", "self.0.matches(map)", "true", id="exact-state-family"),
+    pytest.param("STATE", "fn same_family", "self.0.same_family(&other.0)", "true", id="exact-published-family"),
+    pytest.param("STATE", "fn native_lane_state_owner", "NativeLaneStateOwner(map.family())", "NativeLaneStateOwner(other.family())", id="capture-original-root"),
+    pytest.param("STATE", "fn map(&self)", "BlockHashStorage::EmergencyFastMapped(_) | BlockHashStorage::EmergencyFastEmpty => None", "BlockHashStorage::EmergencyFastMapped(_) => Some(other)", id="mapped-state-no-mutable-family"),
+    pytest.param("STATE", "fn pending(&self)", "start: self.visible_len", "start: 0", id="exact-pending-suffix"),
+    pytest.param("STATE", "fn matches_block_predecessor", "self.mode == block.mode", "true", id="exact-replacement-mode"),
+    pytest.param("STATE", "fn matches_block_predecessor", ".same_predecessor(&block.work.predecessor())", ".same_predecessor(&self.work.predecessor())", id="exact-predecessor-not-self"),
+    pytest.param("HASH_SURFACE", "fn capture", "!std::ptr::eq(block.inner, expected)", "false", id="sealed-original-journal"),
+    pytest.param("HASH_SURFACE", "fn capture", "block.work.predecessor().retain()", "other.work.predecessor().retain()", id="seal-retains-original-predecessor"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "self.observe_current(target)", "Ok(true)", id="pre-admission-predecessor"),
+    pytest.param("STATE", "fn observe_current", "self.work.try_matches_current(map)", "Ok(true)", id="original-advisory-predecessor"),
+    pytest.param("STATE", "fn observe_current", "self.work.try_matches_current(map)", "drop(target.released.guard(())); self.work.try_matches_current(map)", id="advisory-release-not-busy-self-wake"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "let wait = map.observe_reader_release();\n        match self.observe_current(target)", "let wait = target.released.observe();\n        match self.observe_current(target)", id="advisory-waits-for-actual-reader"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "let wait = map.observe_reader_release();\n        let prepared = match writer.try_prepare_commit()", "let wait = target.released.observe();\n        let prepared = match writer.try_prepare_commit()", id="commit-preparation-cannot-wake-itself"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "map.try_write_owned(work)", "other.try_write_owned(work)", id="original-final-reacquisition"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "if error == OwnedWriteError::Changed", "if false", id="changed-release-notification"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "writer.try_prepare_commit()", "Ok(writer.prepare_commit())", id="nonblocking-reader-acquisition"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "owner: NativeLaneStateOwner(map.family())", "owner: NativeLaneStateOwner(other.family())", id="original-published-family"),
+    pytest.param("HASH_PUBLICATION", "fn state_owner", "self.owner.clone()", "other.owner.clone()", id="publication-family-handoff"),
+    pytest.param("HASH_PUBLICATION", "fn abort", "prepared.abort().detach()", "other.abort().detach()", id="abort-original-work"),
+    pytest.param("HASH_PUBLICATION", "fn publish", "committed_height.store(height, Ordering::Release)", "committed_height.store(0, Ordering::Release)", id="exact-published-height"),
+    pytest.param("HASH_PUBLICATION", "fn publish", "_retirement: retirement", "_retirement: { drop(retirement); unreachable!() }", id="retain-physical-cleanup"),
+    pytest.param("PREFIX", "fn prepare_world_effects", ".eq([state._curr_block.hash()])", ".eq([])", id="exact-single-carrier-suffix"),
+])
+def test_shared_history_preserves_original_identity_and_refusal(fixture, owner, anchor, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner), anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error or "shared history" in error or "retained carrier" in error
+               for error in errors), errors
+    assert not any("digest" in error or "must occur exactly once" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,anchor,first,second", [
+    ("HASH_PUBLICATION", "fn abort", "let work = writer.detach();", "let ((), writer) = notification.release_deferred(drop);"),
+    ("HASH_PUBLICATION", "fn publish", "let published = prepared.publish();", "committed_height.store(height, Ordering::Release);"),
+    ("TERMINAL_CARRIER", "fn publish", "let hash_retirement;", "let AcquiredCarrierParticipants {"),
+    ("TERMINAL_CARRIER", "fn publish", "drop(commit);", "drop(hash_retirement);"),
+])
+def test_shared_history_cleanup_and_publication_order(fixture, owner, anchor, first, second):
+    root, helper, checker, _ = fixture
+    path = root / getattr(checker.native_preparation_contract, owner)
+    if second == "let AcquiredCarrierParticipants {":
+        # Move a complete declaration below the complete destructuring statement.
+        helper.replace_once_after(path, anchor, first, "")
+        helper.replace_once_after(path, anchor, "} = components.into_original();", "} = components.into_original();\n        " + first)
+    else:
+        helper.replace_once_after(path, anchor, first, "")
+        helper.replace_once_after(path, anchor, second, second + "\n        " + first)
+    errors = validate(fixture)
+    assert any("reorders executable relation" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,anchor,old,new", [
+    pytest.param("HASH_ADMISSION", "impl BlockHashAdmissionError", "Self::Busy(wait) | Self::Changed(wait) => Some(wait)", "Self::Busy(wait) | Self::Changed(wait) => None", id="original-physical-release"),
+    pytest.param("HASH_ADMISSION", "impl<E: std::fmt::Debug> StateBlockStartError", "Self::History(error) => error.release_wait()", "Self::History(error) => None", id="history-release-survives-stage-wrapper"),
+    pytest.param("HASH_RESTORE", "fn emergency_fast_block_hashes", "BlockHashes::new_emergency_fast_empty()", "BlockHashes::default()", id="empty-fast-remains-readonly"),
+    pytest.param("STATE", "fn new_emergency_fast_empty", "inner: BlockHashStorage::EmergencyFastEmpty", "inner: BlockHashStorage::Owned(other)", id="empty-fast-has-no-mutable-tree"),
+    pytest.param("RUNTIME_ACQUISITION", "fn acquire_canonical_runtime_block", "self.block_hashes.try_next_block(replacement)?", "self.block_hashes.try_next_block(false)?", id="exact-admitted-replacement-mode"),
+    pytest.param("BODY_STORE", "impl HistoryAdmissionWait", "if pending.is_ready(wake)", "if false", id="release-before-registration-self-wake"),
+    pytest.param("BODY_STORE", "impl HistoryAdmissionWait", "Self(wait.wait_for_release())", "Self(other.wait_for_release())", id="original-release-future"),
+    pytest.param("BODY_STORE", "impl HistoryAdmissionWait", "std::pin::Pin::new(&mut self.0)", "std::pin::Pin::new(&mut other)", id="poll-original-dependency"),
+    pytest.param("RUNNER_HISTORY", "fn history_admission_pending", "*pending_owner == owner", "true", id="proposal-owner-custody"),
+    pytest.param("RUNNER_HISTORY", "fn history_admission_pending", "!pending.is_ready(wake)", "true", id="released-owner-can-resume"),
+    pytest.param("RUNNER_HISTORY", "fn defer_history_admission", "HistoryAdmissionWait::new(wait.clone(), wake)", "HistoryAdmissionWait::new(other.clone(), wake)", id="retain-original-admission-refusal"),
+    pytest.param("STATE", "type BlockHashMode", "concread::bptree::Prepaid<BlockHashPolicy>", "concread::bptree::Untracked", id="no-unfunded-mode"),
+    pytest.param("RUNNER_HISTORY", "fn schedule_local_proposal", "proposal_state.history_admission_pending(owner, &queue.sumeragi_waker())", "false", id="dispatch-keeps-original-pending-dependency"),
+    pytest.param("RUNNER_HISTORY", "fn schedule_local_proposal", ".rearm_loaded_candidate_delivery(current.tag(), loaded_round, loaded_subject)", ".rearm_loaded_candidate_delivery(current.tag(), 0, loaded_subject)", id="loaded-refusal-retains-round"),
+    pytest.param("RUNNER_HISTORY", "let has_work = match candidate_block_has_proposal_work", ".rearm_loaded_candidate_delivery(current.tag(), loaded_round, loaded_subject)", '.rearm_loaded_candidate_delivery(current.tag(), loaded_round, { let mut subject = loaded_subject; subject.payload_hash = iroha_crypto::Hash::new(b"foreign subject"); subject })', id="loaded-refusal-retains-subject"),
+    pytest.param("RUNNER_HISTORY", "let has_work = match candidate_block_has_proposal_work", ".map_err(V2RunnerError::Service)?;", ".ok();", id="loaded-refusal-propagates-rearm-failure"),
+    pytest.param("RUNNER_HISTORY", "let has_work = match candidate_block_has_proposal_work", "return Ok(());", "continue;", id="loaded-refusal-yields-after-rearm"),
+    pytest.param("RUNNER_HISTORY", "let assembly = match assembly", "Err(super::v2_candidate::CandidateError::LocalStateAdmission(error))", "Err(super::v2_candidate::CandidateError::Execution(error))", id="assembly-local-refusal-arms-wait"),
+    pytest.param("LANE_WORK_HISTORY", "fn build_and_memoize_merge_execution_candidate", ".build_merge_execution_candidate(application_block_header, self.context.mode)?", ".build_merge_execution_candidate(application_block_header, self.context.mode).unwrap_or(None)", id="memoization-propagates-local-refusal"),
+    pytest.param("LANE_WORK_HISTORY", "fn refresh_merge_candidates", "*view == active_view && !pending.is_ready(&wake)", "false", id="merge-waits-on-exact-view-dependency"),
+    pytest.param("LANE_WORK_HISTORY", "fn refresh_merge_candidates", "let Some(wait) = error.release_wait() else", "let Some(wait) = None else", id="merge-refusal-retains-original-release"),
+    pytest.param("LANE_WORK_HISTORY", "fn refresh_merge_candidates", "HistoryAdmissionWait::new(\n                                    wait.clone(),", "HistoryAdmissionWait::new(\n                                    concread::release::ReleaseNotification::default().observe(),", id="merge-cannot-substitute-release-owner"),
+    pytest.param("RUNNER_HISTORY", "fn candidate_attachments", "error.downcast_ref::<crate::state::BlockHashAdmissionError>()", "None::<&crate::state::BlockHashAdmissionError>", id="npos-preserves-typed-history-refusal"),
+    pytest.param("RUNNER_HISTORY", "let attachments = match attachments", "&queue.sumeragi_waker()", "&std::task::Waker::noop()", id="npos-arms-original-proposal-runner"),
+    pytest.param("LANE_WORK_HISTORY", "fn classify_merge_state_validation", "MergeCandidateValidationError::Frontier(error.to_string())", "MergeCandidateValidationError::Invalid(error.to_string())", id="permanent-history-failure-is-local"),
+    pytest.param("LANE_WORK_HISTORY", "fn classify_merge_state_validation", "Ok(MergeCandidateValidation::Deferred)", "Ok(MergeCandidateValidation::Ready)", id="temporary-history-refusal-never-authorizes"),
+    pytest.param("LANE_WORK_HISTORY", "fn classify_merge_state_validation", "HistoryAdmissionWait::new(wait.clone(), &wake)", "HistoryAdmissionWait::new(concread::release::ReleaseNotification::default().observe(), &wake)", id="validation-retains-original-refund-wait"),
+    pytest.param("LANE_WORK_HISTORY", "fn validate_merge_candidate_for_active_round", "self.classify_merge_state_validation(active_view, validation)?", "MergeCandidateValidation::Ready", id="no-positive-memo-on-history-refusal"),
+    pytest.param("HASH_ADMISSION", "struct BlockHashPolicy", "(mv::allocation::AllocationReservation)", "(usize)", id="original-move-only-reservation"),
+    pytest.param("HASH_ADMISSION", "impl NodeFunding for BlockHashPolicy", "type Charge = mv::allocation::AllocationCharge;", "type Charge = ();", id="actual-allocation-charge"),
+    pytest.param("HASH_ADMISSION", "fn take_node_charge", "self.0", "other", id="no-provider-substitution"),
+    pytest.param("HASH_ADMISSION", "fn admit_successor", ".checked_add(additional.bytes())", ".checked_add(0)", id="include-whole-successor-demand"),
+    pytest.param("HASH_ADMISSION", "fn admit_successor", "if required > self.budget.limit_bytes()", "if false", id="permanent-floor-cannot-wait"),
+    pytest.param("HASH_ADMISSION", "fn admit_successor", "requested_bytes: required", "requested_bytes: additional.bytes()", id="report-current-plus-successor-floor"),
+    pytest.param("HASH_ADMISSION", "fn admit_successor", "self.admit(additional)", "self.admit(existing)", id="reserve-complete-new-demand"),
+    pytest.param("HASH_ADMISSION", "fn admit(", "self.budget", "other.budget", id="original-configured-pool"),
+    pytest.param("HASH_ADMISSION", "fn try_new", "budget.with_deferred_refund_notifications", "other.with_deferred_refund_notifications", id="constructor-original-refund-scope"),
+    pytest.param("HASH_ADMISSION", "fn try_new", "budget: budget.clone()", "budget: other.clone()", id="startup-original-pool"),
+    pytest.param("HASH_ADMISSION", "fn try_new", "owner.admit_successor(existing, additional)", "owner.admit(additional)", id="startup-permanent-floor"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", "self.map().ok_or(BlockHashAdmissionError::ReadOnly)?", "other.map().unwrap()", id="readonly-original-family"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", "view.len().saturating_sub(1)", "view.len()", id="replacement-tip-overwrite"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", "view.predecessor().retain()", "other.predecessor().retain()", id="pinned-reader-predecessor"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", "self.admit_successor(existing, additional)", "self.admit(additional)", id="no-permanent-capacity-wait"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", "MapAdmissionError::Busy | MapAdmissionError::Poisoned", "MapAdmissionError::Busy", id="poison-does-not-invent-unlock"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", "drop(self.released.guard(()));", "", id="refused-acquisition-release-wake"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", "!predecessor.matches(&work.predecessor())", "false", id="reject-concurrent-reader-aba"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", "reserved_tip: Some(prefix)", "reserved_tip: None", id="hide-original-prepaid-tip"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", "fixture_edits: false", "fixture_edits: true", id="no-postexecution-admission"),
+    pytest.param("STATE", "fn push(&mut self, hash:", ".try_update_private(&index, hash)", ".try_update_private(&0, hash)", id="fill-exact-private-tip"),
+    pytest.param("STATE", "fn push(&mut self, hash:", "self.fixture_edits", "true", id="exactly-one-production-tip"),
+    pytest.param("STATE", "fn detach(self) -> DetachedBlockHashes", "reserved_tip: self.reserved_tip", "reserved_tip: None", id="detach-keeps-unfinished-state"),
+    pytest.param("STATE", "macro_rules! work_hash_read", "self.work.len() - usize::from(self.reserved_tip.is_some())", "self.work.len()", id="hidden-tip-excluded-from-height"),
+    pytest.param("STATE", "macro_rules! work_hash_read", "index < self.hash_count()", "true", id="hidden-tip-cannot-be-looked-up"),
+    pytest.param("STATE", "macro_rules! work_hash_read", "end <= self.len()", "true", id="hidden-tip-cannot-escape-range"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "self.reserved_tip.is_some()", "false", id="unfinished-tip-not-publishable"),
+    pytest.param("APPLY", "fn classify_validation_failure", "=> Some(release)", "=> None", id="capacity-refund-schedules-retry"),
+    pytest.param("APPLY", "fn classify_validation_failure", "self.queue.sumeragi_waker()", "other.sumeragi_waker()", id="original-service-retry-waker"),
+    pytest.param("CONTROLS", "fn map_block_err_to_reason", "| BlockValidationError::BlockHashAdmission(_) => return None", "=> return None", id="local-refusal-no-peer-rejection"),
+])
+def test_prepaid_history_keeps_exact_funding_tip_and_local_refusal(fixture, owner, anchor, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner), anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error or "prepaid history" in error or "shared history" in error
+               or "retained carrier" in error for error in errors), errors
+    assert not any("digest" in error or "must occur exactly once" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("move", ["capacity-before-floor", "publish-before-tip-check", "predecessor-after-admission"])
+def test_prepaid_history_order_refuses_before_authority_or_new_allocation(fixture, move):
+    root, helper, checker, _ = fixture
+    c = checker.native_preparation_contract
+    if move == "capacity-before-floor":
+        path = root / c.HASH_ADMISSION
+        helper.replace_once_after(path, "fn admit_successor", "self.admit(additional)", "admitted")
+        helper.replace_once_after(path, "fn admit_successor", "let required =", "let admitted = self.admit(additional);\n        let required =")
+    elif move == "publish-before-tip-check":
+        path = root / c.HASH_PUBLICATION
+        guard = "if self.reserved_tip.is_some() {\n            return Err((self, mv::PublicationPreparationError::Changed));\n        }"
+        helper.replace_once_after(path, "fn try_prepare_publication", guard, "")
+        helper.replace_once_after(path, "fn try_prepare_publication", "let height = self.len();", guard + "\n        let height = self.len();")
+    else:
+        path = root / c.HASH_ADMISSION
+        # Move the complete retained cut/drop statements after admission; this
+        # would compare a freshly observed generation instead of the original view.
+        text = path.read_text()
+        start = text.index("            let predecessor = match &view.inner", text.index("fn try_next_block"))
+        end = text.index("            let wait = self.released.observe();", start)
+        capture = text[start:end]
+        text = text[:start] + text[end:]
+        anchor = "            let (work, _) ="
+        pos = text.index(anchor, text.index("fn try_next_block"))
+        path.write_text(text[:pos] + capture + text[pos:])
+    errors = validate(fixture)
+    assert any("reorders executable relation" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,anchor,old,new", [
     ("APPLY", "fn carrier_queue_source", "&self.queue", "&other.queue"),
     ("APPLY", "fn carrier_queue_source", "&self.state", "&other.state"),
-    ("QUEUE_SOURCE", "impl<'service>", "pub(super) fn new", "pub(crate) fn new"),
-    ("QUEUE_SOURCE", "fn owns_cut", "#[cfg(test)]", ""),
-    ("QUEUE_SOURCE", "fn owns_cut", "    pub(crate) fn for_test", "    pub(crate) fn arbitrary(state: &State, queue: &Queue) -> Self { Self { state, queue } }\n    #[cfg(test)] pub(crate) fn for_test"),
-    ("QUEUE_SOURCE", "struct OriginalCarrierQueue", "state: &'service State", "pub(crate) state: &'service State"),
-    ("QUEUE_SOURCE", "fn belongs_to", "core::ptr::eq(self.state, state)", "true"),
-    ("QUEUE_SOURCE", "fn owns_cut", "cut.belongs_to(self.queue)", "true"),
-    ("QUEUE_SOURCE", "fn try_observe", "self.queue.try_lock_lane_retirement_observer()", "other.try_lock_lane_retirement_observer()"),
+    ("SERVICE_QUEUE", "impl<'service>", "pub(super) fn new", "pub(crate) fn new"),
+    ("SERVICE_QUEUE", "fn owns_cut", "#[cfg(test)]", ""),
+    ("SERVICE_QUEUE", "fn owns_cut", "    pub(crate) fn for_test", "    pub(crate) fn arbitrary(state: &State, queue: &Queue) -> Self { Self { state, queue } }\n    #[cfg(test)] pub(crate) fn for_test"),
+    ("SERVICE_QUEUE", "struct OriginalCarrierQueue", "state: &'service State", "pub(crate) state: &'service State"),
+    ("SERVICE_QUEUE", "fn belongs_to", "core::ptr::eq(self.state, state)", "true"),
+    ("SERVICE_QUEUE", "fn owns_cut", "cut.belongs_to(self.queue)", "true"),
+    ("SERVICE_QUEUE", "fn try_observe", "self.queue.try_lock_lane_retirement_observer()", "other.try_lock_lane_retirement_observer()"),
     ("QUEUE_OWNER", "impl QueueLaneRetirementCut", "core::ptr::eq(self.observer.queue, queue)", "true"),
     ("QUEUE_OWNER", "impl QueueLaneRetirementCut", "self.observer.durability_faulted()", "false"),
     ("QUEUE_OWNER", "impl QueueLaneRetirementCut", "self.observer.queue.lane_pending_work_release_locked(", "other.lane_pending_work_release_locked("),
@@ -917,18 +1165,18 @@ def test_geometry_pending_capacity_snapshot_precedes_inner_fences(fixture):
     ("QUEUE_OWNER", "fn lane_pending_work_release_locked", "if self.transaction_selection_durability_faulted()", "if false"),
     ("QUEUE_OWNER", "fn lane_pending_work_release_locked", ".is_none_or(|owned| self.lane_has_pending_route_work(&owned, lane_id, dataspace_id))", ".is_some_and(|owned| self.lane_has_pending_route_work(&owned, lane_id, dataspace_id))"),
     ("QUEUE_OWNER", "fn lane_pending_work_release_locked", "Ok(Some(wait))", "Ok(None)"),
-    ("QUEUE_RETIREMENT", "fn try_new", "!source.belongs_to(target)", "false"),
-    ("QUEUE_RETIREMENT", "fn try_new", "!geometry.matches_publication_target(target, header)", "false"),
-    ("QUEUE_RETIREMENT", "fn try_new", "!source.owns_cut(&cut)", "false"),
-    ("QUEUE_RETIREMENT", "fn try_new", "cut.lane_pending_work_release(lane, dataspace, incarnation)", "Ok(None)"),
-    ("QUEUE_RETIREMENT", "fn try_new", "return Err(CarrierQueueRetirementError::Pending", "return Err(CarrierQueueRetirementError::InvalidDecision"),
-    ("QUEUE_RETIREMENT", "fn try_new", "_cut: cut", "_cut: other_cut"),
-    ("QUEUE_RETIREMENT", "fn ensure_available", "self._cut.durability_faulted()", "false"),
-    ("QUEUE_RETIREMENT", "fn authenticates", "self.ensure_available().is_err()", "false"),
-    ("QUEUE_RETIREMENT", "fn authenticates", "self.header != header", "false"),
-    ("QUEUE_RETIREMENT", "fn authenticates", "!Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)", "false"),
-    ("QUEUE_RETIREMENT", "fn authenticates", "self.routes.get(index) != Some(&(lane, dataspace, incarnation))", "false"),
-    ("QUEUE_RETIREMENT", "fn authenticates", "index == self.routes.len()", "true"),
+    ("CARRIER_QUEUE", "fn try_new", "!source.belongs_to(target)", "false"),
+    ("CARRIER_QUEUE", "fn try_new", "!geometry.matches_publication_target(target, header)", "false"),
+    ("CARRIER_QUEUE", "fn try_new", "!source.owns_cut(&cut)", "false"),
+    ("CARRIER_QUEUE", "fn try_new", "cut.lane_pending_work_release(lane, dataspace, incarnation)", "Ok(None)"),
+    ("CARRIER_QUEUE", "fn try_new", "return Err(CarrierQueueRetirementError::Pending", "return Err(CarrierQueueRetirementError::InvalidDecision"),
+    ("CARRIER_QUEUE", "fn try_new", "_cut: cut", "_cut: other_cut"),
+    ("CARRIER_QUEUE", "fn ensure_available", "self._cut.durability_faulted()", "false"),
+    ("CARRIER_QUEUE", "fn authenticates", "self.ensure_available().is_err()", "false"),
+    ("CARRIER_QUEUE", "fn authenticates", "self.header != header", "false"),
+    ("CARRIER_QUEUE", "fn authenticates", "!self.state_owner.matches_state(target)", "false"),
+    ("CARRIER_QUEUE", "fn authenticates", "self.routes.get(index) != Some(&(lane, dataspace, incarnation))", "false"),
+    ("CARRIER_QUEUE", "fn authenticates", "index == self.routes.len()", "true"),
     ("GEOMETRY_CARRIER", "fn for_each_retirement_route", ".previous_catalog", ".updated_catalog"),
     ("GEOMETRY_CARRIER", "fn for_each_retirement_route", ".previous_lane_incarnations", ".updated_lane_incarnations"),
     ("GEOMETRY_CARRIER", "fn for_each_retirement_route", "!lane_incarnation_is_zero(*incarnation)", "true"),
@@ -958,8 +1206,8 @@ def test_carrier_retirement_rejects_guard_and_sticky_fault_reordering(fixture, m
         helper.replace_once_after(root / c.PHYSICAL_CARRIER, "fn try_prepare_physical", "let queue = match queue_observer", "let _early = journals.try_map_components(); let queue = match queue_observer")
     elif mutation == "release-before-write":
         path = root / c.PHYSICAL_CARRIER
-        helper.replace_once_after(path, "fn release_for_completion", "drop(queue);", "")
-        helper.replace_once_after(path, "fn release_for_completion", "drop(write);", "drop(queue); drop(write);")
+        helper.replace_once_after(path, "fn release_for_completion", "let queue = queue.map(CarrierQueueRetirement::release_deferred);", "")
+        helper.replace_once_after(path, "fn release_for_completion", "let state = [write.release_deferred(), lifecycle.release_deferred()];", "let queue = queue.map(CarrierQueueRetirement::release_deferred); let state = [write.release_deferred(), lifecycle.release_deferred()];")
     elif mutation == "fault-before-storage":
         path = root / c.TERMINAL_CARRIER
         text = path.read_text()
@@ -971,8 +1219,8 @@ def test_carrier_retirement_rejects_guard_and_sticky_fault_reordering(fixture, m
         path.write_text(text[:target] + block + "\n" + text[target:])
     else:
         path = root / c.PHYSICAL_CARRIER
-        helper.replace_once_after(path, "struct AcquiredCarrierComponents", "    _fences: CarrierFences<'target>,\n", "")
-        helper.replace_once_after(path, "struct AcquiredCarrierComponents", "    world:", "    _fences: CarrierFences<'target>,\n    world:")
+        helper.replace_once_after(path, "struct AcquiredCarrierParticipants", "    _fences: CarrierFences<'target>,\n", "")
+        helper.replace_once_after(path, "struct AcquiredCarrierParticipants", "    world:", "    _fences: CarrierFences<'target>,\n    world:")
     errors = validate(fixture)
     assert any("executable relation" in e for e in errors), errors
     assert not any("digest" in e or "must have one" in e for e in errors), errors
@@ -1011,3 +1259,62 @@ def test_retained_descriptor_admission_precedes_allocation_and_outlives_vectors(
     errors = validate(fixture)
     assert any("executable relation" in e or "original custody" in e for e in errors), errors
     assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("owner,anchor,old,new", [
+    ("PUBLICATION_MUTEX", "fn release_deferred", "self.inner.release_deferred(drop).1", "other.release_deferred(drop).1"),
+    ("KURA", "fn release_deferred", "_prune.release_deferred()", "other.release_deferred()"),
+    ("QUEUE_OWNER", "fn release_deferred", "reservations.release_deferred()", "other.release_deferred()"),
+    ("CARRIER_QUEUE", "fn release_deferred", "_routes: routes", "_routes: Vec::new()"),
+    ("TERMINAL_CARRIER", "fn publish(", "membership_retirement = transactions.publish();", "transactions.publish();"),
+    ("TERMINAL_CARRIER", "fn publish(", "drop(membership_retirement);", ""),
+])
+def test_completion_retains_original_release_owners(fixture, owner, anchor, old, new):
+    root, helper, checker, _ = fixture
+    contract = checker.native_preparation_contract
+    path = root / getattr(contract, owner)
+    if owner == "KURA":
+        path = root / "crates/iroha_core/src/kura/publication_lease.rs"
+    helper.replace_once_after(path, anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error or "retained carrier" in error for error in errors), errors
+
+
+def test_completion_unlocks_commit_before_deferred_callbacks(fixture):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.PHYSICAL_CARRIER
+    helper.swap_ordered_once_after(path, "struct CompletionFences", "_commit: PublicationGuard<'target>,", "_state: [concread::release::DeferredRelease; 2],")
+    assert any("executable relation" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("anchor,old,new", [
+    ("impl Drop for AcquiredCarrierComponents", "drop(original.abort())", "drop(original)"),
+    ("impl AcquiredCarrierParticipants", "let (world, world_retirement) = world.abort()", "let (world, world_retirement) = replacement.abort()"),
+    ("impl AcquiredCarrierParticipants", "drop(fences.release_for_completion())", "drop(fences)"),
+])
+def test_carrier_abandonment_keeps_joint_original_release(fixture, anchor, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / checker.native_preparation_contract.PHYSICAL_CARRIER, anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("cut", ["runtime", "world"])
+def test_partial_carrier_refusal_keeps_cleanup_after_original_fences(fixture, cut):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.PHYSICAL_CARRIER
+    anchor = f"Err(({cut}, error, {cut}_retirement)) =>"
+    helper.replace_once_after(path, anchor,
+                              "drop(fences.release_for_completion());",
+                              f"drop({cut}_retirement); drop(fences.release_for_completion());")
+    errors = validate(fixture)
+    assert any("executable relation" in e for e in errors), errors
+
+
+def test_world_refusal_preserves_original_cleanup_shells(fixture):
+    root, helper, _, _ = fixture
+    path = root / "crates/iroha_core/src/state/world_publication.rs"
+    helper.replace_once_after(path, "fn try_prepare_publication", "_fields: prepared,",
+                              "_fields: PreparedWorldFields(Vec::new()),")
+    errors = validate(fixture)
+    assert any("executable relation" in e for e in errors), errors

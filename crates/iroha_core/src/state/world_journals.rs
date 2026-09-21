@@ -159,7 +159,10 @@ trait RetainedWorldField: Send + Sync {
         target: &'target World,
     ) -> Result<
         Box<dyn publication::PreparedWorldField + 'target>,
-        (Box<dyn RetainedWorldField>, publication::FieldRefusal),
+        (
+            Box<dyn publication::PreparedWorldField + 'target>,
+            publication::FieldRefusal,
+        ),
     >;
 }
 
@@ -202,7 +205,10 @@ impl<K: Key, V: Value> RetainedWorldField for RetainedStorage<K, V> {
         target: &'target World,
     ) -> Result<
         Box<dyn publication::PreparedWorldField + 'target>,
-        (Box<dyn RetainedWorldField>, publication::FieldRefusal),
+        (
+            Box<dyn publication::PreparedWorldField + 'target>,
+            publication::FieldRefusal,
+        ),
     > {
         publication::prepare_storage(self, target)
     }
@@ -258,7 +264,10 @@ impl<V: Value> RetainedWorldField for RetainedCell<V> {
         target: &'target World,
     ) -> Result<
         Box<dyn publication::PreparedWorldField + 'target>,
-        (Box<dyn RetainedWorldField>, publication::FieldRefusal),
+        (
+            Box<dyn publication::PreparedWorldField + 'target>,
+            publication::FieldRefusal,
+        ),
     > {
         publication::prepare_cell(self, target)
     }
@@ -329,7 +338,10 @@ impl RetainedWorldField for RetainedTriggers {
         target: &'target World,
     ) -> Result<
         Box<dyn publication::PreparedWorldField + 'target>,
-        (Box<dyn RetainedWorldField>, publication::FieldRefusal),
+        (
+            Box<dyn publication::PreparedWorldField + 'target>,
+            publication::FieldRefusal,
+        ),
     > {
         publication::prepare_triggers(self, target)
     }

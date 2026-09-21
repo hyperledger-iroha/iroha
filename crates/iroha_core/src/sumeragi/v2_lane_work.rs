@@ -918,6 +918,12 @@ pub(crate) enum GlobalBodyLockOutcome {
 /// Fail-closed adapter construction or durable-retention error.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum V2LaneWorkError {
+    /// Local State could not admit a complete predecessor-bound successor.
+    #[error(transparent)]
+    StateAdmission(
+        crate::state::StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>,
+    ),
+
     /// A fatal consensus effect requires process restart before more lane work.
     #[error("Sumeragi v2 lane work requires process restart")]
     RestartRequired,
@@ -3254,6 +3260,7 @@ pub(crate) struct V2LaneWorkAdapter {
     lane_drain_signing_guard: Option<LaneDrainSigningGuard>,
     lane_drain_votes: LaneDrainVoteState,
     lane_drain_queue: Option<Arc<Queue>>,
+    merge_history_wait: Option<(wire::View, super::v2_body_store::HistoryAdmissionWait)>,
     startup_activation_complete: bool,
     lane_drain_fanout_cursor: usize,
     planned_lane_proposals: BTreeMap<wire::ConsensusRound, Vec<LaneBlockProposalV1>>,
@@ -4029,6 +4036,7 @@ impl V2LaneWorkAdapter {
             lane_drain_signing_guard,
             lane_drain_votes: LaneDrainVoteState::new(),
             lane_drain_queue: None,
+            merge_history_wait: None,
             startup_activation_complete: false,
             lane_drain_fanout_cursor: 0,
             planned_lane_proposals: BTreeMap::new(),
@@ -18270,9 +18278,7 @@ impl V2LaneWorkAdapter {
                 self.validated_merge_execution_candidate = None;
                 return Ok(MergeCandidateValidation::Deferred);
             }
-            return validation
-                .map(|()| MergeCandidateValidation::Ready)
-                .map_err(|error| MergeCandidateValidationError::Invalid(error.to_string()));
+            return self.classify_merge_state_validation(active_view, validation);
         }
         let validated = self.merge_execution_candidate_validation_memo(
             candidate,
@@ -18323,9 +18329,43 @@ impl V2LaneWorkAdapter {
             self.validated_merge_execution_candidate = None;
             return Ok(MergeCandidateValidation::Deferred);
         }
-        validation.map_err(|error| MergeCandidateValidationError::Invalid(error.to_string()))?;
+        if self.classify_merge_state_validation(active_view, validation)?
+            == MergeCandidateValidation::Deferred
+        {
+            return Ok(MergeCandidateValidation::Deferred);
+        }
         self.validated_merge_execution_candidate = Some(validated);
         Ok(MergeCandidateValidation::Ready)
+    }
+    fn classify_merge_state_validation(
+        &mut self,
+        active_view: wire::View,
+        validation: Result<(), crate::state::MergeLedgerCommitError>,
+    ) -> Result<MergeCandidateValidation, MergeCandidateValidationError> {
+        match validation {
+            Ok(()) => Ok(MergeCandidateValidation::Ready),
+            Err(crate::state::MergeLedgerCommitError::BlockHashAdmission(error)) => {
+                self.validated_merge_execution_candidate = None;
+                let Some(wait) = error.release_wait() else {
+                    return Err(MergeCandidateValidationError::Frontier(error.to_string()));
+                };
+                let wake = self
+                    .lane_drain_queue
+                    .as_ref()
+                    .ok_or_else(|| {
+                        MergeCandidateValidationError::Frontier(
+                            "history admission requires the installed runner Queue".to_owned(),
+                        )
+                    })?
+                    .sumeragi_waker();
+                self.merge_history_wait = Some((
+                    active_view,
+                    super::v2_body_store::HistoryAdmissionWait::new(wait.clone(), &wake),
+                ));
+                Ok(MergeCandidateValidation::Deferred)
+            }
+            Err(error) => Err(MergeCandidateValidationError::Invalid(error.to_string())),
+        }
     }
     fn merge_execution_candidate_validation_memo(
         &self,
@@ -18503,11 +18543,17 @@ impl V2LaneWorkAdapter {
         application_block_header: BlockHeader,
         parent_header: &BlockHeader,
         active_view: wire::View,
-    ) -> Option<crate::merge::MergeLedgerCandidate> {
+    ) -> Result<
+        Option<crate::merge::MergeLedgerCandidate>,
+        crate::state::StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>,
+    > {
         let state_view_generation = self.state.state_view_generation();
-        let candidate = self
+        let Some(candidate) = self
             .state
-            .build_merge_execution_candidate(application_block_header, self.context.mode)?;
+            .build_merge_execution_candidate(application_block_header, self.context.mode)?
+        else {
+            return Ok(None);
+        };
         if self.state.state_view_generation() == state_view_generation
             && state_view_generation % 2 == 0
             && let Ok(validated) = self.merge_execution_candidate_validation_memo(
@@ -18523,7 +18569,7 @@ impl V2LaneWorkAdapter {
         {
             self.validated_merge_execution_candidate = Some(validated);
         }
-        Some(candidate)
+        Ok(Some(candidate))
     }
     #[cfg(test)]
     pub(crate) fn validate_merge_execution_candidate_for_test(
@@ -18866,6 +18912,21 @@ impl V2LaneWorkAdapter {
             self.validated_merge_execution_candidate = None;
             return Ok(MergeRefreshOutcome::Ready);
         }
+        if let Some((view, pending)) = &mut self.merge_history_wait {
+            let wake = self
+                .lane_drain_queue
+                .as_ref()
+                .ok_or_else(|| {
+                    V2LaneWorkError::InvalidContext(
+                        "history admission requires the installed runner Queue".to_owned(),
+                    )
+                })?
+                .sumeragi_waker();
+            if *view == active_view && !pending.is_ready(&wake) {
+                return Ok(self.defer_merge_candidate_work());
+            }
+            self.merge_history_wait = None;
+        }
         let refresh_generation = self.state.state_view_generation();
         if self
             .merge_parent_frontier_at_generation(refresh_generation)
@@ -19093,11 +19154,36 @@ impl V2LaneWorkAdapter {
                     .has_pending_merge_execution_sources(self.context.mode)
                 {
                     let header = self.merge_carrier_context_header(active_view)?;
-                    self.build_and_memoize_merge_execution_candidate(
+                    match self.build_and_memoize_merge_execution_candidate(
                         header,
                         &parent_header,
                         active_view,
-                    )
+                    ) {
+                        Ok(candidate) => candidate,
+                        Err(error) => {
+                            let Some(wait) = error.release_wait() else {
+                                return Err(V2LaneWorkError::StateAdmission(error));
+                            };
+                            let wake = self
+                                .lane_drain_queue
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    V2LaneWorkError::InvalidContext(
+                                        "history admission requires the installed runner Queue"
+                                            .to_owned(),
+                                    )
+                                })?
+                                .sumeragi_waker();
+                            self.merge_history_wait = Some((
+                                active_view,
+                                super::v2_body_store::HistoryAdmissionWait::new(
+                                    wait.clone(),
+                                    &wake,
+                                ),
+                            ));
+                            return Ok(self.defer_merge_candidate_work());
+                        }
+                    }
                 } else {
                     None
                 };
@@ -21151,6 +21237,8 @@ pub(super) mod tests {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            block_hash_history_bytes:
+                iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
@@ -22114,6 +22202,48 @@ pub(super) mod tests {
         assert_eq!(view_three.creation_time(), view_zero.creation_time());
         assert_eq!(view_three.view_change_index(), 3);
         assert_ne!(view_three, view_zero);
+    }
+    #[test]
+    fn merge_validation_pressure_keeps_original_wait_instead_of_invalidating_candidate() {
+        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &iroha_primitives::time::TimeSource::new_system(),
+        ));
+        adapter
+            .install_lane_drain_queue(Arc::clone(&queue))
+            .unwrap();
+        let notification = concread::release::ReleaseNotification::default();
+        let error = crate::state::MergeLedgerCommitError::BlockHashAdmission(
+            crate::state::BlockHashAdmissionError::Busy(notification.observe()),
+        );
+        assert_eq!(
+            adapter
+                .classify_merge_state_validation(3, Err(error))
+                .unwrap(),
+            MergeCandidateValidation::Deferred
+        );
+        let (view, wait) = adapter.merge_history_wait.as_mut().unwrap();
+        assert_eq!(*view, 3);
+        assert!(!wait.is_ready(&queue.sumeragi_waker()));
+        drop(notification.guard(()));
+        assert!(wait.is_ready(&queue.sumeragi_waker()));
+        assert!(matches!(
+            adapter.classify_merge_state_validation(
+                3,
+                Err(crate::state::MergeLedgerCommitError::BlockHashAdmission(
+                    crate::state::BlockHashAdmissionError::ReadOnly
+                ))
+            ),
+            Err(MergeCandidateValidationError::Frontier(_))
+        ));
+        assert!(matches!(
+            adapter.classify_merge_state_validation(
+                3,
+                Err(crate::state::MergeLedgerCommitError::EmptyEntry)
+            ),
+            Err(MergeCandidateValidationError::Invalid(_))
+        ));
     }
     #[test]
     fn lane_drain_blocks_until_one_stable_live_queue_is_installed() {

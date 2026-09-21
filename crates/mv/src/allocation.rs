@@ -102,6 +102,40 @@ impl Pool {
     }
 }
 
+/// Borrowed proof that one original pool defers refunds on this thread.
+///
+/// Only the budget's synchronous callback creates this token. Physical owners
+/// which borrow it cannot escape the callback or move to another thread.
+/// Detached owners may leave after their physical guards have been released.
+///
+/// ```compile_fail
+/// let budget = mv::allocation::AllocationBudget::new(1024);
+/// let escaped = budget.with_deferred_refund_notifications(|scope| scope);
+/// drop(escaped);
+/// ```
+///
+/// The scope cannot be used from a different thread:
+/// ```compile_fail
+/// let budget = mv::allocation::AllocationBudget::new(1024);
+/// budget.with_deferred_refund_notifications(|scope| {
+///     std::thread::scope(|threads| {
+///         threads.spawn(move || { std::hint::black_box(scope); });
+///     });
+/// });
+/// ```
+pub struct AllocationScope<'scope> {
+    budget: &'scope AllocationBudget,
+    // Refund deferral is thread-local. Even a scoped thread cannot borrow this
+    // token to acquire writers whose refunds would notify on another thread.
+    _thread: std::marker::PhantomData<*mut ()>,
+}
+
+impl AllocationScope<'_> {
+    pub(crate) fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        Arc::ptr_eq(&self.budget.pool, &budget.pool)
+    }
+}
+
 /// One immutable finite allocation limit shared by its outstanding owners.
 ///
 /// Clones refer to the same pool. Dropping the budget handle does not invalidate
@@ -152,9 +186,13 @@ impl AllocationBudget {
     /// Acquire and release every physical guard inside the closure. Do not keep
     /// an enclosing guard held or return one from the closure: the budget cannot
     /// infer lock ownership. Detached allocation owners may escape after their
-    /// physical guards have been released. This API exposes no movable scope
-    /// guard and does not make an asynchronous future execute inside the scope.
-    pub fn with_deferred_refund_notifications<R>(&self, operation: impl FnOnce() -> R) -> R {
+    /// physical guards have been released. The callback receives a borrowed,
+    /// thread-bound token for APIs that enforce this lifetime in their physical
+    /// owner types. This does not make an async future execute inside the scope.
+    pub fn with_deferred_refund_notifications<R>(
+        &self,
+        operation: impl for<'scope> FnOnce(&'scope AllocationScope<'scope>) -> R,
+    ) -> R {
         let scope = RefundScope {
             pool: Arc::as_ptr(&self.pool),
             previous: REFUND_SCOPES.with(Cell::get),
@@ -165,7 +203,11 @@ impl AllocationBudget {
             pool: &self.pool,
         };
         REFUND_SCOPES.with(|head| head.set(ptr::from_ref(&scope)));
-        let output = operation();
+        let capability = AllocationScope {
+            budget: self,
+            _thread: std::marker::PhantomData,
+        };
+        let output = operation(&capability);
         drop(entered);
         output
     }
@@ -317,14 +359,17 @@ impl AllocationReservation {
         self.remaining
     }
 
-    /// Partition existing prepaid bytes into another owner of the same pool.
+    /// Whether this original reservation belongs to the exact budget pool.
+    /// Equal limits or available-byte observations never establish this identity.
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        Arc::ptr_eq(&self.pool, &budget.pool)
+    }
+
+    /// Move part of one already prepaid sum into a second move-only reservation.
     ///
-    /// This allocates no payload or control storage and obtains no new pool
-    /// credit. Use checked sums of concrete planned layouts to prepay sibling
-    /// operations once, then partition their providers before executing either.
-    /// A partition is still unused admission, not a fabricated aggregate
-    /// allocation charge; each actual allocation must split its own layout.
-    /// Refusal leaves the complete original reservation unchanged.
+    /// No pool CAS, allocation, refund or notification occurs. Both remainders
+    /// retain the same original pool and together own exactly the previous sum.
+    /// A refused partition leaves the original owner unchanged.
     pub fn try_partition_bytes(&mut self, bytes: usize) -> Result<Self, InsufficientReservation> {
         if bytes > self.remaining {
             return Err(InsufficientReservation {
@@ -375,10 +420,10 @@ impl Drop for AllocationReservation {
     }
 }
 
-/// An attempted allocation exceeds this owner's remaining prepaid demand.
+/// An allocation or component partition exceeds this owner's prepaid remainder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InsufficientReservation {
-    /// Exact requested layout size.
+    /// Requested allocation layout size or checked component layout sum.
     pub requested_bytes: usize,
     /// Original prepaid remainder, unchanged by refusal.
     pub remaining_bytes: usize,
@@ -431,3 +476,6 @@ impl Drop for AllocationCharge {
 #[cfg(test)]
 #[path = "allocation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::without_allocations;

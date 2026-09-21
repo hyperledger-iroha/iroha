@@ -382,7 +382,12 @@ impl<'state> PrefixPreparation<'state> {
     fn prepare_world_effects(&mut self) -> Result<world_commit::PreparedWorldEffects, String> {
         let state = &mut *self.state;
         if !self.prefix.retains_closed_state(state)
-            || state.block_hashes.pending.as_slice() != [state._curr_block.hash()]
+            || !state
+                .block_hashes
+                .pending()
+                .iter()
+                .copied()
+                .eq([state._curr_block.hash()])
         {
             return Err(
                 "World carrier preparation lost its original prefix or exact staged metadata"

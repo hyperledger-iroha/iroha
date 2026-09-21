@@ -221,8 +221,8 @@ use mv::{
     Key as MvKey, Value as MvValue,
     cell::{Block as CellBlock, Cell, Transaction as CellTransaction, View as CellView},
     storage::{
-        Block as StorageBlock, RangeIter, Storage, StorageReadOnly,
-        Transaction as StorageTransaction, View as StorageView,
+        Block as StorageBlock, Storage, StorageReadOnly, Transaction as StorageTransaction,
+        View as StorageView,
     },
 };
 use nonzero_ext::nonzero;
@@ -1591,7 +1591,7 @@ macro_rules! build_world_transaction_from_fields {
         [$($privacy:ident,)*]
         [$($suffix:ident,)*]
     ) => {
-        WorldTransaction {
+        Box::new(WorldTransaction {
             dataspace_catalog: $state.dataspace_catalog.clone(),
             axt_last_authorization_identities: axt_authorization_identities($state),
             axt_authorization_transitioned: BTreeSet::new(),
@@ -1608,7 +1608,7 @@ macro_rules! build_world_transaction_from_fields {
             #[cfg(feature = "telemetry")]
             telemetry: $telemetry,
             internal_event_buf: Vec::new(),
-        }
+        })
     };
 }
 macro_rules! build_world_transaction {
@@ -1649,61 +1649,230 @@ macro_rules! build_world_view {
         with_world_overlay_fields!(build_world_view_from_fields, $state)
     };
 }
-/// Lightweight multi-scope container for tracking committed block hashes.
-///
-/// Unlike the full MVCC cells used throughout the world state, block hashes only ever grow
-/// monotonically and can be rolled back deterministically by truncating the tail. To avoid
-/// blocking read-only state views during block execution, block-scoped access buffers appended
-/// hashes and only applies them under a short write lock at commit time.
+/// Shared immutable generations of the canonical block-hash journal.
+/// Opening a view retains its original tree; appending or replacing a tip copies
+/// only the edited tree path. Private execution never retains a physical writer.
+/// Every concrete tree allocation retains credits from its original finite pool.
 pub struct BlockHashes {
-    owner: Arc<BlockHashOwner>,
-    inner: parking_lot::RwLock<BlockHashStorage>,
-    released: mv::ReleaseNotification,
+    inner: BlockHashStorage,
+    budget: mv::allocation::AllocationBudget,
+    released: concread::release::ReleaseNotification,
     committed_height: AtomicUsize,
 }
 
-// Process-local identities are neither serializable nor caller-constructible.
-struct BlockHashOwner;
-struct BlockHashPublication;
+#[path = "state/block_hashes_admission.rs"]
+mod block_hashes_admission;
+use block_hashes_admission::BlockHashPolicy;
+pub use block_hashes_admission::{BlockHashAdmissionError, StateBlockStartError};
+type BlockHashMode = concread::bptree::Prepaid<BlockHashPolicy>;
+type BlockHashMap = concread::bptree::BptreeMap<usize, HashOf<BlockHeader>, BlockHashMode>;
+type BlockHashWork = concread::bptree::BptreeMapOwned<usize, HashOf<BlockHeader>, BlockHashMode>;
+type BlockHashFamily = concread::bptree::BptreeMapFamily<usize, HashOf<BlockHeader>, BlockHashMode>;
 
-/// Original process-local State family retained by a native lane's physical owner.
-/// This opaque identity is never reconstructed from wire or finalized context bytes.
+/// Original physical State family; never reconstructed from portable bytes.
 #[derive(Clone)]
-pub(crate) struct NativeLaneStateOwner(Arc<BlockHashOwner>);
-
+pub(crate) struct NativeLaneStateOwner(BlockHashFamily);
 impl NativeLaneStateOwner {
-    /// Check the actual State family without depending on its advancing generation.
     pub(crate) fn matches_state(&self, state: &State) -> bool {
-        Arc::ptr_eq(&self.0, &state.block_hashes.owner)
+        state
+            .block_hashes
+            .map()
+            .is_some_and(|map| self.0.matches(map))
+    }
+    fn same_family(&self, other: &Self) -> bool {
+        self.0.same_family(&other.0)
     }
 }
-
 impl State {
-    /// Retain this exact State family across native physical opening and closure.
-    pub(crate) fn native_lane_state_owner(&self) -> NativeLaneStateOwner {
-        NativeLaneStateOwner(Arc::clone(&self.block_hashes.owner))
+    /// Retain the actual mutable State family, refusing emergency read-only mode.
+    pub(crate) fn native_lane_state_owner(&self) -> Option<NativeLaneStateOwner> {
+        self.block_hashes
+            .map()
+            .map(|map| NativeLaneStateOwner(map.family()))
     }
 }
-
 enum BlockHashStorage {
-    Owned {
-        hashes: Vec<HashOf<BlockHeader>>,
-        publication: Arc<BlockHashPublication>,
-    },
+    Owned(BlockHashMap),
     EmergencyFastMapped(ReadOnlyMmap),
+    EmergencyFastEmpty,
 }
 
-impl BlockHashStorage {
-    fn as_slice(&self) -> &[HashOf<BlockHeader>] {
-        match self {
-            Self::Owned { hashes, .. } => hashes,
-            Self::EmergencyFastMapped(mapping) => mapped_block_hashes(mapping),
+/// Ordered read access to a captured canonical history, without a contiguous copy.
+pub trait BlockHashRead: Send + Sync {
+    /// Number of hashes in the original generation.
+    fn hash_count(&self) -> usize;
+    /// Borrow one zero-based committed hash.
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>>;
+    /// Iterate a valid half-open range without copying its history.
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_>;
+}
+impl dyn BlockHashRead + '_ {
+    /// Number of hashes in this captured history.
+    pub fn len(&self) -> usize {
+        self.hash_count()
+    }
+    /// Whether the captured history is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// Borrow one zero-based hash.
+    pub fn get(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        self.hash_at(index)
+    }
+    /// Borrow the first committed hash.
+    pub fn first(&self) -> Option<&HashOf<BlockHeader>> {
+        self.get(0)
+    }
+    /// Borrow the captured tip.
+    pub fn last(&self) -> Option<&HashOf<BlockHeader>> {
+        self.len().checked_sub(1).and_then(|i| self.get(i))
+    }
+    /// Iterate this generation without allocation.
+    pub fn iter(&self) -> BlockHashIter<'_> {
+        self.hash_range(0, self.len())
+    }
+    /// Iterate one valid half-open range.
+    pub fn range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        self.hash_range(start, end)
+    }
+}
+pub(crate) fn serialize_block_hashes(hashes: &dyn BlockHashRead, out: &mut String) {
+    out.push('[');
+    for (index, hash) in hashes.iter().enumerate() {
+        if index != 0 {
+            out.push(',');
+        }
+        norito::json::JsonSerialize::json_serialize(hash, out);
+    }
+    out.push(']');
+}
+impl<T: BlockHashRead + ?Sized> BlockHashRead for &T {
+    fn hash_count(&self) -> usize {
+        (**self).hash_count()
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        (**self).hash_at(index)
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        (**self).hash_range(start, end)
+    }
+}
+/// Allocation-free ordered iterator over shared tree or mapped history.
+pub struct BlockHashIter<'a> {
+    inner: BlockHashIterInner<'a>,
+    remaining: usize,
+}
+enum BlockHashIterInner<'a> {
+    Tree(
+        concread::bptree::RangeIter<
+            'a,
+            usize,
+            HashOf<BlockHeader>,
+            mv::allocation::AllocationCharge,
+        >,
+    ),
+    Slice(std::slice::Iter<'a, HashOf<BlockHeader>>),
+}
+impl<'a> Iterator for BlockHashIter<'a> {
+    type Item = &'a HashOf<BlockHeader>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let value = match &mut self.inner {
+            BlockHashIterInner::Tree(it) => it.next().map(|(_, v)| v),
+            BlockHashIterInner::Slice(it) => it.next(),
+        };
+        if value.is_some() {
+            self.remaining -= 1;
+        }
+        value
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+impl DoubleEndedIterator for BlockHashIter<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let value = match &mut self.inner {
+            BlockHashIterInner::Tree(it) => it.next_back().map(|(_, v)| v),
+            BlockHashIterInner::Slice(it) => it.next_back(),
+        };
+        if value.is_some() {
+            self.remaining -= 1;
+        }
+        value
+    }
+}
+impl ExactSizeIterator for BlockHashIter<'_> {}
+impl std::iter::FusedIterator for BlockHashIter<'_> {}
+impl BlockHashRead for [HashOf<BlockHeader>] {
+    fn hash_count(&self) -> usize {
+        <[HashOf<BlockHeader>]>::len(self)
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        <[HashOf<BlockHeader>]>::get(self, index)
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        BlockHashIter {
+            inner: BlockHashIterInner::Slice(self[start..end].iter()),
+            remaining: end - start,
         }
     }
 }
+impl BlockHashRead for Vec<HashOf<BlockHeader>> {
+    fn hash_count(&self) -> usize {
+        self.as_slice().len()
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        self.as_slice().get(index)
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        BlockHashRead::hash_range(self.as_slice(), start, end)
+    }
+}
+impl<const N: usize> BlockHashRead for [HashOf<BlockHeader>; N] {
+    fn hash_count(&self) -> usize {
+        N
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        self.as_slice().get(index)
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        BlockHashRead::hash_range(self.as_slice(), start, end)
+    }
+}
+/// Borrowed portion of one original hash generation.
+pub(crate) struct BlockHashRange<'a> {
+    source: &'a dyn BlockHashRead,
+    start: usize,
+    end: usize,
+}
+impl BlockHashRead for BlockHashRange<'_> {
+    fn hash_count(&self) -> usize {
+        self.end - self.start
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        if index < self.len() {
+            self.source.get(self.start + index)
+        } else {
+            None
+        }
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        assert!(start <= end && end <= self.len());
+        self.source.range(self.start + start, self.start + end)
+    }
+}
+impl std::fmt::Debug for BlockHashRange<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+impl<T: BlockHashRead + ?Sized> PartialEq<&T> for BlockHashRange<'_> {
+    fn eq(&self, other: &&T) -> bool {
+        self.iter().eq(other.hash_range(0, other.hash_count()))
+    }
+}
 
-/// Interpret the fixed-width Kura hash journal without faulting or copying all
-/// of its pages during emergency Fast startup.
+/// Interpret the validated fixed-width emergency journal without copying pages.
 #[allow(unsafe_code)]
 fn mapped_block_hashes(mapping: &ReadOnlyMmap) -> &[HashOf<BlockHeader>] {
     let bytes = mapping.as_slice();
@@ -1712,16 +1881,15 @@ fn mapped_block_hashes(mapping: &ReadOnlyMmap) -> &[HashOf<BlockHeader>] {
         0,
         "Kura hash mapping must contain complete fixed-width hashes"
     );
-    assert!(
+    assert_eq!(
         bytes
             .as_ptr()
-            .align_offset(std::mem::align_of::<HashOf<BlockHeader>>())
-            == 0,
+            .align_offset(std::mem::align_of::<HashOf<BlockHeader>>()),
+        0,
         "Kura hash mapping must satisfy HashOf alignment"
     );
-    // SAFETY: `Hash` and `HashOf<T>` are transparent wrappers around `[u8; 32]`
-    // and explicitly have no trap representation. The mapping is read-only,
-    // page-aligned, and retained for at least the returned slice lifetime.
+    // SAFETY: HashOf is a transparent fixed-width byte array without trap values.
+    // The read-only mapping outlives the returned, correctly aligned slice.
     unsafe {
         std::slice::from_raw_parts(
             bytes.as_ptr().cast::<HashOf<BlockHeader>>(),
@@ -1729,28 +1897,41 @@ fn mapped_block_hashes(mapping: &ReadOnlyMmap) -> &[HashOf<BlockHeader>] {
         )
     }
 }
-
+#[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
 impl Default for BlockHashes {
     fn default() -> Self {
         Self::new(Vec::new())
     }
 }
 impl BlockHashes {
-    /// Construct a new container from an explicit vector.
+    /// Restore an explicit cold-start hash sequence into one shared generation.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn new(initial: Vec<HashOf<BlockHeader>>) -> Self {
-        let committed_height = initial.len();
-        Self {
-            owner: Arc::new(BlockHashOwner),
-            released: mv::ReleaseNotification::default(),
-            inner: parking_lot::RwLock::new(BlockHashStorage::Owned {
-                hashes: initial,
-                publication: Arc::new(BlockHashPublication),
-            }),
-            committed_height: AtomicUsize::new(committed_height),
+        Self::try_new(
+            initial,
+            mv::allocation::AllocationBudget::new(
+                usize::try_from(
+                    iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES.get(),
+                )
+                .expect("default history budget fits supported platforms"),
+            ),
+        )
+        .expect("explicit fixture history fits its finite default budget")
+    }
+    fn map(&self) -> Option<&BlockHashMap> {
+        match &self.inner {
+            BlockHashStorage::Owned(map) => Some(map),
+            BlockHashStorage::EmergencyFastMapped(_) | BlockHashStorage::EmergencyFastEmpty => None,
         }
     }
-    /// Construct a zero-copy read-only view of the exact Kura hash prefix used
-    /// by emergency Fast mode.
+    fn new_emergency_fast_empty() -> Self {
+        Self {
+            inner: BlockHashStorage::EmergencyFastEmpty,
+            budget: mv::allocation::AllocationBudget::new(0),
+            released: concread::release::ReleaseNotification::default(),
+            committed_height: AtomicUsize::new(0),
+        }
+    }
     fn new_emergency_fast_mapped(mapping: ReadOnlyMmap, committed_height: usize) -> Self {
         assert_eq!(
             mapping.len(),
@@ -1758,290 +1939,357 @@ impl BlockHashes {
             "mapped Kura hash prefix must match its committed height"
         );
         Self {
-            owner: Arc::new(BlockHashOwner),
-            released: mv::ReleaseNotification::default(),
-            inner: parking_lot::RwLock::new(BlockHashStorage::EmergencyFastMapped(mapping)),
+            inner: BlockHashStorage::EmergencyFastMapped(mapping),
+            budget: mv::allocation::AllocationBudget::new(0),
+            released: concread::release::ReleaseNotification::default(),
             committed_height: AtomicUsize::new(committed_height),
         }
     }
-    /// Obtain a block-scoped mutable view of the hashes.
-    ///
-    /// # Panics
-    ///
-    /// Panics when this container is the read-only mapped journal installed by
-    /// emergency Fast startup. Fast must be restarted in Strict mode before any
-    /// state mutation can begin.
+    /// Begin a private ordinary generation. Emergency Fast mode is read-only.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn block(&self) -> BlockHashesBlock<'_> {
         BlockHashesBlock::new(self, false)
     }
-    /// Obtain a block-scoped mutable view after reverting the latest committed block, if any.
-    ///
-    /// # Panics
-    ///
-    /// Panics when this container is the read-only mapped journal installed by
-    /// emergency Fast startup.
+    /// Begin a private generation with its original tip removed.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn block_and_revert(&self) -> BlockHashesBlock<'_> {
         BlockHashesBlock::new(self, true)
     }
-    /// Obtain a read-only snapshot of the committed hashes.
+    /// Capture the current immutable generation without copying history.
     pub fn view(&self) -> BlockHashesView<'_> {
-        BlockHashesView {
-            guard: self.released.guard(self.inner.read()),
-        }
+        let inner = match &self.inner {
+            BlockHashStorage::Owned(map) => BlockHashesViewInner::Owned(map.read()),
+            BlockHashStorage::EmergencyFastMapped(mapping) => {
+                BlockHashesViewInner::Mapped(mapped_block_hashes(mapping))
+            }
+            BlockHashStorage::EmergencyFastEmpty => BlockHashesViewInner::Mapped(&[]),
+        };
+        BlockHashesView { inner }
     }
-    /// Return the latest committed height without taking the block-hash read lock.
+    fn try_view(&self) -> Result<BlockHashesView<'_>, concread::bptree::OwnedWriteError> {
+        let inner = match &self.inner {
+            BlockHashStorage::Owned(map) => {
+                let view = map.try_read()?;
+                BlockHashesViewInner::Owned(view)
+            }
+            BlockHashStorage::EmergencyFastMapped(mapping) => {
+                BlockHashesViewInner::Mapped(mapped_block_hashes(mapping))
+            }
+            BlockHashStorage::EmergencyFastEmpty => BlockHashesViewInner::Mapped(&[]),
+        };
+        Ok(BlockHashesView { inner })
+    }
+    /// Return the published height without acquiring a history snapshot.
     pub fn committed_height(&self) -> usize {
         self.committed_height.load(Ordering::Acquire)
     }
+    #[cfg(test)]
+    fn writer_available(&self) -> bool {
+        self.budget.with_deferred_refund_notifications(|_| {
+            self.map()
+                .is_none_or(|map| map.try_write_admitted(|d| self.admit(d)).is_ok())
+        })
+    }
 }
-/// Block-scoped access to the block hash log with staged updates.
+/// Original private hash generation. No physical lock survives construction.
 pub struct BlockHashesBlock<'a> {
     inner: &'a BlockHashes,
-    owner: Arc<BlockHashOwner>,
-    publication: Arc<BlockHashPublication>,
+    work: BlockHashWork,
     mode: mv::BlockMode,
-    guard: Option<mv::ReleaseGuard<'a, parking_lot::RwLockReadGuard<'a, BlockHashStorage>>>,
     visible_len: usize,
-    pending: Vec<HashOf<BlockHeader>>,
-    visible: Vec<HashOf<BlockHeader>>,
+    reserved_tip: Option<usize>,
+    fixture_edits: bool,
 }
+#[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
 impl<'a> BlockHashesBlock<'a> {
-    fn new(inner: &'a BlockHashes, revert_latest: bool) -> Self {
-        let guard = inner.released.guard(inner.inner.read());
-        let BlockHashStorage::Owned { publication, .. } = &**guard else {
-            panic!(
-                "emergency Fast block hashes are read-only; restart in Strict mode before mutation"
-            );
-        };
-        let publication = Arc::clone(publication);
-        let visible_len = if revert_latest {
-            guard.as_slice().len().saturating_sub(1)
-        } else {
-            guard.as_slice().len()
-        };
-        let visible = guard.as_slice()[..visible_len].to_vec();
+    fn new(inner: &'a BlockHashes, revert: bool) -> Self {
+        let map = inner.map().expect(
+            "emergency Fast block hashes are read-only; restart in Strict mode before mutation",
+        );
+        let release = inner.released.guard(());
+        let work = inner.budget.with_deferred_refund_notifications(|_| {
+            let mut work = map
+                .try_write_admitted(|d| inner.admit(d))
+                .expect("fixture hash writer admission")
+                .detach();
+            if revert && !work.is_empty() {
+                work.try_remove_admitted(&(work.len() - 1), |d| inner.admit(d))
+                    .expect("fixture history removal admission");
+            }
+            work
+        });
+        drop(release);
+        let visible_len = work.len();
         Self {
             inner,
-            owner: Arc::clone(&inner.owner),
-            publication,
-            mode: if revert_latest {
+            work,
+            mode: if revert {
                 mv::BlockMode::Replace
             } else {
                 mv::BlockMode::Ordinary
             },
-            guard: Some(guard),
             visible_len,
-            pending: Vec::new(),
-            visible,
+            reserved_tip: None,
+            fixture_edits: true,
         }
     }
-    fn as_slice(&self) -> &[HashOf<BlockHeader>] {
-        &self.visible
-    }
+}
+impl BlockHashesBlock<'_> {
     fn has_pending(&self) -> bool {
-        !self.pending.is_empty()
+        self.len() != self.visible_len
     }
-    /// Begin a transaction-scoped view nested under this block.
-    pub(crate) fn transaction(&mut self) -> BlockHashesTransaction<'_> {
-        let base = self.visible.as_slice();
-        let baseline_len = self.pending.len();
-        BlockHashesTransaction {
-            base,
-            pending: &mut self.pending,
-            baseline_len,
-            applied: false,
+    fn pending(&self) -> BlockHashRange<'_> {
+        BlockHashRange {
+            source: self,
+            start: self.visible_len,
+            end: self.len(),
         }
     }
-    /// Stage a new hash to be appended on commit.
-    pub(crate) fn push(&mut self, hash: HashOf<BlockHeader>) {
-        self.pending.push(hash);
-        self.visible.push(hash);
+    pub(crate) fn transaction(&mut self) -> BlockHashesTransaction<'_> {
+        BlockHashesTransaction { base: self }
     }
-    /// Stage a new hash in tests/benches without exposing internals broadly.
+    pub(crate) fn push(&mut self, hash: HashOf<BlockHeader>) {
+        if let Some(index) = self.reserved_tip.take() {
+            self.work
+                .try_update_private(&index, hash)
+                .expect("prepaid hash tip belongs to this exact private generation");
+        } else {
+            assert!(
+                self.fixture_edits,
+                "a canonical execution stages exactly one prepaid hash"
+            );
+            // Explicit fixture owners may build multiple hashes. Production
+            // acquisition always reserves exactly one successor before World.
+            self.inner.budget.with_deferred_refund_notifications(|_| {
+                self.work
+                    .try_insert_admitted(self.work.len(), hash, |d| self.inner.admit(d))
+                    .expect("fixture history insertion admission");
+            });
+        }
+    }
+    /// Append a test hash to this private generation.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn push_for_tests(&mut self, hash: HashOf<BlockHeader>) {
         self.push(hash);
     }
-    /// Drop the long-lived snapshot guard before entering state commit.
-    ///
-    /// Keeping this guard through block execution preserves deterministic snapshot semantics,
-    /// but committing while still holding it can deadlock with state writer-lock contention. Call
-    /// this before acquiring the state writer lock in commit paths.
-    pub(crate) fn prepare_commit(&mut self) {
-        self.guard.take();
-    }
-    /// Consume the exact staged hash journal and release its snapshot guard.
-    ///
-    /// Both vectors already belong to this block and are moved without a second
-    /// chain copy. Identity was captured with the original read guard, including
-    /// when `prepare_commit` has since released it. No lock or owner reference
-    /// escapes. Capture grants no authority to publish or reject a decided block.
     pub(crate) fn detach(self) -> DetachedBlockHashes {
-        let Self {
-            inner: _,
-            owner,
-            publication,
-            mode,
-            guard,
-            visible_len,
-            pending,
-            visible,
-        } = self;
-        drop(guard);
         DetachedBlockHashes {
-            owner,
-            publication,
-            mode,
-            visible_len,
-            pending,
-            visible,
+            work: self.work,
+            mode: self.mode,
+            visible_len: self.visible_len,
+            reserved_tip: self.reserved_tip,
         }
     }
-    /// Commit all mutations performed in this block scope.
-    pub(crate) fn commit(mut self) {
-        let pending = std::mem::take(&mut self.pending);
-        let visible_len = self.visible_len;
-        self.guard.take();
-        // The raw writer allocates its next opaque identity before taking the
-        // hash write lock. A future aggregate publisher must admit/preallocate
-        // this token and its installation storage before the publication cut.
-        let publication = Arc::new(BlockHashPublication);
-        let mut guard = self.inner.released.guard(self.inner.inner.write());
-        let mut hashes = guard.as_slice().to_vec();
-        hashes.truncate(visible_len);
-        hashes.extend(pending);
-        **guard = BlockHashStorage::Owned {
-            hashes,
-            publication,
-        };
-        self.inner
-            .committed_height
-            .store(guard.as_slice().len(), Ordering::Release);
+    #[cfg(test)]
+    fn commit(self) {
+        self.commit_for_tests();
     }
-    /// Commit mutations in tests without exposing the block hash log publicly.
+    /// Publish a fixture under its exact original predecessor.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn commit_for_tests(self) {
-        self.commit();
+        let target = self.inner;
+        let prepared = self
+            .detach()
+            .try_prepare_publication(target, |_, _| Ok::<_, std::convert::Infallible>(()))
+            .unwrap_or_else(|(_, error)| panic!("test hash publication refused: {error:?}"));
+        drop(prepared.publish());
     }
 }
-impl std::ops::Deref for BlockHashesBlock<'_> {
-    type Target = [HashOf<BlockHeader>];
-    #[allow(clippy::explicit_auto_deref)]
-    fn deref(&self) -> &Self::Target {
-        self.as_slice()
-    }
-}
-/// Owned original hash journal, with neither a read guard nor an owner borrow.
-///
-/// The exact owner/publication identity covers untouched hashes as well as the
-/// discarded tip in replacement mode. The original visible prefix and pending
-/// appends are retained without another chain copy. This move-only owner keeps
-/// no State or BlockHashes reference alive. Publication preparation reacquires
-/// its exact predecessor and retains the writer for the aggregate publisher.
-///
-/// TODO: join aggregate predecessor/resource/finality ownership and preallocate
-/// installation before adding a single consuming State publication operation.
+/// Move-only original successor, including its real tree family and predecessor.
 pub(crate) struct DetachedBlockHashes {
-    owner: Arc<BlockHashOwner>,
-    publication: Arc<BlockHashPublication>,
+    work: BlockHashWork,
     mode: mv::BlockMode,
     visible_len: usize,
-    pending: Vec<HashOf<BlockHeader>>,
-    visible: Vec<HashOf<BlockHeader>>,
+    reserved_tip: Option<usize>,
 }
-
-#[path = "state/block_hashes_publication.rs"]
-mod block_hashes_publication;
-
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: connect retained journals to the consuming State publisher"
-    )
-)]
 impl DetachedBlockHashes {
-    /// Original ordinary or replacement acquisition mode.
     pub(crate) fn mode(&self) -> mv::BlockMode {
         self.mode
     }
-
-    /// Original visible predecessor, before the staged appends.
-    pub(crate) fn prefix(&self) -> &[HashOf<BlockHeader>] {
-        &self.visible[..self.visible_len]
-    }
-
-    /// Exact appends owned by the original block.
-    pub(crate) fn pending(&self) -> &[HashOf<BlockHeader>] {
-        &self.pending
-    }
-
-    /// Complete visible sequence retained from the original block.
-    pub(crate) fn as_slice(&self) -> &[HashOf<BlockHeader>] {
-        &self.visible
-    }
-
-    /// Advisory equality with an explicit target's current opaque identity.
-    ///
-    /// This acquires only the existing hash read lock. It is not a publication
-    /// lease or consensus verdict; the aggregate publisher must reacquire and
-    /// jointly authenticate every original component before publishing any one.
-    pub(crate) fn matches_current(&self, target: &BlockHashes) -> bool {
-        if !Arc::ptr_eq(&self.owner, &target.owner) {
-            return false;
+    pub(crate) fn prefix(&self) -> BlockHashRange<'_> {
+        BlockHashRange {
+            source: self,
+            start: 0,
+            end: self.visible_len,
         }
-        let guard = target.released.guard(target.inner.read());
-        matches!(
-            &**guard,
-            BlockHashStorage::Owned { publication, .. }
-                if Arc::ptr_eq(&self.publication, publication)
-        )
     }
-
-    /// Compare the exact predecessor and mode of another acquired block.
-    /// Candidate mutations in that block do not change its captured identity.
+    pub(crate) fn pending(&self) -> BlockHashRange<'_> {
+        BlockHashRange {
+            source: self,
+            start: self.visible_len,
+            end: self.len(),
+        }
+    }
+    pub(crate) fn matches_current(&self, target: &BlockHashes) -> bool {
+        self.observe_current(target) == Ok(true)
+    }
+    fn observe_current(
+        &self,
+        target: &BlockHashes,
+    ) -> Result<bool, concread::bptree::OwnedWriteError> {
+        let Some(map) = target.map() else {
+            return Ok(false);
+        };
+        self.work.try_matches_current(map)
+    }
     pub(crate) fn matches_block_predecessor(&self, block: &BlockHashesBlock<'_>) -> bool {
         self.mode == block.mode
-            && Arc::ptr_eq(&self.owner, &block.owner)
-            && Arc::ptr_eq(&self.publication, &block.publication)
+            && self
+                .work
+                .predecessor()
+                .same_predecessor(&block.work.predecessor())
     }
 }
-
-/// Transaction-scoped mutable view of the block hash log.
-pub struct BlockHashesTransaction<'block> {
-    base: &'block [HashOf<BlockHeader>],
-    pending: &'block mut Vec<HashOf<BlockHeader>>,
-    baseline_len: usize,
-    applied: bool,
+#[path = "state/block_hashes_publication.rs"]
+mod block_hashes_publication;
+/// Read-only transaction projection of its enclosing private generation.
+pub struct BlockHashesTransaction<'a> {
+    base: &'a dyn BlockHashRead,
 }
 impl BlockHashesTransaction<'_> {
-    /// Apply the accumulated mutations so they persist at the parent block scope.
-    pub(crate) fn apply(mut self) {
-        self.applied = true;
+    pub(crate) fn apply(self) {}
+}
+/// A retained immutable committed generation or read-only mapped journal.
+pub struct BlockHashesView<'a> {
+    inner: BlockHashesViewInner<'a>,
+}
+enum BlockHashesViewInner<'a> {
+    /// Original tree generation retained independently of later publication.
+    Owned(concread::bptree::BptreeMapReadTxn<'a, usize, HashOf<BlockHeader>, BlockHashMode>),
+    /// Validated emergency journal retained by its enclosing State.
+    Mapped(&'a [HashOf<BlockHeader>]),
+}
+macro_rules! hash_read_methods {
+    () => {
+        /// Number of hashes in this generation.
+        pub fn len(&self) -> usize {
+            BlockHashRead::hash_count(self)
+        }
+        /// Whether this generation is empty.
+        pub fn is_empty(&self) -> bool {
+            self.len() == 0
+        }
+        /// Borrow a zero-based hash.
+        pub fn get(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+            BlockHashRead::hash_at(self, index)
+        }
+        /// Borrow the first hash of this generation.
+        pub fn first(&self) -> Option<&HashOf<BlockHeader>> {
+            self.get(0)
+        }
+        /// Borrow the tip of this generation.
+        pub fn last(&self) -> Option<&HashOf<BlockHeader>> {
+            self.len().checked_sub(1).and_then(|i| self.get(i))
+        }
+        /// Iterate this generation in height order without allocation.
+        pub fn iter(&self) -> BlockHashIter<'_> {
+            self.hash_range(0, self.len())
+        }
+    };
+}
+macro_rules! work_hash_read {
+    ($type:ty) => {
+        impl BlockHashRead for $type {
+            fn hash_count(&self) -> usize {
+                self.work.len() - usize::from(self.reserved_tip.is_some())
+            }
+            fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+                (index < self.hash_count())
+                    .then(|| self.work.get(&index))
+                    .flatten()
+            }
+            fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+                assert!(start <= end && end <= self.len());
+                BlockHashIter {
+                    inner: BlockHashIterInner::Tree(self.work.range(start..end)),
+                    remaining: end - start,
+                }
+            }
+        }
+    };
+}
+work_hash_read!(BlockHashesBlock<'_>);
+impl BlockHashesBlock<'_> {
+    hash_read_methods!();
+}
+work_hash_read!(DetachedBlockHashes);
+impl DetachedBlockHashes {
+    fn len(&self) -> usize {
+        self.hash_count()
+    }
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    #[cfg(test)]
+    fn get(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        self.hash_at(index)
+    }
+    #[cfg(test)]
+    fn last(&self) -> Option<&HashOf<BlockHeader>> {
+        self.len().checked_sub(1).and_then(|i| self.get(i))
     }
 }
-impl Drop for BlockHashesTransaction<'_> {
-    fn drop(&mut self) {
-        if !self.applied {
-            self.pending.truncate(self.baseline_len);
+impl BlockHashRead for BlockHashesTransaction<'_> {
+    fn hash_count(&self) -> usize {
+        self.base.len()
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        self.base.get(index)
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        self.base.range(start, end)
+    }
+}
+impl BlockHashRange<'_> {
+    fn len(&self) -> usize {
+        self.hash_count()
+    }
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    #[cfg(test)]
+    fn get(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        self.hash_at(index)
+    }
+    fn iter(&self) -> BlockHashIter<'_> {
+        self.hash_range(0, self.len())
+    }
+}
+impl BlockHashesTransaction<'_> {
+    hash_read_methods!();
+}
+impl BlockHashRead for BlockHashesView<'_> {
+    fn hash_count(&self) -> usize {
+        match &self.inner {
+            BlockHashesViewInner::Owned(view) => view.len(),
+            BlockHashesViewInner::Mapped(view) => view.len(),
+        }
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        match &self.inner {
+            BlockHashesViewInner::Owned(view) => view.get(&index),
+            BlockHashesViewInner::Mapped(view) => view.get(index),
+        }
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        assert!(start <= end && end <= self.len());
+        BlockHashIter {
+            inner: match &self.inner {
+                BlockHashesViewInner::Owned(view) => {
+                    BlockHashIterInner::Tree(view.range(start..end))
+                }
+                BlockHashesViewInner::Mapped(view) => {
+                    BlockHashIterInner::Slice(view[start..end].iter())
+                }
+            },
+            remaining: end - start,
         }
     }
 }
-impl std::ops::Deref for BlockHashesTransaction<'_> {
-    type Target = [HashOf<BlockHeader>];
-    #[allow(clippy::explicit_auto_deref)]
-    fn deref(&self) -> &Self::Target {
-        self.base
-    }
-}
-/// Read-only view of the committed block hashes.
-pub struct BlockHashesView<'a> {
-    guard: mv::ReleaseGuard<'a, parking_lot::RwLockReadGuard<'a, BlockHashStorage>>,
-}
-impl std::ops::Deref for BlockHashesView<'_> {
-    type Target = [HashOf<BlockHeader>];
-    #[allow(clippy::explicit_auto_deref)]
-    fn deref(&self) -> &Self::Target {
-        self.guard.as_slice()
-    }
+impl BlockHashesView<'_> {
+    hash_read_methods!();
 }
 #[cfg(test)]
 mod emergency_fast_block_hash_mapping_tests {
@@ -2063,9 +2311,9 @@ mod emergency_fast_block_hash_mapping_tests {
         let journal = BlockHashes::new_emergency_fast_mapped(mapping, hashes.len());
 
         assert_eq!(journal.committed_height(), hashes.len());
-        assert_eq!(&*journal.view(), hashes.as_slice());
+        assert!(journal.view().iter().copied().eq(hashes));
         assert!(matches!(
-            &*journal.inner.read(),
+            &journal.inner,
             BlockHashStorage::EmergencyFastMapped(_)
         ));
     }
@@ -3280,6 +3528,9 @@ pub(crate) fn certified_merge_queue_reservations(
 /// Errors surfaced when committing merge-ledger entries into state.
 #[derive(Debug, ThisError)]
 pub enum MergeLedgerCommitError {
+    /// Local original hash-history admission refused before executing State effects.
+    #[error(transparent)]
+    BlockHashAdmission(#[from] BlockHashAdmissionError),
     /// Local lane-drain evidence could not be observed or authenticated.
     /// This provenance never authorizes a deterministic proposal rejection.
     #[error("local lane drain observation requires recovery: {0}")]
@@ -4531,7 +4782,7 @@ pub enum LaneLifecycleError {
         /// Original physical lock which prevented acquisition.
         field: &'static str,
         /// Release observation captured before probing that lock.
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
     },
 }
 /// Errors surfaced while installing runtime ZK configuration into committed state.
@@ -7370,7 +7621,12 @@ impl WorldBlock<'_> {
         out
     }
 }
-/// Struct for single transaction's aggregated changes
+/// Aggregated changes and original rollback journals for one transaction.
+///
+/// World block constructors return this journal in a [`Box`], retaining its
+/// allocation through execution and apply. Moving an enclosing transaction must
+/// not copy every store's checkpoint onto each caller's stack. Dropping the box
+/// without applying it restores the original store and cell checkpoints.
 pub struct WorldTransaction<'block, 'world> {
     /// Dataspace alias catalog used to qualify domain-backed aliases.
     pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
@@ -13601,8 +13857,6 @@ pub struct StateBlock<'state> {
     state_ref: &'state State,
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldBlock<'state>,
-    /// Blockchain.
-    pub block_hashes: BlockHashesBlock<'state>,
     /// Merge-ledger cache retaining recent entries for this block scope.
     pub merge_ledger: &'state MergeLedgerStore,
     /// Hashes of transactions mapped onto block height where they stored
@@ -13811,6 +14065,8 @@ pub struct StateBlock<'state> {
     pub(crate) authenticated_replay_commit: bool,
     /// True for the disposable full-range replay pass that must not publish external effects.
     replay_prevalidation: bool,
+    /// Original history custody drops only after all physical State writers.
+    pub block_hashes: BlockHashesBlock<'state>,
 }
 impl<'state> StateBlock<'state> {
     /// Returns the world view associated with this block scope.
@@ -15057,8 +15313,9 @@ pub struct StateTransaction<'block, 'state> {
     committed_fragments: &'block mut usize,
     /// Lanes whose state was touched in this transaction.
     touched_lanes: &'block mut BTreeSet<LaneId>,
-    /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
-    pub world: WorldTransaction<'block, 'state>,
+    /// Heap-owned World journal retained through execution, apply, and discard.
+    /// Enclosing transaction handoffs move the owner without copying all checkpoints.
+    pub world: Box<WorldTransaction<'block, 'state>>,
     /// Blockchain.
     pub block_hashes: BlockHashesTransaction<'block>,
     /// Merge-ledger cache retaining recent entries for this transaction scope.
@@ -15484,7 +15741,7 @@ pub struct StateView<'state> {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldView<'state>,
     /// Snapshot of committed block hashes.
-    pub block_hashes: Vec<HashOf<BlockHeader>>,
+    pub block_hashes: BlockHashesView<'state>,
     /// Merge-ledger cache retaining recent entries for this consistent view.
     pub merge_ledger: &'state MergeLedgerStore,
     /// Hashes of transactions mapped onto block height where they stored
@@ -15564,7 +15821,7 @@ pub struct StateQueryView<'state> {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldView<'state>,
     /// Snapshot of committed block hashes.
-    pub block_hashes: Vec<HashOf<BlockHeader>>,
+    pub block_hashes: BlockHashesView<'state>,
     /// Topology used to commit latest block.
     pub commit_topology: CellView<'state, Vec<PeerId>>,
     /// Topology used to commit previous block.
@@ -15637,7 +15894,7 @@ impl<'state> StateView<'state> {
     }
     /// Exposes the cached block hashes captured by this snapshot.
     #[inline]
-    pub fn block_hashes(&self) -> &[HashOf<BlockHeader>] {
+    pub fn block_hashes(&self) -> &dyn BlockHashRead {
         &self.block_hashes
     }
     /// Provides read-only access to the commit topology for this snapshot.
@@ -17920,12 +18177,13 @@ mod stake_snapshot_tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
-            nexus.staking.public_validator_mode = LaneValidatorMode::AdminManaged;
-            nexus.staking.restricted_validator_mode = LaneValidatorMode::AdminManaged;
-        }
+        let mut nexus = state.nexus_snapshot();
+        nexus.staking.min_validator_stake = 1_u64.into();
+        nexus.staking.public_validator_mode = LaneValidatorMode::AdminManaged;
+        nexus.staking.restricted_validator_mode = LaneValidatorMode::AdminManaged;
+        state
+            .set_nexus_from_config(nexus)
+            .expect("install configured validator ownership before genesis");
         let keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
         let mut wb = state.world.block();
         for keypair in &keypairs {
@@ -23033,15 +23291,12 @@ pub trait WorldReadOnly {
             .and_then(|bindings| bindings.dataspace_for_account(account_id))
     }
     /// Get [`Account`]'s [`RoleId`]s
-    // NOTE: have to use concreate type because don't want to capture lifetme of `id`
-    #[allow(clippy::type_complexity)]
+    ///
+    /// The range borrows State entries, independently of the lookup account's lifetime.
     fn account_roles_iter<'slf>(
         &'slf self,
         id: &AccountId,
-    ) -> core::iter::Map<
-        RangeIter<'slf, RoleIdWithOwner, ()>,
-        fn((&'slf RoleIdWithOwner, &'slf ())) -> &'slf RoleId,
-    > {
+    ) -> impl DoubleEndedIterator<Item = &'slf RoleId> + use<'slf, Self> {
         self.account_roles()
             .range(RoleIdByAccountBounds::new(id))
             .map(|(role, ())| &role.id)
@@ -23294,7 +23549,7 @@ macro_rules! impl_world_ro {
     )*};
 }
 impl_world_ro! {
-    WorldBlock<'_>, WorldTransaction<'_, '_>, WorldView<'_>
+    WorldBlock<'_>, WorldTransaction<'_, '_>, Box<WorldTransaction<'_, '_>>, WorldView<'_>
 }
 #[cfg(test)]
 mod bootle_lantern_policy_world_read_tests {
@@ -23553,7 +23808,7 @@ impl<'world> WorldBlock<'world> {
         #[cfg(feature = "telemetry")] telemetry: Option<&'world StateTelemetry>,
         axt_lane_config: LaneConfig,
         axt_current_slot: u64,
-    ) -> WorldTransaction<'_, 'world> {
+    ) -> Box<WorldTransaction<'_, 'world>> {
         let axt_lane_map = axt_lane_map_from_lane_config(&axt_lane_config);
         self.trasaction_with_axt_lane_map(
             #[cfg(feature = "telemetry")]
@@ -23569,7 +23824,7 @@ impl<'world> WorldBlock<'world> {
         axt_lane_config: LaneConfig,
         axt_current_slot: u64,
         axt_lane_map: BTreeMap<DataSpaceId, LaneId>,
-    ) -> WorldTransaction<'_, 'world> {
+    ) -> Box<WorldTransaction<'_, 'world>> {
         build_world_transaction!(
             self,
             telemetry,
@@ -23586,7 +23841,7 @@ impl<'world> WorldBlock<'world> {
         &mut self,
         axt_lane_config: LaneConfig,
         axt_current_slot: u64,
-    ) -> WorldTransaction<'_, 'world> {
+    ) -> Box<WorldTransaction<'_, 'world>> {
         #[cfg(feature = "telemetry")]
         {
             self.trasaction(None, axt_lane_config, axt_current_slot)
@@ -26312,293 +26567,294 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) {
         self.track_confidential_policy_transition(definition_id, effective_height);
     }
-    /// Apply transaction's changes
+    /// Apply the heap-owned transaction journal to its original World block.
     #[allow(clippy::too_many_lines)]
-    pub fn apply(self) {
-        // NOTE: intentionally destruct self not to forget commit some fields
+    pub fn apply(mut self: Box<Self>) {
+        // Keep exhaustive field coverage without moving the complete journal
+        // off its heap allocation before applying the individual fields.
         let Self {
-            dataspace_catalog,
-            dataspace_catalog_sink,
-            parameters,
-            peers,
-            domain_committees,
-            domain_endorsement_policies,
-            domain_endorsements,
-            domain_endorsements_by_domain,
-            domains,
-            domains_by_owner,
-            kaigi_relay_registry,
-            kaigi_account_dependencies,
-            accounts,
-            uaid_accounts,
-            account_aliases,
-            account_aliases_by_account,
-            account_scope_directory,
-            account_scope_accounts,
-            opaque_uaids,
-            ram_lfe_program_policies,
-            identifier_policies,
-            fee_sponsor_programs,
-            fee_sponsor_program_revisions,
-            fee_sponsor_enrollments,
-            fee_sponsor_vaults,
-            fee_sponsor_budget_counters,
-            identifier_claims,
-            account_rekey_records,
-            account_rekey_records_by_account,
-            account_recovery_policies,
-            account_recovery_requests,
-            asset_definitions,
-            asset_definition_aliases,
-            asset_definition_alias_bindings,
-            contract_aliases,
-            contract_alias_bindings,
-            asset_definition_domains,
-            domain_asset_definitions,
-            asset_definitions_by_owner,
-            asset_definition_holders,
-            asset_definition_assets,
-            assets_by_account,
-            assets_by_domain,
-            asset_definition_nonzero_holders,
-            assets,
-            asset_metadata,
-            nfts,
-            nfts_by_owner,
-            nfts_by_domain,
-            rwas,
-            rwas_by_owner,
-            rwas_by_status,
-            rwas_by_frozen,
-            roles,
-            account_permissions,
-            account_roles,
-            oracle_feeds,
-            oracle_observations,
-            oracle_history,
-            oracle_provider_stats,
-            oracle_disputes,
-            oracle_changes,
-            defi_oracle_attestations,
-            twitter_bindings,
-            twitter_bindings_by_uaid,
-            viral_reward_budget,
-            viral_campaign_budget,
-            viral_daily_counters,
-            viral_binding_claims,
-            viral_escrows,
-            viral_bonus_paid,
-            asset_escrows,
-            asset_escrows_by_seller,
-            asset_escrows_by_buyer,
-            asset_escrows_by_status,
-            execution_proof_profiles,
-            execution_proof_verifications,
-            game_sessions,
-            nft_sale_offers,
-            nft_custody_records,
-            nft_custody_by_nft,
-            nft_custody_owner_refs,
-            nft_custody_domain_refs,
-            game_custody_by_account,
-            game_account_references,
-            game_asset_references,
-            vpn_leases,
-            vpn_active_lease_by_account,
-            vpn_active_lease_by_address_slot,
-            vpn_settled_leases_by_account,
-            uaid_dataspaces,
-            axt_policies,
-            axt_handle_counters,
-            axt_asset_incarnations,
-            axt_replay_ledger,
-            axt_handle_budget_ledger,
-            sccp_registry,
-            sccp_route_liabilities,
-            sccp_ton_breaker_observations,
-            sccp_replay_forests,
-            sccp_outbound_pending_usage,
-            sccp_outbound_pending_messages,
-            sccp_outbound_message_locator,
-            sccp_outbound_message_index,
-            sccp_inbound_anchor_high_water,
-            space_directory_manifests,
-            tx_sequences,
-            triggers,
-            executor,
-            executor_data_model,
-            verifying_keys,
-            verifying_keys_by_circuit,
-            consensus_keys,
-            consensus_keys_by_pk,
-            pedersen_params,
-            poseidon_params,
-            runtime_upgrades,
-            privacy_consensus_policy,
-            privacy_exact12_qualification,
-            privacy_activations,
-            private_settlement_governance,
-            private_settlement_pools,
-            private_settlement_roots,
-            private_settlement_nullifiers,
-            private_settlement_outputs,
-            private_settlement_recipient_index,
-            private_settlement_staged_locks,
-            private_settlement_receipts,
-            private_settlement_aborts,
-            privacy_pgc_accounts,
-            privacy_pgc_pool_invariants,
-            privacy_nullifiers,
-            privacy_commitments,
-            privacy_roots,
-            privacy_root_heads,
-            proofs,
-            proofs_by_status,
-            proof_tags,
-            proofs_by_tag,
-            contract_manifests,
-            contract_code,
-            contract_code_uploads,
-            contract_code_upload_chunks,
-            contract_instances,
-            contract_subject_bindings,
-            contract_subject_addresses,
-            smart_contract_state,
-            musubi_namespace_bindings,
-            musubi_domain_ownership_generations,
-            musubi_packages,
-            musubi_package_metadata,
-            musubi_package_members,
-            musubi_package_invitations,
-            musubi_maintainer_directory,
-            musubi_releases,
-            musubi_archives,
-            musubi_provider_bundle_attestations,
-            musubi_archive_locations,
-            musubi_locations_by_pin,
-            musubi_locations_by_replication_order,
-            musubi_locations_by_provider,
-            musubi_archive_availability,
-            musubi_archive_reverse_references,
-            musubi_resolver_index,
-            musubi_resolver_index_checkpoints,
-            musubi_public_directory,
-            musubi_aliases,
-            musubi_alias_history,
-            musubi_governance_decisions,
-            musubi_registry_policy,
-            musubi_resolver_index_revision,
-            musubi_replication_shortfall_releases,
-            soracloud_sequence_watermark,
-            soracloud_service_revisions,
-            soracloud_service_deployments,
-            soracloud_app_infra_states,
-            soracloud_service_runtime,
-            soracloud_inrou_replica_runtime,
-            soracloud_service_audit_events,
-            soracloud_app_infra_audit_events,
-            soracloud_service_state_entries,
-            soracloud_decryption_request_records,
-            soracloud_agent_apartments,
-            soracloud_agent_apartment_audit_events,
-            soracloud_training_jobs,
-            soracloud_training_job_audit_events,
-            soracloud_model_registries,
-            soracloud_model_weight_versions,
-            soracloud_model_weight_audit_events,
-            soracloud_model_artifacts,
-            soracloud_model_artifact_audit_events,
-            soracloud_uploaded_model_bundles,
-            soracloud_inrou_host_capabilities,
-            soracloud_hf_sources,
-            soracloud_hf_shared_lease_pools,
-            soracloud_hf_shared_lease_members,
-            soracloud_hf_shared_lease_audit_events,
-            soracloud_inrou_service_placements,
-            soracloud_mailbox_messages,
-            soracloud_runtime_receipts,
-            capacity_declarations,
-            capacity_fee_ledger,
-            capacity_disputes,
-            sorafs_pricing,
-            provider_credit_ledger,
-            provider_owners,
-            provider_ingest_completion_authorities,
-            da_pin_intents_by_ticket,
-            da_pin_intents_by_alias,
-            da_pin_intents_by_manifest,
-            da_pin_intents_by_lane_epoch,
-            pin_manifests,
-            manifest_aliases,
-            replication_orders,
-            content_bundles,
-            content_chunks,
-            soradns_directory_records,
-            soradns_directory_pending,
-            soradns_directory_latest,
-            soradns_directory_history,
-            soradns_directory_prev_of,
-            soradns_directory_revocations,
-            soradns_release_signers,
-            soradns_rotation_policy,
-            soradns_last_publish_ms,
-            soradns_history_len,
-            settlement_receipts,
-            kagemusha_reserve_pools,
-            kagemusha_reserve_operations,
-            kagemusha_mint_credit_operations,
-            kagemusha_issuance_operations,
-            kagemusha_redemption_id_operations,
-            kagemusha_terminal_nullifier_operations,
-            public_lane_validators,
-            public_lane_stake_shares,
-            public_lane_rewards,
-            public_lane_reward_claims,
-            lane_relay_emergency_validators,
-            repo_agreements,
-            repo_agreements_by_initiator,
-            repo_agreements_by_counterparty,
-            repo_agreements_by_custodian,
-            zk_assets,
-            confidential_policy_transition_index,
-            confidential_policy_transition_counts,
-            elections,
-            citizens,
-            ministry_agenda_proposals,
-            governance_proposals,
-            governance_referenda,
-            governance_locks,
-            governance_lock_expiry_index,
-            validation_fee_proposal_index,
-            governance_slashes,
-            governance_last_unlock_sweep_height,
-            governance_unlock_stats,
-            parliament_attempts,
-            parliament_attempt_counts,
-            parliament_member_reference_counts,
-            parliament_timed_ovn_resource_reservations,
-            parliament_timed_ovn_casting_candidates,
-            parliament_required_beacon_pulse_slots,
-            parliament_certified_enactments,
-            parliament_unavailable_beacon_pulse_slots,
-            parliament_tle_key_session_retention_deadlines,
-            tle_key_session_selection_intervals,
-            tle_key_sessions,
-            tle_key_session_rosters,
-            tle_key_session_lifecycles,
-            tle_active_key_session,
-            timed_ovn_evidence,
-            global_beacon_dkg,
-            global_beacon_key_sessions,
-            global_beacon_active_session,
-            global_beacon_latest_pulse,
-            global_beacon_pulses,
-            global_beacon_pulse_slots,
-            consensus_evidence,
-            external_event_sink,
-            mut external_event_buf,
-            merge_hint_roots,
-            merge_global_state_root,
+            dataspace_catalog: _,
+            dataspace_catalog_sink: _,
+            parameters: _,
+            peers: _,
+            domain_committees: _,
+            domain_endorsement_policies: _,
+            domain_endorsements: _,
+            domain_endorsements_by_domain: _,
+            domains: _,
+            domains_by_owner: _,
+            kaigi_relay_registry: _,
+            kaigi_account_dependencies: _,
+            accounts: _,
+            uaid_accounts: _,
+            account_aliases: _,
+            account_aliases_by_account: _,
+            account_scope_directory: _,
+            account_scope_accounts: _,
+            opaque_uaids: _,
+            ram_lfe_program_policies: _,
+            identifier_policies: _,
+            fee_sponsor_programs: _,
+            fee_sponsor_program_revisions: _,
+            fee_sponsor_enrollments: _,
+            fee_sponsor_vaults: _,
+            fee_sponsor_budget_counters: _,
+            identifier_claims: _,
+            account_rekey_records: _,
+            account_rekey_records_by_account: _,
+            account_recovery_policies: _,
+            account_recovery_requests: _,
+            asset_definitions: _,
+            asset_definition_aliases: _,
+            asset_definition_alias_bindings: _,
+            contract_aliases: _,
+            contract_alias_bindings: _,
+            asset_definition_domains: _,
+            domain_asset_definitions: _,
+            asset_definitions_by_owner: _,
+            asset_definition_holders: _,
+            asset_definition_assets: _,
+            assets_by_account: _,
+            assets_by_domain: _,
+            asset_definition_nonzero_holders: _,
+            assets: _,
+            asset_metadata: _,
+            nfts: _,
+            nfts_by_owner: _,
+            nfts_by_domain: _,
+            rwas: _,
+            rwas_by_owner: _,
+            rwas_by_status: _,
+            rwas_by_frozen: _,
+            roles: _,
+            account_permissions: _,
+            account_roles: _,
+            oracle_feeds: _,
+            oracle_observations: _,
+            oracle_history: _,
+            oracle_provider_stats: _,
+            oracle_disputes: _,
+            oracle_changes: _,
+            defi_oracle_attestations: _,
+            twitter_bindings: _,
+            twitter_bindings_by_uaid: _,
+            viral_reward_budget: _,
+            viral_campaign_budget: _,
+            viral_daily_counters: _,
+            viral_binding_claims: _,
+            viral_escrows: _,
+            viral_bonus_paid: _,
+            asset_escrows: _,
+            asset_escrows_by_seller: _,
+            asset_escrows_by_buyer: _,
+            asset_escrows_by_status: _,
+            execution_proof_profiles: _,
+            execution_proof_verifications: _,
+            game_sessions: _,
+            nft_sale_offers: _,
+            nft_custody_records: _,
+            nft_custody_by_nft: _,
+            nft_custody_owner_refs: _,
+            nft_custody_domain_refs: _,
+            game_custody_by_account: _,
+            game_account_references: _,
+            game_asset_references: _,
+            vpn_leases: _,
+            vpn_active_lease_by_account: _,
+            vpn_active_lease_by_address_slot: _,
+            vpn_settled_leases_by_account: _,
+            uaid_dataspaces: _,
+            axt_policies: _,
+            axt_handle_counters: _,
+            axt_asset_incarnations: _,
+            axt_replay_ledger: _,
+            axt_handle_budget_ledger: _,
+            sccp_registry: _,
+            sccp_route_liabilities: _,
+            sccp_ton_breaker_observations: _,
+            sccp_replay_forests: _,
+            sccp_outbound_pending_usage: _,
+            sccp_outbound_pending_messages: _,
+            sccp_outbound_message_locator: _,
+            sccp_outbound_message_index: _,
+            sccp_inbound_anchor_high_water: _,
+            space_directory_manifests: _,
+            tx_sequences: _,
+            triggers: _,
+            executor: _,
+            executor_data_model: _,
+            verifying_keys: _,
+            verifying_keys_by_circuit: _,
+            consensus_keys: _,
+            consensus_keys_by_pk: _,
+            pedersen_params: _,
+            poseidon_params: _,
+            runtime_upgrades: _,
+            privacy_consensus_policy: _,
+            privacy_exact12_qualification: _,
+            privacy_activations: _,
+            private_settlement_governance: _,
+            private_settlement_pools: _,
+            private_settlement_roots: _,
+            private_settlement_nullifiers: _,
+            private_settlement_outputs: _,
+            private_settlement_recipient_index: _,
+            private_settlement_staged_locks: _,
+            private_settlement_receipts: _,
+            private_settlement_aborts: _,
+            privacy_pgc_accounts: _,
+            privacy_pgc_pool_invariants: _,
+            privacy_nullifiers: _,
+            privacy_commitments: _,
+            privacy_roots: _,
+            privacy_root_heads: _,
+            proofs: _,
+            proofs_by_status: _,
+            proof_tags: _,
+            proofs_by_tag: _,
+            contract_manifests: _,
+            contract_code: _,
+            contract_code_uploads: _,
+            contract_code_upload_chunks: _,
+            contract_instances: _,
+            contract_subject_bindings: _,
+            contract_subject_addresses: _,
+            smart_contract_state: _,
+            musubi_namespace_bindings: _,
+            musubi_domain_ownership_generations: _,
+            musubi_packages: _,
+            musubi_package_metadata: _,
+            musubi_package_members: _,
+            musubi_package_invitations: _,
+            musubi_maintainer_directory: _,
+            musubi_releases: _,
+            musubi_archives: _,
+            musubi_provider_bundle_attestations: _,
+            musubi_archive_locations: _,
+            musubi_locations_by_pin: _,
+            musubi_locations_by_replication_order: _,
+            musubi_locations_by_provider: _,
+            musubi_archive_availability: _,
+            musubi_archive_reverse_references: _,
+            musubi_resolver_index: _,
+            musubi_resolver_index_checkpoints: _,
+            musubi_public_directory: _,
+            musubi_aliases: _,
+            musubi_alias_history: _,
+            musubi_governance_decisions: _,
+            musubi_registry_policy: _,
+            musubi_resolver_index_revision: _,
+            musubi_replication_shortfall_releases: _,
+            soracloud_sequence_watermark: _,
+            soracloud_service_revisions: _,
+            soracloud_service_deployments: _,
+            soracloud_app_infra_states: _,
+            soracloud_service_runtime: _,
+            soracloud_inrou_replica_runtime: _,
+            soracloud_service_audit_events: _,
+            soracloud_app_infra_audit_events: _,
+            soracloud_service_state_entries: _,
+            soracloud_decryption_request_records: _,
+            soracloud_agent_apartments: _,
+            soracloud_agent_apartment_audit_events: _,
+            soracloud_training_jobs: _,
+            soracloud_training_job_audit_events: _,
+            soracloud_model_registries: _,
+            soracloud_model_weight_versions: _,
+            soracloud_model_weight_audit_events: _,
+            soracloud_model_artifacts: _,
+            soracloud_model_artifact_audit_events: _,
+            soracloud_uploaded_model_bundles: _,
+            soracloud_inrou_host_capabilities: _,
+            soracloud_hf_sources: _,
+            soracloud_hf_shared_lease_pools: _,
+            soracloud_hf_shared_lease_members: _,
+            soracloud_hf_shared_lease_audit_events: _,
+            soracloud_inrou_service_placements: _,
+            soracloud_mailbox_messages: _,
+            soracloud_runtime_receipts: _,
+            capacity_declarations: _,
+            capacity_fee_ledger: _,
+            capacity_disputes: _,
+            sorafs_pricing: _,
+            provider_credit_ledger: _,
+            provider_owners: _,
+            provider_ingest_completion_authorities: _,
+            da_pin_intents_by_ticket: _,
+            da_pin_intents_by_alias: _,
+            da_pin_intents_by_manifest: _,
+            da_pin_intents_by_lane_epoch: _,
+            pin_manifests: _,
+            manifest_aliases: _,
+            replication_orders: _,
+            content_bundles: _,
+            content_chunks: _,
+            soradns_directory_records: _,
+            soradns_directory_pending: _,
+            soradns_directory_latest: _,
+            soradns_directory_history: _,
+            soradns_directory_prev_of: _,
+            soradns_directory_revocations: _,
+            soradns_release_signers: _,
+            soradns_rotation_policy: _,
+            soradns_last_publish_ms: _,
+            soradns_history_len: _,
+            settlement_receipts: _,
+            kagemusha_reserve_pools: _,
+            kagemusha_reserve_operations: _,
+            kagemusha_mint_credit_operations: _,
+            kagemusha_issuance_operations: _,
+            kagemusha_redemption_id_operations: _,
+            kagemusha_terminal_nullifier_operations: _,
+            public_lane_validators: _,
+            public_lane_stake_shares: _,
+            public_lane_rewards: _,
+            public_lane_reward_claims: _,
+            lane_relay_emergency_validators: _,
+            repo_agreements: _,
+            repo_agreements_by_initiator: _,
+            repo_agreements_by_counterparty: _,
+            repo_agreements_by_custodian: _,
+            zk_assets: _,
+            confidential_policy_transition_index: _,
+            confidential_policy_transition_counts: _,
+            elections: _,
+            citizens: _,
+            ministry_agenda_proposals: _,
+            governance_proposals: _,
+            governance_referenda: _,
+            governance_locks: _,
+            governance_lock_expiry_index: _,
+            validation_fee_proposal_index: _,
+            governance_slashes: _,
+            governance_last_unlock_sweep_height: _,
+            governance_unlock_stats: _,
+            parliament_attempts: _,
+            parliament_attempt_counts: _,
+            parliament_member_reference_counts: _,
+            parliament_timed_ovn_resource_reservations: _,
+            parliament_timed_ovn_casting_candidates: _,
+            parliament_required_beacon_pulse_slots: _,
+            parliament_certified_enactments: _,
+            parliament_unavailable_beacon_pulse_slots: _,
+            parliament_tle_key_session_retention_deadlines: _,
+            tle_key_session_selection_intervals: _,
+            tle_key_sessions: _,
+            tle_key_session_rosters: _,
+            tle_key_session_lifecycles: _,
+            tle_active_key_session: _,
+            timed_ovn_evidence: _,
+            global_beacon_dkg: _,
+            global_beacon_key_sessions: _,
+            global_beacon_active_session: _,
+            global_beacon_latest_pulse: _,
+            global_beacon_pulses: _,
+            global_beacon_pulse_slots: _,
+            consensus_evidence: _,
+            external_event_sink: _,
+            external_event_buf: _,
+            merge_hint_roots: _,
+            merge_global_state_root: _,
             #[cfg(feature = "telemetry")]
                 telemetry: _,
             internal_event_buf: _,
@@ -26608,289 +26864,290 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             axt_last_authorization_identities: _,
             axt_authorization_transitioned: _,
             current_dataspace_id: _,
-        } = self;
-        *dataspace_catalog_sink = dataspace_catalog;
-        if !external_event_buf.is_empty() {
-            external_event_sink.append(&mut external_event_buf);
+        } = self.as_ref();
+        *self.dataspace_catalog_sink = self.dataspace_catalog;
+        if !self.external_event_buf.is_empty() {
+            self.external_event_sink
+                .append(&mut self.external_event_buf);
         }
-        executor_data_model.apply();
-        executor.apply();
-        triggers.apply();
-        verifying_keys.apply();
-        verifying_keys_by_circuit.apply();
-        consensus_keys.apply();
-        consensus_keys_by_pk.apply();
-        pedersen_params.apply();
-        poseidon_params.apply();
-        runtime_upgrades.apply();
-        privacy_consensus_policy.apply();
-        privacy_exact12_qualification.apply();
-        privacy_activations.apply();
-        private_settlement_governance.apply();
-        private_settlement_pools.apply();
-        private_settlement_roots.apply();
-        private_settlement_nullifiers.apply();
-        private_settlement_outputs.apply();
-        private_settlement_recipient_index.apply();
-        private_settlement_staged_locks.apply();
-        private_settlement_receipts.apply();
-        private_settlement_aborts.apply();
-        privacy_pgc_accounts.apply();
-        privacy_pgc_pool_invariants.apply();
-        privacy_nullifiers.apply();
-        privacy_commitments.apply();
-        privacy_roots.apply();
-        privacy_root_heads.apply();
-        proofs.apply();
-        proofs_by_status.apply();
-        proof_tags.apply();
-        proofs_by_tag.apply();
-        consensus_evidence.apply();
-        merge_global_state_root.apply();
-        merge_hint_roots.apply();
-        contract_manifests.apply();
-        contract_code.apply();
-        contract_code_uploads.apply();
-        contract_code_upload_chunks.apply();
-        contract_instances.apply();
-        contract_subject_bindings.apply();
-        contract_subject_addresses.apply();
-        smart_contract_state.apply();
-        musubi_namespace_bindings.apply();
-        musubi_domain_ownership_generations.apply();
-        musubi_packages.apply();
-        musubi_package_metadata.apply();
-        musubi_package_members.apply();
-        musubi_package_invitations.apply();
-        musubi_maintainer_directory.apply();
-        musubi_releases.apply();
-        musubi_archives.apply();
-        musubi_provider_bundle_attestations.apply();
-        musubi_archive_locations.apply();
-        musubi_locations_by_pin.apply();
-        musubi_locations_by_replication_order.apply();
-        musubi_locations_by_provider.apply();
-        musubi_archive_availability.apply();
-        musubi_archive_reverse_references.apply();
-        musubi_resolver_index.apply();
-        musubi_resolver_index_checkpoints.apply();
-        musubi_public_directory.apply();
-        musubi_aliases.apply();
-        musubi_alias_history.apply();
-        musubi_governance_decisions.apply();
-        musubi_registry_policy.apply();
-        musubi_resolver_index_revision.apply();
-        musubi_replication_shortfall_releases.apply();
-        soracloud_sequence_watermark.apply();
-        soracloud_service_revisions.apply();
-        soracloud_service_deployments.apply();
-        soracloud_app_infra_states.apply();
-        soracloud_service_runtime.apply();
-        soracloud_inrou_replica_runtime.apply();
-        soracloud_service_audit_events.apply();
-        soracloud_app_infra_audit_events.apply();
-        soracloud_service_state_entries.apply();
-        soracloud_decryption_request_records.apply();
-        soracloud_agent_apartments.apply();
-        soracloud_agent_apartment_audit_events.apply();
-        soracloud_training_jobs.apply();
-        soracloud_training_job_audit_events.apply();
-        soracloud_model_registries.apply();
-        soracloud_model_weight_versions.apply();
-        soracloud_model_weight_audit_events.apply();
-        soracloud_model_artifacts.apply();
-        soracloud_model_artifact_audit_events.apply();
-        soracloud_uploaded_model_bundles.apply();
-        soracloud_inrou_host_capabilities.apply();
-        soracloud_hf_sources.apply();
-        soracloud_hf_shared_lease_pools.apply();
-        soracloud_hf_shared_lease_members.apply();
-        soracloud_hf_shared_lease_audit_events.apply();
-        soracloud_inrou_service_placements.apply();
-        soracloud_mailbox_messages.apply();
-        soracloud_runtime_receipts.apply();
-        capacity_disputes.apply();
-        capacity_fee_ledger.apply();
-        capacity_declarations.apply();
-        sorafs_pricing.apply();
-        provider_credit_ledger.apply();
-        provider_owners.apply();
-        provider_ingest_completion_authorities.apply();
-        da_pin_intents_by_ticket.apply();
-        da_pin_intents_by_alias.apply();
-        da_pin_intents_by_manifest.apply();
-        da_pin_intents_by_lane_epoch.apply();
-        pin_manifests.apply();
-        manifest_aliases.apply();
-        replication_orders.apply();
-        content_chunks.apply();
-        content_bundles.apply();
-        soradns_directory_records.apply();
-        soradns_directory_pending.apply();
-        soradns_directory_history.apply();
-        soradns_directory_prev_of.apply();
-        soradns_directory_revocations.apply();
-        soradns_release_signers.apply();
-        soradns_directory_latest.apply();
-        soradns_rotation_policy.apply();
-        soradns_last_publish_ms.apply();
-        soradns_history_len.apply();
-        settlement_receipts.apply();
-        kagemusha_reserve_pools.apply();
-        kagemusha_reserve_operations.apply();
-        kagemusha_mint_credit_operations.apply();
-        kagemusha_issuance_operations.apply();
-        kagemusha_redemption_id_operations.apply();
-        kagemusha_terminal_nullifier_operations.apply();
-        domain_committees.apply();
-        domain_endorsement_policies.apply();
-        domain_endorsements.apply();
-        domain_endorsements_by_domain.apply();
-        public_lane_validators.apply();
-        public_lane_stake_shares.apply();
-        public_lane_rewards.apply();
-        public_lane_reward_claims.apply();
-        lane_relay_emergency_validators.apply();
-        repo_agreements.apply();
-        repo_agreements_by_initiator.apply();
-        repo_agreements_by_counterparty.apply();
-        repo_agreements_by_custodian.apply();
-        zk_assets.apply();
-        confidential_policy_transition_index.apply();
-        confidential_policy_transition_counts.apply();
-        elections.apply();
-        citizens.apply();
-        ministry_agenda_proposals.apply();
-        governance_proposals.apply();
-        governance_referenda.apply();
-        governance_locks.apply();
-        governance_lock_expiry_index.apply();
-        validation_fee_proposal_index.apply();
-        governance_slashes.apply();
-        governance_last_unlock_sweep_height.apply();
-        governance_unlock_stats.apply();
-        parliament_attempts.apply();
-        parliament_attempt_counts.apply();
-        parliament_member_reference_counts.apply();
-        parliament_timed_ovn_resource_reservations.apply();
-        parliament_timed_ovn_casting_candidates.apply();
-        parliament_required_beacon_pulse_slots.apply();
-        parliament_certified_enactments.apply();
-        parliament_unavailable_beacon_pulse_slots.apply();
-        parliament_tle_key_session_retention_deadlines.apply();
-        tle_key_session_selection_intervals.apply();
-        tle_key_sessions.apply();
-        tle_key_session_rosters.apply();
-        tle_key_session_lifecycles.apply();
-        tle_active_key_session.apply();
-        timed_ovn_evidence.apply();
-        global_beacon_dkg.apply();
-        global_beacon_key_sessions.apply();
-        global_beacon_active_session.apply();
-        global_beacon_latest_pulse.apply();
-        global_beacon_pulses.apply();
-        global_beacon_pulse_slots.apply();
-        tx_sequences.apply();
-        oracle_disputes.apply();
-        oracle_changes.apply();
-        defi_oracle_attestations.apply();
-        oracle_provider_stats.apply();
-        oracle_history.apply();
-        oracle_observations.apply();
-        oracle_feeds.apply();
-        twitter_bindings_by_uaid.apply();
-        twitter_bindings.apply();
-        viral_bonus_paid.apply();
-        viral_escrows.apply();
-        asset_escrows.apply();
-        asset_escrows_by_seller.apply();
-        asset_escrows_by_buyer.apply();
-        asset_escrows_by_status.apply();
-        execution_proof_profiles.apply();
-        execution_proof_verifications.apply();
-        game_sessions.apply();
-        nft_sale_offers.apply();
-        nft_custody_records.apply();
-        nft_custody_by_nft.apply();
-        nft_custody_owner_refs.apply();
-        nft_custody_domain_refs.apply();
-        game_custody_by_account.apply();
-        game_account_references.apply();
-        game_asset_references.apply();
-        vpn_leases.apply();
-        vpn_active_lease_by_account.apply();
-        vpn_active_lease_by_address_slot.apply();
-        vpn_settled_leases_by_account.apply();
-        viral_binding_claims.apply();
-        viral_daily_counters.apply();
-        viral_campaign_budget.apply();
-        viral_reward_budget.apply();
-        account_roles.apply();
-        uaid_dataspaces.apply();
-        axt_policies.apply();
-        axt_handle_counters.apply();
-        axt_asset_incarnations.apply();
-        axt_replay_ledger.apply();
-        axt_handle_budget_ledger.apply();
-        sccp_registry.apply();
-        sccp_route_liabilities.apply();
-        sccp_ton_breaker_observations.apply();
-        sccp_replay_forests.apply();
-        sccp_outbound_pending_usage.apply();
-        sccp_outbound_pending_messages.apply();
-        sccp_outbound_message_locator.apply();
-        sccp_outbound_message_index.apply();
-        sccp_inbound_anchor_high_water.apply();
-        space_directory_manifests.apply();
-        account_permissions.apply();
-        roles.apply();
-        rwas.apply();
-        rwas_by_owner.apply();
-        rwas_by_status.apply();
-        rwas_by_frozen.apply();
-        nfts.apply();
-        nfts_by_owner.apply();
-        nfts_by_domain.apply();
-        identifier_claims.apply();
-        identifier_policies.apply();
-        fee_sponsor_programs.apply();
-        fee_sponsor_program_revisions.apply();
-        fee_sponsor_enrollments.apply();
-        fee_sponsor_vaults.apply();
-        fee_sponsor_budget_counters.apply();
-        ram_lfe_program_policies.apply();
-        account_recovery_requests.apply();
-        account_recovery_policies.apply();
-        account_rekey_records.apply();
-        account_rekey_records_by_account.apply();
-        asset_metadata.apply();
-        assets.apply();
-        asset_definition_alias_bindings.apply();
-        asset_definition_aliases.apply();
-        contract_alias_bindings.apply();
-        contract_aliases.apply();
-        asset_definition_domains.apply();
-        asset_definition_nonzero_holders.apply();
-        assets_by_domain.apply();
-        assets_by_account.apply();
-        asset_definition_assets.apply();
-        asset_definition_holders.apply();
-        asset_definitions_by_owner.apply();
-        domain_asset_definitions.apply();
-        asset_definitions.apply();
-        accounts.apply();
-        uaid_accounts.apply();
-        account_aliases.apply();
-        account_aliases_by_account.apply();
-        account_scope_directory.apply();
-        account_scope_accounts.apply();
-        opaque_uaids.apply();
-        domains.apply();
-        domains_by_owner.apply();
-        kaigi_relay_registry.apply();
-        kaigi_account_dependencies.apply();
-        peers.apply();
-        parameters.apply();
+        self.executor_data_model.apply();
+        self.executor.apply();
+        self.triggers.apply();
+        self.verifying_keys.apply();
+        self.verifying_keys_by_circuit.apply();
+        self.consensus_keys.apply();
+        self.consensus_keys_by_pk.apply();
+        self.pedersen_params.apply();
+        self.poseidon_params.apply();
+        self.runtime_upgrades.apply();
+        self.privacy_consensus_policy.apply();
+        self.privacy_exact12_qualification.apply();
+        self.privacy_activations.apply();
+        self.private_settlement_governance.apply();
+        self.private_settlement_pools.apply();
+        self.private_settlement_roots.apply();
+        self.private_settlement_nullifiers.apply();
+        self.private_settlement_outputs.apply();
+        self.private_settlement_recipient_index.apply();
+        self.private_settlement_staged_locks.apply();
+        self.private_settlement_receipts.apply();
+        self.private_settlement_aborts.apply();
+        self.privacy_pgc_accounts.apply();
+        self.privacy_pgc_pool_invariants.apply();
+        self.privacy_nullifiers.apply();
+        self.privacy_commitments.apply();
+        self.privacy_roots.apply();
+        self.privacy_root_heads.apply();
+        self.proofs.apply();
+        self.proofs_by_status.apply();
+        self.proof_tags.apply();
+        self.proofs_by_tag.apply();
+        self.consensus_evidence.apply();
+        self.merge_global_state_root.apply();
+        self.merge_hint_roots.apply();
+        self.contract_manifests.apply();
+        self.contract_code.apply();
+        self.contract_code_uploads.apply();
+        self.contract_code_upload_chunks.apply();
+        self.contract_instances.apply();
+        self.contract_subject_bindings.apply();
+        self.contract_subject_addresses.apply();
+        self.smart_contract_state.apply();
+        self.musubi_namespace_bindings.apply();
+        self.musubi_domain_ownership_generations.apply();
+        self.musubi_packages.apply();
+        self.musubi_package_metadata.apply();
+        self.musubi_package_members.apply();
+        self.musubi_package_invitations.apply();
+        self.musubi_maintainer_directory.apply();
+        self.musubi_releases.apply();
+        self.musubi_archives.apply();
+        self.musubi_provider_bundle_attestations.apply();
+        self.musubi_archive_locations.apply();
+        self.musubi_locations_by_pin.apply();
+        self.musubi_locations_by_replication_order.apply();
+        self.musubi_locations_by_provider.apply();
+        self.musubi_archive_availability.apply();
+        self.musubi_archive_reverse_references.apply();
+        self.musubi_resolver_index.apply();
+        self.musubi_resolver_index_checkpoints.apply();
+        self.musubi_public_directory.apply();
+        self.musubi_aliases.apply();
+        self.musubi_alias_history.apply();
+        self.musubi_governance_decisions.apply();
+        self.musubi_registry_policy.apply();
+        self.musubi_resolver_index_revision.apply();
+        self.musubi_replication_shortfall_releases.apply();
+        self.soracloud_sequence_watermark.apply();
+        self.soracloud_service_revisions.apply();
+        self.soracloud_service_deployments.apply();
+        self.soracloud_app_infra_states.apply();
+        self.soracloud_service_runtime.apply();
+        self.soracloud_inrou_replica_runtime.apply();
+        self.soracloud_service_audit_events.apply();
+        self.soracloud_app_infra_audit_events.apply();
+        self.soracloud_service_state_entries.apply();
+        self.soracloud_decryption_request_records.apply();
+        self.soracloud_agent_apartments.apply();
+        self.soracloud_agent_apartment_audit_events.apply();
+        self.soracloud_training_jobs.apply();
+        self.soracloud_training_job_audit_events.apply();
+        self.soracloud_model_registries.apply();
+        self.soracloud_model_weight_versions.apply();
+        self.soracloud_model_weight_audit_events.apply();
+        self.soracloud_model_artifacts.apply();
+        self.soracloud_model_artifact_audit_events.apply();
+        self.soracloud_uploaded_model_bundles.apply();
+        self.soracloud_inrou_host_capabilities.apply();
+        self.soracloud_hf_sources.apply();
+        self.soracloud_hf_shared_lease_pools.apply();
+        self.soracloud_hf_shared_lease_members.apply();
+        self.soracloud_hf_shared_lease_audit_events.apply();
+        self.soracloud_inrou_service_placements.apply();
+        self.soracloud_mailbox_messages.apply();
+        self.soracloud_runtime_receipts.apply();
+        self.capacity_disputes.apply();
+        self.capacity_fee_ledger.apply();
+        self.capacity_declarations.apply();
+        self.sorafs_pricing.apply();
+        self.provider_credit_ledger.apply();
+        self.provider_owners.apply();
+        self.provider_ingest_completion_authorities.apply();
+        self.da_pin_intents_by_ticket.apply();
+        self.da_pin_intents_by_alias.apply();
+        self.da_pin_intents_by_manifest.apply();
+        self.da_pin_intents_by_lane_epoch.apply();
+        self.pin_manifests.apply();
+        self.manifest_aliases.apply();
+        self.replication_orders.apply();
+        self.content_chunks.apply();
+        self.content_bundles.apply();
+        self.soradns_directory_records.apply();
+        self.soradns_directory_pending.apply();
+        self.soradns_directory_history.apply();
+        self.soradns_directory_prev_of.apply();
+        self.soradns_directory_revocations.apply();
+        self.soradns_release_signers.apply();
+        self.soradns_directory_latest.apply();
+        self.soradns_rotation_policy.apply();
+        self.soradns_last_publish_ms.apply();
+        self.soradns_history_len.apply();
+        self.settlement_receipts.apply();
+        self.kagemusha_reserve_pools.apply();
+        self.kagemusha_reserve_operations.apply();
+        self.kagemusha_mint_credit_operations.apply();
+        self.kagemusha_issuance_operations.apply();
+        self.kagemusha_redemption_id_operations.apply();
+        self.kagemusha_terminal_nullifier_operations.apply();
+        self.domain_committees.apply();
+        self.domain_endorsement_policies.apply();
+        self.domain_endorsements.apply();
+        self.domain_endorsements_by_domain.apply();
+        self.public_lane_validators.apply();
+        self.public_lane_stake_shares.apply();
+        self.public_lane_rewards.apply();
+        self.public_lane_reward_claims.apply();
+        self.lane_relay_emergency_validators.apply();
+        self.repo_agreements.apply();
+        self.repo_agreements_by_initiator.apply();
+        self.repo_agreements_by_counterparty.apply();
+        self.repo_agreements_by_custodian.apply();
+        self.zk_assets.apply();
+        self.confidential_policy_transition_index.apply();
+        self.confidential_policy_transition_counts.apply();
+        self.elections.apply();
+        self.citizens.apply();
+        self.ministry_agenda_proposals.apply();
+        self.governance_proposals.apply();
+        self.governance_referenda.apply();
+        self.governance_locks.apply();
+        self.governance_lock_expiry_index.apply();
+        self.validation_fee_proposal_index.apply();
+        self.governance_slashes.apply();
+        self.governance_last_unlock_sweep_height.apply();
+        self.governance_unlock_stats.apply();
+        self.parliament_attempts.apply();
+        self.parliament_attempt_counts.apply();
+        self.parliament_member_reference_counts.apply();
+        self.parliament_timed_ovn_resource_reservations.apply();
+        self.parliament_timed_ovn_casting_candidates.apply();
+        self.parliament_required_beacon_pulse_slots.apply();
+        self.parliament_certified_enactments.apply();
+        self.parliament_unavailable_beacon_pulse_slots.apply();
+        self.parliament_tle_key_session_retention_deadlines.apply();
+        self.tle_key_session_selection_intervals.apply();
+        self.tle_key_sessions.apply();
+        self.tle_key_session_rosters.apply();
+        self.tle_key_session_lifecycles.apply();
+        self.tle_active_key_session.apply();
+        self.timed_ovn_evidence.apply();
+        self.global_beacon_dkg.apply();
+        self.global_beacon_key_sessions.apply();
+        self.global_beacon_active_session.apply();
+        self.global_beacon_latest_pulse.apply();
+        self.global_beacon_pulses.apply();
+        self.global_beacon_pulse_slots.apply();
+        self.tx_sequences.apply();
+        self.oracle_disputes.apply();
+        self.oracle_changes.apply();
+        self.defi_oracle_attestations.apply();
+        self.oracle_provider_stats.apply();
+        self.oracle_history.apply();
+        self.oracle_observations.apply();
+        self.oracle_feeds.apply();
+        self.twitter_bindings_by_uaid.apply();
+        self.twitter_bindings.apply();
+        self.viral_bonus_paid.apply();
+        self.viral_escrows.apply();
+        self.asset_escrows.apply();
+        self.asset_escrows_by_seller.apply();
+        self.asset_escrows_by_buyer.apply();
+        self.asset_escrows_by_status.apply();
+        self.execution_proof_profiles.apply();
+        self.execution_proof_verifications.apply();
+        self.game_sessions.apply();
+        self.nft_sale_offers.apply();
+        self.nft_custody_records.apply();
+        self.nft_custody_by_nft.apply();
+        self.nft_custody_owner_refs.apply();
+        self.nft_custody_domain_refs.apply();
+        self.game_custody_by_account.apply();
+        self.game_account_references.apply();
+        self.game_asset_references.apply();
+        self.vpn_leases.apply();
+        self.vpn_active_lease_by_account.apply();
+        self.vpn_active_lease_by_address_slot.apply();
+        self.vpn_settled_leases_by_account.apply();
+        self.viral_binding_claims.apply();
+        self.viral_daily_counters.apply();
+        self.viral_campaign_budget.apply();
+        self.viral_reward_budget.apply();
+        self.account_roles.apply();
+        self.uaid_dataspaces.apply();
+        self.axt_policies.apply();
+        self.axt_handle_counters.apply();
+        self.axt_asset_incarnations.apply();
+        self.axt_replay_ledger.apply();
+        self.axt_handle_budget_ledger.apply();
+        self.sccp_registry.apply();
+        self.sccp_route_liabilities.apply();
+        self.sccp_ton_breaker_observations.apply();
+        self.sccp_replay_forests.apply();
+        self.sccp_outbound_pending_usage.apply();
+        self.sccp_outbound_pending_messages.apply();
+        self.sccp_outbound_message_locator.apply();
+        self.sccp_outbound_message_index.apply();
+        self.sccp_inbound_anchor_high_water.apply();
+        self.space_directory_manifests.apply();
+        self.account_permissions.apply();
+        self.roles.apply();
+        self.rwas.apply();
+        self.rwas_by_owner.apply();
+        self.rwas_by_status.apply();
+        self.rwas_by_frozen.apply();
+        self.nfts.apply();
+        self.nfts_by_owner.apply();
+        self.nfts_by_domain.apply();
+        self.identifier_claims.apply();
+        self.identifier_policies.apply();
+        self.fee_sponsor_programs.apply();
+        self.fee_sponsor_program_revisions.apply();
+        self.fee_sponsor_enrollments.apply();
+        self.fee_sponsor_vaults.apply();
+        self.fee_sponsor_budget_counters.apply();
+        self.ram_lfe_program_policies.apply();
+        self.account_recovery_requests.apply();
+        self.account_recovery_policies.apply();
+        self.account_rekey_records.apply();
+        self.account_rekey_records_by_account.apply();
+        self.asset_metadata.apply();
+        self.assets.apply();
+        self.asset_definition_alias_bindings.apply();
+        self.asset_definition_aliases.apply();
+        self.contract_alias_bindings.apply();
+        self.contract_aliases.apply();
+        self.asset_definition_domains.apply();
+        self.asset_definition_nonzero_holders.apply();
+        self.assets_by_domain.apply();
+        self.assets_by_account.apply();
+        self.asset_definition_assets.apply();
+        self.asset_definition_holders.apply();
+        self.asset_definitions_by_owner.apply();
+        self.domain_asset_definitions.apply();
+        self.asset_definitions.apply();
+        self.accounts.apply();
+        self.uaid_accounts.apply();
+        self.account_aliases.apply();
+        self.account_aliases_by_account.apply();
+        self.account_scope_directory.apply();
+        self.account_scope_accounts.apply();
+        self.opaque_uaids.apply();
+        self.domains.apply();
+        self.domains_by_owner.apply();
+        self.kaigi_relay_registry.apply();
+        self.kaigi_account_dependencies.apply();
+        self.peers.apply();
+        self.parameters.apply();
     }
     /// Get `Domain` with an ability to modify it.
     ///
@@ -27281,12 +27538,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 telemetry.ingest_data_event(event);
             }
         }
-        self.external_event_buf.extend(
-            shared_events
-                .iter()
-                .cloned()
-                .map(EventBox::Data),
-        );
+        self.external_event_buf
+            .extend(shared_events.iter().cloned().map(EventBox::Data));
         self.internal_event_buf.extend(shared_events);
     }
     /// Publish data events to native trigger processing without exposing them
@@ -27827,7 +28080,7 @@ impl State {
     /// waiting on this exact mutex observation; a wake requires a fresh probe.
     pub(crate) fn try_lock_lane_lifecycle_work_admission(
         &self,
-    ) -> Result<PublicationGuard<'_>, mv::ReleaseWait> {
+    ) -> Result<PublicationGuard<'_>, concread::release::ReleaseWait> {
         self.lane_lifecycle_lock.try_lock_or_wait()
     }
     fn lane_consensus_lifecycle_snapshot(&self) -> LaneConsensusLifecycleSnapshot {
@@ -29133,7 +29386,7 @@ impl State {
             .saturating_add(1);
         let mut block = self.block_hashes.block();
         block.push(block_hash);
-        block.commit();
+        block.commit_for_tests();
         let history_cap = autoscale_sample_history_cap(&self.nexus_snapshot().autoscale);
         let mut runtime = self.canonical_runtime.block();
         let mut history: VecDeque<_> = runtime.autoscale_sample_history.iter().copied().collect();
@@ -29600,7 +29853,8 @@ impl State {
         );
         let mut s = Self {
             world,
-            block_hashes: BlockHashes::default(),
+            block_hashes: BlockHashes::try_new(std::iter::empty(), kura.block_hash_history_budget())
+                .map_err(MergeLedgerCommitError::BlockHashAdmission)?,
             latest_block_header: parking_lot::RwLock::new(latest_block_header),
             transactions: TransactionsStorage::new(),
             commit_topology: Cell::new(Vec::new()),
@@ -30016,6 +30270,30 @@ impl State {
         self.kura
             .bind_lane_storage_network(self.network_id)
             .expect("bind the exact State test network before lane storage");
+        if !self.kura.emergency_fast_startup_enabled() {
+            let configured_hash =
+                LaneLifecycleParameterV1::catalog_hash(&nexus.configured_lane_catalog);
+            if self
+                .kura
+                .configured_lane_catalog_baseline()
+                .expect("read the authenticated test storage baseline")
+                != Some(configured_hash)
+            {
+                // A constructor may precede installation of a nondefault
+                // configured catalog. Its provisional default State must not
+                // provision storage before that catalog is authenticated.
+                return;
+            }
+            let configured = configured_primary_replay_geometry(&nexus.configured_lane_catalog)
+                .expect("test configured catalog has an exact initial primary");
+            self.kura
+                .establish_or_verify_configured_primary_geometry_anchor(
+                    configured.lane_config.primary(),
+                    configured.primary_incarnation,
+                    configured_hash,
+                )
+                .expect("authenticate the initial primary before provisioning test lane storage");
+        }
         self.kura
             .replace_lane_storage_entries_for_test(
                 &nexus.lane_config,
@@ -30464,6 +30742,8 @@ impl State {
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            block_hash_history_bytes:
+                iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
@@ -30645,19 +30925,23 @@ impl State {
     /// protocol-limit tightening. The same predicate excludes that work from a pristine merge
     /// execution carrier and admits the ordinary carrier which must apply it.
     /// A stale parent or concurrent state publication returns `None`.
-    pub(crate) fn deterministic_start_work_pending(&self, header: &BlockHeader) -> Option<bool> {
+    pub(crate) fn deterministic_start_work_pending(
+        &self,
+        header: &BlockHeader,
+    ) -> Result<Option<bool>, StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>>
+    {
         let generation = self.state_view_generation();
+        let next_height = u64::try_from(self.committed_height())
+            .ok()
+            .and_then(|h| h.checked_add(1));
         if generation % 2 != 0
-            || u64::try_from(self.committed_height())
-                .ok()?
-                .checked_add(1)?
-                != header.height().get()
+            || next_height != Some(header.height().get())
             || header.is_genesis()
             || header.prev_block_hash() != self.latest_block_hash_fast()
         {
-            return None;
+            return Ok(None);
         }
-        let probe = self.block(header.clone());
+        let probe = self.try_block(header.clone())?;
         let pending = !probe.world.merge_execution_write_set_bytes().is_empty()
             || !probe.world.external_event_buf.is_empty()
             || !probe.merge_carrier_entrypoints.is_empty()
@@ -30665,10 +30949,14 @@ impl State {
                 .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
                 .is_err();
         drop(probe);
-        is_stable_state_view_generation(generation, self.state_view_generation()).then_some(pending)
+        Ok(
+            is_stable_state_view_generation(generation, self.state_view_generation())
+                .then_some(pending),
+        )
     }
     /// Create structure to execute a block
     #[allow(clippy::too_many_lines)]
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.try_block(curr_block).unwrap_or_else(|error| {
             panic!("persisted active runtime ABI is incompatible with this node: {error:?}")
@@ -30682,7 +30970,8 @@ impl State {
     pub fn try_block(
         &self,
         curr_block: BlockHeader,
-    ) -> Result<StateBlock<'_>, iroha_data_model::executor::IvmAdmissionError> {
+    ) -> Result<StateBlock<'_>, StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>>
+    {
         self.block_with_pristine_stage(curr_block, |block| {
             // Validate the acquired predecessor, before any start effects. A
             // separate World view can belong to a different publication.
@@ -30693,11 +30982,11 @@ impl State {
             .map(|_| ())
         })
     }
-    pub(crate) fn block_with_pristine_stage<E>(
+    pub(crate) fn block_with_pristine_stage<E: std::fmt::Debug>(
         &self,
         curr_block: BlockHeader,
         stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
-    ) -> Result<StateBlock<'_>, E> {
+    ) -> Result<StateBlock<'_>, StateBlockStartError<E>> {
         self.block_with_owned_start_stages(curr_block, stage, |_, ()| Ok(()))
             .map(|(block, ())| *block)
     }
@@ -30707,12 +30996,12 @@ impl State {
     /// come from the before-start closure on this SAME overlay. Native callers
     /// retain the heap owner; old callers keep their existing return convention.
     #[allow(clippy::too_many_lines)]
-    fn block_with_owned_start_stages<'state, E, T, R>(
+    fn block_with_owned_start_stages<'state, E: std::fmt::Debug, T, R>(
         &'state self,
         curr_block: BlockHeader,
         before_start: impl FnOnce(&mut StateBlock<'state>) -> Result<T, E>,
         after_start: impl FnOnce(&mut StateBlock<'state>, T) -> Result<R, E>,
-    ) -> Result<(Box<StateBlock<'state>>, R), E> {
+    ) -> Result<(Box<StateBlock<'state>>, R), StateBlockStartError<E>> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
         #[cfg(feature = "telemetry")]
@@ -30730,7 +31019,7 @@ impl State {
             canonical_runtime,
             projection,
             sccp_registry,
-        } = self.acquire_canonical_runtime_block(false);
+        } = self.acquire_canonical_runtime_block(false)?;
         let gas_limit_per_block = gas_limit_from_parameters(world.parameters());
         let privacy_budget_in_block = crate::privacy::PrivacyBlockBudgetV1::new(
             world.privacy_consensus_policy.get().current_limits,
@@ -30846,7 +31135,7 @@ impl State {
         });
         sb.freeze_fastpq_source_context();
         sb.freeze_axt_block_start();
-        let continuation = before_start(&mut sb)?;
+        let continuation = before_start(&mut sb).map_err(StateBlockStartError::Stage)?;
         let pinned_sortition_anchors =
             crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(&mut sb)
                 .unwrap_or_else(|error| {
@@ -30908,7 +31197,7 @@ impl State {
         Self::apply_block_start_confidential_policies(&mut sb, now_h);
         sb.start_of_block_effects_applied = true;
         sb.capture_execution_output_capacity();
-        let result = after_start(&mut sb, continuation)?;
+        let result = after_start(&mut sb, continuation).map_err(StateBlockStartError::Stage)?;
         Ok((sb, result))
     }
     /// Release expired private locks inside their original block transaction.
@@ -31469,7 +31758,10 @@ impl State {
     /// The returned scope is scratch state: callers must either fold its deterministic
     /// result into a canonical carrier or drop it. [`StateBlock::commit`] rejects scopes
     /// without canonical transaction membership.
-    fn merge_preexecution_block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
+    fn try_merge_preexecution_block(
+        &self,
+        curr_block: BlockHeader,
+    ) -> Result<StateBlock<'_>, BlockHashAdmissionError> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
         let canonical_runtime::AcquiredRuntimeBlock {
@@ -31482,7 +31774,7 @@ impl State {
             canonical_runtime,
             projection,
             sccp_registry,
-        } = self.acquire_canonical_runtime_block(false);
+        } = self.acquire_canonical_runtime_block(false)?;
         let gas_limit_per_block = gas_limit_from_parameters(world.parameters());
         let privacy_budget_in_block = crate::privacy::PrivacyBlockBudgetV1::new(
             world.privacy_consensus_policy.get().current_limits,
@@ -31598,16 +31890,25 @@ impl State {
         };
         state_block.freeze_fastpq_source_context();
         state_block.freeze_axt_block_start();
-        state_block
+        Ok(state_block)
+    }
+    #[cfg(test)]
+    fn merge_preexecution_block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
+        self.try_merge_preexecution_block(curr_block)
+            .expect("fixture scratch hash admission")
     }
     /// Create a side-effect-free scratch block for exact consensus-effect preflight.
     ///
     /// The scope contains one generation-coherent parent world/Nexus snapshot,
     /// runs no start-of-block lifecycle effects, and must never be committed.
-    pub(crate) fn consensus_effects_probe_block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
-        self.merge_preexecution_block(curr_block)
+    pub(crate) fn consensus_effects_probe_block(
+        &self,
+        curr_block: BlockHeader,
+    ) -> Result<StateBlock<'_>, BlockHashAdmissionError> {
+        self.try_merge_preexecution_block(curr_block)
     }
     /// Create structure to execute a block while reverting changes made in the latest block
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn block_and_revert(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.block_and_revert_with_pristine_stage(curr_block, |_| {
             Ok::<(), core::convert::Infallible>(())
@@ -31615,17 +31916,11 @@ impl State {
         .expect("infallible replacement-block pristine stage")
     }
     /// Create a replacement block with one pre-lifecycle deterministic stage.
-    pub(crate) fn block_and_revert_with_pristine_stage<E>(
+    pub(crate) fn block_and_revert_with_pristine_stage<E: std::fmt::Debug>(
         &self,
         curr_block: BlockHeader,
         stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
-    ) -> Result<StateBlock<'_>, E> {
-        let current_height = self.block_hashes.view().len() as u64;
-        let target_height = curr_block.height().get().saturating_sub(1);
-        if target_height < current_height {
-            self.rewind_da_indexes_to_height(target_height)
-                .expect("failed to rewind DA indexes from Kura");
-        }
+    ) -> Result<StateBlock<'_>, StateBlockStartError<E>> {
         let canonical_runtime::AcquiredRuntimeBlock {
             world,
             block_hashes,
@@ -31636,7 +31931,15 @@ impl State {
             canonical_runtime,
             projection,
             sccp_registry,
-        } = self.acquire_canonical_runtime_block(true);
+        } = self.acquire_canonical_runtime_block(true)?;
+        // Keep the prepaid original successor through the rewind. A local
+        // capacity refusal must happen before changing any live DA projection.
+        let current_height = self.block_hashes.committed_height() as u64;
+        let target_height = curr_block.height().get().saturating_sub(1);
+        if target_height < current_height {
+            self.rewind_da_indexes_to_height(target_height)
+                .expect("failed to rewind DA indexes from Kura");
+        }
         let gas_limit_per_block = gas_limit_from_parameters(world.parameters());
         let privacy_budget_in_block = crate::privacy::PrivacyBlockBudgetV1::new(
             world.privacy_consensus_policy.get().current_limits,
@@ -31753,7 +32056,7 @@ impl State {
         };
         state_block.freeze_fastpq_source_context();
         state_block.freeze_axt_block_start();
-        stage(&mut state_block)?;
+        stage(&mut state_block).map_err(StateBlockStartError::Stage)?;
         let pinned_sortition_anchors =
             crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(
                 &mut state_block,
@@ -31901,8 +32204,7 @@ impl State {
                 continue;
             }
             let block_hashes_start = Instant::now();
-            let block_hashes: Vec<HashOf<BlockHeader>> =
-                self.block_hashes.view().iter().copied().collect();
+            let block_hashes = self.block_hashes.view();
             let block_hashes_wait = block_hashes_start.elapsed();
             let query_ledger_time_ms = self.latest_block_creation_time_ms_fast();
             let world_start = Instant::now();
@@ -32770,8 +33072,7 @@ impl State {
                 return Ok(None);
             }
             let block_hashes_start = Instant::now();
-            let block_hashes: Vec<HashOf<BlockHeader>> =
-                self.block_hashes.view().iter().copied().collect();
+            let block_hashes = self.block_hashes.view();
             let block_hashes_wait = block_hashes_start.elapsed();
             let query_ledger_time_ms = self.latest_block_creation_time_ms_fast();
             let nexus_start = Instant::now();
@@ -34930,7 +35231,7 @@ impl State {
         application_block_header: BlockHeader,
         sources: Vec<MergeExecutionSource>,
     ) -> Result<(StateBlock<'state>, Vec<MergeLaneExecution>), MergeLedgerCommitError> {
-        let mut state_block = self.merge_preexecution_block(application_block_header);
+        let mut state_block = self.try_merge_preexecution_block(application_block_header)?;
         let executions = Self::preexecute_merge_execution_sources_into(&mut state_block, sources)?;
         Ok((state_block, executions))
     }
@@ -35560,6 +35861,7 @@ impl State {
             &consensus,
             frozen_mode,
         )
+        .expect("fixture merge admission")
         .and_then(|candidate| candidate.execution_batch)
     }
     /// Snapshot merge bindings and their exact lane committees from one immutable
@@ -35744,28 +36046,42 @@ impl State {
         &self,
         application_block_header: BlockHeader,
         frozen_mode: ConsensusMode,
-    ) -> Option<crate::merge::MergeLedgerCandidate> {
+    ) -> Result<
+        Option<crate::merge::MergeLedgerCandidate>,
+        StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>,
+    > {
         if self.ensure_merge_history_available().is_err() {
-            return None;
+            return Ok(None);
         }
         let consensus = self.merge_consensus_snapshot();
         let epoch_id = consensus.admission.expected_epoch();
         let global_view = application_block_header.view_change_index();
-        let parent_header = self.latest_block_header_fast()?;
-        let candidate = self.build_merge_execution_candidate_for_consensus(
+        let Some(parent_header) = self.latest_block_header_fast() else {
+            return Ok(None);
+        };
+        let Some(candidate) = self.build_merge_execution_candidate_for_consensus(
             epoch_id,
             application_block_header,
             &consensus,
             frozen_mode,
-        )?;
-        self.validate_merge_candidate_for_global_round(
+        )?
+        else {
+            return Ok(None);
+        };
+        if let Err(error) = self.validate_merge_candidate_for_global_round(
             &candidate,
             &parent_header,
             global_view,
             frozen_mode,
-        )
-        .ok()?;
-        consensus.is_current(self).then_some(candidate)
+        ) {
+            return match error {
+                MergeLedgerCommitError::BlockHashAdmission(error) => {
+                    Err(StateBlockStartError::History(error))
+                }
+                _ => Ok(None),
+            };
+        }
+        Ok(consensus.is_current(self).then_some(candidate))
     }
     fn build_merge_execution_candidate_for_consensus(
         &self,
@@ -35773,163 +36089,182 @@ impl State {
         application_block_header: BlockHeader,
         consensus: &MergeConsensusSnapshot,
         frozen_mode: ConsensusMode,
-    ) -> Option<crate::merge::MergeLedgerCandidate> {
-        let lifecycle = &consensus.lifecycle;
-        let admission = &consensus.admission;
-        let nexus = &lifecycle.nexus;
-        if !consensus.is_current(self)
-            || epoch_id != admission.expected_epoch()
-            || application_block_header.height().get()
-                != consensus.committed_height.checked_add(1)?
-            || application_block_header.prev_block_hash() != consensus.latest_block_hash
-            || nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES
-        {
-            return None;
+    ) -> Result<
+        Option<crate::merge::MergeLedgerCandidate>,
+        StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>,
+    > {
+        if self.deterministic_start_work_pending(&application_block_header)? != Some(false) {
+            return Ok(None);
         }
-        if self.deterministic_start_work_pending(&application_block_header)? {
-            debug!(
-                carrier_height = application_block_header.height().get(),
-                "deferring autonomous execution because its carrier has due deterministic start effects"
-            );
-            return None;
-        }
-        let world = self.world.view();
-        let mut sources = Vec::new();
-        for lane in nexus.lane_catalog.lanes() {
-            let incarnation = *lifecycle.incarnations.get(&lane.id)?;
-            let frontier = match Self::canonical_merged_lane_frontier_from_world(
-                &world,
-                lane.id,
-                lane.dataspace_id,
-                incarnation,
-            ) {
-                Ok(frontier) => frontier,
-                Err(err) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        ?err,
-                        "deferring merge batch construction because the replicated lane frontier is invalid"
-                    );
-                    return None;
-                }
-            };
-            let expected_height = frontier.0.checked_add(1)?;
-            let durable_source = match self.durable_autonomous_merge_source_for_lane_slot(
-                &world,
-                lane.id,
-                expected_height,
-                frozen_mode,
-            ) {
-                Ok(Some(source)) => source,
-                Ok(None) => continue,
-                Err(message) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        message,
-                        "certified lane block is missing its complete durable merge source"
-                    );
-                    return None;
-                }
-            };
-            let certified = &durable_source.bundle.certified;
-            let descriptor = &certified.proposal.descriptor;
-            if descriptor.lane_id != lane.id
-                || descriptor.dataspace_id != lane.dataspace_id
-                || descriptor.lane_incarnation != incarnation
-                || !lifecycle.lane_route_and_incarnation_matches(
+        self.select_merge_execution_candidate_for_consensus(
+            epoch_id,
+            application_block_header,
+            consensus,
+            frozen_mode,
+        )
+        .map_err(StateBlockStartError::History)
+    }
+    fn select_merge_execution_candidate_for_consensus(
+        &self,
+        epoch_id: u64,
+        application_block_header: BlockHeader,
+        consensus: &MergeConsensusSnapshot,
+        frozen_mode: ConsensusMode,
+    ) -> Result<Option<crate::merge::MergeLedgerCandidate>, BlockHashAdmissionError> {
+        let Some((candidate_template, sources)) = (|| {
+            let lifecycle = &consensus.lifecycle;
+            let admission = &consensus.admission;
+            let nexus = &lifecycle.nexus;
+            if !consensus.is_current(self)
+                || epoch_id != admission.expected_epoch()
+                || application_block_header.height().get()
+                    != consensus.committed_height.checked_add(1)?
+                || application_block_header.prev_block_hash() != consensus.latest_block_hash
+                || nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES
+            {
+                return None;
+            }
+            let world = self.world.view();
+            let mut sources = Vec::new();
+            for lane in nexus.lane_catalog.lanes() {
+                let incarnation = *lifecycle.incarnations.get(&lane.id)?;
+                let frontier = match Self::canonical_merged_lane_frontier_from_world(
+                    &world,
                     lane.id,
                     lane.dataspace_id,
-                    descriptor.proposal_height,
-                    descriptor.lane_incarnation,
-                )
-            {
-                warn!(
-                    lane = %lane.id.as_u32(),
-                    lane_block_height = expected_height,
-                    "durable autonomous source differs from the active lane generation"
-                );
-                return None;
-            }
-            if let Err(err) =
-                Self::validate_merge_execution_predecessor_against_frontier(&world, descriptor)
-            {
-                warn!(
-                    lane = %lane.id.as_u32(),
-                    lane_block_height = expected_height,
-                    ?err,
-                    "deferring merge batch construction because its predecessor is not the replicated lane frontier"
-                );
-                return None;
-            }
-            let authoritative = match lane_authority::authenticated_committee_for_descriptor(
-                self, descriptor,
-            ) {
-                Ok(authoritative) => authoritative,
-                Err(reason) => {
+                    incarnation,
+                ) {
+                    Ok(frontier) => frontier,
+                    Err(err) => {
+                        warn!(
+                            lane = %lane.id.as_u32(),
+                            ?err,
+                            "deferring merge batch construction because the replicated lane frontier is invalid"
+                        );
+                        return None;
+                    }
+                };
+                let expected_height = frontier.0.checked_add(1)?;
+                let durable_source = match self.durable_autonomous_merge_source_for_lane_slot(
+                    &world,
+                    lane.id,
+                    expected_height,
+                    frozen_mode,
+                ) {
+                    Ok(Some(source)) => source,
+                    Ok(None) => continue,
+                    Err(message) => {
+                        warn!(
+                            lane = %lane.id.as_u32(),
+                            lane_block_height = expected_height,
+                            message,
+                            "certified lane block is missing its complete durable merge source"
+                        );
+                        return None;
+                    }
+                };
+                let certified = &durable_source.bundle.certified;
+                let descriptor = &certified.proposal.descriptor;
+                if descriptor.lane_id != lane.id
+                    || descriptor.dataspace_id != lane.dataspace_id
+                    || descriptor.lane_incarnation != incarnation
+                    || !lifecycle.lane_route_and_incarnation_matches(
+                        lane.id,
+                        lane.dataspace_id,
+                        descriptor.proposal_height,
+                        descriptor.lane_incarnation,
+                    )
+                {
                     warn!(
                         lane = %lane.id.as_u32(),
                         lane_block_height = expected_height,
-                        reason,
-                        "deferring merge batch construction because historical lane authority is unavailable"
+                        "durable autonomous source differs from the active lane generation"
                     );
                     return None;
                 }
+                if let Err(err) =
+                    Self::validate_merge_execution_predecessor_against_frontier(&world, descriptor)
+                {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        ?err,
+                        "deferring merge batch construction because its predecessor is not the replicated lane frontier"
+                    );
+                    return None;
+                }
+                let authoritative = match lane_authority::authenticated_committee_for_descriptor(
+                    self, descriptor,
+                ) {
+                    Ok(authoritative) => authoritative,
+                    Err(reason) => {
+                        warn!(
+                            lane = %lane.id.as_u32(),
+                            lane_block_height = expected_height,
+                            reason,
+                            "deferring merge batch construction because historical lane authority is unavailable"
+                        );
+                        return None;
+                    }
+                };
+                if descriptor.validator_set != authoritative {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        "certified lane block differs from its finalized proposal-height committee"
+                    );
+                    return None;
+                }
+                sources.push(MergeExecutionSource::from_durable(durable_source));
+            }
+            if sources.is_empty() {
+                return None;
+            }
+            let sources = match select_merge_execution_source_budget(
+                sources,
+                gas_limit_from_parameters(world.parameters()),
+            ) {
+                Ok(sources) => sources,
+                Err(error) => {
+                    warn!(?error, "autonomous merge source gas accounting failed");
+                    return None;
+                }
             };
-            if descriptor.validator_set != authoritative {
-                warn!(
-                    lane = %lane.id.as_u32(),
-                    lane_block_height = expected_height,
-                    "certified lane block differs from its finalized proposal-height committee"
-                );
+            if sources.is_empty() {
+                warn!("oldest autonomous merge source exceeds the entrypoint or block gas limit");
                 return None;
             }
-            sources.push(MergeExecutionSource::from_durable(durable_source));
-        }
-        if sources.is_empty() {
-            return None;
-        }
-        let sources = match select_merge_execution_source_budget(
-            sources,
-            gas_limit_from_parameters(world.parameters()),
-        ) {
-            Ok(sources) => sources,
-            Err(error) => {
-                warn!(?error, "autonomous merge source gas accounting failed");
-                return None;
-            }
-        };
-        if sources.is_empty() {
-            warn!("oldest autonomous merge source exceeds the entrypoint or block gas limit");
-            return None;
-        }
-        let (lane_catalog_hash, active_lanes, lane_authority_catalog) = self
-            .merge_active_lane_authority_snapshot(application_block_header.height().get())
-            .ok()?;
-        let incarnation_entries = active_lanes
-            .iter()
-            .map(
-                |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
-                    lane_id: binding.lane_id,
-                    incarnation: binding.incarnation,
-                },
-            )
-            .collect::<Vec<_>>();
-        let candidate_template = crate::merge::MergeLedgerCandidate {
-            version: crate::merge::MergeLedgerCandidate::VERSION,
-            epoch_id,
-            view: application_block_header.view_change_index(),
-            carrier_height: application_block_header.height().get(),
-            carrier_parent_hash: application_block_header.prev_block_hash()?,
-            lane_catalog_hash,
-            active_lanes: active_lanes.clone(),
-            lane_authority_catalog,
-            incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
-            activation_root: crate::merge::merge_activation_root(&active_lanes),
-            lane_snapshots: Vec::new(),
-            execution_batch: None,
-            lane_drain_certificates: Vec::new(),
-            global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
+            let (lane_catalog_hash, active_lanes, lane_authority_catalog) = self
+                .merge_active_lane_authority_snapshot(application_block_header.height().get())
+                .ok()?;
+            let incarnation_entries = active_lanes
+                .iter()
+                .map(
+                    |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
+                        lane_id: binding.lane_id,
+                        incarnation: binding.incarnation,
+                    },
+                )
+                .collect::<Vec<_>>();
+            let candidate_template = crate::merge::MergeLedgerCandidate {
+                version: crate::merge::MergeLedgerCandidate::VERSION,
+                epoch_id,
+                view: application_block_header.view_change_index(),
+                carrier_height: application_block_header.height().get(),
+                carrier_parent_hash: application_block_header.prev_block_hash()?,
+                lane_catalog_hash,
+                active_lanes: active_lanes.clone(),
+                lane_authority_catalog,
+                incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
+                activation_root: crate::merge::merge_activation_root(&active_lanes),
+                lane_snapshots: Vec::new(),
+                execution_batch: None,
+                lane_drain_certificates: Vec::new(),
+                global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
+            };
+            Some((candidate_template, sources))
+        })() else {
+            return Ok(None);
         };
         let selected = Self::select_merge_execution_candidate_prefix(
             &candidate_template,
@@ -35937,7 +36272,7 @@ impl State {
             MAX_MERGE_LEDGER_ENTRY_BYTES.saturating_sub(MAX_MERGE_QC_BYTES),
             |prefix_len| {
                 if !consensus.is_current(self) {
-                    return None;
+                    return Ok(None);
                 }
                 self.build_merge_execution_batch_from_source_prefix(
                     epoch_id,
@@ -35945,11 +36280,11 @@ impl State {
                     sources[..prefix_len].to_vec(),
                 )
             },
-        );
+        )?;
         // Every live read and scratch execution must belong to the generation
         // which supplied the parent/lifecycle/admission snapshot. A concurrent
         // publication invalidates even a previously fitting prefix.
-        consensus.is_current(self).then_some(selected).flatten()
+        Ok(consensus.is_current(self).then_some(selected).flatten())
     }
     /// Select a fitting priority source prefix whose complete unsigned
     /// carrier fits, including the immutable historical authority catalog.
@@ -35961,8 +36296,11 @@ impl State {
         candidate_template: &crate::merge::MergeLedgerCandidate,
         source_count: usize,
         unsigned_limit: usize,
-        mut build_batch: impl FnMut(usize) -> Option<MergeExecutionBatch>,
-    ) -> Option<crate::merge::MergeLedgerCandidate> {
+        mut build_batch: impl FnMut(
+            usize,
+        )
+            -> Result<Option<MergeExecutionBatch>, BlockHashAdmissionError>,
+    ) -> Result<Option<crate::merge::MergeLedgerCandidate>, BlockHashAdmissionError> {
         // Binary refinement bounds repeated deterministic pre-execution work. Each
         // trial restores canonical execution order, which can change result sizes;
         // therefore this finds a fitting prefix, not necessarily the largest one.
@@ -35973,7 +36311,7 @@ impl State {
         let mut best = None;
         while lower <= upper {
             let midpoint = lower + (upper - lower) / 2;
-            let candidate = build_batch(midpoint).and_then(|batch| {
+            let candidate = build_batch(midpoint)?.and_then(|batch| {
                 let mut candidate = candidate_template.clone();
                 candidate.execution_batch = Some(batch);
                 (candidate.canonical_bytes().len() <= unsigned_limit).then_some(candidate)
@@ -35986,93 +36324,109 @@ impl State {
                 None => upper = midpoint.saturating_sub(1),
             }
         }
-        best
+        Ok(best)
     }
     fn build_merge_execution_batch_from_source_prefix(
         &self,
         epoch_id: u64,
         application_block_header: BlockHeader,
         mut sources: Vec<MergeExecutionSource>,
-    ) -> Option<MergeExecutionBatch> {
-        let total_entrypoints = sources
-            .iter()
-            .map(|source| source.input.entrypoints.len())
-            .sum::<usize>();
-        if sources.is_empty() || total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS {
-            return None;
-        }
-        // Selection uses age for fairness; execution and its certified wire representation
-        // retain the protocol's canonical lane order for the chosen set.
-        sources
-            .sort_by_key(|source| merge_execution_canonical_order_key(&source.certified.proposal));
-        let base_state_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
-        let base_state_hash = self.lane_execution_state_hash().ok()?;
-        if application_block_header.height().get() != base_state_height.saturating_add(1)
-            || application_block_header.prev_block_hash() != self.latest_block_hash_fast()
-            || application_block_header.merkle_root().is_some()
-            || application_block_header.creation_time().is_zero()
-        {
-            warn!(
-                "deferring merge execution batch because the application context is not a canonical stripped carrier header"
-            );
-            return None;
-        }
+    ) -> Result<Option<MergeExecutionBatch>, BlockHashAdmissionError> {
+        let Some((sources, total_entrypoints, base_state_height, base_state_hash)) = (|| {
+            let total_entrypoints = sources
+                .iter()
+                .map(|source| source.input.entrypoints.len())
+                .sum::<usize>();
+            if sources.is_empty() || total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS {
+                return None;
+            }
+            // Selection uses age for fairness; execution and its certified wire representation
+            // retain the protocol's canonical lane order for the chosen set.
+            sources.sort_by_key(|source| {
+                merge_execution_canonical_order_key(&source.certified.proposal)
+            });
+            let base_state_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
+            let base_state_hash = self.lane_execution_state_hash().ok()?;
+            if application_block_header.height().get() != base_state_height.saturating_add(1)
+                || application_block_header.prev_block_hash() != self.latest_block_hash_fast()
+                || application_block_header.merkle_root().is_some()
+                || application_block_header.creation_time().is_zero()
+            {
+                warn!(
+                    "deferring merge execution batch because the application context is not a canonical stripped carrier header"
+                );
+                return None;
+            }
+            Some((
+                sources,
+                total_entrypoints,
+                base_state_height,
+                base_state_hash,
+            ))
+        })() else {
+            return Ok(None);
+        };
         let (state_block, lanes) = match self
             .preexecute_merge_execution_sources(application_block_header.clone(), sources)
         {
             Ok(prepared) => prepared,
+            Err(MergeLedgerCommitError::BlockHashAdmission(error)) => return Err(error),
             Err(err) => {
                 warn!(?err, "merge execution pre-execution failed");
-                return None;
+                return Ok(None);
             }
         };
-        let mut state_block = state_block;
-        state_block.stage_merge_metadata_values(&[], crate::merge::reduce_merge_hint_roots(&[]));
-        if let Err(err) = state_block
-            .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
-        {
-            warn!(
-                ?err,
-                "merge execution staged an unsupported commit side effect"
+        Ok((|| {
+            let mut state_block = state_block;
+            state_block
+                .stage_merge_metadata_values(&[], crate::merge::reduce_merge_hint_roots(&[]));
+            if let Err(err) = state_block
+                .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
+            {
+                warn!(
+                    ?err,
+                    "merge execution staged an unsupported commit side effect"
+                );
+                return None;
+            }
+            let application_write_set_root = state_block.merge_execution_write_set_root();
+            let execution_root = crate::merge::merge_execution_root(&lanes);
+            let entrypoint_count = u64::try_from(total_entrypoints).ok()?;
+            let entrypoint_merkle_root =
+                crate::merge::merge_execution_entrypoint_merkle_root(&lanes)?;
+            let result_merkle_root = crate::merge::merge_execution_result_merkle_root(&lanes)?;
+            let mut batch = MergeExecutionBatch {
+                version: 1,
+                base_state_height,
+                base_state_hash,
+                application_block_header,
+                lanes,
+                entrypoint_count,
+                entrypoint_merkle_root,
+                result_merkle_root,
+                execution_root,
+                application_write_set_root,
+                write_set_root: Hash::prehashed([0; Hash::LENGTH]),
+                expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
+                    [0; Hash::LENGTH],
+                )),
+                batch_hash: Hash::prehashed([0; Hash::LENGTH]),
+            };
+            if let Err(err) = state_block.stage_merge_execution_markers(epoch_id, &batch) {
+                warn!(?err, "merge execution replay markers could not be staged");
+                return None;
+            }
+            batch.write_set_root = state_block.merge_execution_write_set_root();
+            batch.expected_post_state_hash = crate::merge::merge_expected_post_state_hash(
+                base_state_height,
+                base_state_hash,
+                batch.write_set_root,
             );
-            return None;
-        }
-        let application_write_set_root = state_block.merge_execution_write_set_root();
-        let execution_root = crate::merge::merge_execution_root(&lanes);
-        let entrypoint_count = u64::try_from(total_entrypoints).ok()?;
-        let entrypoint_merkle_root = crate::merge::merge_execution_entrypoint_merkle_root(&lanes)?;
-        let result_merkle_root = crate::merge::merge_execution_result_merkle_root(&lanes)?;
-        let mut batch = MergeExecutionBatch {
-            version: 1,
-            base_state_height,
-            base_state_hash,
-            application_block_header,
-            lanes,
-            entrypoint_count,
-            entrypoint_merkle_root,
-            result_merkle_root,
-            execution_root,
-            application_write_set_root,
-            write_set_root: Hash::prehashed([0; Hash::LENGTH]),
-            expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
-                [0; Hash::LENGTH],
-            )),
-            batch_hash: Hash::prehashed([0; Hash::LENGTH]),
-        };
-        if let Err(err) = state_block.stage_merge_execution_markers(epoch_id, &batch) {
-            warn!(?err, "merge execution replay markers could not be staged");
-            return None;
-        }
-        batch.write_set_root = state_block.merge_execution_write_set_root();
-        batch.expected_post_state_hash = crate::merge::merge_expected_post_state_hash(
-            base_state_height,
-            base_state_hash,
-            batch.write_set_root,
-        );
-        batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
-        let encoded_len = norito::to_bytes(&batch).ok()?.len();
-        iroha_data_model::merge::merge_execution_batch_size_within_limit(encoded_len)
-            .then_some(batch)
+            batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
+            let encoded_len = norito::to_bytes(&batch).ok()?.len();
+            iroha_data_model::merge::merge_execution_batch_size_within_limit(encoded_len)
+                .then_some(batch)
+        })())
     }
     /// Return the only committed, uncertified autoscale drain body and its exact
     /// close-boundary committee.
@@ -36440,9 +36794,8 @@ impl State {
         MergeLedgerCommitError,
     > {
         // One immutable view owns both predecessor history and route authority.
-        // Holding a raw block-hash read guard and then opening `State::view()`
-        // can deadlock a State commit that has already raised the write
-        // generation and is waiting to publish that same block-hash journal.
+        // Capture them together so route membership and immutable history
+        // describe the same published State generation.
         let state_view = self.view();
         let active_lanes = Self::queue_plan_active_lane_bindings_from_snapshot(
             state_view.nexus(),
@@ -45270,6 +45623,7 @@ impl State {
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_certified_merge_entry(entry, frozen_mode)
         })
+        .map_err(MergeLedgerCommitError::from)
     }
     /// Resolve and stage a compact certified merge reference before running
     /// deterministic start-of-block effects.
@@ -45292,6 +45646,7 @@ impl State {
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_certified_merge_reference(reference, frozen_mode)
         })
+        .map_err(MergeLedgerCommitError::from)
     }
     /// Stage proposal-native QueuePlan certificates on the pristine carrier
     /// overlay before running deterministic start-of-block effects.
@@ -45314,6 +45669,7 @@ impl State {
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_queue_plan_admissions_for_carrier(admission_bytes)
         })
+        .map_err(MergeLedgerCommitError::from)
     }
     /// Stage a complete-input admission carrier for a component test fixture.
     ///
@@ -47400,9 +47756,10 @@ impl State {
             || lane_incarnation_activation_heights
                 != update.previous_lane_incarnation_activation_heights
         {
-            return Err(LaneLifecycleError::Storage(
-                "staged autoscale lifecycle no longer matches committed nexus state".to_owned(),
-            ));
+            return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
+                transition: pending.transition.name(),
+                reason: "staged autoscale lifecycle no longer matches committed nexus state",
+            });
         }
         let allow_autoscale_managed_changes =
             pending.transition != PendingAutoscaleTransition::Manual;
@@ -47514,9 +47871,10 @@ impl State {
         if committed_lane_manifests.consensus_policy_digest()
             != pending.updated_lane_manifests.consensus_policy_digest()
         {
-            return Err(LaneLifecycleError::Storage(
-                "installed lane manifest policy changed after lifecycle staging".to_owned(),
-            ));
+            return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
+                transition: pending.transition.name(),
+                reason: "installed lane manifest policy changed after lifecycle staging",
+            });
         }
         pending
             .updated_lane_manifests
@@ -49956,7 +50314,7 @@ pub trait WorldStateSnapshot {
     /// Read-only access to the world state.
     fn world(&self) -> &impl WorldReadOnly;
     /// Recent block hashes for consistency checks.
-    fn block_hashes(&self) -> &[HashOf<BlockHeader>];
+    fn block_hashes(&self) -> &dyn BlockHashRead;
     /// Current commit topology (ordering of peers).
     fn commit_topology(&self) -> &[PeerId];
     /// Previous commit topology (before the latest block).
@@ -50219,7 +50577,7 @@ macro_rules! impl_state_ro {
             fn world(&self) -> &impl WorldReadOnly {
                 &self.world
             }
-            fn block_hashes(&self) -> &[HashOf<BlockHeader>] {
+            fn block_hashes(&self) -> &dyn BlockHashRead {
                 &self.block_hashes
             }
             fn commit_topology(&self) -> &[PeerId] {
@@ -53454,6 +53812,25 @@ impl<'state> StateBlock<'state> {
     pub fn transaction(&mut self) -> StateTransaction<'_, 'state> {
         self.transaction_with_event_telemetry(true)
     }
+    /// Open an isolated callback component fixture with an explicit root owner.
+    ///
+    /// The root identifies this block's direct execution slot. This does not
+    /// authenticate a Network input or grant block publication authority; tests
+    /// exercising either must use the canonical execution output producer.
+    #[cfg(test)]
+    pub(crate) fn transaction_for_callback_testing(&mut self) -> StateTransaction<'_, 'state> {
+        assert!(
+            self.execution_output_plan.is_none(),
+            "component callback fixtures cannot replace an admitted block owner"
+        );
+        let mut transaction = self.transaction();
+        transaction.tx_call_hash = Some(
+            transaction
+                .direct_execution_identity()
+                .expect("component callback root has a bounded direct execution slot"),
+        );
+        transaction
+    }
     /// Create a finality-effects transaction that cannot publish speculative event telemetry.
     pub(crate) fn consensus_effects_transaction(&mut self) -> StateTransaction<'_, 'state> {
         self.transaction_with_event_telemetry(false)
@@ -54259,7 +54636,12 @@ impl<'state> StateBlock<'state> {
                 carrier_hash,
             } => {
                 let height = carrier_storage_height(carrier_height)?;
-                self.block_hashes.pending.as_slice() != core::slice::from_ref(carrier_hash)
+                !self
+                    .block_hashes
+                    .pending()
+                    .iter()
+                    .copied()
+                    .eq([*carrier_hash])
                     || !self
                         .transactions
                         .has_exact_staged_block(height, &self.merge_carrier_entrypoints)
@@ -55378,7 +55760,25 @@ impl<'state> StateBlock<'state> {
             .expect("test block height exceeds usize::MAX");
         self.stage_canonical_carrier_membership(core::iter::empty(), block_height)
             .map_err(|_| TransactionsBlockError::MergeAdmission)?;
+        append_autoscale_sample_record(
+            &mut self.autoscale_sample_history,
+            AutoscaleSampleRecord {
+                block_height: self._curr_block.height().get(),
+                block_hash: self._curr_block.hash(),
+                creation_time_ms: self._curr_block.creation_time_ms,
+                work_count: 0,
+            },
+            autoscale_sample_history_cap(&self.nexus.autoscale),
+        );
+        self.autoscale_sample_history_dirty = true;
+        self.autoscale_evaluated_committed_fragment_count = Some(0);
+        self.refresh_canonical_runtime();
         self.block_hashes.push(self._curr_block.hash());
+        self.stage_musubi_resolver_index_checkpoint(
+            self._curr_block.height().get(),
+            self._curr_block.hash(),
+        )
+        .map_err(|_| TransactionsBlockError::MergeAdmission)?;
         self.commit()
     }
     /// Commit with a move-only authorization consumed inside State's exact
@@ -55416,6 +55816,8 @@ impl<'state> StateBlock<'state> {
             &mut (dyn FnMut(LaneId, DataSpaceId, Hash) -> Result<(), String> + '_),
         >,
     ) -> Result<(), TransactionsBlockError> {
+        let hash_budget = self.block_hashes.inner.budget.clone();
+        hash_budget.with_deferred_refund_notifications(|_| {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         if let Err(error) = self.verify_execution_output_publication() {
             error!(
@@ -55500,6 +55902,8 @@ impl<'state> StateBlock<'state> {
             Ok(())
         };
         let merge_runtime_effects = self.merge_execution_runtime_effects();
+        // Outlive the component writers and commit fence, including unwind.
+        let membership_retirement;
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
             // Keep the linear finality/output and native-source owners alive
@@ -55510,7 +55914,7 @@ impl<'state> StateBlock<'state> {
             runtime_policy,
             canonical_runtime,
             world,
-            mut block_hashes,
+            block_hashes,
             transactions,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
@@ -55566,6 +55970,7 @@ impl<'state> StateBlock<'state> {
                 return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
             }
         };
+        let hash_retirement;
         let _state_commit_lock = state_ref.state_commit_lock.lock();
         if let Err(err) = merge_execution_commit_surface_result {
             error!(
@@ -55934,16 +56339,21 @@ impl<'state> StateBlock<'state> {
         };
         let mut da_post_publication = None;
         let mut lifecycle_post_publication = None;
-        block_hashes.prepare_commit();
         {
             let state_write_lock_wait_start = Instant::now();
             let _state_write_lock = state_write_lock.lock();
             let state_write_lock_wait =
                 preflight_state_write_lock_wait + state_write_lock_wait_start.elapsed();
+            let block_hashes = block_hashes
+                .detach()
+                .try_prepare_publication(&state_ref.block_hashes, |_, _| {
+                    Ok::<_, std::convert::Infallible>(())
+                })
+                .map_err(|(_, _)| TransactionsBlockError::SnapshotObservationChanged)?;
             let _view_generation = state_ref.begin_state_view_write();
             let state_write_lock_hold_start = Instant::now();
             let tx_commit_start = Instant::now();
-            transactions.publish();
+            membership_retirement = transactions.publish();
             let tx_commit_hold = tx_commit_start.elapsed();
             // Membership was admitted before every fallible resource step.
             // The exact retained journals now publish under one State writer.
@@ -55972,8 +56382,8 @@ impl<'state> StateBlock<'state> {
             committed_topology.commit();
             let commit_topology_hold = commit_topology_start.elapsed();
             let world_start = Instant::now();
-            // Validation acquires hash snapshots before World writers. Publish
-            // World before reacquiring the hash writer to preserve lock order.
+            // Hash predecessor acquisition completed before this visibility interval.
+            // All original World writes publish under the same State generation.
             world.commit();
             #[cfg(feature = "telemetry")]
             state_ref
@@ -55988,7 +56398,7 @@ impl<'state> StateBlock<'state> {
             state_ref.install_sccp_registry_cache(Arc::clone(&sccp_registry));
             let world_hold = world_start.elapsed();
             let block_hashes_start = Instant::now();
-            block_hashes.commit();
+            hash_retirement = block_hashes.publish();
             let block_hashes_hold = block_hashes_start.elapsed();
             let merge_admission_hold = if let Some(entry) = staged_merge_entry.as_ref() {
                 let merge_start = Instant::now();
@@ -56152,7 +56562,11 @@ impl<'state> StateBlock<'state> {
                     .persist_query_index_status(block_height, state_ref.latest_block_hash_fast());
             }
         }
+        drop(_state_commit_lock);
+        drop(membership_retirement);
+        drop(hash_retirement);
         Ok(())
+        })
     }
     fn mint_canonical_carrier_commit_metadata_authorization(
         &mut self,
@@ -56266,7 +56680,12 @@ impl<'state> StateBlock<'state> {
                     "finalized autonomous carrier height exceeds local storage bounds".to_owned(),
                 )
             })?;
-        if self.block_hashes.pending.as_slice() != [carrier_hash]
+        if !self
+            .block_hashes
+            .pending()
+            .iter()
+            .copied()
+            .eq([carrier_hash])
             || !self
                 .transactions
                 .has_exact_staged_block(carrier_storage_height, &self.merge_carrier_entrypoints)
@@ -57815,6 +58234,18 @@ impl<'state> StateBlock<'state> {
         }
         samples
     }
+    /// Exercise the post-admission AXT replay component with explicit test records.
+    ///
+    /// This does not authenticate a block or authorize consensus publication.
+    /// Component fixtures may persist only the resulting World overlay through
+    /// [`Self::commit_world_overlay_for_testing`]. Production callers enter the
+    /// same replay implementation only after carrier admission.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn replay_axt_envelopes_for_testing(&mut self, envelopes: &[AxtEnvelopeRecord]) {
+        let current_slot =
+            current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms);
+        self.apply_replayed_axt_envelopes(envelopes, current_slot);
+    }
     fn apply_replayed_axt_envelopes(&mut self, envelopes: &[AxtEnvelopeRecord], current_slot: u64) {
         if envelopes.is_empty() {
             return;
@@ -57922,20 +58353,19 @@ impl<'state> StateBlock<'state> {
         let interval = TimeInterval::new(since, length);
         TimeEvent { interval }
     }
-    /// Reexecute a committed fixture through the canonical output owner, then apply its metadata.
+    /// Replay and publish a fixture through actual output ownership and verified finality.
     /// Genesis fixtures must supply their independently configured account explicitly.
-    /// This test-only helper grants no production publication capability.
+    /// This consumes the overlay and uses the four-validator test publication authority.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn apply_fixture_block(
-        &mut self,
+        mut self,
         block: &CommittedBlock,
-        topology: Vec<PeerId>,
         genesis_account: Option<&AccountId>,
     ) -> Result<Vec<EventBox>, String> {
         let mut replayed = block.as_ref().clone();
         crate::block::ValidBlock::execute_block_outputs_for_test(
             &mut replayed,
-            self,
+            &mut self,
             genesis_account,
         )
         .map_err(|error| error.to_string())?;
@@ -57945,9 +58375,8 @@ impl<'state> StateBlock<'state> {
             &replayed,
         )
         .map_err(|error| error.to_string())?;
-        let (events, authorization) =
-            self.apply_without_execution_inner(block, topology, ApplyTopologyAuthority::Fixture);
-        authorization.map(|()| events).map_err(|error| error.to_string())
+        self.state_ref
+            .commit_executed_block_for_testing(self, block.clone())
     }
 }
 #[cfg(feature = "zk-preverify")]
@@ -58242,7 +58671,7 @@ mod public_lane_slash_observability_staging_tests {
                 .add_block_fee_amount(&Quantity::from(11_u64));
         }
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.consensus_effects_probe_block(header);
+        let mut block = state.consensus_effects_probe_block(header).unwrap();
         let lane_id = LaneId::new(73);
         let status_before = crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests();
 
@@ -58706,6 +59135,8 @@ mod tiered_snapshot_diff_tests {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            block_hash_history_bytes:
+                iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
@@ -58715,6 +59146,8 @@ mod tiered_snapshot_diff_tests {
         let baseline = LaneLifecycleParameterV1::catalog_hash(&catalog);
         let incarnations = derive_static_lane_incarnations(&catalog);
         let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        kura.bind_lane_storage_network(*DEFAULT_TEST_NETWORK_ID)
+            .expect("bind the SCCP fixture network before provisioning lane storage");
         kura.establish_or_verify_configured_primary_geometry_anchor(
             lane_config.primary(),
             incarnations[&LaneId::SINGLE],
@@ -59802,7 +60235,7 @@ mod tiered_snapshot_diff_tests {
         assert!(futures::poll!(wait.as_mut()).is_pending());
         // Finish the read statement before the append takes the write lock.
         let previous_hash = state.block_hashes.view().last().copied();
-        assert!(state.block_hashes.inner.try_write().is_some());
+        assert!(state.block_hashes.writer_available());
         state.append_committed_block_header_for_tests(BlockHeader::new(
             NonZeroU64::new(required_height).unwrap(),
             previous_hash,
@@ -61149,7 +61582,7 @@ mod tiered_snapshot_diff_tests {
     }
     #[test]
     fn sccp_snapshot_rejects_fabricated_wsv_message_at_rootless_height() {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = authenticated_sccp_archive_kura();
         let rootless = rootless_retained_block(None);
         kura.persist_block_with_retained_archive_for_tests(&rootless)
             .expect("persist rootless committed block");
@@ -61822,6 +62255,9 @@ mod fastpq_tx_set_hash_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
+        state
+            .seed_genesis_for_testing()
+            .expect("publish genesis before ordinary FASTPQ sources");
         let mut builder = TransactionBuilder::new(
             state.network_id,
             authority.clone(),
@@ -67213,9 +67649,20 @@ pub(crate) use telemetry_status::{
 /// Execute all canonical phases with no Network inputs for component tests.
 pub(crate) fn run_empty_network_owner_fixture(
     block: &mut crate::state::StateBlock<'_>,
+    source: Option<&SignedBlock>,
 ) -> Vec<iroha_data_model::block::execution_output::ExecutionOutputV1> {
-    let source = iroha_data_model::block::builder::BlockBuilder::new(block._curr_block)
-        .build_with_signature(0, iroha_test_samples::ALICE_KEYPAIR.private_key());
+    let source = source.map_or_else(
+        || {
+            iroha_data_model::block::builder::BlockBuilder::new(block._curr_block)
+                .build_with_signature(0, iroha_test_samples::ALICE_KEYPAIR.private_key())
+        },
+        SignedBlock::canonical_resultless_proposal,
+    );
+    assert_eq!(
+        source.network_entrypoint_count(),
+        0,
+        "empty Network fixture source"
+    );
     let _guard = crate::sumeragi::witness::exec_witness_guard();
     crate::sumeragi::witness::start_block();
     block.reserve_ordinary_execution_outputs(&source).unwrap();

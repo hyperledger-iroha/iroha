@@ -7,14 +7,13 @@
 use crate::{
     queue::{QueueLaneRetirementCut, QueueLaneRetirementUnavailable},
     state::{
-        BlockHashOwner, LaneLifecycleError, State,
+        LaneLifecycleError, NativeLaneStateOwner, State,
         carrier_geometry_preparation::PreparedCarrierGeometry,
     },
 };
 use iroha_crypto::Hash;
 use iroha_data_model::block::BlockHeader;
 use iroha_model_base::topology::{DataSpaceId, LaneId};
-use std::sync::Arc;
 
 /// Local retirement refusal; no variant is a consensus-invalidity verdict.
 #[derive(Debug)]
@@ -28,14 +27,14 @@ pub(in crate::state) enum CarrierQueueRetirementError {
     /// The original Queue is physically held by independent work.
     Busy {
         field: &'static str,
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
     },
     /// The exact old route still owns work; retry only after its real release.
     Pending {
         lane: LaneId,
         dataspace: DataSpaceId,
         incarnation: Hash,
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
     },
     /// Ambiguous Queue durability cannot be treated as an empty route.
     Unavailable(QueueLaneRetirementUnavailable),
@@ -46,13 +45,36 @@ pub(in crate::state) enum CarrierQueueRetirementError {
 /// Move-only custody retained until all authoritative State components are visible.
 /// Drop later component/State guards before this cut; never carry it across await.
 pub(in crate::state) struct CarrierQueueRetirement<'queue> {
-    state_owner: Arc<BlockHashOwner>,
+    state_owner: NativeLaneStateOwner,
     header: BlockHeader,
     routes: Vec<(LaneId, DataSpaceId, Hash)>,
     _cut: QueueLaneRetirementCut<'queue>,
 }
 
+/// Original route metadata and notifications after all Queue locks are released.
+/// Keep this cleanup until every enclosing State/Kura fence has released.
+pub(super) struct ReleasedCarrierQueue {
+    _routes: Vec<(LaneId, DataSpaceId, Hash)>,
+    _state_owner: NativeLaneStateOwner,
+    _released: [concread::release::DeferredRelease; 3],
+}
+
 impl<'queue> CarrierQueueRetirement<'queue> {
+    /// Unlock the original cut while retaining all cleanup through outer fences.
+    pub(super) fn release_deferred(self) -> ReleasedCarrierQueue {
+        let Self {
+            state_owner,
+            routes,
+            _cut,
+            ..
+        } = self;
+        ReleasedCarrierQueue {
+            _released: _cut.release_deferred(),
+            _routes: routes,
+            _state_owner: state_owner,
+        }
+    }
+
     /// Observe every exact predecessor route under the shared Queue predicate.
     /// Aggregate installation admission must cover this vector and Queue scan.
     pub(in crate::state) fn try_new(
@@ -90,7 +112,9 @@ impl<'queue> CarrierQueueRetirement<'queue> {
             }
         }
         Ok(Self {
-            state_owner: Arc::clone(&target.block_hashes.owner),
+            state_owner: target
+                .native_lane_state_owner()
+                .ok_or(CarrierQueueRetirementError::ForeignState)?,
             header,
             routes,
             _cut: cut,
@@ -116,7 +140,7 @@ impl<'queue> CarrierQueueRetirement<'queue> {
         header: BlockHeader,
     ) -> bool {
         if self.ensure_available().is_err()
-            || !Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)
+            || !self.state_owner.matches_state(target)
             || self.header != header
             || !geometry.matches_publication_target(target, header)
         {

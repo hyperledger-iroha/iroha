@@ -1,4 +1,5 @@
 use super::states::*;
+use super::tracking::TrackingBuffer;
 use crate::utils::*;
 // use libc::{c_void, mprotect, PROT_READ, PROT_WRITE};
 use super::allocation::{NodeAllocation, NodeCloning, NodeFunding, OwnedNodeAllocation};
@@ -403,21 +404,6 @@ impl<K: Clone + Ord + Debug, V: Clone, C> Node<K, V, C> {
         Self::no_cycles_inner_raw(pointer, &mut track)
     }
 
-    pub(crate) fn sblock_collect(&mut self, alloc: &mut Vec<*mut Node<K, V, C>>) {
-        // Reset our txid.
-        // self.meta.0 &= FLAG_MASK | COUNT_MASK;
-        // self.meta.0 |= txid << TXID_SHF;
-
-        if (self.meta.0 & FLAG_MASK) == FLAG_BRANCH {
-            let bref = unsafe { &*(self as *const _ as *const Branch<K, V, C>) };
-            for idx in 0..(bref.count() + 1) {
-                alloc.push(bref.nodes[idx]);
-                let n = bref.nodes[idx];
-                unsafe { (*n).sblock_collect(alloc) };
-            }
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn sblock_collect_raw(pointer: *mut Self, alloc: &mut Vec<*mut Node<K, V, C>>) {
         // Reset our txid.
@@ -445,14 +431,34 @@ impl<K: Clone + Ord + Debug, V: Clone, C> Node<K, V, C> {
     /// The complete tree must be exclusively owned, with no remaining reader or
     /// unpublished cursor that can access its nodes. Each node must occur once.
     pub(crate) unsafe fn free_tree(root: *mut Self) {
+        // SAFETY: the caller owns the entire tree; postorder visits never read
+        // a child again after its destruction.
+        unsafe {
+            Self::visit_tree(root, |node| {
+                Self::free(node);
+                Some(())
+            })
+        }
+        .expect("committed B+tree exceeds its height bound");
+    }
+
+    /// Visit every original node exactly once, in bounded allocation-free postorder.
+    ///
+    /// # Safety
+    /// The root must name a valid tree retained for the call. A visitor may free
+    /// only its visited node, after its children; it must not change ancestors or
+    /// unvisited nodes. Shared read-only traversal must leave every node intact.
+    pub(crate) unsafe fn visit_tree(
+        root: *mut Self,
+        mut visit: impl FnMut(*mut Self) -> Option<()>,
+    ) -> Option<()> {
         let mut path = [(ptr::null_mut::<Self>(), 0_usize); usize::BITS as usize + 1];
         path[0] = (root, 0);
         let mut depth = 1;
         while depth != 0 {
             let (node, next_child) = path[depth - 1];
-            // SAFETY: this frame retains its original node until all of its
-            // children have been freed. Child pointers are read only while the
-            // parent allocation is still alive.
+            // SAFETY: an ancestor remains alive until all its children have
+            // been visited. No mutable reference is made to a shared node.
             let child = unsafe {
                 match (*node).meta.0 & FLAG_MASK {
                     FLAG_LEAF => None,
@@ -464,18 +470,34 @@ impl<K: Clone + Ord + Debug, V: Clone, C> Node<K, V, C> {
                 }
             };
             if let Some(child) = child {
-                assert!(
-                    depth < path.len(),
-                    "committed B+tree exceeds its height bound"
-                );
+                if depth == path.len() {
+                    return None;
+                }
                 path[depth - 1].1 = next_child + 1;
                 path[depth] = (child, 0);
                 depth += 1;
             } else {
                 depth -= 1;
-                Self::free(node);
+                visit(node)?;
             }
         }
+        Some(())
+    }
+
+    /// Count actual original node allocations without copying payloads or pointers.
+    ///
+    /// # Safety
+    /// The complete tree must stay alive and unchanged for this read-only call.
+    pub(crate) unsafe fn tree_node_count(root: *mut Self) -> Option<usize> {
+        let mut count = 0_usize;
+        // SAFETY: the caller retains the tree; this visitor only counts nodes.
+        unsafe {
+            Self::visit_tree(root, |_| {
+                count = count.checked_add(1)?;
+                Some(())
+            })
+        }?;
+        Some(count)
     }
 
     pub(crate) fn free(node: *mut Node<K, V, C>) {
@@ -720,7 +742,9 @@ impl<K: Ord + Clone + Debug, V: Clone, C> Leaf<K, V, C> {
             Ok(idx) => {
                 // It exists at idx, replace
                 let prev = unsafe { self.values[idx].as_mut_ptr().replace(v) };
-                // Prev now contains the original value, return it!
+                // The replacement slot is initialized before arbitrary input
+                // cleanup. Keep the previous value local until that succeeds.
+                drop(k);
                 LeafInsertState::Ok(Some(prev))
             }
             Err(idx) => {
@@ -778,9 +802,13 @@ impl<K: Ord + Clone + Debug, V: Clone, C> Leaf<K, V, C> {
             None => LeafRemoveState::Ok(None),
             Some(idx) => {
                 // Get the kv out
-                let _pk = unsafe { slice_remove(&mut self.key, idx).assume_init() };
+                let removed_key = unsafe { slice_remove(&mut self.key, idx).assume_init() };
                 let pv = unsafe { slice_remove(&mut self.values, idx).assume_init() };
                 self.dec_count();
+                // Keep the removed value in local custody until key cleanup
+                // succeeds. A tail return would move it before an implicit key
+                // destructor can unwind, orphaning its allocation and charge.
+                drop(removed_key);
                 if self.count() == 0 {
                     LeafRemoveState::Shrink(Some(pv))
                 } else {
@@ -1673,12 +1701,12 @@ impl<K: Ord + Clone + Debug, V: Clone, C> Branch<K, V, C> {
         self.nodes[idx] = node;
     }
 
-    pub(crate) fn clone_sibling_idx(
+    pub(crate) fn clone_sibling_idx<B: TrackingBuffer<*mut Node<K, V, C>, Charge = C>>(
         &mut self,
         txid: u64,
         idx: usize,
-        last_seen: &mut Vec<*mut Node<K, V, C>>,
-        first_seen: &mut Vec<*mut Node<K, V, C>>,
+        last_seen: &mut B,
+        first_seen: &mut B,
         funding: &mut impl NodeCloning<K, V, Charge = C>,
     ) -> usize {
         debug_assert_branch!(self);

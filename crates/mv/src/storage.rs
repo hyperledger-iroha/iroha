@@ -1,28 +1,80 @@
 use crate::{
-    BlockMode, Key, PublicationPreparationError, PublicationPreparationResult, ReleaseGuard,
-    ReleaseNotification, Value,
+    BlockMode, Key, PublicationCleanup, PublicationPreparationError, PublicationPreparationResult,
+    ReleaseGuard, ReleaseNotification, Value,
     publication::{CapturedPublication, NextPublication, Publication},
 };
 use concread::bptree::{
     BptreeMap, BptreeMapCheckpoint, BptreeMapOwned, BptreeMapReadSnapshot, BptreeMapReadTxn,
-    BptreeMapWriteTxn, OwnedWriteError,
+    BptreeMapWriteTxn, Iter, MapMode, NodeCloning, OwnedWriteError, RangeIter, Untracked,
 };
 use std::{borrow::Borrow, collections::BTreeSet, ops::RangeBounds};
-/// Multi-version key value storage
-pub struct Storage<K: Key, V: Value> {
+
+#[path = "storage/physical.rs"]
+mod physical;
+use physical::PreparedStorageWriters;
+pub use physical::PublicationRetirement;
+
+/// Published map cleanup and its original capture/installation reservations.
+/// Physical locks are already free. Retain this owner through all enclosing
+/// publication fences; cleanup drops before either reservation on every exit.
+pub struct PublishedPublication<
+    K: Key,
+    V: Value,
+    Admission,
+    Installation,
+    M: StorageMode<K, V> = Untracked,
+> {
+    retirement: PublicationRetirement<K, V, M>,
+    admission: Admission,
+    installation: Installation,
+}
+
+impl<K: Key, V: Value, Admission, Installation, M: StorageMode<K, V>>
+    PublishedPublication<K, V, Admission, Installation, M>
+{
+    /// Finish cleanup after the enclosing fences, returning separate reservations.
+    pub fn into_reservations(self) -> (Admission, Installation) {
+        let Self {
+            retirement,
+            admission,
+            installation,
+        } = self;
+        drop(retirement);
+        (admission, installation)
+    }
+}
+/// Original Concread mode for both current values and first undo preimages.
+///
+/// Implementations cannot introduce another map engine: `MapMode` is sealed by
+/// Concread. Both roles retain the same mode and its original allocation owners.
+pub trait StorageMode<K: Key, V: Value>:
+    MapMode + NodeCloning<K, V> + NodeCloning<K, Option<V>>
+{
+}
+impl<K: Key, V: Value, M> StorageMode<K, V> for M where
+    M: MapMode + NodeCloning<K, V> + NodeCloning<K, Option<V>>
+{
+}
+
+/// Multi-version key value storage using the original current and undo maps.
+pub struct Storage<K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
     /// Process-local identity of the jointly published current/undo pair.
     pub(crate) publication: Publication,
     pub(crate) revert_released: ReleaseNotification,
     pub(crate) blocks_released: ReleaseNotification,
     /// Previous version of values in the `blocks` map, required to perform revert of the latest changes
-    pub(crate) revert: BptreeMap<K, Option<V>>,
+    pub(crate) revert: BptreeMap<K, Option<V>, M>,
     /// Map which represent aggregated changes of multiple blocks
-    pub(crate) blocks: BptreeMap<K, V>,
+    pub(crate) blocks: BptreeMap<K, V, M>,
+    // Only the admitted constructor installs a pool; ordinary constructors
+    // remain explicitly Untracked and cannot create prepaid map owners.
+    pub(crate) allocation: Option<crate::allocation::AllocationBudget>,
 }
 impl<K: Key, V: Value> Storage<K, V> {
     /// Construct new [`Self`]
     pub fn new() -> Self {
         Self {
+            allocation: None,
             publication: Publication::new(),
             revert_released: ReleaseNotification::default(),
             blocks_released: ReleaseNotification::default(),
@@ -30,14 +82,9 @@ impl<K: Key, V: Value> Storage<K, V> {
             blocks: BptreeMap::new(),
         }
     }
-    /// Create persistent view of storage at certain point in time
-    pub fn view(&self) -> View<'_, K, V> {
-        let read = self.blocks.read();
-        View::from_read_txn(read)
-    }
     /// Create block to aggregate updates
     pub fn block(&self) -> Block<'_, K, V> {
-        let mut revert = self.revert_released.poisoning_guard(
+        let revert = self.revert_released.poisoning_guard(
             self.revert_released
                 .with_acquisition_unwind_notification(|| self.revert.write()),
         );
@@ -45,17 +92,11 @@ impl<K: Key, V: Value> Storage<K, V> {
             self.blocks_released
                 .with_acquisition_unwind_notification(|| self.blocks.write()),
         );
+        let mut writers = StorageWriters::new(self, revert, blocks);
         let predecessor = self.publication.capture();
         // Clear revert
-        revert.clear();
-        Block::new(
-            revert,
-            blocks,
-            false,
-            &self.publication,
-            predecessor,
-            BlockMode::Ordinary,
-        )
+        writers.as_mut().revert.clear();
+        Block::new(writers, false, predecessor, BlockMode::Ordinary)
     }
     /// Insert a value directly into the latest committed state.
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
@@ -64,24 +105,34 @@ impl<K: Key, V: Value> Storage<K, V> {
                 .with_acquisition_unwind_notification(|| self.blocks.write()),
         );
         let prev_value = blocks.insert(key, value);
-        self.publication
-            .publish(|| blocks.release_with(|guard| guard.commit()));
+        let next = NextPublication::new();
+        let prepared = blocks.map_preserving_release(|writer| writer.prepare_commit());
+        let retirement = self.publication.publish_retaining(
+            next,
+            || prepared.map_preserving_release(|prepared| prepared.publish()),
+            |published| published.release_retaining(|published| published.release()),
+        );
+        // The current-only change and its identity are visible before any old
+        // payload can unwind or signal a retry. The undo tree is untouched.
+        drop(retirement);
         prev_value
     }
     /// Create block to aggregate updates and revert changes created in the latest block
     pub fn block_and_revert(&self) -> Block<'_, K, V> {
-        let mut revert = self.revert_released.poisoning_guard(
+        let revert = self.revert_released.poisoning_guard(
             self.revert_released
                 .with_acquisition_unwind_notification(|| self.revert.write()),
         );
-        let mut blocks = self.blocks_released.poisoning_guard(
+        let blocks = self.blocks_released.poisoning_guard(
             self.blocks_released
                 .with_acquisition_unwind_notification(|| self.blocks.write()),
         );
+        let mut writers = StorageWriters::new(self, revert, blocks);
         let predecessor = self.publication.capture();
         // The committed undo tree may still be retained by snapshots. Copy its
         // preimages into the new current generation before clearing this writer;
         // never move values from nodes shared with an original reader.
+        let OriginalWriters { revert, blocks } = writers.as_mut();
         for (key, value) in revert.iter() {
             match value {
                 None => blocks.remove(key),
@@ -89,16 +140,30 @@ impl<K: Key, V: Value> Storage<K, V> {
             };
         }
         revert.clear();
-        Block::new(
-            revert,
-            blocks,
-            true,
-            &self.publication,
-            predecessor,
-            BlockMode::Replace,
-        )
+        Block::new(writers, true, predecessor, BlockMode::Replace)
     }
 }
+impl<K: Key, V: Value, M: StorageMode<K, V>> Storage<K, V, M> {
+    /// Retain a read-only view of the current original allocation owners.
+    /// This does not copy map entries or create an admitted iteration workspace.
+    pub fn view(&self) -> View<'_, K, V, M> {
+        View::from_read_txn(self.blocks.read())
+    }
+}
+
+#[path = "storage/touches.rs"]
+mod touches;
+
+#[path = "storage/admitted.rs"]
+mod admitted;
+#[cfg(test)]
+#[path = "storage/admitted_tests.rs"]
+mod admitted_tests;
+pub use admitted::{
+    AdmittedAbortedPublication, AdmittedBlockError, AdmittedPreparedPublication,
+    AdmittedPublishedPublication, AdmittedStorageError, AdmittedStoragePolicy, StorageRole,
+};
+
 impl<K: Key, V: Value> Default for Storage<K, V> {
     fn default() -> Self {
         Self::new()
@@ -107,6 +172,7 @@ impl<K: Key, V: Value> Default for Storage<K, V> {
 impl<K: Key, V: Value> FromIterator<(K, V)> for Storage<K, V> {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         Self {
+            allocation: None,
             publication: Publication::new(),
             revert_released: ReleaseNotification::default(),
             blocks_released: ReleaseNotification::default(),
@@ -116,6 +182,14 @@ impl<K: Key, V: Value> FromIterator<(K, V)> for Storage<K, V> {
     }
 }
 pub trait StorageReadOnly<K: Key, V: Value> {
+    /// Borrowed entries in canonical order, retaining traversal state inline.
+    type Iter<'a>: DoubleEndedIterator<Item = (&'a K, &'a V)> + ExactSizeIterator
+    where
+        Self: 'a;
+    /// Borrowed bounded traversal, with no heap allocation for the iterator.
+    type RangeIter<'a>: DoubleEndedIterator<Item = (&'a K, &'a V)>
+    where
+        Self: 'a;
     /// Read entry from the storage
     fn get<Q>(&self, key: &Q) -> Option<&V>
     where
@@ -132,9 +206,9 @@ pub trait StorageReadOnly<K: Key, V: Value> {
             .filter(|(candidate, _)| *candidate == key)
     }
     /// Iterate over all entries in the storage
-    fn iter(&self) -> Iter<'_, K, V>;
+    fn iter(&self) -> Self::Iter<'_>;
     /// Iterate over range of entries in the storage
-    fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> RangeIter<'_, K, V>
+    fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> Self::RangeIter<'_>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized;
@@ -152,27 +226,58 @@ pub trait StorageReadOnly<K: Key, V: Value> {
 /// Module for [`View`] and it's related impls
 mod view {
     use super::*;
-    enum ViewInner<'storage, K: Key, V: Value> {
-        Txn(BptreeMapReadTxn<'storage, K, V>),
-        Snapshot(BptreeMapReadSnapshot<'storage, K, V>),
+    enum ViewInner<'storage, K: Key, V: Value, M: StorageMode<K, V>> {
+        Txn(BptreeMapReadTxn<'storage, K, V, M>),
+        Snapshot(BptreeMapReadSnapshot<'storage, K, V, M>),
     }
     /// Consistent view of the storage at the certain version
-    pub struct View<'storage, K: Key, V: Value> {
-        blocks: ViewInner<'storage, K, V>,
+    pub struct View<'storage, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
+        blocks: ViewInner<'storage, K, V, M>,
     }
-    impl<'storage, K: Key, V: Value> View<'storage, K, V> {
-        pub(crate) fn from_read_txn(read: BptreeMapReadTxn<'storage, K, V>) -> Self {
+    impl<'storage, K: Key, V: Value, M: StorageMode<K, V>> View<'storage, K, V, M> {
+        /// Borrow a current value without allocating iteration storage.
+        pub fn get<Q>(&self, key: &Q) -> Option<&V>
+        where
+            K: Borrow<Q>,
+            Q: Ord + ?Sized,
+        {
+            match &self.blocks {
+                ViewInner::Txn(txn) => txn.get(key),
+                ViewInner::Snapshot(snapshot) => snapshot.get(key),
+            }
+        }
+        /// Number of current entries retained by this view.
+        pub fn len(&self) -> usize {
+            match &self.blocks {
+                ViewInner::Txn(txn) => txn.len(),
+                ViewInner::Snapshot(snapshot) => snapshot.len(),
+            }
+        }
+        /// Whether this original view has no entries.
+        pub fn is_empty(&self) -> bool {
+            self.len() == 0
+        }
+
+        pub(crate) fn from_read_txn(read: BptreeMapReadTxn<'storage, K, V, M>) -> Self {
             Self {
                 blocks: ViewInner::Txn(read),
             }
         }
-        pub(crate) fn from_snapshot(snapshot: BptreeMapReadSnapshot<'storage, K, V>) -> Self {
+        pub(crate) fn from_snapshot(snapshot: BptreeMapReadSnapshot<'storage, K, V, M>) -> Self {
             Self {
                 blocks: ViewInner::Snapshot(snapshot),
             }
         }
     }
-    impl<K: Key, V: Value> StorageReadOnly<K, V> for View<'_, K, V> {
+    impl<K: Key, V: Value, M: StorageMode<K, V>> StorageReadOnly<K, V> for View<'_, K, V, M> {
+        type Iter<'a>
+            = Iter<'a, K, V, M::Charge>
+        where
+            Self: 'a;
+        type RangeIter<'a>
+            = RangeIter<'a, K, V, M::Charge>
+        where
+            Self: 'a;
         fn get<Q>(&self, key: &Q) -> Option<&V>
         where
             K: Ord + Borrow<Q>,
@@ -183,24 +288,20 @@ mod view {
                 ViewInner::Snapshot(snapshot) => snapshot.get(key),
             }
         }
-        fn iter(&self) -> Iter<'_, K, V> {
-            Iter {
-                iter: match &self.blocks {
-                    ViewInner::Txn(txn) => Box::new(txn.iter()),
-                    ViewInner::Snapshot(snapshot) => Box::new(snapshot.iter()),
-                },
+        fn iter(&self) -> Self::Iter<'_> {
+            match &self.blocks {
+                ViewInner::Txn(txn) => txn.iter(),
+                ViewInner::Snapshot(snapshot) => snapshot.iter(),
             }
         }
-        fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> RangeIter<'_, K, V>
+        fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> Self::RangeIter<'_>
         where
             K: Borrow<Q>,
             Q: Ord + ?Sized,
         {
-            RangeIter {
-                iter: match &self.blocks {
-                    ViewInner::Txn(txn) => Box::new(txn.range(bounds)),
-                    ViewInner::Snapshot(snapshot) => Box::new(snapshot.range(bounds)),
-                },
+            match &self.blocks {
+                ViewInner::Txn(txn) => txn.range(bounds),
+                ViewInner::Snapshot(snapshot) => snapshot.range(bounds),
             }
         }
         fn first_key_value(&self) -> Option<(&K, &V)> {
@@ -251,9 +352,9 @@ pub struct TouchedEntry<'a, K: Key, V: Value> {
 /// generation so untouched shared nodes remain alive even if Storage is dropped.
 /// Replacement semantics are already staged by the original block. Publication
 /// reacquires and authenticates that same current/undo pair without rebuilding it.
-pub struct Detached<K: Key, V: Value, Admission> {
-    revert: BptreeMapOwned<K, Option<V>>,
-    blocks: BptreeMapOwned<K, V>,
+pub struct Detached<K: Key, V: Value, Admission, M: StorageMode<K, V> = Untracked> {
+    revert: BptreeMapOwned<K, Option<V>, M>,
+    blocks: BptreeMapOwned<K, V, M>,
     // Release metadata admission after the original successors and their pins.
     metadata: DetachedMetadata<Admission>,
 }
@@ -266,7 +367,7 @@ struct DetachedMetadata<Admission> {
     admission: Admission,
 }
 
-impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
+impl<K: Key, V: Value, Admission, M: StorageMode<K, V>> Detached<K, V, Admission, M> {
     /// Return the actual original block's acquisition mode.
     pub fn mode(&self) -> BlockMode {
         self.metadata.mode
@@ -296,12 +397,12 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
 
     /// Observe equality with the original published current/undo pair.
     /// This momentary observation grants no publication authority.
-    pub fn matches_current(&self, storage: &Storage<K, V>) -> bool {
+    pub fn matches_current(&self, storage: &Storage<K, V, M>) -> bool {
         self.metadata.predecessor.matches(&storage.publication)
     }
 
     /// Compare exact original owner/version and mode with an acquired block.
-    pub fn matches_block_predecessor(&self, block: &Block<'_, K, V>) -> bool {
+    pub fn matches_block_predecessor(&self, block: &Block<'_, K, V, M>) -> bool {
         self.metadata.mode == block.mode && self.metadata.predecessor.same_as(&block.predecessor)
     }
 
@@ -316,26 +417,32 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
     /// Acquisition never waits and every refusal returns the original journal.
     /// Aggregate publication and complete resource admission remain the caller's
     /// responsibility; prepare every component before publishing the first one.
-    pub fn try_prepare_publication<'target, Installation, E>(
+    fn prepare_publication<'target, Installation, E>(
         self,
-        target: &'target Storage<K, V>,
-        admit: impl FnOnce(&Self, &Storage<K, V>) -> Result<Installation, E>,
+        target: &'target Storage<K, V, M>,
+        admit: impl FnOnce(&Self, &Storage<K, V, M>) -> Result<Installation, E>,
     ) -> PublicationPreparationResult<
-        PreparedPublication<'target, K, V, Admission, Installation>,
+        PreparedPublication<'target, K, V, Admission, Installation, M>,
         Self,
         E,
+        Installation,
     > {
-        if let Err(error) = self
+        let mut cleanup = PublicationCleanup::empty();
+        let (checked, probe) = self
             .metadata
             .predecessor
-            .try_check_current(&target.publication)
-        {
-            return Err((self, error));
+            .try_check_current(&target.publication);
+        cleanup.identities[0] = probe;
+        if let Err(error) = checked {
+            return Err((self, error, cleanup));
         }
         let installation = match admit(&self, target) {
             Ok(installation) => installation,
-            Err(error) => return Err((self, PublicationPreparationError::Admission(error))),
+            Err(error) => {
+                return Err((self, PublicationPreparationError::Admission(error), cleanup));
+            }
         };
+        cleanup.installation = Some(installation);
         let Self {
             revert,
             blocks,
@@ -350,7 +457,13 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
                         PublicationPreparationError::after_failed_acquisition(wait)
                     }
                     OwnedWriteError::Poisoned => PublicationPreparationError::Poisoned,
-                    OwnedWriteError::Changed => PublicationPreparationError::Changed,
+                    OwnedWriteError::Changed => {
+                        // A stale base can be rejected after taking and releasing
+                        // the raw writer, before any wrapper is returned.
+                        cleanup.writers[1] =
+                            Some(target.revert_released.guard(()).release_deferred(drop).1);
+                        PublicationPreparationError::Changed
+                    }
                 };
                 return Err((
                     Self {
@@ -359,6 +472,7 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
                         metadata,
                     },
                     error,
+                    cleanup,
                 ));
             }
         };
@@ -371,9 +485,14 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
                         PublicationPreparationError::after_failed_acquisition(wait)
                     }
                     OwnedWriteError::Poisoned => PublicationPreparationError::Poisoned,
-                    OwnedWriteError::Changed => PublicationPreparationError::Changed,
+                    OwnedWriteError::Changed => {
+                        cleanup.writers[0] =
+                            Some(target.blocks_released.guard(()).release_deferred(drop).1);
+                        PublicationPreparationError::Changed
+                    }
                 };
-                let revert = revert.release_with(|writer| writer.detach());
+                let (revert, released) = revert.release_deferred(|writer| writer.detach());
+                cleanup.writers[1] = Some(released);
                 return Err((
                     Self {
                         revert,
@@ -381,59 +500,143 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
                         metadata,
                     },
                     error,
+                    cleanup,
                 ));
             }
         };
-        let prepared = PreparedPublication {
-            revert,
-            blocks,
-            publication: &target.publication,
+        let mut prepared = PreparedPublication {
+            writers: PreparedStorageWriters::new(
+                StorageWriters::new(target, revert, blocks),
+                cleanup.identities[0].take(),
+            ),
             metadata,
-            installation,
+            installation: cleanup.installation.take().expect("original installation"),
         };
         if let Err(error) = prepared
-            .metadata
-            .predecessor
-            .try_check_current(&target.publication)
+            .writers
+            .prepare(&prepared.metadata.predecessor, prepared.metadata.dirty)
         {
-            return Err((prepared.abort(), error));
+            let (journal, cleanup) = prepared.abort();
+            return Err((journal, error, cleanup));
         }
         Ok(prepared)
+    }
+}
+
+impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
+    /// Reacquire the exact original untracked pair, returning custody on refusal.
+    /// No successor allocation or payload copy occurs. The caller prepares every
+    /// aggregate component before publication and owns separate resource admission.
+    pub fn try_prepare_publication<'target, Installation, E>(
+        self,
+        target: &'target Storage<K, V>,
+        admit: impl FnOnce(&Self, &Storage<K, V>) -> Result<Installation, E>,
+    ) -> PublicationPreparationResult<
+        PreparedPublication<'target, K, V, Admission, Installation>,
+        Self,
+        E,
+        Installation,
+    > {
+        self.prepare_publication(target, admit)
     }
 }
 
 /// Original map and undo successors held under both exact target writers.
 /// Drop abandons them without publication; abort returns the original owners.
 #[must_use = "preparation must be published or aborted by its aggregate owner"]
-pub struct PreparedPublication<'target, K: Key, V: Value, Admission, Installation> {
-    revert: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, Option<V>>>,
-    blocks: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, V>>,
-    publication: &'target Publication,
+pub struct PreparedPublication<
+    'target,
+    K: Key,
+    V: Value,
+    Admission,
+    Installation,
+    M: StorageMode<K, V> = Untracked,
+> {
+    writers: PreparedStorageWriters<'target, K, V, M>,
     metadata: DetachedMetadata<Admission>,
     // Release temporary resources after every retained successor and writer.
     installation: Installation,
 }
 
-impl<K: Key, V: Value, Admission, Installation>
-    PreparedPublication<'_, K, V, Admission, Installation>
+struct OriginalWriters<'target, K: Key, V: Value, M: StorageMode<K, V>> {
+    revert: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, Option<V>, M>>,
+    blocks: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, V, M>>,
+}
+
+// A single owner gives abandonment the same two-writer release boundary as
+// explicit abort. The original pair is present until a consuming transition.
+struct StorageWriters<'target, K: Key, V: Value, M: StorageMode<K, V>> {
+    original: Option<OriginalWriters<'target, K, V, M>>,
+    target: &'target Storage<K, V, M>,
+}
+
+impl<'target, K: Key, V: Value, M: StorageMode<K, V>> StorageWriters<'target, K, V, M> {
+    fn new(
+        target: &'target Storage<K, V, M>,
+        revert: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, Option<V>, M>>,
+        blocks: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, V, M>>,
+    ) -> Self {
+        Self {
+            original: Some(OriginalWriters { revert, blocks }),
+            target,
+        }
+    }
+
+    fn as_ref(&self) -> &OriginalWriters<'target, K, V, M> {
+        self.original.as_ref().expect("original storage pair")
+    }
+
+    fn as_mut(&mut self) -> &mut OriginalWriters<'target, K, V, M> {
+        self.original.as_mut().expect("original storage pair")
+    }
+
+    fn into_original(mut self) -> OriginalWriters<'target, K, V, M> {
+        self.original.take().expect("original storage pair")
+    }
+}
+
+impl<K: Key, V: Value, M: StorageMode<K, V>> Drop for StorageWriters<'_, K, V, M> {
+    fn drop(&mut self) {
+        if let Some(OriginalWriters { revert, blocks }) = self.original.take() {
+            revert.release_pair_with(
+                blocks,
+                |revert, blocks| drop((revert, blocks)),
+                || {
+                    (
+                        self.target.revert.is_poisoned(),
+                        self.target.blocks.is_poisoned(),
+                    )
+                },
+            );
+        }
+    }
+}
+
+impl<K: Key, V: Value, Admission, Installation, M: StorageMode<K, V>>
+    PreparedPublication<'_, K, V, Admission, Installation, M>
 {
-    /// Release physical writers and return the exact original successors.
-    pub fn abort(self) -> Detached<K, V, Admission> {
+    /// Release physical writers and return the exact original successors and cleanup.
+    /// Retain the cleanup until every enclosing component and fence has unlocked.
+    pub fn abort(
+        self,
+    ) -> (
+        Detached<K, V, Admission, M>,
+        PublicationCleanup<Installation>,
+    ) {
         let Self {
-            revert,
-            blocks,
-            publication: _,
+            writers,
             metadata,
             installation,
         } = self;
-        let blocks = blocks.release_with(|writer| writer.detach());
-        let revert = revert.release_with(|writer| writer.detach());
-        drop(installation);
-        Detached {
-            revert,
-            blocks,
-            metadata,
-        }
+        let (blocks, revert, retirement) = writers.abort(installation);
+        (
+            Detached {
+                revert,
+                blocks,
+                metadata,
+            },
+            retirement,
+        )
     }
 
     /// Publish the original prepared pair and return separate reservations.
@@ -442,29 +645,78 @@ impl<K: Key, V: Value, Admission, Installation>
     /// detachment. This does not establish complete heap admission: nested data,
     /// cursor/node custody and collector/control bookkeeping still need their own
     /// policy. The aggregate owner supplies joint visibility and finality.
-    pub fn publish(self) -> (Admission, Installation) {
+    pub fn publish(self) -> PublishedPublication<K, V, Admission, Installation, M> {
         let Self {
-            revert,
-            blocks,
-            publication,
+            writers,
             metadata,
             installation,
         } = self;
         let DetachedMetadata {
             predecessor: _,
             mode: _,
-            dirty,
+            dirty: _,
             next,
             admission,
         } = metadata;
-        publication.publish_prepared(next, || {
-            if dirty {
-                blocks.release_with(|guard| guard.commit());
-            }
-            revert.release_with(|guard| guard.commit());
-        });
-        (admission, installation)
+        let retirement = writers.publish(next);
+        PublishedPublication {
+            retirement,
+            admission,
+            installation,
+        }
     }
+}
+
+// Retain both release signals until both original physical writers are free.
+// Notification unwind must not poison an already released healthy writer.
+fn detach_pair<K: Key, V: Value, M: StorageMode<K, V>>(
+    blocks: ReleaseGuard<'_, BptreeMapWriteTxn<'_, K, V, M>>,
+    revert: ReleaseGuard<'_, BptreeMapWriteTxn<'_, K, Option<V>, M>>,
+) -> (BptreeMapOwned<K, V, M>, BptreeMapOwned<K, Option<V>, M>) {
+    let blocks = blocks.release_retaining(|writer| writer.detach());
+    let revert = revert.release_retaining(|writer| writer.detach());
+    let blocks = blocks.release_with(|owner| owner);
+    let revert = revert.release_with(|owner| owner);
+    (blocks, revert)
+}
+
+// Prepare every fallible lock/invariant check before the first map transfers
+// node custody. Both physical writers survive through the pair identity change;
+// charged cursor, old-reader and notification cleanup run only after unlocking.
+fn publish_pair<'a, K: Key, V: Value, M: StorageMode<K, V>>(
+    blocks: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>,
+    revert: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, Option<V>, M>>,
+    publication: &Publication,
+    next: NextPublication,
+    dirty: bool,
+) {
+    let (blocks, unchanged) = if dirty {
+        (
+            Some(blocks.map_preserving_release(|writer| writer.prepare_commit())),
+            None,
+        )
+    } else {
+        (None, Some(blocks))
+    };
+    let revert = revert.map_preserving_release(|writer| writer.prepare_commit());
+    let retirement = publication.publish_retaining(
+        next,
+        || {
+            let blocks =
+                blocks.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));
+            let revert = revert.map_preserving_release(|prepared| prepared.publish());
+            (blocks, revert)
+        },
+        |(blocks, revert)| {
+            let blocks =
+                blocks.map(|writer| writer.release_retaining(|published| published.release()));
+            let revert = revert.release_retaining(|published| published.release());
+            let unchanged =
+                unchanged.map(|writer| writer.release_retaining(|writer| writer.detach()));
+            (blocks, revert, unchanged)
+        },
+    );
+    drop(retirement);
 }
 
 #[cfg(test)]
@@ -475,22 +727,62 @@ mod publication_tests;
 mod block {
     use super::*;
     /// Batched update to the storage that can be reverted later
-    pub struct Block<'store, K: Key, V: Value> {
-        pub(crate) revert: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, Option<V>>>,
-        pub(crate) blocks: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, V>>,
+    pub struct Block<'store, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
+        pub(super) writers: StorageWriters<'store, K, V, M>,
         pub(super) dirty: bool,
-        failed: bool,
-        pub(super) publication: &'store Publication,
+        pub(super) failed: bool,
         pub(super) predecessor: CapturedPublication,
+        pub(super) next: NextPublication,
         pub(super) mode: BlockMode,
     }
-    impl<'store, K: Key, V: Value> Block<'store, K, V> {
-        fn assert_operable(&self) {
+    impl<'store, K: Key, V: Value, M: StorageMode<K, V>> Block<'store, K, V, M> {
+        pub(super) fn assert_operable(&self) {
             assert!(!self.failed, "block edit unwound; abandon the block");
             // A child checkpoint can poison only one cursor while restoring
             // its root. Check the complete pair before either can publish.
-            self.blocks.len();
-            self.revert.len();
+            self.writers.as_ref().blocks.len();
+            self.writers.as_ref().revert.len();
+        }
+
+        pub(super) fn detach_owned<Admission>(
+            self,
+            admission: Admission,
+        ) -> Detached<K, V, Admission, M> {
+            self.assert_operable();
+            let Self {
+                writers,
+                dirty,
+                failed: _,
+                predecessor,
+                next,
+                mode,
+            } = self;
+            let OriginalWriters { revert, blocks } = writers.into_original();
+            let (blocks, revert) = detach_pair(blocks, revert);
+            Detached {
+                revert,
+                blocks,
+                metadata: DetachedMetadata {
+                    predecessor,
+                    mode,
+                    dirty,
+                    next,
+                    admission,
+                },
+            }
+        }
+
+        pub(super) fn publish(self) {
+            self.assert_operable();
+            let Self {
+                writers,
+                dirty,
+                next,
+                ..
+            } = self;
+            let publication = &writers.target.publication;
+            let OriginalWriters { revert, blocks } = writers.into_original();
+            publish_pair(blocks, revert, publication, next, dirty);
         }
 
         /// Observe this block's original owner, current/undo predecessor and mode.
@@ -501,116 +793,10 @@ mod block {
 
         /// Check the original storage owner without reading values or taking locks.
         /// This observation grants no mutation or publication authority.
-        pub fn belongs_to(&self, storage: &Storage<K, V>) -> bool {
+        pub fn belongs_to(&self, storage: &Storage<K, V, M>) -> bool {
             self.predecessor.belongs_to(&storage.publication)
         }
 
-        pub(super) fn new(
-            revert: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, Option<V>>>,
-            blocks: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, V>>,
-            dirty: bool,
-            publication: &'store Publication,
-            predecessor: CapturedPublication,
-            mode: BlockMode,
-        ) -> Self {
-            Self {
-                revert,
-                blocks,
-                dirty,
-                failed: false,
-                publication,
-                predecessor,
-                mode,
-            }
-        }
-        /// Create transaction for the block
-        pub fn transaction(&mut self) -> Transaction<'_, K, V> {
-            self.assert_operable();
-            // TODO: propagate generation refusal through State admission before
-            // activating prepaid transaction construction.
-            let blocks = self
-                .blocks
-                .checkpoint()
-                .expect("current checkpoint generation exhausted");
-            let revert = self
-                .revert
-                .checkpoint()
-                .expect("undo checkpoint generation exhausted");
-            Transaction {
-                blocks: Some(blocks),
-                revert: Some(revert),
-                touched: BTreeSet::new(),
-                dirty: self.dirty,
-                parent_dirty: &mut self.dirty,
-                failed: false,
-            }
-        }
-        /// Apply aggregated changes to the storage
-        pub fn commit(self) {
-            self.assert_operable();
-            let Self {
-                revert,
-                blocks,
-                dirty,
-                failed: _,
-                publication,
-                predecessor: _,
-                mode: _,
-            } = self;
-            publication.publish(|| {
-                // Commit fields in the inverse order. Even an untouched block
-                // publishes its clear-undo transition and changes pair identity.
-                if dirty {
-                    blocks.release_with(|guard| guard.commit());
-                }
-                revert.release_with(|guard| guard.commit());
-            });
-        }
-
-        /// Admit capture metadata, then retain the exact original successors.
-        ///
-        /// The callback runs before next-identity allocation. No key/value clone
-        /// or delta vector is needed: current and undo move with their original
-        /// allocation owners. The map retains its original root/base generation
-        /// to protect untouched shared nodes after releasing the physical writer.
-        /// Original execution, nested payload growth and retained-reader resources
-        /// require their own earlier admission; this callback cannot fund them
-        /// retroactively. Rejection abandons the block without publication.
-        pub fn try_detach<Admission, E>(
-            self,
-            admit: impl FnOnce(&Self) -> Result<Admission, E>,
-        ) -> Result<Detached<K, V, Admission>, E> {
-            self.assert_operable();
-            let admission = admit(&self)?;
-            let next = NextPublication::new();
-            let Self {
-                revert,
-                blocks,
-                dirty,
-                failed: _,
-                predecessor,
-                mode,
-                publication: _,
-            } = self;
-            let blocks = blocks.release_with(|writer| writer.detach());
-            let revert = revert.release_with(|writer| writer.detach());
-            Ok(Detached {
-                revert,
-                blocks,
-                metadata: DetachedMetadata {
-                    predecessor,
-                    mode,
-                    dirty,
-                    next,
-                    admission,
-                },
-            })
-        }
-        /// Read-only access to the block revert map (keys touched in this block).
-        pub fn revert_map(&self) -> &BptreeMapWriteTxn<'store, K, Option<V>> {
-            self.assert_operable();
-            &self.revert
-        }
         /// Read the value that existed before this block's first mutation of `key`.
         ///
         /// The block undo log retains the first pre-block value across direct
@@ -618,7 +804,8 @@ mod block {
         /// `None` means the key was absent before the block; an untouched key is
         /// read from the current map.
         pub fn get_before_block(&self, key: &K) -> Option<&V> {
-            match self.revert_map().get(key) {
+            self.assert_operable();
+            match self.writers.as_ref().revert.get(key) {
                 Some(previous) => previous.as_ref(),
                 None => self.get(key),
             }
@@ -636,11 +823,15 @@ mod block {
             &self,
         ) -> impl DoubleEndedIterator<Item = TouchedEntry<'_, K, V>> + ExactSizeIterator {
             self.assert_operable();
-            self.revert.iter().map(|(key, before)| TouchedEntry {
-                key,
-                before: before.as_ref(),
-                after: self.get(key),
-            })
+            self.writers
+                .as_ref()
+                .revert
+                .iter()
+                .map(|(key, before)| TouchedEntry {
+                    key,
+                    before: before.as_ref(),
+                    after: self.get(key),
+                })
         }
 
         /// Return the actual acquisition mode, including an untouched replacement.
@@ -650,15 +841,88 @@ mod block {
 
         /// Return whether this block has staged any storage mutation.
         pub fn is_dirty(&self) -> bool {
+            self.assert_operable();
             self.dirty
         }
+        /// Read-only access to the block revert map (keys touched in this block).
+        pub fn revert_map(&self) -> &BptreeMapWriteTxn<'store, K, Option<V>, M> {
+            self.assert_operable();
+            &self.writers.as_ref().revert
+        }
+    }
+    impl<'store, K: Key, V: Value> Block<'store, K, V> {
+        pub(super) fn new(
+            writers: StorageWriters<'store, K, V, Untracked>,
+            dirty: bool,
+            predecessor: CapturedPublication,
+            mode: BlockMode,
+        ) -> Self {
+            Self {
+                writers,
+                dirty,
+                failed: false,
+                predecessor,
+                next: NextPublication::new(),
+                mode,
+            }
+        }
+        /// Retain both original parent roots, refusing generation exhaustion.
+        pub fn try_transaction(
+            &mut self,
+        ) -> Result<Transaction<'_, K, V>, concread::bptree::PlanningError> {
+            self.assert_operable();
+            let OriginalWriters { revert, blocks } = self.writers.as_mut();
+            let blocks = blocks.checkpoint()?;
+            let revert = revert.checkpoint()?;
+            Ok(Transaction {
+                blocks: Some(blocks),
+                revert: Some(revert),
+                touched: TransactionTouches::Untracked(BTreeSet::new()),
+                dirty: self.dirty,
+                parent_dirty: &mut self.dirty,
+                failed: false,
+                allocation: None,
+                parent_failure: Some(super::admitted_transaction::ParentFailure::new(
+                    &mut self.failed,
+                )),
+            })
+        }
+        /// Apply aggregated changes to the storage
+        pub fn commit(self) {
+            self.publish();
+        }
+
+        /// Admit capture metadata, then retain the exact original successors.
+        ///
+        /// The next identity is retained from block opening. No key/value clone
+        /// or delta vector is needed: current and undo move with their original
+        /// allocation owners. The map retains its original root/base generation
+        /// to protect untouched shared nodes after releasing the physical writer.
+        /// Original execution, nested payload growth and retained-reader resources
+        /// require their own earlier admission; this callback cannot fund them
+        /// retroactively. Rejection abandons the block without publication.
+        pub fn try_detach<Admission, E>(
+            self,
+            admit: impl FnOnce(&Self) -> Result<Admission, E>,
+        ) -> Result<Detached<K, V, Admission>, E> {
+            self.assert_operable();
+            let admission = admit(&self)?;
+            Ok(self.detach_owned(admission))
+        }
+        /// Create transaction for the block.
+        pub fn transaction(&mut self) -> Transaction<'_, K, V> {
+            // TODO: propagate generation exhaustion through State admission.
+            self.try_transaction()
+                .expect("transaction checkpoint generation exhausted")
+        }
+
         /// Get mutable access to the value stored in
         pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
             self.assert_operable();
             self.failed = true;
             let dirty = &mut self.dirty;
-            let revert = &mut self.revert;
-            let value = self.blocks.get_mut(key).inspect(|value| {
+            let OriginalWriters { revert, blocks } = self.writers.as_mut();
+            let value = blocks.get_mut(key).inspect(|value| {
                 *dirty = true;
                 if !revert.contains_key(key) {
                     revert.insert(key.clone(), Some((*value).clone()));
@@ -673,9 +937,10 @@ mod block {
             // The first-preimage clone runs outside either tree cursor. Keep
             // aggregate failure armed until both edits and input cleanup finish.
             self.failed = true;
-            let prev_value = self.blocks.insert(key.clone(), value);
-            if !self.revert.contains_key(&key) {
-                self.revert.insert(key, prev_value.clone());
+            let OriginalWriters { revert, blocks } = self.writers.as_mut();
+            let prev_value = blocks.insert(key.clone(), value);
+            if !revert.contains_key(&key) {
+                revert.insert(key, prev_value.clone());
             } else {
                 drop(key);
             }
@@ -687,9 +952,10 @@ mod block {
         pub fn remove(&mut self, key: K) -> Option<V> {
             self.assert_operable();
             self.failed = true;
-            let prev_value = self.blocks.remove(&key);
-            if !self.revert.contains_key(&key) {
-                self.revert.insert(key, prev_value.clone());
+            let OriginalWriters { revert, blocks } = self.writers.as_mut();
+            let prev_value = blocks.remove(&key);
+            if !revert.contains_key(&key) {
+                revert.insert(key, prev_value.clone());
             } else {
                 drop(key);
             }
@@ -700,42 +966,46 @@ mod block {
             prev_value
         }
     }
-    impl<K: Key, V: Value> StorageReadOnly<K, V> for Block<'_, K, V> {
+    impl<K: Key, V: Value, M: StorageMode<K, V>> StorageReadOnly<K, V> for Block<'_, K, V, M> {
+        type Iter<'a>
+            = Iter<'a, K, V, M::Charge>
+        where
+            Self: 'a;
+        type RangeIter<'a>
+            = RangeIter<'a, K, V, M::Charge>
+        where
+            Self: 'a;
         fn get<Q>(&self, key: &Q) -> Option<&V>
         where
             K: Borrow<Q>,
             Q: Ord + ?Sized,
         {
             self.assert_operable();
-            self.blocks.get(key)
+            self.writers.as_ref().blocks.get(key)
         }
-        fn iter(&self) -> Iter<'_, K, V> {
+        fn iter(&self) -> Self::Iter<'_> {
             self.assert_operable();
-            Iter {
-                iter: Box::new(self.blocks.iter()),
-            }
+            self.writers.as_ref().blocks.iter()
         }
-        fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> RangeIter<'_, K, V>
+        fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> Self::RangeIter<'_>
         where
             K: Borrow<Q>,
             Q: Ord + ?Sized,
         {
             self.assert_operable();
-            RangeIter {
-                iter: Box::new(self.blocks.range(bounds)),
-            }
+            self.writers.as_ref().blocks.range(bounds)
         }
         fn first_key_value(&self) -> Option<(&K, &V)> {
             self.assert_operable();
-            self.blocks.first_key_value()
+            self.writers.as_ref().blocks.first_key_value()
         }
         fn last_key_value(&self) -> Option<(&K, &V)> {
             self.assert_operable();
-            self.blocks.last_key_value()
+            self.writers.as_ref().blocks.last_key_value()
         }
         fn len(&self) -> usize {
             self.assert_operable();
-            self.blocks.len()
+            self.writers.as_ref().blocks.len()
         }
     }
     /// A private transaction retaining both original parent tree generations.
@@ -743,31 +1013,97 @@ mod block {
     /// Drop restores the parent roots without inverse mutations or allocation.
     /// First preimages live in the block-undo checkpoint; transaction preimages
     /// are borrowed from the original current root instead of cloned into a log.
-    pub struct Transaction<'block, K: Key, V: Value> {
-        blocks: Option<BptreeMapCheckpoint<'block, K, V>>,
-        revert: Option<BptreeMapCheckpoint<'block, K, Option<V>>>,
-        // TODO: admit ordered touch-key storage with both tree edits before
-        // activating the prepaid State transaction path.
-        touched: BTreeSet<K>,
-        parent_dirty: &'block mut bool,
-        dirty: bool,
-        failed: bool,
+    pub struct Transaction<'block, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
+        pub(super) blocks: Option<BptreeMapCheckpoint<'block, K, V, M>>,
+        pub(super) revert: Option<BptreeMapCheckpoint<'block, K, Option<V>, M>>,
+        // Constructors bind this one touch owner to the original map mode.
+        pub(super) touched: TransactionTouches<K>,
+        pub(super) parent_dirty: &'block mut bool,
+        pub(super) dirty: bool,
+        pub(super) failed: bool,
+        pub(super) allocation: Option<&'block crate::allocation::AllocationBudget>,
+        // LAST: both original checkpoints and all local touch keys/buffers must
+        // finish rollback/apply cleanup before this parent-failure guard drops.
+        pub(super) parent_failure: Option<super::admitted_transaction::ParentFailure<'block>>,
     }
-    impl<K: Key, V: Value> Transaction<'_, K, V> {
-        fn assert_operable(&self) {
+
+    impl<K: Key, V: Value, M: StorageMode<K, V>> Drop for Transaction<'_, K, V, M> {
+        fn drop(&mut self) {
+            // This runs before automatic checkpoint and touched-key destruction.
+            // Existing unwind, including refusal to apply a failed ordinary
+            // child, can roll back under both checkpoints. New cleanup failures
+            // must poison the parent; already armed failures remain sticky.
+            if let Some(parent) = self.parent_failure.as_mut() {
+                parent.begin_cleanup();
+            }
+        }
+    }
+
+    pub(super) enum TransactionTouches<K: Key> {
+        Untracked(BTreeSet<K>),
+        Admitted(super::touches::SortedTouches<K>),
+    }
+    impl<K: Key> TransactionTouches<K> {
+        fn untracked(&self) -> &BTreeSet<K> {
+            match self {
+                Self::Untracked(touches) => touches,
+                Self::Admitted(_) => {
+                    panic!("Untracked transaction requires its original touch mode")
+                }
+            }
+        }
+        fn untracked_mut(&mut self) -> &mut BTreeSet<K> {
+            match self {
+                Self::Untracked(touches) => touches,
+                Self::Admitted(_) => {
+                    panic!("Untracked transaction requires its original touch mode")
+                }
+            }
+        }
+        pub(super) fn admitted(&self) -> &super::touches::SortedTouches<K> {
+            match self {
+                Self::Admitted(touches) => touches,
+                Self::Untracked(_) => {
+                    panic!("admitted transaction requires its original touch mode")
+                }
+            }
+        }
+        pub(super) fn admitted_mut(&mut self) -> &mut super::touches::SortedTouches<K> {
+            match self {
+                Self::Admitted(touches) => touches,
+                Self::Untracked(_) => {
+                    panic!("admitted transaction requires its original touch mode")
+                }
+            }
+        }
+    }
+    impl<K: Key, V: Value, M: StorageMode<K, V>> Transaction<'_, K, V, M> {
+        pub(super) fn assert_operable(&self) {
             assert!(
                 !self.failed,
                 "transaction edit unwound; abort the transaction"
             );
+            assert!(
+                !self
+                    .parent_failure
+                    .as_ref()
+                    .is_some_and(|parent| parent.is_failed()),
+                "parent block is unusable"
+            );
         }
 
-        fn current(&self) -> &BptreeMapCheckpoint<'_, K, V> {
+        pub(super) fn current(&self) -> &BptreeMapCheckpoint<'_, K, V, M> {
             self.assert_operable();
             self.blocks.as_ref().expect("live transaction current root")
         }
-
+        /// Create a read-only view into this private transaction state.
+        pub fn view(&self) -> View<'_, K, V, M> {
+            View::from_snapshot(self.current().to_snapshot())
+        }
+    }
+    impl<K: Key, V: Value> Transaction<'_, K, V> {
         fn record_touch(&mut self, key: &K) {
-            self.touched.insert(key.clone());
+            self.touched.untracked_mut().insert(key.clone());
             let revert = self.revert.as_mut().expect("live transaction undo root");
             if revert.get(key).is_none() {
                 let before = self
@@ -778,11 +1114,6 @@ mod block {
                     .cloned();
                 revert.insert(key.clone(), before);
             }
-        }
-
-        /// Create a read-only view into this private transaction state.
-        pub fn view(&self) -> View<'_, K, V> {
-            View::from_snapshot(self.current().to_snapshot())
         }
 
         /// Borrow the original block-start value, including applied siblings.
@@ -812,7 +1143,7 @@ mod block {
             &self,
         ) -> impl DoubleEndedIterator<Item = TouchedEntry<'_, K, V>> + ExactSizeIterator {
             self.assert_operable();
-            self.touched.iter().map(|key| TouchedEntry {
+            self.touched.untracked().iter().map(|key| TouchedEntry {
                 key,
                 before: self.current().get_before(key),
                 after: self.current().get(key),
@@ -822,8 +1153,9 @@ mod block {
         /// Keep both private successors and their first preimages in the block.
         pub fn apply(mut self) {
             self.assert_operable();
-            // Check both cursors before consuming either checkpoint. Untracked
-            // checkpoint apply has no displaced charged buffers or callbacks.
+            // Every destructor runs while rollback is available or aggregate
+            // failure remains armed. Neither retained apply transfers nor
+            // updating parent metadata runs user destruction.
             self.blocks
                 .as_ref()
                 .expect("live transaction current root")
@@ -832,20 +1164,31 @@ mod block {
                 .as_ref()
                 .expect("live transaction undo root")
                 .len();
-            // A touched-key destructor must unwind while both rollback guards
-            // are still armed, never after only part of the transaction applies.
-            drop(core::mem::take(&mut self.touched));
-            self.blocks
+            // Arm the aggregate before any touched-key destructor can unwind.
+            // Both rollback guards still retain the original parent roots.
+            self.parent_failure.as_mut().expect("original parent").arm();
+            drop(core::mem::replace(
+                &mut self.touched,
+                TransactionTouches::Untracked(BTreeSet::new()),
+            ));
+            let current_retirement = self
+                .blocks
                 .take()
                 .expect("live transaction current root")
-                .apply();
-            self.revert
+                .apply_retaining();
+            let undo_retirement = self
+                .revert
                 .take()
                 .expect("live transaction undo root")
-                .apply();
+                .apply_retaining();
             *self.parent_dirty = self.dirty;
+            drop(current_retirement);
+            drop(undo_retirement);
+            self.parent_failure
+                .as_mut()
+                .expect("original parent")
+                .resolve();
         }
-
         /// Mutably borrow a present value while retaining its original preimages.
         pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
             self.assert_operable();
@@ -895,7 +1238,15 @@ mod block {
             previous
         }
     }
-    impl<K: Key, V: Value> StorageReadOnly<K, V> for Transaction<'_, K, V> {
+    impl<K: Key, V: Value, M: StorageMode<K, V>> StorageReadOnly<K, V> for Transaction<'_, K, V, M> {
+        type Iter<'a>
+            = Iter<'a, K, V, M::Charge>
+        where
+            Self: 'a;
+        type RangeIter<'a>
+            = RangeIter<'a, K, V, M::Charge>
+        where
+            Self: 'a;
         fn get<Q>(&self, key: &Q) -> Option<&V>
         where
             K: Borrow<Q>,
@@ -903,19 +1254,15 @@ mod block {
         {
             self.current().get(key)
         }
-        fn iter(&self) -> Iter<'_, K, V> {
-            Iter {
-                iter: Box::new(self.current().iter()),
-            }
+        fn iter(&self) -> Self::Iter<'_> {
+            self.current().iter()
         }
-        fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> RangeIter<'_, K, V>
+        fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> Self::RangeIter<'_>
         where
             K: Borrow<Q>,
             Q: Ord + ?Sized,
         {
-            RangeIter {
-                iter: Box::new(self.current().range(bounds)),
-            }
+            self.current().range(bounds)
         }
         fn first_key_value(&self) -> Option<(&K, &V)> {
             self.current().first_key_value()
@@ -929,35 +1276,8 @@ mod block {
     }
 }
 pub use block::{Block, Transaction};
-mod iter {
-    use super::*;
-    /// Iterate over entries in block, view or transaction
-    pub struct Iter<'slf, K: Key, V: Value> {
-        pub(crate) iter: Box<dyn Iterator<Item = (&'slf K, &'slf V)> + 'slf>,
-    }
-    /// Iterate over range of entries in block, view or transaction
-    pub struct RangeIter<'slf, K: Key, V: Value> {
-        pub(crate) iter: Box<dyn DoubleEndedIterator<Item = (&'slf K, &'slf V)> + 'slf>,
-    }
-    impl<'slf, K: Key, V: Value> Iterator for Iter<'slf, K, V> {
-        type Item = (&'slf K, &'slf V);
-        fn next(&mut self) -> Option<Self::Item> {
-            self.iter.next()
-        }
-    }
-    impl<'slf, K: Key, V: Value> Iterator for RangeIter<'slf, K, V> {
-        type Item = (&'slf K, &'slf V);
-        fn next(&mut self) -> Option<Self::Item> {
-            self.iter.next()
-        }
-    }
-    impl<'slf, K: Key, V: Value> DoubleEndedIterator for RangeIter<'slf, K, V> {
-        fn next_back(&mut self) -> Option<Self::Item> {
-            self.iter.next_back()
-        }
-    }
-}
-pub use iter::{Iter, RangeIter};
+#[path = "storage/admitted_transaction.rs"]
+mod admitted_transaction;
 #[cfg(test)]
 mod tests {
     use super::*;

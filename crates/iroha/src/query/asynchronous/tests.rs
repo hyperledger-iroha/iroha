@@ -161,7 +161,7 @@ async fn collects_typed_pages_with_fresh_signed_nonces_and_exact_cursor_authorit
     let signed: Vec<_> = requests
         .iter()
         .map(|request| {
-            assert_eq!(request.url.path(), "/query");
+            assert_eq!(request.url.path(), "/v1/query");
             let signed = SignedQuery::decode_all_versioned(&request.body).expect("signed query");
             assert_eq!(signed.payload.network_id, *account.network_id());
             assert_eq!(&signed.payload.authority, account.authority());

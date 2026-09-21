@@ -300,9 +300,9 @@ fn print_usage() {
     eprintln!(
         "    Build the Rust-owned Nexus Connect transfer SDK fixture; write mode refuses Git checkouts and requires an external staging root."
     );
-    eprintln!("  cargo xtask nexus-lane-maintenance --config <path> [--json-out <path|->]");
+    eprintln!("  cargo xtask nexus-lane-maintenance --config <path>");
     eprintln!(
-        "    Report configured labels and observed canonical Kura instance paths without changing storage or inferring active/retired authority."
+        "    Emit a read-only JSON inventory to stdout; declared lanes and physical canonical/instance paths do not prove active or retired ownership."
     );
     eprintln!(
         "  cargo xtask nexus-lane-audit --status <status.json> [--json-out <path>] [--parquet-out <path>] [--markdown-out <path>] [--captured-at <iso8601>] [--lane-compliance <path>]"

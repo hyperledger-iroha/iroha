@@ -1,26 +1,26 @@
 //! Borrowed committed and prior images for validation and derived storage.
 
-use super::{Iter, Storage, StorageReadOnly, View};
+use super::{Iter, Storage, StorageMode, StorageReadOnly, View};
 use crate::{Key, Value};
-use concread::bptree::BptreeMapReadTxn;
+use concread::bptree::{BptreeMapReadTxn, Untracked};
 use std::{borrow::Borrow, cmp::Ordering, iter::Peekable, marker::PhantomData};
 
 /// Read-only guard over a storage's current state and retained undo history.
 ///
 /// The exclusive source borrow prevents writes while both images are acquired
 /// and inspected. Reading history does not begin a block or consume the undo log.
-pub struct History<'storage, K: Key, V: Value> {
-    current: View<'storage, K, V>,
-    revert: BptreeMapReadTxn<'storage, K, Option<V>>,
-    _exclusive: PhantomData<&'storage mut Storage<K, V>>,
+pub struct History<'storage, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
+    current: View<'storage, K, V, M>,
+    revert: BptreeMapReadTxn<'storage, K, Option<V>, M>,
+    _exclusive: PhantomData<&'storage mut Storage<K, V, M>>,
 }
 
-impl<K: Key, V: Value> Storage<K, V> {
+impl<K: Key, V: Value, M: StorageMode<K, V>> Storage<K, V, M> {
     /// Borrow the current image and the state before the latest committed block.
     ///
     /// This operation does not mutate storage. Exclusive access keeps acquisition
     /// of the two read guards coherent and excludes writes for their lifetime.
-    pub fn history(&mut self) -> History<'_, K, V> {
+    pub fn history(&mut self) -> History<'_, K, V, M> {
         let revert = self.revert.read();
         let current = self.view();
         History {
@@ -31,18 +31,10 @@ impl<K: Key, V: Value> Storage<K, V> {
     }
 }
 
-impl<'storage, K: Key, V: Value> History<'storage, K, V> {
+impl<'storage, K: Key, V: Value, M: StorageMode<K, V>> History<'storage, K, V, M> {
     /// Borrow the committed storage image.
-    pub fn current(&self) -> &View<'storage, K, V> {
+    pub fn current(&self) -> &View<'storage, K, V, M> {
         &self.current
-    }
-
-    /// Borrow touched keys and their values before the last committed block.
-    ///
-    /// `None` records prior absence; it is not a missing undo entry. Untouched
-    /// keys inherit their current values in the prior image.
-    pub fn revert_map(&self) -> &BptreeMapReadTxn<'storage, K, Option<V>> {
-        &self.revert
     }
 
     /// Read a value in the image before the latest committed block.
@@ -57,6 +49,14 @@ impl<'storage, K: Key, V: Value> History<'storage, K, V> {
         }
     }
 
+    /// Borrow touched keys and their values before the last committed block.
+    ///
+    /// `None` records prior absence; it is not a missing undo entry. Untouched
+    /// keys inherit their current values in the prior image.
+    pub fn revert_map(&self) -> &BptreeMapReadTxn<'storage, K, Option<V>, M> {
+        &self.revert
+    }
+
     /// Iterate over the prior image in canonical key order without cloning values.
     ///
     /// The iterator merges unchanged current entries with retained prior values;
@@ -67,7 +67,9 @@ impl<'storage, K: Key, V: Value> History<'storage, K, V> {
             revert: self.revert.iter().peekable(),
         }
     }
+}
 
+impl<K: Key, V: Value> History<'_, K, V> {
     /// Derive another storage while preserving both images and touched-key history.
     ///
     /// Apply the same pure projection to current and retained prior values. `None`
@@ -86,6 +88,7 @@ impl<'storage, K: Key, V: Value> History<'storage, K, V> {
             .map(|(key, previous)| (key.clone(), previous.as_ref().and_then(&project)))
             .collect::<concread::bptree::BptreeMap<_, _>>();
         Storage {
+            allocation: None,
             publication: crate::publication::Publication::new(),
             revert_released: crate::ReleaseNotification::default(),
             blocks_released: crate::ReleaseNotification::default(),
@@ -95,12 +98,12 @@ impl<'storage, K: Key, V: Value> History<'storage, K, V> {
     }
 }
 
-struct BeforeBlockIter<'a, K: Key, V: Value> {
-    current: Peekable<Iter<'a, K, V>>,
-    revert: Peekable<concread::internals::bptree::iter::Iter<'a, K, Option<V>>>,
+struct BeforeBlockIter<'a, K: Key, V: Value, C> {
+    current: Peekable<Iter<'a, K, V, C>>,
+    revert: Peekable<Iter<'a, K, Option<V>, C>>,
 }
 
-impl<'a, K: Key, V: Value> Iterator for BeforeBlockIter<'a, K, V> {
+impl<'a, K: Key, V: Value, C> Iterator for BeforeBlockIter<'a, K, V, C> {
     type Item = (&'a K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {

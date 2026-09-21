@@ -36,7 +36,7 @@ fn prepare<'a, V: Value, A>(
 ) -> PreparedPublication<'a, V, A, ()> {
     match journal.try_prepare_publication(target, |_, _| Ok::<_, ()>(())) {
         Ok(p) => p,
-        Err((_, e)) => panic!("unexpected preparation refusal: {e:?}"),
+        Err((_, e, _)) => panic!("unexpected preparation refusal: {e:?}"),
     }
 }
 
@@ -61,7 +61,14 @@ fn prepared_cell_matches_direct_commit_without_changing_existing_readers() {
     assert!(target.blocks.try_write().is_none());
     assert_eq!(*target.view(), 10);
     assert!(target.predecessor_view().is_none());
-    assert!(observer.matches_current(&target));
+    assert!(matches!(
+        observer
+            .metadata
+            .predecessor
+            .try_check_current::<()>(&target.publication)
+            .0,
+        Err(PublicationPreparationError::Busy(_))
+    ));
     direct.commit();
     prepared.publish();
     assert_eq!(*target.view(), *reference.view());
@@ -69,6 +76,48 @@ fn prepared_cell_matches_direct_commit_without_changing_existing_readers() {
     assert_eq!(*reader, 10);
     assert_eq!(*undo, None);
     assert!(!observer.matches_current(&target));
+}
+
+#[test]
+fn prepared_cell_identity_and_cleanup_remain_owned_through_aggregate_unlock() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Waker},
+    };
+    let first = Cell::new(10_u64);
+    let second = Cell::new(20_u64);
+    let mut a = first.block();
+    *a.get_mut() = 11;
+    let mut b = second.block();
+    *b.get_mut() = 21;
+    let a = prepare(detach(a), &first);
+    let b = prepare(detach(b), &second);
+    assert!(matches!(
+        a.metadata
+            .predecessor
+            .try_check_current::<()>(&first.publication)
+            .0,
+        Err(PublicationPreparationError::Busy(_))
+    ));
+    let mut wait = first.blocks_released.observe().wait_for_release();
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    let a = a.publish();
+    assert!(first.blocks.try_write().is_some());
+    assert!(first.revert.try_write().is_some());
+    assert!(second.blocks.try_write().is_none());
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    let b = b.publish();
+    assert!(second.blocks.try_write().is_some());
+    assert!(second.revert.try_write().is_some());
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    drop((a, b));
+    assert!(Pin::new(&mut wait).poll(&mut context).is_ready());
+    assert_eq!(*first.view(), 11);
+    assert_eq!(*first.predecessor_view(), Some(10));
+    assert_eq!(*second.view(), 21);
+    assert_eq!(*second.predecessor_view(), Some(20));
 }
 
 #[test]
@@ -134,10 +183,11 @@ fn either_busy_writer_returns_original_values_and_releases_partial_locks() {
     for which in 0..2 {
         let undo = (which == 0).then(|| target.revert.write());
         let current = (which == 1).then(|| target.blocks.write());
-        let (returned, error) = journal
+        let (returned, error, _cleanup) = journal
             .try_prepare_publication(&target, |_, _| Ok::<_, ()>(()))
             .err()
             .unwrap();
+        drop(_cleanup);
         assert!(matches!(error, PublicationPreparationError::Busy(_)));
         assert_eq!(returned.touched_value().unwrap().after.as_ptr(), ptr);
         drop(current);
@@ -156,30 +206,33 @@ fn foreign_equal_pair_aba_and_change_during_admission_are_refused() {
     let target = Cell::new(10_u64);
     let foreign = Cell::new(10_u64);
     let journal = detach(target.block());
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&foreign, |_, _| -> Result<(), ()> {
             panic!("foreign admission")
         })
         .err()
         .unwrap();
+    drop(_cleanup);
     assert_eq!(error, PublicationPreparationError::Changed);
     target.replace_current_preserving_predecessor(11);
     target.replace_current_preserving_predecessor(10);
-    let (_, error) = journal
+    let (_, error, _cleanup) = journal
         .try_prepare_publication(&target, |_, _| -> Result<(), ()> {
             panic!("ABA admission")
         })
         .err()
         .unwrap();
+    drop(_cleanup);
     assert_eq!(error, PublicationPreparationError::Changed);
     let journal = detach(target.block());
-    let (_, error) = journal
+    let (_, error, _cleanup) = journal
         .try_prepare_publication(&target, |_, owner| {
             owner.block().commit();
             Ok::<_, ()>(())
         })
         .err()
         .unwrap();
+    drop(_cleanup);
     assert_eq!(error, PublicationPreparationError::Changed);
     assert_eq!(*target.view(), 10);
     assert!(target.revert.try_write().is_some());
@@ -195,12 +248,13 @@ fn abort_preserves_the_exact_journal_for_retry_after_late_component_refusal() {
     let journal = detach(candidate);
     let ptr = journal.touched_value().unwrap().after.as_ptr();
     let prepared = prepare(journal, &first);
-    let (_, error) = detach(second.block())
+    let (_, error, _cleanup) = detach(second.block())
         .try_prepare_publication(&second, |_, _| Err::<(), _>("capacity"))
         .err()
         .unwrap();
+    drop(_cleanup);
     assert_eq!(error, PublicationPreparationError::Admission("capacity"));
-    let journal = prepared.abort();
+    let journal = prepared.abort().0;
     assert_eq!(journal.touched_value().unwrap().after.as_ptr(), ptr);
     assert!(journal.matches_current(&first));
     assert_eq!(&*first.view(), "before");
@@ -232,10 +286,11 @@ fn original_successors_are_reused_without_value_copies_and_keep_resource_owners(
         .try_detach(|_| Ok::<_, ()>(Reservation(Arc::clone(&captured))))
         .unwrap();
     copies.store(0, Ordering::SeqCst);
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&target, |_, _| Err::<(), _>("capacity"))
         .err()
         .unwrap();
+    drop(_cleanup);
     assert_eq!(error, PublicationPreparationError::Admission("capacity"));
     assert_eq!(copies.load(Ordering::SeqCst), 0);
     let installed = Arc::new(AtomicBool::new(false));
@@ -287,4 +342,202 @@ fn dropping_preparation_releases_writers_before_installation_capacity() {
     assert!(released.load(Ordering::SeqCst));
     assert_eq!(*target.view(), 10);
     assert_eq!(*target.predecessor_view(), None);
+}
+
+#[test]
+fn cell_release_wakes_follow_both_values_identity_and_physical_unlocks() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Wake, Waker},
+    };
+    struct Probe {
+        cell: Arc<Cell<u64>>,
+        predecessor: CapturedPublication,
+        current: u64,
+        undo: Option<u64>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            assert_eq!(
+                self.predecessor
+                    .try_check_current::<()>(&self.cell.publication)
+                    .0,
+                Err(PublicationPreparationError::Changed)
+            );
+            let current = self.cell.blocks.try_write().expect("current unlocked");
+            let undo = self.cell.revert.try_write().expect("undo unlocked");
+            assert_eq!(*current, self.current);
+            assert_eq!(*undo, self.undo);
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    fn check(probe: Arc<Probe>, publish: impl FnOnce()) {
+        let mut current = probe.cell.blocks_released.observe().wait_for_release();
+        let mut undo = probe.cell.revert_released.observe().wait_for_release();
+        let waker = Waker::from(Arc::clone(&probe));
+        for wait in [&mut current, &mut undo] {
+            assert!(
+                Pin::new(wait)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+        }
+        publish();
+        assert_eq!(probe.wakes.load(Ordering::SeqCst), 2);
+        for wait in [&mut current, &mut undo] {
+            assert!(
+                Pin::new(wait)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_ready()
+            );
+        }
+    }
+    for finish in 0..3 {
+        for dirty in [false, true] {
+            if finish == 2 && !dirty {
+                continue;
+            }
+            let cell = Arc::new(Cell::new(10_u64));
+            let mut tip = cell.block();
+            *tip.get_mut() = 20;
+            tip.commit();
+            let probe = Arc::new(Probe {
+                predecessor: cell.publication.capture(),
+                cell: Arc::clone(&cell),
+                current: if dirty { 30 } else { 20 },
+                undo: if finish == 2 {
+                    Some(10)
+                } else {
+                    dirty.then_some(20)
+                },
+                wakes: AtomicUsize::new(0),
+            });
+            if finish == 2 {
+                let replacement = cell.current_replacement();
+                check(probe, || replacement.publish(30));
+            } else {
+                let mut block = cell.block();
+                if dirty {
+                    *block.get_mut() = 30;
+                }
+                if finish == 1 {
+                    let prepared = prepare(detach(block), &cell);
+                    check(probe, || {
+                        prepared.publish();
+                    });
+                } else {
+                    check(probe, || block.commit());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn unchanged_cell_cleanup_panic_preserves_published_pair_and_healthy_contention() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    struct Charge(Arc<AtomicBool>);
+    impl Drop for Charge {
+        fn drop(&mut self) {
+            assert!(
+                !self.0.swap(false, Ordering::SeqCst),
+                "retired unchanged current"
+            );
+        }
+    }
+    let quiet = || Charge(Arc::new(AtomicBool::new(false)));
+    for prepared in [false, true] {
+        let cell = Cell::new_charged(10_u64, CellAllocationCharges::new(quiet(), quiet()));
+        let predecessor = cell.publication.capture();
+        let current_cleanup = Arc::new(AtomicBool::new(false));
+        let block = cell.block_charged(CellAllocationCharges::new(
+            Charge(Arc::clone(&current_cleanup)),
+            quiet(),
+        ));
+        let result = if prepared {
+            let original = block.try_detach(|_| Ok::<_, ()>(())).unwrap();
+            let publisher = original
+                .try_prepare_publication(&cell, |_, _| Ok::<_, ()>(()))
+                .unwrap_or_else(|_| panic!("same original cell"));
+            current_cleanup.store(true, Ordering::SeqCst);
+            catch_unwind(AssertUnwindSafe(|| {
+                publisher.publish();
+            }))
+        } else {
+            current_cleanup.store(true, Ordering::SeqCst);
+            catch_unwind(AssertUnwindSafe(|| block.commit()))
+        };
+        assert!(result.is_err());
+        assert!(!current_cleanup.load(Ordering::SeqCst));
+        assert_eq!(*cell.view(), 10);
+        assert_eq!(*cell.predecessor_view(), None);
+        assert_eq!(
+            predecessor.try_check_current::<()>(&cell.publication).0,
+            Err(PublicationPreparationError::Changed)
+        );
+        assert!(!cell.blocks_released.observe().is_poisoned());
+        assert!(!cell.revert_released.observe().is_poisoned());
+        let journal = cell
+            .block_charged(CellAllocationCharges::new(quiet(), quiet()))
+            .try_detach(|_| Ok::<_, ()>(()))
+            .unwrap();
+        let held = cell.block_charged(CellAllocationCharges::new(quiet(), quiet()));
+        let expected = cell.revert_released.observe();
+        let (journal, error, _cleanup) = journal
+            .try_prepare_publication(&cell, |_, _| Ok::<_, ()>(()))
+            .err()
+            .expect("original undo held");
+        drop(_cleanup);
+        assert_eq!(error, PublicationPreparationError::Busy(expected));
+        drop(held);
+        let retry = journal
+            .try_prepare_publication(&cell, |_, _| Ok::<_, ()>(()))
+            .unwrap_or_else(|_| panic!("healthy original cell retry"));
+        retry.publish();
+        assert_eq!(*cell.view(), 10);
+    }
+}
+
+#[test]
+fn cell_abort_retains_original_notifications_until_the_entire_aggregate_unlocks() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Waker},
+    };
+    let first = Cell::new(10_u64);
+    let second = Cell::new(20_u64);
+    let mut a = first.block();
+    *a.get_mut() = 11;
+    let mut b = second.block();
+    *b.get_mut() = 21;
+    let a = prepare(detach(a), &first);
+    let b = prepare(detach(b), &second);
+    assert!(matches!(
+        a.metadata
+            .predecessor
+            .try_check_current::<()>(&first.publication)
+            .0,
+        Err(PublicationPreparationError::Busy(_))
+    ));
+    let mut wait = first.blocks_released.observe().wait_for_release();
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    let a = a.abort();
+    assert!(first.blocks.try_write().is_some());
+    assert!(first.revert.try_write().is_some());
+    assert!(second.blocks.try_write().is_none());
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    let b = b.abort();
+    assert!(second.blocks.try_write().is_some());
+    assert!(second.revert.try_write().is_some());
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    drop((a, b));
+    assert!(Pin::new(&mut wait).poll(&mut context).is_ready());
+    assert_eq!(*first.view(), 10);
+    assert_eq!(*first.predecessor_view(), None);
+    assert_eq!(*second.view(), 20);
+    assert_eq!(*second.predecessor_view(), None);
 }

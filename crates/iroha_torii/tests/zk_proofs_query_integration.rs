@@ -20,6 +20,7 @@ use iroha_version::codec::EncodeVersioned as _;
 use mv::storage::StorageReadOnly;
 use norito::json;
 use std::{
+    collections::BTreeSet,
     num::{NonZeroU64, NonZeroUsize},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -43,17 +44,21 @@ fn proof_query_authority_fixture_uses_checked_ed25519_key_generation() {
 async fn proofs_query_find_by_id_returns_norito() {
     let backend = "halo2/ipa";
     let proof_hash = [0xAA; 32];
-    // Authority registered in state so query validation succeeds
+    // The signed proof query requires a registered authority with ledger-read permission.
     let key_pair = checked_proof_query_authority_fixture();
     let domain_name = "wonderland";
     let domain_id = iroha_model_base::domain::DomainId::try_new(domain_name, "universal").unwrap();
     let authority = iroha_data_model::account::AccountId::new(key_pair.public_key().clone());
     let domain = iroha_data_model::domain::Domain::new(domain_id.clone()).build(&authority);
     let account = iroha_data_model::account::Account::new(authority.clone()).build(&authority);
-    let world = World::with(
+    let mut world = World::with(
         [domain],
         [account],
         std::iter::empty::<iroha_data_model::asset::definition::AssetDefinition>(),
+    );
+    world.account_permissions_mut_for_testing().insert(
+        authority.clone(),
+        BTreeSet::from([iroha_executor_data_model::permission::query::CanReadAllLedgerData.into()]),
     );
     // Minimal state and live query store
     let kura = Kura::blank_kura_for_testing();

@@ -171,7 +171,7 @@ impl CapturedStateSnapshot {
     }
 }
 fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, out: &mut String) {
-    let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
+    let block_hashes = &view.block_hashes;
     out.push('{');
     json::write_json_string("chain_id", out);
     out.push(':');
@@ -204,7 +204,7 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     out.push(',');
     json::write_json_string("block_hashes", out);
     out.push(':');
-    json::JsonSerialize::json_serialize(&block_hashes, out);
+    crate::state::serialize_block_hashes(block_hashes, out);
     out.push(',');
     json::write_json_string("transactions", out);
     out.push(':');
@@ -246,7 +246,7 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
 }
 fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     let world = state.world();
-    let block_hashes: Vec<HashOf<BlockHeader>> = state.block_hashes().iter().copied().collect();
+    let block_hashes = state.block_hashes();
     out.push('{');
     json::write_json_string("chain_id", out);
     out.push(':');
@@ -266,7 +266,7 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     out.push(',');
     json::write_json_string("block_hashes", out);
     out.push(':');
-    json::JsonSerialize::json_serialize(&block_hashes, out);
+    crate::state::serialize_block_hashes(block_hashes, out);
     out.push(',');
     json::write_json_string("transactions", out);
     out.push(':');
@@ -3062,7 +3062,7 @@ fn try_read_snapshot_with_initializer<F>(
 where
     F: Fn(&mut State) -> Result<(), TryReadError>,
 {
-    read_buffer_budget.with_deferred_refund_notifications(|| {
+    read_buffer_budget.with_deferred_refund_notifications(|_| {
         let store_dir = store_dir.as_ref();
         if matches!(
             std::fs::symlink_metadata(store_dir),
@@ -4320,7 +4320,7 @@ fn try_write_snapshot_with_limit_and_policy(
     resource_policy: SnapshotResourcePolicy,
     read_buffer_budget: &AllocationBudget,
 ) -> Result<CapturedSnapshotIdentity, TryWriteError> {
-    read_buffer_budget.with_deferred_refund_notifications(|| {
+    read_buffer_budget.with_deferred_refund_notifications(|_| {
         let _publication_guard = SNAPSHOT_PUBLICATION_LOCK.lock();
         // TODO: Add a `Write`-backed Norito JSON sink so production can emit this
         // canonical payload directly into the authenticated staging descriptor.
@@ -4350,7 +4350,7 @@ fn try_write_snapshot_payload_with_limit(
     let read_buffer_budget = &AllocationBudget::new(
         iroha_config::parameters::defaults::snapshot::MAX_READ_BUFFER_BYTES.get(),
     );
-    read_buffer_budget.with_deferred_refund_notifications(|| {
+    read_buffer_budget.with_deferred_refund_notifications(|_| {
         // This test-only seam accepts caller-supplied bytes, unlike the production writer whose
         // payload is emitted directly from the typed State. Keep the full restart dry run here so
         // adversarial fixture bytes cannot exercise post-publication geometry compaction.

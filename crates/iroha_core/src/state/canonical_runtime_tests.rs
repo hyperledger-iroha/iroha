@@ -16,6 +16,44 @@ fn header() -> BlockHeader {
 }
 
 #[test]
+fn fixture_dataspace_baseline_is_visible_in_every_canonical_scope() {
+    let mut state = state();
+    let dataspace = DataSpaceId::new(17);
+    let catalog = DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+        iroha_data_model::nexus::DataSpaceMetadata {
+            id: dataspace,
+            alias: "fixture".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .unwrap();
+    state.set_dataspace_catalog_for_testing(catalog.clone());
+    assert_eq!(state.nexus_snapshot().dataspace_catalog, catalog);
+    assert_eq!(state.view().nexus().dataspace_catalog, catalog);
+    let mut block = state.block(header());
+    assert_eq!(block.nexus.dataspace_catalog, catalog);
+    let tx = block.transaction();
+    assert_eq!(tx.world.dataspace_catalog, catalog);
+}
+
+#[test]
+fn synthetic_routing_snapshot_updates_the_canonical_owner_without_storage() {
+    let state = state();
+    let before = state.kura.exact_durable_blocks_count().unwrap();
+    let mut nexus = state.nexus_snapshot();
+    // A deliberately invalid default route is input to fail-closed router tests.
+    nexus.routing_policy.default_lane = LaneId::new(99);
+    state.install_synthetic_routing_snapshot_for_testing(nexus);
+    assert_eq!(
+        state.view().nexus().routing_policy.default_lane,
+        LaneId::new(99)
+    );
+    assert_eq!(state.kura.exact_durable_blocks_count().unwrap(), before);
+}
+
+#[test]
 fn abandoned_runtime_children_and_blocks_do_not_publish() {
     let state = state();
     let original = state.canonical_runtime.view().get().clone();

@@ -4445,7 +4445,8 @@ pub(crate) mod tests {
                 &pulse_only,
                 &state,
                 false,
-            ),
+            )
+            .unwrap(),
             "a cryptographically finalized pulse cannot manufacture proposal work"
         );
         let account_key = KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519)
@@ -4468,7 +4469,8 @@ pub(crate) mod tests {
                 &pulse_only,
                 &state,
                 false,
-            ),
+            )
+            .unwrap(),
             "the same authenticated pulse may accompany a genuine external operation"
         );
 

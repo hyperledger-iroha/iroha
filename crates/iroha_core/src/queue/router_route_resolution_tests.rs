@@ -38,7 +38,7 @@ fn route_resolution_rejects_lane_dataspace_mismatch() {
     ]);
     let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
     let state = blank_state();
-    install_router_nexus(&state, &router);
+    install_synthetic_router_nexus(&state, &router);
     let tx = sample_transaction(
         &alice_id,
         alice_keypair.private_key(),
@@ -91,7 +91,7 @@ fn route_resolution_rejects_unknown_lane() {
     let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
     let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
     let state = blank_state();
-    install_router_nexus(&state, &router);
+    install_synthetic_router_nexus(&state, &router);
     let tx = sample_transaction(
         &alice_id,
         alice_keypair.private_key(),
@@ -154,7 +154,7 @@ fn route_resolution_rejects_missing_default_lane() {
     ]);
     let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
     let state = blank_state();
-    install_router_nexus(&state, &router);
+    install_synthetic_router_nexus(&state, &router);
     let tx = sample_transaction(
         &alice_id,
         alice_keypair.private_key(),
@@ -212,7 +212,7 @@ fn route_resolution_rejects_missing_default_dataspace() {
         ))],
     );
     let state = blank_state();
-    install_router_nexus(&state, &router);
+    install_synthetic_router_nexus(&state, &router);
     let direct_err = router
         .try_route_with_view(&tx, &state.view())
         .expect_err("missing default dataspace must not fall back to the universal route");
@@ -389,8 +389,8 @@ fn domain_alias_routing_propagates_malformed_dynamic_sns_record() {
     world
         .smart_contract_state_mut_for_testing()
         .insert(crate::sns::record_storage_key(&selector), vec![0xFF]);
-    let state = state_from_world(world);
-    install_router_nexus(&state, &router);
+    let mut state = state_from_world(world);
+    install_router_nexus(&mut state, &router);
     let tx = sample_transaction(
         &authority_id,
         authority_keypair.private_key(),
@@ -441,8 +441,8 @@ fn domain_alias_routing_defers_without_state_and_matches_block_conflict() {
 
     assert_eq!(router.try_route_plan_without_state(&tx), Ok(None));
 
-    let static_state = blank_state();
-    install_router_nexus(&static_state, &router);
+    let mut static_state = blank_state();
+    install_router_nexus(&mut static_state, &router);
     assert_eq!(
         router
             .try_route_plan_with_state(&tx, &static_state)
@@ -450,8 +450,9 @@ fn domain_alias_routing_defers_without_state_and_matches_block_conflict() {
         RoutingPlan::single(RoutingDecision::new(static_lane, static_dataspace))
     );
 
-    let conflicting_state = state_from_world(world_with_dynamic_dataspace("alpha", &authority_id));
-    install_router_nexus(&conflicting_state, &router);
+    let mut conflicting_state =
+        state_from_world(world_with_dynamic_dataspace("alpha", &authority_id));
+    install_router_nexus(&mut conflicting_state, &router);
     let queue_error = router
         .try_route_plan_with_state(&tx, &conflicting_state)
         .expect_err("queue routing must reject active SNS/static disagreement");

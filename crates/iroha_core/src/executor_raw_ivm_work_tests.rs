@@ -3,7 +3,6 @@ mod raw_ivm_work {
     use super::*;
     use crate::executor::Executor;
     use crate::smartcontracts::ivm::host::CoreHost;
-    use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
     use ivm::{encoding::wide, instruction::wide as opcode, pointer_abi::PointerType};
 
     const GAS: u64 = 50_000_000;
@@ -226,25 +225,23 @@ seiyaku RawMeteredFailure {
 
     #[test]
     fn artifact_validation_rejection_retains_completed_vm_work() {
-        let backend: iroha_schema::Ident = "halo2/ipa".into();
-        let ballot = InstructionBox::from(iroha_data_model::isi::zk::SubmitBallot {
-            election_id: "raw-work-election".to_owned(),
-            ciphertext: vec![0x11; 32],
-            ballot_proof: ProofAttachment::new_ref(
-                backend.clone(),
-                ProofBox::new(backend.clone(), vec![0xa5]),
-                VerifyingKeyId::new(backend.as_str(), "raw-work-unverified"),
-            ),
-            nullifier: [0x22; 32],
-        });
-        // Generic-v1 cannot call this syscall. Use an actually bound, permitted
-        // raw contract and its schema-bound bytes argument instead.
+        // Generic-v1 cannot call this syscall. The canonical inline builder
+        // supplies the NoritoBytes pointer required by the typed bridge; a
+        // contract bytes argument is a Blob and cannot stand in for that type.
         let (program, manifest) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(
                 r#"
 seiyaku UnverifiedBallot {
-    kotoage fn run(bytes instruction) authorize("CanInvokeContractEntrypoint") {
-        ledger::governance::submit_ballot(instruction);
+    kotoage fn run() authorize("CanInvokeContractEntrypoint") {
+        let instruction = ledger::governance::build_submit_ballot(
+            election_id: "raw-work-election",
+            ciphertext: b"ciphertext",
+            nullifier: b"0123456789abcdef0123456789abcdef",
+            backend: "halo2/ipa",
+            proof: b"unverified-proof",
+            verification_key: b"unverified-key",
+        );
+        ledger::governance::submit_ballot(value: instruction);
     }
 }
 "#,
@@ -273,11 +270,6 @@ seiyaku UnverifiedBallot {
         ] {
             metadata.insert(key.parse().unwrap(), Json::new(value));
         }
-        let instruction = format!("0x{}", hex::encode(norito::to_bytes(&ballot).unwrap()));
-        metadata.insert(
-            "contract_payload".parse().unwrap(),
-            Json::from(norito::json!({ "instruction": instruction })),
-        );
         let transaction = TransactionBuilder::new(
             state.network_id,
             ALICE_ID.clone(),
@@ -566,7 +558,9 @@ seiyaku UnverifiedBallot {
                 assert!(matches!(result, Err(ValidationFail::NotPermitted(ref reason))
                     if reason == &format!("quarantine cycle budget exceeded: {cap}")));
                 assert_eq!(cycles, Some(cap));
-                assert!(tx.last_tx_gas_used > 0 && tx.last_tx_gas_used < expected_gas);
+                // Only the final, zero-gas HALT is refused. All metered work
+                // completed, even though its queued effects cannot be applied.
+                assert_eq!(tx.last_tx_gas_used, expected_gas);
                 assert!(!tx.execution_effects_allow_apply());
                 assert!(tx.world.account(&ALICE_ID).unwrap().metadata().get("raw_work_written").is_none(),
                     "a queued write cannot apply after HALT was refused");

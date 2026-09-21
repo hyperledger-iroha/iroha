@@ -44,44 +44,67 @@ pub(in crate::state) enum WorldPublicationError<E> {
 }
 
 pub(super) trait PreparedWorldField {
-    fn abort(self: Box<Self>) -> Box<dyn RetainedWorldField>;
-    fn publish(self: Box<Self>);
+    fn release(&mut self);
+    fn abort(&mut self) -> Box<dyn RetainedWorldField>;
+    fn publish(&mut self);
 }
 
 struct PreparedStorage<'target, K: Key, V: Value> {
-    original: Box<RetainedStorage<K, V>>,
+    original: Option<Box<RetainedStorage<K, V>>>,
     journal: Option<mv::storage::PreparedPublication<'target, K, V, (), ()>>,
+    published: Option<mv::storage::PublishedPublication<K, V, (), ()>>,
+    aborted: Option<mv::PublicationCleanup<()>>,
 }
 
 impl<K: Key, V: Value> PreparedWorldField for PreparedStorage<'_, K, V> {
-    fn abort(self: Box<Self>) -> Box<dyn RetainedWorldField> {
-        let Self {
-            mut original,
-            journal,
-        } = *self;
-        original.journal = Some(journal.expect("prepared original journal").abort());
-        original
+    fn release(&mut self) {
+        if let Some(journal) = self.journal.take() {
+            let (journal, retirement) = journal.abort();
+            self.original.as_mut().expect("original field box").journal = Some(journal);
+            self.aborted = Some(retirement);
+        }
     }
 
-    fn publish(self: Box<Self>) {
-        self.journal.expect("prepared original journal").publish();
+    fn abort(&mut self) -> Box<dyn RetainedWorldField> {
+        self.release();
+        self.original.take().expect("original field box")
+    }
+
+    fn publish(&mut self) {
+        self.published = Some(
+            self.journal
+                .take()
+                .expect("prepared original journal")
+                .publish(),
+        );
     }
 }
 
 pub(super) fn prepare_storage<'target, K: Key, V: Value>(
     original: Box<RetainedStorage<K, V>>,
     world: &'target World,
-) -> Result<Box<dyn PreparedWorldField + 'target>, (Box<dyn RetainedWorldField>, FieldRefusal)> {
+) -> Result<
+    Box<dyn PreparedWorldField + 'target>,
+    (Box<dyn PreparedWorldField + 'target>, FieldRefusal),
+> {
     // Allocate only the transient prepared shell before taking this field's writers.
     // The populated original box stays owned throughout acquisition and rollback.
     let mut prepared = Box::new(PreparedStorage {
-        original,
+        original: Some(original),
         journal: None,
+        published: None,
+        aborted: None,
     });
-    let name = prepared.original.name;
-    let target = prepared.original.target;
+    let name = prepared.original.as_ref().expect("original field box").name;
+    let target = prepared
+        .original
+        .as_ref()
+        .expect("original field box")
+        .target;
     let journal = prepared
         .original
+        .as_mut()
+        .expect("original field box")
         .journal
         .take()
         .expect("retained original journal");
@@ -90,10 +113,15 @@ pub(super) fn prepare_storage<'target, K: Key, V: Value>(
             prepared.journal = Some(journal);
             Ok(prepared)
         }
-        Err((journal, cause)) => {
-            prepared.original.journal = Some(journal);
+        Err((journal, cause, cleanup)) => {
+            prepared
+                .original
+                .as_mut()
+                .expect("original field box")
+                .journal = Some(journal);
+            prepared.aborted = Some(cleanup);
             Err((
-                prepared.original,
+                prepared,
                 FieldRefusal {
                     field: name,
                     trigger_component: None,
@@ -105,39 +133,61 @@ pub(super) fn prepare_storage<'target, K: Key, V: Value>(
 }
 
 struct PreparedCell<'target, V: Value> {
-    original: Box<RetainedCell<V>>,
+    original: Option<Box<RetainedCell<V>>>,
     journal: Option<mv::cell::PreparedPublication<'target, V, (), ()>>,
+    published: Option<mv::cell::PublishedPublication<V, (), ()>>,
+    aborted: Option<mv::PublicationCleanup<()>>,
 }
 
 impl<V: Value> PreparedWorldField for PreparedCell<'_, V> {
-    fn abort(self: Box<Self>) -> Box<dyn RetainedWorldField> {
-        let Self {
-            mut original,
-            journal,
-        } = *self;
-        original.journal = Some(journal.expect("prepared original journal").abort());
-        original
+    fn release(&mut self) {
+        if let Some(journal) = self.journal.take() {
+            let (journal, retirement) = journal.abort();
+            self.original.as_mut().expect("original field box").journal = Some(journal);
+            self.aborted = Some(retirement);
+        }
     }
 
-    fn publish(self: Box<Self>) {
-        self.journal.expect("prepared original journal").publish();
+    fn abort(&mut self) -> Box<dyn RetainedWorldField> {
+        self.release();
+        self.original.take().expect("original field box")
+    }
+
+    fn publish(&mut self) {
+        self.published = Some(
+            self.journal
+                .take()
+                .expect("prepared original journal")
+                .publish(),
+        );
     }
 }
 
 pub(super) fn prepare_cell<'target, V: Value>(
     original: Box<RetainedCell<V>>,
     world: &'target World,
-) -> Result<Box<dyn PreparedWorldField + 'target>, (Box<dyn RetainedWorldField>, FieldRefusal)> {
+) -> Result<
+    Box<dyn PreparedWorldField + 'target>,
+    (Box<dyn PreparedWorldField + 'target>, FieldRefusal),
+> {
     // Allocate only the transient prepared shell before taking this field's writers.
     // The populated original box stays owned throughout acquisition and rollback.
     let mut prepared = Box::new(PreparedCell {
-        original,
+        original: Some(original),
         journal: None,
+        published: None,
+        aborted: None,
     });
-    let name = prepared.original.name;
-    let target = prepared.original.target;
+    let name = prepared.original.as_ref().expect("original field box").name;
+    let target = prepared
+        .original
+        .as_ref()
+        .expect("original field box")
+        .target;
     let journal = prepared
         .original
+        .as_mut()
+        .expect("original field box")
         .journal
         .take()
         .expect("retained original journal");
@@ -146,10 +196,15 @@ pub(super) fn prepare_cell<'target, V: Value>(
             prepared.journal = Some(journal);
             Ok(prepared)
         }
-        Err((journal, cause)) => {
-            prepared.original.journal = Some(journal);
+        Err((journal, cause, cleanup)) => {
+            prepared
+                .original
+                .as_mut()
+                .expect("original field box")
+                .journal = Some(journal);
+            prepared.aborted = Some(cleanup);
             Err((
-                prepared.original,
+                prepared,
                 FieldRefusal {
                     field: name,
                     trigger_component: None,
@@ -161,39 +216,61 @@ pub(super) fn prepare_cell<'target, V: Value>(
 }
 
 struct PreparedTriggers<'target> {
-    original: Box<RetainedTriggers>,
+    original: Option<Box<RetainedTriggers>>,
     journal: Option<PreparedSet<'target, (), ()>>,
+    published: Option<crate::smartcontracts::isi::triggers::set::PublishedSet<(), ()>>,
+    aborted: Option<crate::smartcontracts::isi::triggers::set::AbortedSet<()>>,
 }
 
 impl PreparedWorldField for PreparedTriggers<'_> {
-    fn abort(self: Box<Self>) -> Box<dyn RetainedWorldField> {
-        let Self {
-            mut original,
-            journal,
-        } = *self;
-        original.journal = Some(journal.expect("prepared original journal").abort());
-        original
+    fn release(&mut self) {
+        if let Some(journal) = self.journal.take() {
+            let (journal, retirement) = journal.abort();
+            self.original.as_mut().expect("original field box").journal = Some(journal);
+            self.aborted = Some(retirement);
+        }
     }
 
-    fn publish(self: Box<Self>) {
-        self.journal.expect("prepared original journal").publish();
+    fn abort(&mut self) -> Box<dyn RetainedWorldField> {
+        self.release();
+        self.original.take().expect("original field box")
+    }
+
+    fn publish(&mut self) {
+        self.published = Some(
+            self.journal
+                .take()
+                .expect("prepared original journal")
+                .publish(),
+        );
     }
 }
 
 pub(super) fn prepare_triggers<'target>(
     original: Box<RetainedTriggers>,
     world: &'target World,
-) -> Result<Box<dyn PreparedWorldField + 'target>, (Box<dyn RetainedWorldField>, FieldRefusal)> {
+) -> Result<
+    Box<dyn PreparedWorldField + 'target>,
+    (Box<dyn PreparedWorldField + 'target>, FieldRefusal),
+> {
     // Allocate only the transient prepared shell before taking this field's writers.
     // The populated original box stays owned throughout acquisition and rollback.
     let mut prepared = Box::new(PreparedTriggers {
-        original,
+        original: Some(original),
         journal: None,
+        published: None,
+        aborted: None,
     });
-    let name = prepared.original.name;
-    let target = prepared.original.target;
+    let name = prepared.original.as_ref().expect("original field box").name;
+    let target = prepared
+        .original
+        .as_ref()
+        .expect("original field box")
+        .target;
     let journal = prepared
         .original
+        .as_mut()
+        .expect("original field box")
         .journal
         .take()
         .expect("retained original journal");
@@ -202,10 +279,15 @@ pub(super) fn prepare_triggers<'target>(
             prepared.journal = Some(journal);
             Ok(prepared)
         }
-        Err((journal, SetPublicationError::Component { field, cause })) => {
-            prepared.original.journal = Some(journal);
+        Err((journal, SetPublicationError::Component { field, cause }, cleanup)) => {
+            prepared
+                .original
+                .as_mut()
+                .expect("original field box")
+                .journal = Some(journal);
+            prepared.aborted = Some(cleanup);
             Err((
-                prepared.original,
+                prepared,
                 FieldRefusal {
                     field: name,
                     trigger_component: Some(field),
@@ -213,8 +295,46 @@ pub(super) fn prepare_triggers<'target>(
                 },
             ))
         }
-        Err((_, SetPublicationError::Admission(impossible))) => match impossible {},
+        Err((_, SetPublicationError::Admission(impossible), _)) => match impossible {},
     }
+}
+
+/// The original heterogeneous prepared vector releases every writer before any
+/// field shell, payload or callback is destroyed, including preparation unwind.
+struct PreparedWorldFields<'target>(Vec<Box<dyn PreparedWorldField + 'target>>);
+
+impl<'target> PreparedWorldFields<'target> {
+    fn release_all(&mut self) {
+        for field in &mut self.0 {
+            field.release();
+        }
+    }
+
+    fn into_inner(mut self) -> Vec<Box<dyn PreparedWorldField + 'target>> {
+        std::mem::take(&mut self.0)
+    }
+}
+impl<'target> std::ops::Deref for PreparedWorldFields<'target> {
+    type Target = Vec<Box<dyn PreparedWorldField + 'target>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for PreparedWorldFields<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for PreparedWorldFields<'_> {
+    fn drop(&mut self) {
+        self.release_all();
+    }
+}
+
+/// Original shells and abort cleanup retained with installation admission.
+pub(in crate::state) struct AbortedWorld<'target, Installation> {
+    _fields: PreparedWorldFields<'target>,
+    _installation: Option<Installation>,
 }
 
 /// All original World writers retained together, with no State authorization.
@@ -224,13 +344,20 @@ pub(super) fn prepare_triggers<'target>(
 #[must_use = "complete World preparation must be published or aborted by its State owner"]
 pub(in crate::state) struct PreparedWorld<'target, Admission, Installation> {
     mode: BlockMode,
-    fields: Vec<Box<dyn PreparedWorldField + 'target>>,
+    fields: PreparedWorldFields<'target>,
     // Original field-vector allocation, kept empty until an exact rollback.
     retry: Vec<Box<dyn RetainedWorldField>>,
     dataspace_catalog: DataSpaceCatalog,
     external_event_buf: Vec<EventBox>,
     admission: Admission,
     installation: Installation,
+}
+
+/// Original field boxes and containers retained after physical publication.
+/// Drop after all State fences, before releasing the enclosing resource guards.
+pub(in crate::state) struct WorldRetirement<'target> {
+    _fields: Vec<Box<dyn PreparedWorldField + 'target>>,
+    _retry: Vec<Box<dyn RetainedWorldField>>,
 }
 
 impl<Admission> DetachedWorld<Admission> {
@@ -244,15 +371,30 @@ impl<Admission> DetachedWorld<Admission> {
         self,
         target: &'target World,
         admit: impl FnOnce(&Self, &World) -> Result<Installation, E>,
-    ) -> Result<PreparedWorld<'target, Admission, Installation>, (Self, WorldPublicationError<E>)>
-    {
+    ) -> Result<
+        PreparedWorld<'target, Admission, Installation>,
+        (
+            Self,
+            WorldPublicationError<E>,
+            AbortedWorld<'target, Installation>,
+        ),
+    > {
         // These locals precede every payload so panic unwinding releases
         // original/prepared fields before either retained capacity owner.
         let installation;
         let admission;
         installation = match admit(&self, target) {
             Ok(installation) => installation,
-            Err(error) => return Err((self, WorldPublicationError::Admission(error))),
+            Err(error) => {
+                return Err((
+                    self,
+                    WorldPublicationError::Admission(error),
+                    AbortedWorld {
+                        _fields: PreparedWorldFields(Vec::new()),
+                        _installation: None,
+                    },
+                ));
+            }
         };
         let Self {
             mode,
@@ -262,19 +404,22 @@ impl<Admission> DetachedWorld<Admission> {
             admission: retained_admission,
         } = self;
         admission = retained_admission;
-        let mut prepared: Vec<Box<dyn PreparedWorldField + 'target>> =
-            Vec::with_capacity(fields.len());
+        let mut prepared = PreparedWorldFields(Vec::with_capacity(fields.len()));
         // Pop in inventory order while retaining the original vector allocation.
         fields.reverse();
         while let Some(field) = fields.pop() {
             match field.try_prepare(target) {
                 Ok(field) => prepared.push(field),
                 Err((field, error)) => {
-                    fields.push(field);
+                    prepared.push(field);
                     // Restore the original order without allocating rollback custody.
-                    fields.extend(prepared.into_iter().rev().map(|field| field.abort()));
+                    prepared.release_all();
+                    fields.extend(prepared.iter_mut().rev().map(|field| field.abort()));
                     fields.reverse();
-                    drop(installation);
+                    let retirement = AbortedWorld {
+                        _fields: prepared,
+                        _installation: Some(installation),
+                    };
                     return Err((
                         DetachedWorld {
                             mode,
@@ -284,6 +429,7 @@ impl<Admission> DetachedWorld<Admission> {
                             admission,
                         },
                         WorldPublicationError::Field(error),
+                        retirement,
                     ));
                 }
             }
@@ -300,7 +446,7 @@ impl<Admission> DetachedWorld<Admission> {
     }
 }
 
-impl<Admission, Installation> PreparedWorld<'_, Admission, Installation> {
+impl<'target, Admission, Installation> PreparedWorld<'target, Admission, Installation> {
     /// Observe actual constructed shell sizes and both coexisting Vec capacities.
     #[cfg(test)]
     pub(super) fn observed_shell_layouts(
@@ -316,12 +462,17 @@ impl<Admission, Installation> PreparedWorld<'_, Admission, Installation> {
     }
 
     /// Release every writer and return the complete original journals and extras.
-    pub(in crate::state) fn abort(self) -> DetachedWorld<Admission> {
+    pub(in crate::state) fn abort(
+        self,
+    ) -> (
+        DetachedWorld<Admission>,
+        AbortedWorld<'target, Installation>,
+    ) {
         let installation;
         let admission;
         let Self {
             mode,
-            fields,
+            mut fields,
             mut retry,
             dataspace_catalog,
             external_event_buf,
@@ -330,27 +481,40 @@ impl<Admission, Installation> PreparedWorld<'_, Admission, Installation> {
         } = self;
         installation = retained_installation;
         admission = retained_admission;
-        retry.extend(fields.into_iter().map(|field| field.abort()));
-        drop(installation);
-        DetachedWorld {
-            mode,
-            fields: retry,
-            dataspace_catalog,
-            external_event_buf,
-            admission,
-        }
+        fields.release_all();
+        retry.extend(fields.iter_mut().map(|field| field.abort()));
+        let retirement = AbortedWorld {
+            _fields: fields,
+            _installation: Some(installation),
+        };
+        (
+            DetachedWorld {
+                mode,
+                fields: retry,
+                dataspace_catalog,
+                external_event_buf,
+                admission,
+            },
+            retirement,
+        )
     }
 
     /// Consume all prepared fields, handing extras and both guards to State.
     /// Caller-owned State visibility/finality must already exclude partial reads.
     pub(in crate::state) fn publish(
         self,
-    ) -> (DataSpaceCatalog, Vec<EventBox>, Admission, Installation) {
+    ) -> (
+        DataSpaceCatalog,
+        Vec<EventBox>,
+        WorldRetirement<'target>,
+        Admission,
+        Installation,
+    ) {
         let installation;
         let admission;
         let Self {
             mode: _,
-            fields,
+            mut fields,
             retry,
             dataspace_catalog,
             external_event_buf,
@@ -359,13 +523,17 @@ impl<Admission, Installation> PreparedWorld<'_, Admission, Installation> {
         } = self;
         installation = retained_installation;
         admission = retained_admission;
-        for field in fields {
+        for field in fields.iter_mut() {
             field.publish();
         }
-        drop(retry);
+        let retirement = WorldRetirement {
+            _fields: fields.into_inner(),
+            _retry: retry,
+        };
         (
             dataspace_catalog,
             external_event_buf,
+            retirement,
             admission,
             installation,
         )

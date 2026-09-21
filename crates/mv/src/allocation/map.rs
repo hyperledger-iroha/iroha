@@ -8,7 +8,7 @@ use std::{alloc::Layout, borrow::Borrow, marker::PhantomData};
 
 use concread::bptree::{
     AllocationDemand, BptreeMap, BptreeMapCheckpoint, BptreeMapOwned, BptreeMapWriteTxn,
-    ClonePlanning, InsertAdmissionError, NodeCloning, NodeFunding, OwnedWriteError, PlanningError,
+    ClonePlanning, MapAdmissionError, NodeCloning, NodeFunding, OwnedWriteError, PlanningError,
     Prepaid,
 };
 
@@ -111,7 +111,7 @@ impl<K: Key, V: Value, P: CopyPolicy<K, V>> BudgetMap<K, V, P> {
     /// writer lifetime inside the original pool's refund-notification scope.
     pub fn try_write(
         &self,
-    ) -> Result<BudgetWriter<'_, K, V, P>, InsertAdmissionError<AllocationRefusal>> {
+    ) -> Result<BudgetWriter<'_, K, V, P>, MapAdmissionError<AllocationRefusal>> {
         let inner = self.inner.try_write_admitted(|demand| {
             self.budget
                 .try_reserve_bytes(demand.bytes())

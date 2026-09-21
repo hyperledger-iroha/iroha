@@ -250,7 +250,7 @@ impl<'a> PenaltyApplier<'a> {
             crate::sumeragi::witness::suppress_recording_for_current_thread();
         let mut scratch = self
             .state
-            .consensus_effects_probe_block(block_header.clone());
+            .consensus_effects_probe_block(block_header.clone())?;
         let mut actions = Vec::new();
         for (key, record) in pending {
             // Admission already validated and anchored this immutable context.
@@ -1556,9 +1556,13 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_enforces_retained_validator_capacity() {
-        let mut state = fresh_state();
-        state.nexus.get_mut().staking.max_validators =
-            NonZeroU32::new(1).expect("non-zero validator cap");
+        let state = fresh_state();
+        // This negative fixture exceeds the retained, consensus-visible owner
+        // capacity. Changing the local Nexus cache cannot change that policy.
+        let mut runtime = state.canonical_runtime.block();
+        runtime.get_mut().owner_policy.max_validators = 1;
+        runtime.commit();
+        assert_eq!(state.nexus_snapshot().staking.max_validators.get(), 1);
         install_one_block_delay_npos(&state);
         let peers = roster();
         add_validator_record(&state, &peers[0]);
@@ -1768,7 +1772,9 @@ mod tests {
             );
         }
         {
-            let mut scratch = state.consensus_effects_probe_block(penalty_header(2));
+            let mut scratch = state
+                .consensus_effects_probe_block(penalty_header(2))
+                .unwrap();
             let mut transaction = scratch.consensus_effects_transaction();
             apply_slash_to_validator_without_observability(
                 &mut transaction,

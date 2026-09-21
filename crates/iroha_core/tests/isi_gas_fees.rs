@@ -312,6 +312,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     state_tx.current_dataspace_id = Some(route);
+    state_tx.world.current_dataspace_id = Some(route);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
         .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
@@ -592,13 +593,9 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     setup_state_block
         .commit_world_overlay_for_testing()
         .expect("commit sponsor world fixture");
-    let mut genesis_state_block = state.block(setup_block.header());
-    let setup_valid =
-        ValidBlock::validate_unchecked(setup_block.into(), &mut genesis_state_block).unpack(|_| {});
-    let setup_committed = setup_valid.commit_unchecked().unpack(|_| {});
-    let setup_block_signed = setup_committed.as_ref().clone();
-    let _ = genesis_state_block.apply_without_execution(&setup_committed, Vec::new());
-    genesis_state_block.commit().expect("commit setup block");
+    let setup_block_signed = state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish authenticated fee-sponsor fixture genesis");
     {
         let check_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut check_block = state.block(check_header);
@@ -664,8 +661,9 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     let committed = valid
         .commit_unchecked()
         .unpack(|event| validation_events.push(format!("{event:?}")));
-    let _ = state_block.apply_without_execution(&committed, Vec::new());
-    state_block.commit().expect("commit block");
+    state
+        .commit_executed_block_for_testing(state_block, committed)
+        .expect("publish fee-sponsor transaction with exact output ownership");
     let inspect_header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
     let mut inspect_block = state.block(inspect_header);
     let inspect_tx = inspect_block.transaction();
@@ -721,7 +719,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
 }
 #[test]
 fn genesis_overlay_pipeline_transactions_remain_fee_free() {
-    use iroha_core::block::{BlockBuilder, ValidBlock};
+    use iroha_core::block::ValidBlock;
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let (gas_id, _gas_kp) = gen_account_in("ivm");
     let dom_w: Domain =
@@ -784,19 +782,42 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     )
     .into();
     let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
-    let tx = TransactionBuilder::new(*state.network_id_ref(), alice_id.clone(), fee_payment)
+    let tx = TransactionBuilder::new_genesis(alice_id.clone(), fee_payment)
         .with_executable(Executable::from(core::iter::once(instruction)))
         .sign(alice_kp.private_key());
-    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let block = BlockBuilder::new(vec![accepted])
-        .chain(0, None)
-        .sign(alice_kp.private_key())
-        .unpack(|_| {});
+    let creation_time_ms = u64::try_from(tx.creation_time().as_millis())
+        .expect("fixture timestamp")
+        .checked_add(1)
+        .expect("block follows its genesis transaction");
+    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(BlockHeader::new(
+        nonzero!(1_u64),
+        None,
+        None,
+        creation_time_ms,
+        0,
+    ));
+    builder.push_transaction(tx);
+    builder.set_da_proof_policies(Some(iroha_core::da::proof_policy_bundle(
+        &state.nexus_snapshot().lane_config,
+    )));
+    let block = builder.build_with_signature(0, alice_kp.private_key());
+    let topology = iroha_core::sumeragi::network_topology::Topology::new([
+        iroha_model_base::peer::PeerId::new(alice_kp.public_key().clone()),
+    ]);
     let mut state_block = state.block(block.header());
-    let valid = ValidBlock::validate_unchecked(block.into(), &mut state_block).unpack(|_| {});
+    let valid = ValidBlock::validate_sumeragi_v2_fixture(
+        block.into(),
+        &topology,
+        &alice_id,
+        &iroha_primitives::time::TimeSource::new_system(),
+        &mut state_block,
+    )
+    .unpack(|_| {})
+    .expect("authenticate the exact genesis transaction authority");
     let committed = valid.commit_unchecked().unpack(|_| {});
-    let _ = state_block.apply_without_execution(&committed, Vec::new());
-    state_block.commit().expect("commit genesis block");
+    state
+        .commit_executed_block_for_testing(state_block, committed)
+        .expect("publish actual genesis output and verified finality");
     let inspect_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut inspect_block = state.block(inspect_header);
     let inspect_tx = inspect_block.transaction();
@@ -971,6 +992,7 @@ fn ivm_syscall_charges_fees() {
     let mut state_tx = block.transaction();
     let contract_route = iroha_model_base::topology::DataSpaceId::new(10);
     state_tx.current_dataspace_id = Some(contract_route);
+    state_tx.world.current_dataspace_id = Some(contract_route);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
         .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)

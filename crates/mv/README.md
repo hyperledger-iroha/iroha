@@ -28,7 +28,7 @@ Consumers must compare their canonical value projections before committing a
 semantic delta. The storage layer does not choose a serialization, hash, read
 witness, or complete State commitment; a delta alone does not bind untouched data.
 
-`Block::try_detach` consumes the actual Cell or Storage block after a caller
+`Block::try_detach` consumes the actual Cell or Untracked Storage block after a caller
 admission callback. The detached owner retains that callback's resource guard,
 the original ordinary/replacement mode, the published current/undo identity,
 and exact candidate touches. Capture moves the original current and undo
@@ -48,8 +48,9 @@ later publication cannot recreate an earlier identity.
 writer around the original current and undo owners. Acquisition does not clone
 values or allocate successor generations. It acquires both original writers
 without waiting and checks the exact captured identity under those writers;
-the next publication identity was already allocated during capture.
-A refusal returns the unchanged journal. A prepared publication can be aborted
+Storage retains its next publication identity from block opening; Cell allocates
+its next identity during capture.
+A refusal returns `(journal, error, cleanup)`, retaining the unchanged journal and original notification/resource cleanup. The caller keeps cleanup until enclosing participants unlock. A prepared publication can be aborted
 back to that journal without changing visible state. Publishing consumes the
 prepared pair and returns both capture and installation reservations to the
 aggregate caller; the caller owns their eventual transfer/release.
@@ -89,7 +90,7 @@ pools keep notifying normally. Notification also preserves the remaining
 original waiters when one callback unwinds, without suppressing its panic.
 
 Writer admission carries original move-only input alongside exact shell charges.
-The existing B+tree wrappers also expose `Prepaid<P>` for closed insertions:
+The existing B+tree wrappers expose `Prepaid<P>` for closed admitted edits:
 under the original writer lock, it plans node/buffer/shell layouts and an explicit
 nested payload bound, reserves once, then returns its completed detached owner.
 Unused admission returns before handoff; actual allocation charges remain until
@@ -102,6 +103,17 @@ Abort restores the original parent root without allocating; prepaid mode also
 restores its exact tracking buffers, including at full capacity. Nested apply
 keeps edits private; only the original writer can publish. A caught edit or
 cleanup panic forbids further use of that cursor. Prepaid mutation remains closed.
+Closed map removal admits the original search path, possible rebalance siblings,
+separator copies and tracking growth before mutation. Missing keys require no
+allocation or admission. Both map modes share this removal engine, including
+merges and root demotion; refusal and checkpoint abort preserve original nodes.
+`MapAdmissionError` covers acquisition and closed edit refusal.
+Retained insertion preparations keep the original cursor, checkpoint and input
+borrowed while their checked demands are combined and prepaid. Key and optional
+preimage copies occur only after that admission. Prepared, direct and joint
+insertions use the same planner and executor; joint edits retain their failure
+guard until both roots and all cleanup complete. Cancelling a preparation does
+not edit the tree or acquire new credit.
 Real MV budget regressions exercise this public boundary. Production Storage
 uses the same B+tree engine for current and block-undo data, retaining both
 original generations through snapshots and publication retries. Ordinary block
@@ -109,11 +121,108 @@ opening no longer deep-clones prior undo values before clearing them. Transactio
 retain both parent checkpoints and borrow their original preimages; abort restores
 both roots without inverse edits, allocation or cloning. Apply resolves both
 checkpoints only after checking failures and dropping transaction touch keys.
-These maps remain Untracked pending native lock/runtime, joint current/undo/touch
-admission, generation-refusal propagation, concrete model payload policies and
-configured aggregate integration.
+Both retained checkpoint successors transfer before either retired allocation is
+destroyed; cleanup stays under the original parent failure guard.
+`Storage<K, V, Prepaid<P>>::try_new_admitted` constructs this same storage family
+with one original finite pool. Construction and writer startup each reserve one
+checked sum for both maps and their original shared publication identities, then
+partition that reservation without reacquiring credits. The canonical
+`initial_allocation_demand` and `writer_start_allocation_demand` include the actual
+identity layouts. Writer opening owns the successor identity before execution;
+publication needs no new identity allocation. Captured predecessors retain the
+original identity charges until their last reference releases them, even after
+the storage is gone. Identity retirement releases credits after the visibility
+lock and physical writers have unlocked. `try_with_admitted_block` holds both original writers inside the pool's
+refund scope, clears the actual undo tree through admitted reset, and lends a
+private block to a synchronous callback. `try_capture_admitted_block` uses the
+same opening/edit path and returns the exact detached current/undo successors
+with the callback result attached; capture neither allocates nor copies values. Its `try_insert_admitted` and
+`try_remove_admitted` fund current and missing first-preimage edits together.
+Removal records an explicit None for an absent key and marks dirty only when
+a value was present. The owned query drops under the original pair failure guard.
+Success publishes the original pair; refusal or callback error leaves the
+published pair intact. Both successors and their shared identity become visible
+before old owners are destroyed or retries wake. A caught edit panic makes the
+aggregate unusable, including when the callback returns success.
+`try_with_admitted_replacement` restores the held undo preimages before lending
+the block to the same bounded callback. Each restoration admits incoming copies
+and the map edit together; refusal discards the whole private restored prefix.
+The new undo journal records preimages from the restored state, and even an empty
+replacement retains replacement mode and advances publication identity.
+`try_from_snapshot_admitted` copies exact current and undo images into a private
+destination under one owned pool. Source entries remain borrowed for retry;
+callers authenticate the snapshot schema and fence its acquisition by generation.
+Read-only views and exclusive history retain original allocation owners.
+`StorageReadOnly` exposes concrete double-ended iterators and range iterators
+whose traversal state stays inline. Views, blocks and transactions can scan a
+fully exhausted pool without copying payloads or allocating iterator storage.
+
+`AllocationBudget::with_deferred_refund_notifications` lends a thread-bound scope
+token. Prepaid detached journals require that same original pool token when they
+`try_prepare_admitted`. Multiple pairs can prepare inside one scope. Prepared
+physical owners cannot escape it or move to another thread; `abort` returns the
+same journal without writer borrows and `publish` installs its original nodes.
+Foreign/busy/poisoned ownership and stale current/undo generations preserve exact
+retry custody. Capture and explicit abort release both physical writers before
+either native release signal, including callbacks that unwind. Opening an ordinary
+or admitted block and reattaching a prepared pair share one original writer owner.
+It retains both locks through reset, replacement copies, execution and snapshot
+restoration, and releases both before abandonment callbacks. It observes the
+actual locks' poison states after destruction and freezes both verdicts before
+notifying, so a later payload or wake panic cannot falsely poison a released
+healthy writer. State still supplies complete resource policy, aggregate
+visibility and QC/Kura authority; all aggregate physical preparation and cleanup
+ordering remain required.
+
+`Block::try_transaction_admitted` lends both original checkpoints to a private
+transaction. Both admitted insertion and removal join the canonical current/undo
+demand with the exact ordered touch-array growth and policy-owned key copy before one
+reservation. Repeated touches preserve the first owned key. `touched_entries`
+borrows a sorted slice without iterator allocation; no-op insertions and absent
+removals remain explicit. Dropping the child restores both parent roots without
+allocation.
+Applying first destroys its touch keys under both rollback guards, then keeps
+both private successors before retiring displaced checkpoint storage. Cleanup
+panic also makes the original block unusable.
+
+World storage remains Untracked pending native lock/runtime and release
+control storage, mutable access, concrete model payload policies
+and configured aggregate integration. Replacement and snapshot restoration admit
+each edit; they do not bound aggregate restoration work or complete State admission.
+
+Release observations use `concread::release`, the physical storage owner's single
+implementation. Native active-reader contention has its own source; releasing a
+writer cannot satisfy that wait. Published tree retirement retains the original
+reader notification after physical unlock, so the enclosing publisher can drop it
+after its visibility fences. Detached map preparation retains native active-reader
+mutexes and the exact identity guard; Cell preparation retains its EBR owners and
+identity. Their publish methods acquire no further lock and return cleanup with
+caller reservations. Keep those returned owners until enclosing fences release.
+Prepaid published cleanup cannot leave the original pool scope. Preparation abort
+and whole-State cleanup still need aggregate ordering; these component APIs do
+not establish that boundary.
 
 TODO: compose these component publications with exact aggregate State predecessor
 ownership, membership, hash history, archive/resource reservations and finality.
 The production State publisher and its resource policy remain unfinished; no
 State execution, native-output or publication guard is bypassed by these APIs.
+
+Cell publication also retains both original writers through pair identity rotation.
+Epoch reclamation and release callbacks run after physical unlock, including
+current-only replacement that retains undo. A cleanup panic cannot poison the
+release hint for a physical lock that was already released successfully.
+
+Prepared publication abort returns `(journal, cleanup)`. Keep `cleanup` until all
+participants of the enclosing publication attempt have released their physical
+locks, then retry the same journal. Prepaid cleanup remains in its original
+allocation scope. This API does not make acquisition failures across an entire
+State aggregate callback-safe by itself.
+
+Failed preparation uses the same MV-wide `PublicationCleanup` owner as explicit
+abort. The preliminary identity observation, partially acquired writers/readers,
+final identity refusal and installation reservation stay with that owner. Runtime,
+TriggerSet and World return their aggregate cleanup, including failed World field
+shells. A retained carrier releases its State/Queue/Kura fences before retiring
+World/runtime refusal cleanup. This covers returned errors; panic propagation
+during acquisition, earlier Kura/State/Queue probes and successor acquisitions
+still require enclosing ownership.

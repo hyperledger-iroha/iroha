@@ -20367,9 +20367,9 @@ seiyaku OpaqueInstructionSubmission {
             [authority_account, merchant_account, replacement_account],
             [],
         );
-        let state = State::new_for_testing(world, kura, query);
+        let mut state = State::new_for_testing(world, kura, query);
         let (paynet, catalog) = retail_dataspace_catalog();
-        state.nexus.write().dataspace_catalog = catalog;
+        state.set_dataspace_catalog_for_testing(catalog);
         let alias_literal = "merchant@paynet";
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
@@ -20446,9 +20446,9 @@ seiyaku OpaqueInstructionSubmission {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with([domain], [authority_account], []);
-        let state = State::new_for_testing(world, kura, query);
+        let mut state = State::new_for_testing(world, kura, query);
         let (_paynet, catalog) = retail_dataspace_catalog();
-        state.nexus.write().dataspace_catalog = catalog;
+        state.set_dataspace_catalog_for_testing(catalog);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -20480,9 +20480,9 @@ seiyaku OpaqueInstructionSubmission {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with([domain], [authority_account, merchant_account], []);
-        let state = State::new_for_testing(world, kura, query);
+        let mut state = State::new_for_testing(world, kura, query);
         let (paynet, catalog) = retail_dataspace_catalog();
-        state.nexus.write().dataspace_catalog = catalog;
+        state.set_dataspace_catalog_for_testing(catalog);
         let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), paynet);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
@@ -20525,9 +20525,9 @@ seiyaku OpaqueInstructionSubmission {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with([domain], [authority_account, merchant_account], []);
-        let state = State::new_for_testing(world, kura, query);
+        let mut state = State::new_for_testing(world, kura, query);
         let (paynet, catalog) = retail_dataspace_catalog();
-        state.nexus.write().dataspace_catalog = catalog;
+        state.set_dataspace_catalog_for_testing(catalog);
         let alias_literal = "merchant@paynet";
         let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), paynet);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
@@ -20598,9 +20598,9 @@ seiyaku OpaqueInstructionSubmission {
             [],
         );
         crate::sns::seed_default_namespace_policies(&mut world);
-        let state = State::new_for_testing(world, kura, query);
+        let mut state = State::new_for_testing(world, kura, query);
         let (paynet, catalog) = retail_dataspace_catalog();
-        state.nexus.write().dataspace_catalog = catalog;
+        state.set_dataspace_catalog_for_testing(catalog);
         let alias_literal = "merchant@bank.paynet";
         let alias = AccountAlias::new(
             "merchant".parse().expect("alias label"),
@@ -20730,9 +20730,9 @@ seiyaku OpaqueInstructionSubmission {
             &mut world,
             &payment_asset_definition_id.to_string(),
         );
-        let state = State::new_for_testing(world, kura, query);
+        let mut state = State::new_for_testing(world, kura, query);
         let (paynet, catalog) = retail_dataspace_catalog();
-        state.nexus.write().dataspace_catalog = catalog;
+        state.set_dataspace_catalog_for_testing(catalog);
         let alias_literal = "merchant@bank.paynet";
         let alias = AccountAlias::new(
             "merchant".parse().expect("alias label"),
@@ -20837,9 +20837,9 @@ seiyaku OpaqueInstructionSubmission {
             &mut world,
             &payment_asset_definition_id.to_string(),
         );
-        let state = State::new_for_testing(world, kura, query);
+        let mut state = State::new_for_testing(world, kura, query);
         let (paynet, catalog) = retail_dataspace_catalog();
-        state.nexus.write().dataspace_catalog = catalog;
+        state.set_dataspace_catalog_for_testing(catalog);
         let alias_literal = "merchant@bank.paynet";
         let alias = AccountAlias::new(
             "merchant".parse().expect("alias label"),
@@ -23311,9 +23311,9 @@ seiyaku Callee {
                 None,
             )
         };
-        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let mut state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
         let (paynet, catalog) = retail_dataspace_catalog();
-        state.nexus.write().dataspace_catalog = catalog;
+        state.set_dataspace_catalog_for_testing(catalog);
         AliasContractCaseState {
             state,
             authority,

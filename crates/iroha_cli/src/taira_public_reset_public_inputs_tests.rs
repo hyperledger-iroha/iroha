@@ -248,6 +248,7 @@ fn execute_fixture_genesis(
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         fastpq_artifacts: defaults::kura::FASTPQ_ARTIFACT_POLICY,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,

@@ -145,7 +145,7 @@ fn snapshot_read_buffer_gc_refusal_preserves_pointer_and_both_retained_generatio
     let budget = AllocationBudget::new(64);
     let occupied = budget.try_reserve_bytes(64).unwrap();
     let publish = || {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let _guard = SNAPSHOT_PUBLICATION_LOCK.lock();
             publish_snapshot_current_pointer(
                 &store,
@@ -416,7 +416,7 @@ fn snapshot_read_buffer_operation_unwind_notifies_after_unlock() {
     );
     let unwind =
         catch_unwind(AssertUnwindSafe(|| {
-            budget.with_deferred_refund_notifications(|| {
+            budget.with_deferred_refund_notifications(|_| {
         let _guard = SNAPSHOT_PUBLICATION_LOCK.lock();
         let (buffer, _) = read_bound_snapshot_payload(&binding, &budget).unwrap();
         assert_eq!(buffer.as_slice(), b"unwind");

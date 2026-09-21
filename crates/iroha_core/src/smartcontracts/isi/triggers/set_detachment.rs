@@ -20,7 +20,7 @@ use mv::storage::Detached as DetachedStorage;
 
 #[path = "set_publication.rs"]
 mod publication;
-pub(crate) use publication::{PreparedSet, SetPublicationError};
+pub(crate) use publication::{AbortedSet, PreparedSet, PublishedSet, SetPublicationError};
 
 /// Capture refusal leaves every original trigger writer unpublished and released.
 #[derive(Debug, thiserror::Error)]

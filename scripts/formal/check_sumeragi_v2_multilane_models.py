@@ -893,6 +893,20 @@ NATIVE_PREPUBLICATION_BINDINGS = (
         "fn",
         "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
         (
+            "canonical_chain_lock.lock()",
+            "lane_geometry_lock.lock()",
+            "sidecar_lock.lock()",
+            "self.authenticate_native_amx_participant_application_prepublication_under_publication_guards(",
+            "expected_manifest,",
+            "expected_receipt,",
+            "require_post_apply_metadata,",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "authenticate_native_amx_participant_application_prepublication_under_publication_guards",
+        (
             "require_active_lane_artifact",
             "read_native_amx_participant_application_manifest_from_paths_locked",
             "read_native_amx_participant_application_receipt_from_paths_locked",
@@ -1065,6 +1079,7 @@ NATIVE_PREPUBLICATION_BINDINGS = (
             "prepublish_native_amx_participant_application_evidence",
             "State::native_amx_participant_frontier_markers_and_merge_entry",
             "token.authenticates_state_frontiers",
+            "reauthenticate_native_amx_prepublication",
             "apply_without_execution_with_verified_v2_finality",
             "let staged_merge_queue_reservation_hashes = certified_merge_queue_reservation_hashes(",
             "state_block.staged_merge_entry(),",
@@ -1108,6 +1123,7 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
             ".prepublish_native_amx_participant_application_evidence(",
             "State::native_amx_participant_frontier_markers_and_merge_entry(",
             "token.authenticates_state_frontiers(",
+            ".reauthenticate_native_amx_prepublication(",
             ".apply_without_execution_with_verified_v2_finality(&committed_block)",
             ".pending_autoscale_retirement_binding()",
             "Box::new(checked_carrier_applications)",
@@ -2020,7 +2036,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "PublicationMutex",
         (
             "inner: parking_lot::Mutex<T>,",
-            "released: mv::ReleaseNotification,",
+            "released: concread::release::ReleaseNotification,",
         ),
     ),
     (
@@ -2028,7 +2044,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "struct",
         "PublicationGuard",
         (
-            "inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,",
+            "inner: concread::release::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,",
         ),
     ),
     (

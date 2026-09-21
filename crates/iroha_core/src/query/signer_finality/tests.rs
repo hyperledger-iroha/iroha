@@ -214,9 +214,13 @@ fn identical_block_and_certificate_cannot_authorize_a_foreign_state_network() {
     );
     stage_native_block(&mut foreign_state, &finalized);
     persist_finality(&foreign_state, &finalized);
-    assert_eq!(
-        foreign_state.view().block_hashes(),
-        state.view().block_hashes()
+    assert!(
+        foreign_state
+            .view()
+            .block_hashes()
+            .iter()
+            .eq(state.view().block_hashes().iter()),
+        "both States retain the same ordered block history"
     );
     assert_eq!(
         verify_signer_finality_v1(&foreign_state.view(), 1, hash),

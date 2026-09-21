@@ -1585,3 +1585,95 @@ v2_apply_test!(
         fixture.assert_no_apply_mutation();
     }
 );
+
+v2_apply_test!(
+    hash_admission_stays_local_and_preserves_exact_release_and_service_waker,
+    {
+        use super::super::v2_body_store::LocalValidationRefusal;
+        use crate::state::BlockHashAdmissionError;
+        use std::{
+            future::Future,
+            pin::Pin,
+            task::{Context, Poll},
+        };
+        let fixture = ApplyFixture::new();
+        let (wake_sender, wake_receiver) = std::sync::mpsc::sync_channel(1);
+        fixture.service.queue.set_sumeragi_wake(wake_sender);
+        for case in 0..6 {
+            let notification = concread::release::ReleaseNotification::default();
+            let pool = mv::allocation::AllocationBudget::new(1);
+            let occupied = pool.try_reserve_bytes(1).unwrap();
+            let refusal = match case {
+                0 => BlockHashAdmissionError::Busy(notification.observe()),
+                1 => BlockHashAdmissionError::Changed(notification.observe()),
+                2 => BlockHashAdmissionError::Capacity(pool.try_reserve_bytes(1).err().unwrap()),
+                3 => BlockHashAdmissionError::ReadOnly,
+                4 => BlockHashAdmissionError::Poisoned,
+                _ => BlockHashAdmissionError::Capacity(
+                    mv::allocation::AllocationRefusal::ExceedsLimit {
+                        requested_bytes: 2,
+                        limit_bytes: 1,
+                    },
+                ),
+            };
+            let expected = refusal.release_wait().cloned();
+            let error = BlockValidationError::BlockHashAdmission(refusal);
+            let classified =
+                fixture
+                    .service
+                    .classify_validation_failure(None, &fixture.body, &error);
+            assert!(classified.rejection_identity().is_none());
+            match (classified.local_refusal(), expected) {
+                (Some(LocalValidationRefusal::PhysicalBusy(busy)), Some(wait)) => {
+                    assert_eq!(busy.wait, wait);
+                    assert!(!classified.requires_restart_recovery());
+                    let mut released = busy.wait.clone().wait_for_release();
+                    assert_eq!(
+                        Pin::new(&mut released).poll(&mut Context::from_waker(busy.waker())),
+                        Poll::Pending
+                    );
+                    assert!(matches!(
+                        wake_receiver.try_recv(),
+                        Err(std::sync::mpsc::TryRecvError::Empty)
+                    ));
+                    // The registered dependency must notify this service's actual
+                    // runner. Separately constructed Wakers need not share identity.
+                    if case == 2 {
+                        drop(notification.guard(()));
+                        assert_eq!(
+                            Pin::new(&mut released).poll(&mut Context::from_waker(busy.waker())),
+                            Poll::Pending
+                        );
+                        assert!(matches!(
+                            wake_receiver.try_recv(),
+                            Err(std::sync::mpsc::TryRecvError::Empty)
+                        ));
+                        drop(occupied);
+                    } else {
+                        drop(occupied);
+                        assert_eq!(
+                            Pin::new(&mut released).poll(&mut Context::from_waker(busy.waker())),
+                            Poll::Pending
+                        );
+                        assert!(matches!(
+                            wake_receiver.try_recv(),
+                            Err(std::sync::mpsc::TryRecvError::Empty)
+                        ));
+                        drop(notification.guard(()));
+                    }
+                    wake_receiver
+                        .try_recv()
+                        .expect("original resource release wakes the installed runner");
+                    assert_eq!(
+                        Pin::new(&mut released).poll(&mut Context::from_waker(busy.waker())),
+                        Poll::Ready(())
+                    );
+                }
+                (Some(LocalValidationRefusal::RecoveryRequired(_)), None) => {
+                    assert!(classified.requires_restart_recovery())
+                }
+                _ => panic!("local history refusal changed ownership or retryability"),
+            }
+        }
+    }
+);

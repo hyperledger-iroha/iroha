@@ -7,9 +7,9 @@
 use crate::{
     Key, Value,
     cell::{Block as CellBlock, Cell, CellAllocationCharges},
-    storage::{Block as StorageBlock, Storage, StorageReadOnly},
+    storage::{Block as StorageBlock, Storage, StorageMode, StorageReadOnly},
 };
-use concread::bptree::{BptreeMap, BptreeMapReadTxn};
+use concread::bptree::{BptreeMap, BptreeMapReadTxn, MapMode, NodeCloning};
 use core::{fmt, marker::PhantomData};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::{collections::BTreeMap, ops::Deref};
@@ -346,6 +346,7 @@ where
         let revert = revert.ok_or_else(|| json::MapVisitor::missing_field("revert"))?;
         let blocks = blocks.ok_or_else(|| json::MapVisitor::missing_field("blocks"))?;
         Ok(Storage {
+            allocation: None,
             publication: crate::publication::Publication::new(),
             revert_released: crate::ReleaseNotification::default(),
             blocks_released: crate::ReleaseNotification::default(),
@@ -475,7 +476,7 @@ where
         Ok(Cell::from_values_charged(blocks, revert, charges))
     }
 }
-impl<K, V> JsonSerialize for Storage<K, V>
+impl<K, V, M: StorageMode<K, V>> JsonSerialize for Storage<K, V, M>
 where
     K: JsonKeyCodec + Key,
     V: JsonSerialize + Value,
@@ -492,7 +493,7 @@ where
         out.push('}');
     }
 }
-impl<K, V> JsonSerialize for StorageBlock<'_, K, V>
+impl<K, V, M: StorageMode<K, V>> JsonSerialize for StorageBlock<'_, K, V, M>
 where
     K: JsonKeyCodec + Key,
     V: JsonSerialize + Value,
@@ -526,8 +527,8 @@ where
 /// previously touched key. A newly touched key records its current value as undo,
 /// even when removing an absent key. Both maps are streamed in storage-key order;
 /// no existing key, value, or full store is cloned or decoded.
-pub fn json_serialize_storage_block_with_changes<K, V>(
-    block: &StorageBlock<'_, K, V>,
+pub fn json_serialize_storage_block_with_changes<K, V, M: StorageMode<K, V>>(
+    block: &StorageBlock<'_, K, V, M>,
     changes: &BTreeMap<K, Option<V>>,
     out: &mut String,
 ) where
@@ -676,8 +677,10 @@ where
     }
     out.push('}');
 }
-fn write_blocks<K, V>(blocks: &BptreeMapReadTxn<'_, K, V>, out: &mut String)
-where
+fn write_blocks<K, V, M: MapMode + NodeCloning<K, V>>(
+    blocks: &BptreeMapReadTxn<'_, K, V, M>,
+    out: &mut String,
+) where
     K: JsonKeyCodec + Clone + Ord + fmt::Debug + Send + Sync + 'static,
     V: JsonSerialize + Clone + Send + Sync + 'static,
 {

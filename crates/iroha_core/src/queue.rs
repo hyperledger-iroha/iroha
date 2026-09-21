@@ -3993,8 +3993,9 @@ pub struct Queue {
     lane_reservation_transition_lock: PublicationMutex,
     /// Exact pending lane-retirement conditions awaiting queue ownership release.
     /// Same-scope observers share a source until the protected condition clears.
-    lane_retirement_releases:
-        parking_lot::Mutex<BTreeMap<(LaneId, DataSpaceId, Hash), mv::ReleaseNotification>>,
+    lane_retirement_releases: parking_lot::Mutex<
+        BTreeMap<(LaneId, DataSpaceId, Hash), concread::release::ReleaseNotification>,
+    >,
     /// Deterministic test handoff between a durability precheck and its protected recheck.
     #[cfg(test)]
     durability_observer_lock_handoff:
@@ -4131,7 +4132,7 @@ impl<'queue> QueueLaneRetirementObserver<'queue> {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
-    ) -> Result<Option<mv::ReleaseWait>, QueueLaneRetirementUnavailable> {
+    ) -> Result<Option<concread::release::ReleaseWait>, QueueLaneRetirementUnavailable> {
         let _mutation = self.queue.push_remove_lock.lock();
         let reservations = self.queue.lane_reservations.lock();
         self.queue.lane_pending_work_release_locked(
@@ -4198,7 +4199,7 @@ pub(crate) struct QueueRetirementBusy {
     /// Physical mutex which must release before the original owner retries.
     pub(crate) field: &'static str,
     /// Pre-probe observation of that exact mutex; a wake grants no drain authority.
-    pub(crate) wait: mv::ReleaseWait,
+    pub(crate) wait: concread::release::ReleaseWait,
 }
 
 /// Stable Queue retirement observation retaining every original mutation owner.
@@ -4217,6 +4218,25 @@ pub(crate) struct QueueLaneRetirementCut<'queue> {
 }
 
 impl QueueLaneRetirementCut<'_> {
+    /// Release reservation, mutation and transition locks before any callback.
+    /// An enclosing State publisher retains the returned original notifications.
+    pub(crate) fn release_deferred(self) -> [concread::release::DeferredRelease; 3] {
+        let Self {
+            reservations,
+            _mutation,
+            observer,
+        } = self;
+        let QueueLaneRetirementObserver {
+            _reservation_transition_guard,
+            ..
+        } = observer;
+        [
+            reservations.release_deferred(),
+            _mutation.release_deferred(),
+            _reservation_transition_guard.release_deferred(),
+        ]
+    }
+
     /// Authenticate the original service Queue while this exact cut remains held.
     pub(crate) fn belongs_to(&self, queue: &Queue) -> bool {
         core::ptr::eq(self.observer.queue, queue)
@@ -4234,7 +4254,7 @@ impl QueueLaneRetirementCut<'_> {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
-    ) -> Result<Option<mv::ReleaseWait>, QueueLaneRetirementUnavailable> {
+    ) -> Result<Option<concread::release::ReleaseWait>, QueueLaneRetirementUnavailable> {
         self.observer.queue.lane_pending_work_release_locked(
             &self.reservations,
             lane_id,
@@ -10380,7 +10400,7 @@ impl Queue {
     /// State/Queue service owner; empty contents do not establish that binding.
     pub(crate) fn try_lock_lane_retirement_observer(
         &self,
-    ) -> Result<QueueLaneRetirementObserver<'_>, mv::ReleaseWait> {
+    ) -> Result<QueueLaneRetirementObserver<'_>, concread::release::ReleaseWait> {
         let guard = self.lane_reservation_transition_lock.try_lock_or_wait()?;
         Ok(QueueLaneRetirementObserver {
             queue: self,
@@ -10492,7 +10512,7 @@ impl Queue {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
-    ) -> Result<Option<mv::ReleaseWait>, QueueLaneRetirementUnavailable> {
+    ) -> Result<Option<concread::release::ReleaseWait>, QueueLaneRetirementUnavailable> {
         if hash_is_zero(lane_incarnation) {
             return Err(QueueLaneRetirementUnavailable::InvalidIncarnation);
         }
@@ -23259,6 +23279,8 @@ pub mod tests {
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: kura_defaults::FSYNC_INTERVAL,
             lane_history_retention: kura_defaults::LANE_HISTORY_RETENTION,
+            block_hash_history_bytes:
+                iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: kura_defaults::REPLICA_ADVERT_POLICY,
         };

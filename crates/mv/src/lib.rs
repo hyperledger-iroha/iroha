@@ -1,18 +1,23 @@
-//! Minimal MV (multi-version) storage traits used in tests and lightweight
-//! components. This crate defines the `Key` and `Value` marker traits and
-//! exposes simple cell and storage modules for multi-version concurrency.
+//! Multi-version storage and cells used by Iroha's production State owners.
 //!
-//! The abstractions here are intentionally small to avoid pulling heavy dependencies. They are
-//! suitable for in-memory testing or thin adapters in higher-level crates.
+//! Current values, block undo preimages and retained readers share the original
+//! Concread generations. Explicit prepaid storage admits node, writer and copied
+//! payload and publication identity custody through a finite allocation pool. This
+//! is not complete World admission: native mutex/release storage and the remaining mutation
+//! families require their own allocation owners. Borrowed ordered scans retain
+//! traversal state inline without allocating.
 use core::fmt::Debug;
 /// Finite prepaid custody for explicitly enumerated allocation layouts.
 pub mod allocation;
 mod publication;
+use concread::release::{ReleaseGuard, ReleaseNotification, ReleaseWait};
 pub use publication::{
-    BlockPublicationIdentity, PublicationPreparationError, PublicationPreparationResult,
+    BlockPublicationIdentity, PublicationCleanup, PublicationPreparationError,
+    PublicationPreparationResult,
 };
-mod release;
-pub use release::{ReleaseFuture, ReleaseGuard, ReleaseNotification, ReleaseWait};
+#[cfg(test)]
+#[path = "release_tests.rs"]
+mod release_tests;
 
 /// How a block acquired its exact published predecessor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

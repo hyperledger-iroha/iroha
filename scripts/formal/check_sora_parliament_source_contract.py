@@ -86,6 +86,66 @@ def require_all(relative: str, text: str, needles: tuple[str, ...]) -> None:
         raise RuntimeError(f"{relative}: missing modeled source binding(s): {rendered}")
 
 
+def require_storage_borrowed_iterators(source: str) -> None:
+    """Bind Parliament's ordered reverse reads to native, owner-borrowed GATs."""
+    path = "crates/mv/src/storage.rs"
+    # These declarations and read methods contain no string literals. Comments
+    # cannot substitute for a live bound, concrete family, or original delegate.
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.S)
+    code = re.sub(r"\s+", "", code)
+
+    def body(text: str, declaration: str) -> str:
+        if text.count(declaration) != 1:
+            raise RuntimeError(f"{path}: borrowed iterator declaration changed: {declaration}")
+        start = text.index("{", text.index(declaration) + len(declaration))
+        depth = 1
+        for end in range(start + 1, len(text)):
+            depth += (text[end] == "{") - (text[end] == "}")
+            if depth == 0:
+                return text[start + 1:end]
+        raise RuntimeError(f"{path}: unclosed borrowed iterator declaration")
+
+    trait = body(code, "pubtraitStorageReadOnly<K:Key,V:Value>")
+    for binding in (
+        "typeIter<'a>:DoubleEndedIterator<Item=(&'aK,&'aV)>+ExactSizeIteratorwhereSelf:'a;",
+        "typeRangeIter<'a>:DoubleEndedIterator<Item=(&'aK,&'aV)>whereSelf:'a;",
+        "fniter(&self)->Self::Iter<'_>;",
+        "fnrange<Q>(&self,bounds:implRangeBounds<Q>)->Self::RangeIter<'_>whereK:Borrow<Q>,Q:Ord+?Sized;",
+    ):
+        if trait.count(binding) != 1:
+            raise RuntimeError(f"{path}: borrowed iterator trait contract changed: {binding}")
+
+    implementations = {
+        "View": (
+            "match&self.blocks{ViewInner::Txn(txn)=>txn.iter(),ViewInner::Snapshot(snapshot)=>snapshot.iter(),}",
+            "match&self.blocks{ViewInner::Txn(txn)=>txn.range(bounds),ViewInner::Snapshot(snapshot)=>snapshot.range(bounds),}",
+        ),
+        "Block": (
+            "self.assert_operable();self.blocks.iter()",
+            "self.assert_operable();self.blocks.range(bounds)",
+        ),
+        "Transaction": ("self.current().iter()", "self.current().range(bounds)"),
+    }
+    for owner, expected in implementations.items():
+        implementation = body(
+            code,
+            f"impl<K:Key,V:Value,M:StorageMode<K,V>>StorageReadOnly<K,V>for{owner}<'_,K,V,M>",
+        )
+        for family in ("Iter", "RangeIter"):
+            binding = f"type{family}<'a>={family}<'a,K,V,M::Charge>whereSelf:'a;"
+            if implementation.count(binding) != 1:
+                raise RuntimeError(f"{path}: {owner} borrowed iterator family changed: {family}")
+        for declaration, original in zip(
+            (
+                "fniter(&self)->Self::Iter<'_>",
+                "fnrange<Q>(&self,bounds:implRangeBounds<Q>)->Self::RangeIter<'_>whereK:Borrow<Q>,Q:Ord+?Sized,",
+            ),
+            expected,
+        ):
+            if body(implementation, declaration) != original:
+                raise RuntimeError(f"{path}: {owner} borrowed iterator must use its original native owner")
+
+
 def require_identifiers_absent(
     relative: str, text: str, identifiers: tuple[str, ...]
 ) -> None:
@@ -418,7 +478,7 @@ def require_block_start_enactment_phases(state: str) -> None:
     state_path = "crates/iroha_core/src/state.rs"
     constructor = section(
         state,
-        "    fn block_with_owned_start_stages<'state, E, T, R>(",
+        "    fn block_with_owned_start_stages<'state, E: std::fmt::Debug, T, R>(",
         "    /// Release expired private locks inside their original block transaction.",
         state_path,
     )
@@ -441,12 +501,14 @@ def require_block_start_enactment_phases(state: str) -> None:
         raise RuntimeError(f"{state_path}: start phases must use the original block and height in order")
     compact = re.sub(r"\s+", "", constructor)
     ordered = (
-        "letcontinuation=before_start(&mutsb)?;",
+        "self.acquire_canonical_runtime_block(false)?;",
+        "letmutsb=Box::new(StateBlock{",
+        "letcontinuation=before_start(&mutsb).map_err(StateBlockStartError::Stage)?;",
         "Self::apply_block_start_private_settlement_expiry(&mutsb,now_h);",
         "Self::apply_block_start_parliament_enactments(&mutsb,now_h);",
         "sb.start_of_block_effects_applied=true;",
         "sb.capture_execution_output_capacity();",
-        "letresult=after_start(&mutsb,continuation)?;",
+        "letresult=after_start(&mutsb,continuation).map_err(StateBlockStartError::Stage)?;",
     )
     positions = [compact.find(token) for token in ordered]
     if any(compact.count(token) != 1 for token in ordered) or positions != sorted(positions):
@@ -566,24 +628,30 @@ def require_parliament_commit_publication(state: str) -> None:
         raise RuntimeError(f"{path}: geometry refusal must return before State publication")
     ordered = (
         "letcommitted_parliament_attempt_counts=world.parliament_attempt_counts.is_dirty()",
+        "lethash_retirement;",
+        "let_state_commit_lock=state_ref.state_commit_lock.lock();",
         "letworld=world_commit::PreparedWorldCommit::prepare(",
         "ifletErr(err)=geometry_result{",
-        "block_hashes.prepare_commit();{",
+        "letmutlifecycle_post_publication=None;{",
         "transactions.publish();",
         "canonical_runtime.commit();",
         "world.commit();",
-        "block_hashes.commit();",
+        "hash_retirement=block_hashes.publish();",
         "drop(autoscale_lifecycle_guard);",
+        "drop(_state_commit_lock);",
+        "drop(hash_retirement);",
     )
     positions = [compact.find(token) for token in ordered]
     if any(compact.count(token) != 1 for token in ordered) or positions != sorted(positions):
         raise RuntimeError(f"{path}: Parliament telemetry requires ordered prepared State publication")
-    publication = section(compact, "block_hashes.prepare_commit();{",
+    publication = section(compact, "letmutlifecycle_post_publication=None;{",
                           "ifletSome(post)=lifecycle_post_publication{", path)
     writer_order = (
         "let_state_write_lock=state_write_lock.lock();",
+        "letblock_hashes=block_hashes.detach().try_prepare_publication(",
+        ".map_err(|(_,_)|TransactionsBlockError::SnapshotObservationChanged)?;",
         "let_view_generation=state_ref.begin_state_view_write();",
-        "transactions.publish();", "world.commit();", "block_hashes.commit();",
+        "transactions.publish();", "world.commit();", "hash_retirement=block_hashes.publish();",
     )
     writer_positions = [publication.find(token) for token in writer_order]
     if any(publication.count(token) != 1 for token in writer_order) or writer_positions != sorted(writer_positions):
@@ -623,7 +691,7 @@ def require_parliament_commit_publication(state: str) -> None:
     expected = re.sub(r"\s+", "", expected)
     if start < 0 or telemetry[start:] != expected:
         raise RuntimeError(f"{path}: Parliament telemetry requires exact replay-guarded transition and gauge scopes")
-    if compact.find(expected) <= positions[-1]:
+    if compact.find(expected) <= positions[ordered.index("drop(autoscale_lifecycle_guard);")]:
         raise RuntimeError(f"{path}: Parliament telemetry must follow successful canonical publication")
     if compact.count(".record_committed_parliament_transition(") != 1:
         raise RuntimeError(f"{path}: Parliament commit must have one exact transition-metric publisher")
@@ -2737,14 +2805,11 @@ def main() -> int:
 
     mv_storage_path = "crates/mv/src/storage.rs"
     mv_storage = read(mv_storage_path)
+    require_storage_borrowed_iterators(mv_storage)
     require_all(
         mv_storage_path,
         mv_storage,
         (
-            "pub struct RangeIter<'slf, K: Key, V: Value>",
-            "Box<dyn DoubleEndedIterator<Item = (&'slf K, &'slf V)> + 'slf>",
-            "impl<'slf, K: Key, V: Value> DoubleEndedIterator for RangeIter<'slf, K, V>",
-            "self.iter.next_back()",
             "assert_eq!(view.range(..=3).next_back(), Some((&3, &1)))",
             "assert_eq!(transaction.range(..=5).next_back(), Some((&5, &3)))",
         ),

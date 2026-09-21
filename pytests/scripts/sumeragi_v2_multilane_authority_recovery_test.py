@@ -856,7 +856,7 @@ def test_history_body_read_requires_both_inner_guard_drops(tmp_path):
     ("BlockValidationError::from_certified_merge_stage_error",
      "| MergeLedgerCommitError::LocalDrainObservation(_)", "| MergeLedgerCommitError::Unrelated(_)"),
     ("V2ApplyService::classify_candidate_validation_error",
-     "return V2ApplyError::LocalValidation(", "return V2ApplyError::Validation("),
+     "if let BlockValidationError::LocalStorageRecoveryRequired { reason } = error {\n            return V2ApplyError::LocalValidation(", "if let BlockValidationError::LocalStorageRecoveryRequired { reason } = error {\n            return V2ApplyError::Validation("),
     ("V2ApplyService::classify_lane_lifecycle_validation_error",
      "V2ApplyError::LocalValidation(", "V2ApplyError::Validation("),
     ("rejection_identity", "| Self::CommittedStatePublication(_) => None,",
@@ -896,7 +896,8 @@ def test_typed_drain_and_retained_lifecycle_preserve_semantics(tmp_path, symbol,
     assert errors and all("authority/recovery item" in error for error in errors)
 
 
-@pytest.mark.parametrize("mutation", ["post_inside_generation", "lifecycle_fence_released", "generation_released"])
+@pytest.mark.parametrize("mutation", ["post_inside_generation", "lifecycle_fence_released", "generation_released",
+    "hash_prepare_refusal", "hash_cleanup_before_commit_unlock", "hash_cleanup_declared_after_commit_lock"])
 def test_lifecycle_post_work_requires_original_generation_and_fences(tmp_path, mutation):
     binding = next(b for b in BINDINGS if b[3] == "StateBlock::commit_inner")
     item = source_item(binding)
@@ -905,8 +906,17 @@ def test_lifecycle_post_work_requires_original_generation_and_fences(tmp_path, m
         }"""
     assert item.count(post) == 1
     if mutation == "post_inside_generation":
-        changed = item.replace(post, "", 1).replace("            block_hashes.commit();",
-            "            block_hashes.commit();\n" + post, 1)
+        changed = item.replace(post, "", 1).replace("            hash_retirement = block_hashes.publish();",
+            "            hash_retirement = block_hashes.publish();\n" + post, 1)
+    elif mutation == "hash_prepare_refusal":
+        changed = item.replace(".map_err(|(_, _)| TransactionsBlockError::SnapshotObservationChanged)?;", ".unwrap();", 1)
+    elif mutation == "hash_cleanup_before_commit_unlock":
+        changed = item.replace("        drop(hash_retirement);", "", 1).replace(
+            "        drop(_state_commit_lock);", "        drop(hash_retirement);\n        drop(_state_commit_lock);", 1)
+    elif mutation == "hash_cleanup_declared_after_commit_lock":
+        changed = item.replace("        let hash_retirement;", "", 1).replace(
+            "let _state_commit_lock = state_ref.state_commit_lock.lock();",
+            "let _state_commit_lock = state_ref.state_commit_lock.lock();\n        let hash_retirement;", 1)
     elif mutation == "lifecycle_fence_released":
         changed = item.replace("        drop(autoscale_lifecycle_guard);", "", 1).replace(
             post, "        drop(autoscale_lifecycle_guard);\n" + post, 1)

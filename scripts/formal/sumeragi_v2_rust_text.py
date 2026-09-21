@@ -225,4 +225,3 @@ def _mask_rust_comments_uncached(source: str) -> str:
     if state in {"string", "char", "raw-string"}:
         mask(literal_start, length)
     return "".join(output)
-

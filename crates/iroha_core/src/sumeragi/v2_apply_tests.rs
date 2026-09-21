@@ -1,4 +1,6 @@
 //! Test-only extensions and the stable v2 apply test module.
+use mv::storage::StorageReadOnly;
+
 #[derive(Default)]
 pub(super) struct FailureInjection {
     pub(super) candidate_executions: std::sync::atomic::AtomicUsize,

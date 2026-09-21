@@ -39,7 +39,7 @@ async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
     let state = blank_state();
     let_row! { block = result_bearing_time_trigger_block(&state, |h| { h.set_height(NonZeroU64::new(1).unwrap()); h.creation_time_ms = 1; }) };
     let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     Register::domain(Domain::new(domain_id.clone()))
         .execute(&ALICE_ID, &mut stx)
@@ -70,19 +70,20 @@ async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
     Register::trigger(by_call)
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
-    let _ = state_block.apply_without_execution(&block, Vec::new());
-    state_block.commit().unwrap();
+    stx.apply_callback_for_testing()
+        .expect("capture successful component callbacks");
+    state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = result_bearing_time_trigger_block(&state, |h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     // Now execute the by-call trigger via transaction API and expect data trigger to chain
     let mut state_block2 = state.block(block2.as_ref().header());
-    let mut stx2 = state_block2.transaction();
+    let mut stx2 = state_block2.transaction_for_callback_testing();
     let_row! { evt = ExecuteTriggerEvent { trigger_id: by_call_id.clone(), authority: ALICE_ID.clone(), args: Json::from(norito::json!({})), } };
     stx2.execute_called_trigger(&by_call_id, &evt)
         .expect("execute by-call");
-    stx2.apply();
-    // Flush events and block book-keeping; capture emitted events
-    let events = state_block2.apply_without_execution(&block2, Vec::new());
+    stx2.apply_callback_for_testing()
+        .expect("capture successful component callbacks");
+    // Observe the component owner's captured events without publishing a block.
+    let events = state_block2.world.take_external_events();
     // ExecuteTrigger event (exactly one for this trigger id)
     let_row! { exec_count = events .iter() .filter(|e| matches!(e, EventBox::ExecuteTrigger(ev) if ev.trigger_id() == &by_call_id)) .count() };
     assert_eq!(exec_count, 1, "expected exactly one ExecuteTrigger event");
@@ -137,7 +138,7 @@ async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
         chained_completion.outcome(),
         TriggerCompletedOutcome::Success
     ));
-    state_block2.commit().unwrap();
+    state_block2.commit_world_overlay_for_testing().unwrap();
     // Check that the data trigger action took effect
     let_row! { flag_val = state .view() .world .map_account(&ALICE_ID, |a| a.value().metadata().get(&key).cloned()) .unwrap() };
     assert_eq!(flag_val, Some(Json::from(norito::json!("ok"))));
@@ -154,17 +155,17 @@ state_test! { sync deterministic_pipeline_block_approved_trigger_executes
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
         header: block2.as_ref().header(),
         status: BlockStatus::Approved,
     })])
     .expect("pipeline trigger should execute");
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -188,17 +189,17 @@ state_test! { sync constrained_pipeline_block_trigger_ignores_wrong_height_appro
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
         header: block2.as_ref().header(),
         status: BlockStatus::Approved,
     })])
     .expect("wrong-height approved event should be ignored");
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -220,19 +221,19 @@ state_test! { sync one_shot_pipeline_trigger_executes_once_for_multiple_matching
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let_row! { block3 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(3).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     let_row! { steps = stx .execute_pipeline_triggers([ PipelineEventBox::from(BlockEvent { header: block2.as_ref().header(), status: BlockStatus::Approved, }), PipelineEventBox::from(BlockEvent { header: block3.as_ref().header(), status: BlockStatus::Approved, }), ]) .expect("matching approved block events should execute at most once") };
     assert_eq!(
         steps.len(),
         1,
         "one-shot trigger must not execute twice in the same batch"
     );
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -257,20 +258,20 @@ state_test! { sync one_shot_pipeline_transaction_trigger_executes_once_for_dupli
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let tx_hash_a = HashOf::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
     let tx_hash_b = HashOf::from_untyped_unchecked(Hash::prehashed([0xB2; Hash::LENGTH]));
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     let_row! { steps = stx .execute_pipeline_triggers([ PipelineEventBox::from(TransactionEvent { hash: tx_hash_a, block_height: Some(block2.as_ref().header().height()), lane_id: LaneId::SINGLE, dataspace_id: DataSpaceId::UNIVERSAL, status: TransactionStatus::Approved, }), PipelineEventBox::from(TransactionEvent { hash: tx_hash_b, block_height: Some(block2.as_ref().header().height()), lane_id: LaneId::SINGLE, dataspace_id: DataSpaceId::UNIVERSAL, status: TransactionStatus::Approved, }), ]) .expect("duplicate matching approved transaction facts should execute at most once") };
     assert_eq!(
         steps.len(),
         1,
         "one-shot transaction trigger must not execute twice in the same batch"
     );
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -311,13 +312,13 @@ state_test! { sync deterministic_pipeline_transaction_approved_and_rejected_trig
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
     }
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let tx_hash_a = HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
     let tx_hash_b = HashOf::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([
         PipelineEventBox::from(TransactionEvent {
             hash: tx_hash_a,
@@ -335,7 +336,7 @@ state_test! { sync deterministic_pipeline_transaction_approved_and_rejected_trig
         }),
     ])
     .expect("deterministic transaction pipeline triggers should execute");
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -380,17 +381,17 @@ state_test! { sync malformed_enabled_pipeline_trigger_does_not_execute_or_decrem
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
         header: block2.as_ref().header(),
         status: BlockStatus::Approved,
     })])
     .expect("malformed enabled metadata should fail closed without erroring");
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -427,17 +428,17 @@ state_test! { sync numeric_zero_enabled_pipeline_trigger_does_not_execute_or_dec
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
         header: block2.as_ref().header(),
         status: BlockStatus::Approved,
     })])
     .expect("numeric zero enabled metadata should disable without erroring");
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -471,11 +472,11 @@ state_test! { sync constrained_pipeline_transaction_trigger_ignores_near_miss_ev
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([
         PipelineEventBox::from(TransactionEvent {
             hash: other_hash,
@@ -493,7 +494,7 @@ state_test! { sync constrained_pipeline_transaction_trigger_ignores_near_miss_ev
         }),
     ])
     .expect("non-matching deterministic events should be ignored");
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -519,7 +520,7 @@ state_test! { sync pipeline_trigger_fails_closed_on_missing_bytecode
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     assert!(
         state.world.triggers.remove_contract_for_test(blob_hash),
@@ -527,7 +528,7 @@ state_test! { sync pipeline_trigger_fails_closed_on_missing_bytecode
     );
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     let_row! { err = stx .execute_pipeline_triggers([PipelineEventBox::from(BlockEvent { header: block2.as_ref().header(), status: BlockStatus::Approved, })]) .expect_err("missing bytecode should reject pipeline trigger execution") };
     let err_debug = format!("{err:?}");
     assert!(
@@ -587,14 +588,14 @@ state_test! { sync isolated_pipeline_failure_rolls_back_disables_and_allows_heal
     Register::trigger(Trigger::new(good_trigger_id.clone(), good_action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
 
     let_row! { block2 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(2).unwrap());
     }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block);
+    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block, Some(block2.as_ref()));
     let outcomes = outputs.iter().map(|output| {
         let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
             panic!("only matched Pipeline sources exist in this fixture");
@@ -672,14 +673,14 @@ state_test! { sync pipeline_trigger_replacement_keeps_its_own_repeat_budget
     Register::trigger(original)
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
 
     let_row! { block2 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(2).unwrap());
     }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block);
+    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block, Some(block2.as_ref()));
     let outcomes = outputs.iter().map(|output| {
         let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
             panic!("only matched Pipeline sources exist in this fixture");
@@ -750,7 +751,7 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
     Register::trigger(original_sibling)
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
 
     let_row! { block2 = new_dummy_block_with_payload(|h| {
@@ -758,7 +759,7 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
     }) };
     let mut state_block = state.block(block2.as_ref().header());
     let fragments_before = state_block.committed_fragment_count();
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block);
+    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block, Some(block2.as_ref()));
     let outcomes = outputs.iter().map(|output| {
         let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
             panic!("only matched Pipeline sources exist in this fixture");
@@ -795,7 +796,7 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
         h.set_height(NonZeroU64::new(3).unwrap());
     }) };
     let mut state_block = state.block(block3.as_ref().header());
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block);
+    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block, Some(block3.as_ref()));
     let outcomes = outputs.iter().map(|output| {
         let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
             panic!("only matched Pipeline sources exist in this fixture");
@@ -875,7 +876,7 @@ state_test! { sync data_trigger_revalidates_the_captured_incarnation_and_event
     Register::trigger(original_sibling)
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
 
     let_row! { block2 = new_dummy_block_with_payload(|h| {
@@ -941,11 +942,11 @@ state_test! { sync pipeline_trigger_instruction_failure_rolls_back_and_preserves
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
         header: block2.as_ref().header(),
         status: BlockStatus::Approved,
@@ -983,11 +984,11 @@ state_test! { sync pipeline_trigger_chained_data_failure_rolls_back_and_preserve
     Register::trigger(Trigger::new(pipeline_trigger_id.clone(), pipeline_action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
         header: block2.as_ref().header(),
         status: BlockStatus::Approved,
@@ -1026,11 +1027,11 @@ state_test! { sync by_call_chained_data_trigger_failure_rolls_back_and_preserves
     Register::trigger(Trigger::new(by_call_id.clone(), by_call_action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply();
+    stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_callback_testing();
     let_row! { event = ExecuteTriggerEvent { trigger_id: by_call_id.clone(), authority: ALICE_ID.clone(), args: Json::default(), } };
     stx.execute_called_trigger(&by_call_id, &event)
         .expect_err("chained data trigger failure must reject by-call execution");

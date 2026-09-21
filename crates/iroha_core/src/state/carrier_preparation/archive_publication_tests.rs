@@ -302,8 +302,8 @@ impl OriginalCustody {
                 .journals
                 .components
                 .block_hashes
-                .as_slice()
-                .as_ptr()
+                .get(0)
+                .map_or(std::ptr::null(), std::ptr::from_ref)
                 .cast(),
             membership: std::ptr::from_ref(
                 decision

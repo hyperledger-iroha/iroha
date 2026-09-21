@@ -280,7 +280,7 @@ def test_block_start_phase_calls_reject_disconnected_or_late_owners(mutation: st
         mutated = source.replace(ENACTMENT_CALL, "if false { " + ENACTMENT_CALL + " }", 1)
     else:
         anchor = ("        sb.start_of_block_effects_applied = true;" if mutation == "late_before_flag"
-                  else "        let result = after_start(&mut sb, continuation)?;")
+                  else "        let result = after_start(&mut sb, continuation).map_err(StateBlockStartError::Stage)?;")
         assert source.count(anchor) == 1
         mutated = source.replace(ENACTMENT_CALL, "", 1).replace(anchor, anchor + "\n        " + ENACTMENT_CALL, 1)
     assert mutated != source
@@ -309,6 +309,28 @@ def test_block_start_phase_bodies_reject_changed_height_or_rollback(
     assert original in helpers
     mutated = source.replace(helpers, helpers.replace(original, replacement))
     with pytest.raises(RuntimeError, match=STATE_PATH):
+        guard.require_block_start_enactment_phases(mutated)
+
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("self.acquire_canonical_runtime_block(false)?", "self.acquire_canonical_runtime_block(false).unwrap()"),
+    ("self.acquire_canonical_runtime_block(false)?", "self.acquire_canonical_runtime_block(true)?"),
+    ("before_start(&mut sb).map_err(StateBlockStartError::Stage)?", "before_start(&mut sb).unwrap()"),
+    ("after_start(&mut sb, continuation).map_err(StateBlockStartError::Stage)?", "after_start(&mut sb, continuation).unwrap()"),
+))
+def test_block_start_admission_and_stage_refusals_remain_typed(
+    original: str, replacement: str,
+) -> None:
+    """Local history admission precedes original effects; callback errors retain their class."""
+    source = guard.read(STATE_PATH)
+    guard.require_block_start_enactment_phases(source)
+    constructor = guard.section(source,
+        "    fn block_with_owned_start_stages<'state, E: std::fmt::Debug, T, R>(",
+        "    /// Release expired private locks inside their original block transaction.", STATE_PATH)
+    assert constructor.count(original) == 1
+    mutated = source.replace(constructor, constructor.replace(original, replacement, 1), 1)
+    with pytest.raises(RuntimeError, match="start phases"):
         guard.require_block_start_enactment_phases(mutated)
 
 
@@ -367,6 +389,7 @@ def test_prepared_parliament_commit_publication_baseline_and_entrypoint() -> Non
     "writer_removed", "generation_removed", "writer_early_drop", "conditional_world",
     "replay_prevalidation", "authenticated_replay", "transitions_outside_replay_guard",
     "gauges_inside_replay_guard", "duplicate_publisher", "early_telemetry", "missing_cfg",
+    "hash_prepare_refusal", "hash_cleanup_before_commit_unlock", "hash_cleanup_declared_after_commit_lock",
 ))
 def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(mutation: str) -> None:
     """Complete Rust statements cannot bypass refusals, publish early, or recount replay."""
@@ -385,15 +408,24 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(mutat
         changed = commit.replace(anchor, anchor.replace("})?;", "}).unwrap();"), 1)
     elif mutation == "geometry_refusal":
         changed = commit.replace("return Err(TransactionsBlockError::from(err));", "", 1)
+    elif mutation == "hash_prepare_refusal":
+        changed = commit.replace(".map_err(|(_, _)| TransactionsBlockError::SnapshotObservationChanged)?;", ".unwrap();", 1)
+    elif mutation == "hash_cleanup_before_commit_unlock":
+        changed = commit.replace("        drop(hash_retirement);", "", 1).replace(
+            "        drop(_state_commit_lock);", "        drop(hash_retirement);\n        drop(_state_commit_lock);", 1)
+    elif mutation == "hash_cleanup_declared_after_commit_lock":
+        changed = commit.replace("        let hash_retirement;", "", 1).replace(
+            "let _state_commit_lock = state_ref.state_commit_lock.lock();",
+            "let _state_commit_lock = state_ref.state_commit_lock.lock();\n        let hash_retirement;", 1)
     elif mutation == "world_drop":
         changed = commit.replace("world.commit();", "drop(world);", 1)
     elif mutation == "hash_drop":
-        changed = commit.replace("block_hashes.commit();", "drop(block_hashes);", 1)
+        changed = commit.replace("hash_retirement = block_hashes.publish();", "drop(block_hashes);", 1)
     elif mutation == "swapped_commits":
         changed = commit.replace("world.commit();", "SWAP_COMMIT", 1).replace(
-            "block_hashes.commit();", "world.commit();", 1).replace("SWAP_COMMIT", "block_hashes.commit();", 1)
+            "hash_retirement = block_hashes.publish();", "world.commit();", 1).replace("SWAP_COMMIT", "hash_retirement = block_hashes.publish();", 1)
     elif mutation in ("writer_removed", "generation_removed", "writer_early_drop", "conditional_world"):
-        publication = guard.section(commit, "        block_hashes.prepare_commit();",
+        publication = guard.section(commit, "        let mut lifecycle_post_publication = None;",
                                     "        if let Some(post) = lifecycle_post_publication", STATE_PATH)
         if mutation == "writer_removed":
             replacement = publication.replace("let _state_write_lock = state_write_lock.lock();", "", 1)
@@ -429,7 +461,7 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(mutat
         changed = commit.replace(telemetry, moved, 1)
     else:
         changed = commit.replace(telemetry, "", 1).replace(
-            "        block_hashes.prepare_commit();", telemetry + "        block_hashes.prepare_commit();", 1)
+            "        let mut lifecycle_post_publication = None;", telemetry + "        let mut lifecycle_post_publication = None;", 1)
     assert changed != commit
     with pytest.raises(RuntimeError, match=STATE_PATH):
         guard.require_parliament_commit_publication(source.replace(commit, changed, 1))
@@ -474,3 +506,108 @@ def test_beacon_requirement_rejects_lost_demand_or_unauthenticated_activation(ol
     changed = source.replace(old, new, 1)
     with pytest.raises(RuntimeError, match=BEACON_PATH):
         guard.require_parliament_beacon_requirement(changed)
+
+
+STORAGE_PATH = "crates/mv/src/storage.rs"
+
+
+def _storage_iterator_implementation(source: str, owner: str) -> tuple[int, int]:
+    """Select the concrete owner, so another implementation cannot be a decoy."""
+    marker = f"StorageReadOnly<K, V> for {owner}<'_, K, V, M>"
+    assert source.count(marker) == 1
+    start = source.rfind("impl<", 0, source.index(marker))
+    opening = source.index("{", source.index(marker))
+    depth = 1
+    for end in range(opening + 1, len(source)):
+        depth += (source[end] == "{") - (source[end] == "}")
+        if depth == 0:
+            return start, end + 1
+    raise AssertionError("missing concrete implementation end")
+
+
+def test_borrowed_storage_iterators_accept_current_complete_owner_families() -> None:
+    """All three owners retain lifetime, mode charge, reverse order and exact length."""
+    guard.require_storage_borrowed_iterators(guard.read(STORAGE_PATH))
+
+
+@pytest.mark.parametrize("mutation", (
+    "iter_forward_only", "iter_inexact", "range_forward_only",
+    "range_owner_lifetime", "iter_static_items", "range_sized_query",
+))
+def test_borrowed_storage_iterator_trait_rejects_weakened_contract(mutation: str) -> None:
+    source = guard.read(STORAGE_PATH)
+    start = source.index("pub trait StorageReadOnly")
+    end = source.index("mod view {", start)
+    trait = source[start:end]
+    if mutation == "range_sized_query":
+        range_start = trait.index("fn range<Q>")
+        changed = trait[:range_start] + trait[range_start:].replace(
+            "Q: Ord + ?Sized;", "Q: Ord + Sized;", 1
+        )
+    else:
+        family = "RangeIter" if mutation.startswith("range_") else "Iter"
+        match = re.search(rf"type {family}<'a>.*?;", trait, re.S)
+        assert match
+        declaration = match.group()
+        if mutation.endswith("forward_only"):
+            replacement = declaration.replace("DoubleEndedIterator", "Iterator")
+        elif mutation == "iter_inexact":
+            replacement = declaration.replace(" + ExactSizeIterator", "")
+        elif mutation == "range_owner_lifetime":
+            replacement = re.sub(r"\s+where\s+Self: 'a", "", declaration)
+        else:
+            replacement = declaration.replace("&'a", "&'static")
+        changed = trait[:match.start()] + replacement + trait[match.end():]
+    assert changed != trait
+    mutated = source[:start] + changed + source[end:] + "\n/* " + trait + " */\n"
+    with pytest.raises(RuntimeError, match="borrowed iterator trait contract changed"):
+        guard.require_storage_borrowed_iterators(mutated)
+
+
+@pytest.mark.parametrize("owner", ("View", "Block", "Transaction"))
+@pytest.mark.parametrize("family", ("Iter", "RangeIter"))
+@pytest.mark.parametrize("mutation", ("erase_charge", "remove_owner_lifetime", "boxed_delegate"))
+def test_borrowed_storage_iterators_reject_family_and_allocation_escape(
+    owner: str, family: str, mutation: str,
+) -> None:
+    source = guard.read(STORAGE_PATH)
+    start, end = _storage_iterator_implementation(source, owner)
+    implementation = source[start:end]
+    if mutation == "boxed_delegate":
+        receiver = {"View": "txn", "Block": "self.blocks", "Transaction": "self.current()"}[owner]
+        call = f"{receiver}.iter()" if family == "Iter" else f"{receiver}.range(bounds)"
+        assert implementation.count(call) == 1
+        changed = implementation.replace(call, f"Box::new({call})", 1)
+        message = f"{owner} borrowed iterator must use its original native owner"
+    else:
+        match = re.search(rf"type {family}<'a>.*?;", implementation, re.S)
+        assert match
+        declaration = match.group()
+        replacement = (declaration.replace("M::Charge", "Untracked")
+                       if mutation == "erase_charge"
+                       else re.sub(r"\s+where\s+Self: 'a", "", declaration))
+        changed = implementation[:match.start()] + replacement + implementation[match.end():]
+        message = f"{owner} borrowed iterator family changed"
+    assert changed != implementation
+    mutated = source[:start] + changed + source[end:] + "\n/* " + implementation + " */\n"
+    with pytest.raises(RuntimeError, match=re.escape(message)):
+        guard.require_storage_borrowed_iterators(mutated)
+
+
+@pytest.mark.parametrize("owner", ("View", "Block", "Transaction"))
+def test_borrowed_storage_iterators_reject_other_generation_or_order(owner: str) -> None:
+    source = guard.read(STORAGE_PATH)
+    start, end = _storage_iterator_implementation(source, owner)
+    implementation = source[start:end]
+    call = {"View": "snapshot.range(bounds)", "Block": "self.blocks.range(bounds)",
+            "Transaction": "self.current().range(bounds)"}[owner]
+    assert implementation.count(call) == 1
+    changed = implementation.replace(call, f"{call}.rev()", 1)
+    with pytest.raises(RuntimeError, match=f"{owner} borrowed iterator must use its original native owner"):
+        guard.require_storage_borrowed_iterators(source[:start] + changed + source[end:])
+
+
+def test_borrowed_storage_iterator_gate_is_connected_to_main() -> None:
+    calls = [node.func.id for node in ast.walk(ast.parse(inspect.getsource(guard.main)))
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+    assert calls.count("require_storage_borrowed_iterators") == 1

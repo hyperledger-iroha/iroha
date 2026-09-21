@@ -8919,8 +8919,8 @@ mod tests {
             .into(),
             RenewAliasLease::new(AliasTargetV1::Dataspace(resolved), 1, 2, guard).into(),
         ];
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         let universal =
             RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
         let foreign = RoutingPlan::single(RoutingDecision::new(lane, dataspace));
@@ -9570,11 +9570,40 @@ mod tests {
         }
         block_hashes.commit_for_tests();
     }
-    fn install_router_nexus(state: &crate::state::State, router: &ConfigLaneRouter) {
-        let mut nexus = state.nexus.write();
+    fn install_router_nexus(state: &mut crate::state::State, router: &ConfigLaneRouter) {
+        let mut nexus = state.nexus_snapshot();
         nexus.routing_policy = router.policy.as_ref().clone();
         nexus.dataspace_catalog = router.dataspace_catalog.as_ref().clone();
         nexus.lane_catalog = router.lane_catalog.as_ref().clone();
+        replace_router_fixture_nexus(state, nexus);
+    }
+    fn install_router_lane_catalog(state: &mut crate::state::State, catalog: LaneCatalog) {
+        let mut nexus = state.nexus_snapshot();
+        nexus.lane_catalog = catalog;
+        replace_router_fixture_nexus(state, nexus);
+    }
+    fn install_synthetic_router_nexus(state: &crate::state::State, router: &ConfigLaneRouter) {
+        let mut nexus = state.nexus_snapshot();
+        nexus.routing_policy = router.policy.as_ref().clone();
+        nexus.dataspace_catalog = router.dataspace_catalog.as_ref().clone();
+        nexus.lane_catalog = router.lane_catalog.as_ref().clone();
+        state.install_synthetic_routing_snapshot_for_testing(nexus);
+    }
+    fn replace_router_fixture_nexus(
+        state: &mut crate::state::State,
+        nexus: iroha_config::parameters::actual::Nexus,
+    ) {
+        assert_eq!(
+            state.view().height(),
+            0,
+            "configure routing fixtures before history"
+        );
+        let world = std::mem::take(&mut state.world);
+        *state = crate::state::State::new_with_nexus_for_testing(
+            world,
+            nexus,
+            crate::query::store::LiveQueryStore::start_test(),
+        );
     }
     fn set_nexus_autoscale_range(
         state: &crate::state::State,
@@ -9582,12 +9611,13 @@ mod tests {
         min_lane_id: u32,
         max_lane_id_exclusive: u32,
     ) {
-        let mut nexus = state.nexus.write();
+        let mut nexus = state.nexus_snapshot();
         nexus.autoscale.enabled = enabled;
         nexus.autoscale.min_lane_id = std::num::NonZeroU32::new(min_lane_id)
             .expect("autoscale test min_lane_id must be nonzero");
         nexus.autoscale.max_lane_id_exclusive = std::num::NonZeroU32::new(max_lane_id_exclusive)
             .expect("autoscale test max_lane_id_exclusive must be nonzero");
+        state.install_synthetic_routing_snapshot_for_testing(nexus);
     }
     fn dataspace_catalog(entries: &[(DataSpaceId, &str)]) -> DataSpaceCatalog {
         let mut metadata = vec![iroha_data_model::nexus::DataSpaceMetadata::default()];
@@ -9678,10 +9708,10 @@ mod tests {
         #[cfg(feature = "telemetry")]
         let telemetry = crate::telemetry::StateTelemetry::default();
         #[cfg(feature = "telemetry")]
-        let state = crate::state::State::with_telemetry(world, kura, query, telemetry);
+        let mut state = crate::state::State::with_telemetry(world, kura, query, telemetry);
         #[cfg(not(feature = "telemetry"))]
-        let state = crate::state::State::new(world, kura, query);
-        state.nexus.write().dataspace_catalog = dataspace_catalog;
+        let mut state = crate::state::State::new(world, kura, query);
+        state.set_dataspace_catalog_for_testing(dataspace_catalog);
         state
     }
     fn state_with_account_scope_entries(
@@ -9691,19 +9721,38 @@ mod tests {
         )],
         dataspace_catalog: DataSpaceCatalog,
     ) -> crate::state::State {
-        let mut state = blank_state();
-        state.nexus.write().dataspace_catalog = dataspace_catalog;
+        // Scope is a projection of primary labels and alias bindings. Seed those
+        // authoritative records so rebuilding a configured State preserves it.
+        let aliases = accounts
+            .iter()
+            .enumerate()
+            .flat_map(|(index, (account_id, entry))| {
+                entry.iter().flat_map(move |(dataspace, domains)| {
+                    let domains = if domains.is_empty() {
+                        vec![None]
+                    } else {
+                        domains.iter().cloned().map(Some).collect()
+                    };
+                    domains.into_iter().map(move |domain| {
+                        (
+                            account_id.clone(),
+                            AccountAlias::new(
+                                format!("scope_{index}").parse().expect("scope label"),
+                                domain,
+                                *dataspace,
+                            ),
+                        )
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut state = state_with_account_aliases(&aliases, dataspace_catalog);
         for (account_id, entry) in accounts {
-            let account = Account::new(account_id.clone()).build(account_id);
-            let (account_id, account_value) = account.into_key_value();
-            state
-                .world
-                .accounts
-                .insert(account_id.clone(), account_value);
-            state
-                .world
-                .account_scope_directory
-                .insert(account_id, entry.clone());
+            if entry.is_empty() {
+                let account = Account::new(account_id.clone()).build(account_id);
+                let (id, value) = account.into_key_value();
+                state.world.accounts.insert(id, value);
+            }
         }
         state
     }
@@ -9712,12 +9761,15 @@ mod tests {
         dataspace_catalog: DataSpaceCatalog,
         lane_catalog: LaneCatalog,
     ) -> crate::state::State {
-        let mut state = blank_state();
-        {
-            let mut nexus = state.nexus.write();
-            nexus.dataspace_catalog = dataspace_catalog;
-            nexus.lane_catalog = lane_catalog;
-        }
+        let mut state = crate::state::State::new_with_nexus_for_testing(
+            crate::state::World::default(),
+            iroha_config::parameters::actual::Nexus {
+                dataspace_catalog,
+                lane_catalog,
+                ..Default::default()
+            },
+            crate::query::store::LiveQueryStore::start_test(),
+        );
         for asset_definition in asset_definitions {
             state
                 .world
@@ -9883,7 +9935,7 @@ mod tests {
         );
         let router = ConfigLaneRouter::new(policy.clone(), dataspace_catalog, lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         let tx = sample_transaction(
             &alice_id,
@@ -9988,7 +10040,7 @@ mod tests {
         let router =
             ConfigLaneRouter::new(policy.clone(), DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         seed_committed_height_for_router_test(&state, 7);
         let mut lanes_seen = BTreeSet::new();
@@ -10058,7 +10110,7 @@ mod tests {
         ]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         seed_committed_height_for_router_test(&state, 7);
         let mut lanes_seen = BTreeSet::new();
@@ -10107,7 +10159,7 @@ mod tests {
         ]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         seed_committed_height_for_router_test(&state, 6);
         for idx in 0..64 {
@@ -10151,7 +10203,7 @@ mod tests {
         let lane_catalog = lane_catalog_from_configs(vec![default_lane_config(), elastic]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         seed_committed_height_for_router_test(&state, 7);
 
@@ -10282,7 +10334,7 @@ mod tests {
         let router =
             ConfigLaneRouter::new(policy.clone(), DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 3);
         seed_committed_height_for_router_test(&state, 7);
         let tx = sample_transaction(
@@ -10351,7 +10403,7 @@ mod tests {
         let router =
             ConfigLaneRouter::new(policy.clone(), DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         seed_committed_height_for_router_test(&state, 7);
         let mut lanes_seen = BTreeSet::new();
@@ -10421,7 +10473,7 @@ mod tests {
         ]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         seed_committed_height_for_router_test(&state, 7);
         let mut lanes_seen = BTreeSet::new();
@@ -10494,7 +10546,7 @@ mod tests {
             ]);
             let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
             let state = blank_state();
-            install_router_nexus(&state, &router);
+            install_synthetic_router_nexus(&state, &router);
             set_nexus_autoscale_range(&state, true, 1, 8);
             seed_committed_height_for_router_test(&state, 7);
             for idx in 0..64 {
@@ -10547,7 +10599,7 @@ mod tests {
         ]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, false, 1, 8);
         for idx in 0..64 {
             let tx = sample_transaction(
@@ -10597,7 +10649,7 @@ mod tests {
         ]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         for idx in 0..64 {
             let tx = sample_transaction(
@@ -10633,7 +10685,7 @@ mod tests {
         ]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(
             &state,
             true,
@@ -10674,7 +10726,7 @@ mod tests {
         ]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 4, 2);
         for idx in 0..64 {
             let tx = sample_transaction(
@@ -10710,7 +10762,7 @@ mod tests {
         ]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 4, 4);
         for idx in 0..64 {
             let tx = sample_transaction(
@@ -10751,7 +10803,7 @@ mod tests {
         ]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         let tx = sample_transaction(
             &alice_id,
@@ -10852,7 +10904,7 @@ mod tests {
         ]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         for idx in 0..32 {
             let tx = sample_transaction(
                 &alice_id,
@@ -10899,7 +10951,7 @@ mod tests {
         ]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
-        install_router_nexus(&state, &router);
+        install_synthetic_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         let tx = sample_transaction(
             &alice_id,
@@ -11084,7 +11136,7 @@ mod tests {
                 ),
             ))],
         );
-        let state = state_with_asset_definitions(
+        let mut state = state_with_asset_definitions(
             vec![
                 AssetDefinition::numeric(
                     delivery_definition,
@@ -11104,7 +11156,7 @@ mod tests {
             router.dataspace_catalog.as_ref().clone(),
             router.lane_catalog.as_ref().clone(),
         );
-        install_router_nexus(&state, &router);
+        install_router_nexus(&mut state, &router);
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -11175,7 +11227,7 @@ mod tests {
                 ),
             ))],
         );
-        let state = state_with_asset_definitions(
+        let mut state = state_with_asset_definitions(
             vec![
                 AssetDefinition::numeric(
                     delivery_definition,
@@ -11195,7 +11247,7 @@ mod tests {
             router.dataspace_catalog.as_ref().clone(),
             router.lane_catalog.as_ref().clone(),
         );
-        install_router_nexus(&state, &router);
+        install_router_nexus(&mut state, &router);
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -11266,7 +11318,7 @@ mod tests {
                 ),
             ))],
         );
-        let state = state_with_asset_definitions(
+        let mut state = state_with_asset_definitions(
             vec![
                 AssetDefinition::numeric(
                     primary_definition,
@@ -11286,7 +11338,7 @@ mod tests {
             router.dataspace_catalog.as_ref().clone(),
             router.lane_catalog.as_ref().clone(),
         );
-        install_router_nexus(&state, &router);
+        install_router_nexus(&mut state, &router);
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -11337,7 +11389,7 @@ mod tests {
             DomainId::try_new("settlement", "universal").expect("global domain id"),
             "global".parse().expect("asset definition name"),
         );
-        let state = state_with_asset_definitions(
+        let mut state = state_with_asset_definitions(
             vec![
                 AssetDefinition::numeric(
                     delivery_definition.clone(),
@@ -11364,7 +11416,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        install_router_nexus(&state, &router);
+        install_router_nexus(&mut state, &router);
         let expected = RoutingPlan::native_amx(
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             vec![
@@ -11635,8 +11687,8 @@ mod tests {
                 DomainId::try_new("castle", "universal").expect("domain id"),
             )))],
         );
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         let decision = router
             .try_route_with_view(&tx, &state.view())
             .expect("register-domain matcher route should resolve");
@@ -11669,8 +11721,8 @@ mod tests {
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         let code_hash = Hash::new(&code);
         let cases = [
             InstructionBox::from(RegisterSmartContractBytes {
@@ -12089,7 +12141,7 @@ mod tests {
                 ),
             ))]),
         );
-        let state = state_with_asset_definitions(
+        let mut state = state_with_asset_definitions(
             vec![
                 AssetDefinition::numeric(
                     delivery_definition,
@@ -12109,7 +12161,7 @@ mod tests {
             router.dataspace_catalog.as_ref().clone(),
             router.lane_catalog.as_ref().clone(),
         );
-        install_router_nexus(&state, &router);
+        install_router_nexus(&mut state, &router);
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12170,7 +12222,7 @@ mod tests {
                 ),
             ))]),
         );
-        let state = state_with_asset_definitions(
+        let mut state = state_with_asset_definitions(
             vec![
                 AssetDefinition::numeric(
                     primary_definition,
@@ -12190,7 +12242,7 @@ mod tests {
             router.dataspace_catalog.as_ref().clone(),
             router.lane_catalog.as_ref().clone(),
         );
-        install_router_nexus(&state, &router);
+        install_router_nexus(&mut state, &router);
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12757,8 +12809,8 @@ mod tests {
         );
         let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
         scope_entry.ensure_dataspace(dataspace_id);
-        let state = state_with_account_scope_entries(&[(alice_id, scope_entry)], catalog);
-        state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
+        let mut state = state_with_account_scope_entries(&[(alice_id, scope_entry)], catalog);
+        install_router_lane_catalog(&mut state, router.lane_catalog.as_ref().clone());
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12799,7 +12851,7 @@ mod tests {
         let account = Account::new(alice_id.clone()).build(&alice_id);
         let (account_id, account) = account.into_key_value();
         state.world.accounts.insert(account_id, account);
-        install_router_nexus(&state, &router);
+        install_router_nexus(&mut state, &router);
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -12843,8 +12895,8 @@ mod tests {
             alice_keypair.private_key(),
             vec![InstructionBox::from(instruction)],
         );
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         let decision = router
             .try_route_with_view(&tx, &state.view())
             .expect("noncanonical matcher must leave the canonical default route valid");
@@ -12884,7 +12936,7 @@ mod tests {
                 DomainId::try_new("bank-no-match", "universal").expect("domain id"),
             )))],
         );
-        let state = state_with_account_aliases(
+        let mut state = state_with_account_aliases(
             &[
                 (
                     uae_id.clone(),
@@ -12897,7 +12949,7 @@ mod tests {
             ],
             catalog,
         );
-        install_router_nexus(&state, &router);
+        install_router_nexus(&mut state, &router);
         let uae_decision = router
             .try_route_with_view(&uae_tx, &state.view())
             .expect("UAE alias route should resolve");
@@ -12939,7 +12991,7 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(transfer)],
         );
-        let state = state_with_account_aliases(
+        let mut state = state_with_account_aliases(
             &[
                 (
                     sender_id.clone(),
@@ -12952,7 +13004,7 @@ mod tests {
             ],
             catalog,
         );
-        install_router_nexus(&state, &router);
+        install_router_nexus(&mut state, &router);
         let decision = router
             .try_route_with_view(&tx, &state.view())
             .expect("transfer destination alias route should resolve");
@@ -12987,8 +13039,8 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(transfer)],
         );
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         let decision = router
             .try_route_with_view(&tx, &state.view())
             .expect("transferred domain route should resolve");
@@ -13306,8 +13358,8 @@ mod tests {
                 .expect("declared alias state requirement should be deterministic"),
             None
         );
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         assert_eq!(
             router
                 .try_route_with_state(&tx, &state)
@@ -13402,8 +13454,8 @@ mod tests {
                 .expect("universal alias state requirement should be deterministic"),
             None
         );
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         assert_eq!(
             router
                 .try_route_with_state(&tx, &state)
@@ -13473,7 +13525,10 @@ mod tests {
                 rules: vec![],
             },
             dataspace_catalog(&[(dataspace_id, "paynet")]),
-            catalog_with_lane_dataspaces(&[(LaneId::new(4), DataSpaceId::UNIVERSAL)]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(4), DataSpaceId::UNIVERSAL),
+            ]),
         );
         let definition = NewAssetDefinition {
             id: AssetDefinitionId::derive_from_components(
@@ -13496,8 +13551,8 @@ mod tests {
             vec![InstructionBox::from(Register::asset_definition(definition))],
         );
         assert_eq!(router.try_route_without_state(&tx), Ok(None));
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         let err = router
             .try_route_with_state(&tx, &state)
             .expect_err("state-backed alias home without lane should fail");
@@ -14419,7 +14474,7 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-        install_router_nexus(&state, &router);
+        install_router_nexus(&mut state, &router);
         scope_account_to_dataspace(&mut state, &sender_id, source_dataspace);
         scope_account_to_dataspace(&mut state, &receiver_id, destination_dataspace);
         let transfer = InstructionBox::from(Transfer::asset_quantity(
@@ -14567,8 +14622,8 @@ mod tests {
         Result<RoutingPlan, RoutingResolveError>,
         Result<RoutingPlan, RoutingResolveError>,
     ) {
-        let state = state_from_world(world);
-        install_router_nexus(&state, router);
+        let mut state = state_from_world(world);
+        install_router_nexus(&mut state, router);
         install_fx_corridor_policy(&state, corridor);
         let view = state.view();
         let queued_plan = router.try_route_plan_with_view(tx, &view);
@@ -14650,8 +14705,8 @@ mod tests {
                 RouteLegRole::Participant,
             )],
         );
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         for (index, update) in updates.into_iter().enumerate() {
             let tx = sample_transaction(
                 &authority,
@@ -14808,8 +14863,8 @@ mod tests {
                 ("proved overlay", sample_proved_executable(instructions)),
             ]
         };
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         for (update_label, update) in updates {
             for (operation_label, operation, expected) in &operations {
                 for (executable_label, executable) in
@@ -14897,8 +14952,8 @@ mod tests {
                 RouteLegRole::Participant,
             )],
         );
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         let nested_cases = [
             (
                 "trigger",
@@ -15023,8 +15078,8 @@ mod tests {
                 RouteLegRole::Participant,
             )],
         );
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
 
         let tx = sample_transaction(
             &authority,
@@ -15085,7 +15140,7 @@ mod tests {
         }
 
         let mut persisted_state = blank_state();
-        install_router_nexus(&persisted_state, &router);
+        install_router_nexus(&mut persisted_state, &router);
         let persisted_proposal = MultisigProposalState::new(
             multisig_id.clone(),
             proposal_hash,
@@ -15579,8 +15634,8 @@ mod tests {
             InstructionBox::from(refund.clone()),
             InstructionBox::from(SettlementInstructionBox::RefundFxCorridorEscrow(refund)),
         ];
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         install_fx_corridor_policy(&state, corridor);
         let expected_single = RoutingPlan::single(RoutingDecision::new(
             destination_lane,
@@ -16019,8 +16074,17 @@ mod tests {
                 settlement_instruction,
             ],
         );
-        let (queued_plan, block_plan) =
-            fx_route_plan_results(&router, &tx, corridor, crate::state::World::default());
+        let state = blank_state();
+        install_synthetic_router_nexus(&state, &router);
+        install_fx_corridor_policy(&state, corridor);
+        let view = state.view();
+        let queued_plan = router.try_route_plan_with_view(&tx, &view);
+        let block_plan = evaluate_policy_plan_with_nexus_and_world_at(
+            view.nexus(),
+            &tx,
+            view.world(),
+            state_view_ledger_time_ms(&view),
+        );
         let expected_error = RoutingResolveError::NoLaneForDataspace {
             dataspace_id: deploy_dataspace,
         };
@@ -16102,8 +16166,8 @@ mod tests {
                 settlement_instruction,
             ],
         );
-        let state = blank_state();
-        install_router_nexus(&state, &router);
+        let mut state = blank_state();
+        install_router_nexus(&mut state, &router);
         install_fx_corridor_policy(&state, corridor);
         let view = state.view();
         let expected = RoutingPlan::native_amx(
@@ -16183,8 +16247,8 @@ mod tests {
                 settlement_instruction,
             ],
         );
-        let state = state_from_world(world_with_dynamic_dataspace("alpha", &authority));
-        install_router_nexus(&state, &router);
+        let mut state = state_from_world(world_with_dynamic_dataspace("alpha", &authority));
+        install_router_nexus(&mut state, &router);
         install_fx_corridor_policy(&state, corridor);
         let view = state.view();
         let queued_plan = router.try_route_plan_with_view(&tx, &view);
@@ -16333,7 +16397,7 @@ mod tests {
                 settlement_instruction.clone(),
             ],
         );
-        let state = state_with_asset_definitions(
+        let mut state = state_with_asset_definitions(
             vec![
                 AssetDefinition::numeric(
                     dvp_source_definition,
@@ -16353,7 +16417,7 @@ mod tests {
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         );
-        install_router_nexus(&state, &router);
+        install_router_nexus(&mut state, &router);
         let mut registry = FxCorridorPolicyRegistry::default();
         registry.upsert(corridor);
         {

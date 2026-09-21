@@ -20,17 +20,17 @@ struct Allocation<T, Charge> {
 }
 
 /// An originally allocated shell that has not yet received its payload.
-pub(super) struct Reserved<T, Charge> {
+pub(crate) struct Reserved<T, Charge> {
     pointer: NonNull<Allocation<T, Charge>>,
 }
 
 /// Strong references to one original initialized allocation and its charge.
-pub(super) struct Shared<T, Charge> {
+pub struct Shared<T, Charge> {
     pointer: NonNull<Allocation<T, Charge>>,
 }
 
 /// The uniquely owned payload and charge after their control block was freed.
-pub(super) struct Reclaimed<T, Charge> {
+pub(crate) struct Reclaimed<T, Charge> {
     value: ManuallyDrop<T>,
     charge: ManuallyDrop<Charge>,
 }
@@ -44,11 +44,11 @@ unsafe impl<T: Send, Charge: Send> Send for Reserved<T, Charge> {}
 unsafe impl<T: Sync, Charge: Sync> Sync for Reserved<T, Charge> {}
 
 impl<T, Charge> Reserved<T, Charge> {
-    pub(super) fn layout() -> Layout {
+    pub(crate) fn layout() -> Layout {
         Layout::new::<Allocation<T, Charge>>()
     }
 
-    pub(super) fn new(charge: Charge) -> Self {
+    pub(crate) fn new(charge: Charge) -> Self {
         let allocation = Box::new(Allocation {
             references: AtomicUsize::new(1),
             value: UnsafeCell::new(MaybeUninit::uninit()),
@@ -59,7 +59,7 @@ impl<T, Charge> Reserved<T, Charge> {
         }
     }
 
-    pub(super) fn initialize(self, value: T) -> Shared<T, Charge> {
+    pub(crate) fn initialize(self, value: T) -> Shared<T, Charge> {
         let this = ManuallyDrop::new(self);
         // SAFETY: Reserved is unique, cannot be cloned and has no published
         // payload. Initialization happens exactly once before the type changes.
@@ -82,11 +82,24 @@ impl<T, Charge> Drop for Reserved<T, Charge> {
 }
 
 impl<T, Charge> Shared<T, Charge> {
-    pub(super) fn ptr_eq(left: &Self, right: &Self) -> bool {
+    /// Exact layout of the one allocation retained by this shared owner.
+    /// Nested allocations in `T` or `Charge` require their own funding.
+    pub fn layout() -> Layout {
+        Reserved::<T, Charge>::layout()
+    }
+
+    /// Allocate one initialized owner, retaining its original charge until the
+    /// final reference has freed the allocation and destroyed its payload.
+    pub fn new(value: T, charge: Charge) -> Self {
+        Reserved::new(charge).initialize(value)
+    }
+
+    /// Whether both references retain the same original allocation.
+    pub fn ptr_eq(left: &Self, right: &Self) -> bool {
         left.pointer == right.pointer
     }
 
-    pub(super) fn get_mut(&mut self) -> Option<&mut T> {
+    pub(crate) fn get_mut(&mut self) -> Option<&mut T> {
         // No weak owner can race an upgrade. With one strong reference and an
         // exclusive borrow of it, no other owner can create a competing clone.
         if unsafe { self.pointer.as_ref() }
@@ -99,7 +112,7 @@ impl<T, Charge> Shared<T, Charge> {
         Some(unsafe { (&mut *self.pointer.as_ref().value.get()).assume_init_mut() })
     }
 
-    pub(super) fn into_inner(self) -> Option<Reclaimed<T, Charge>> {
+    pub(crate) fn into_inner(self) -> Option<Reclaimed<T, Charge>> {
         let this = ManuallyDrop::new(self);
         // SAFETY: this consumes exactly one strong reference. Suppressing its
         // destructor prevents a second decrement of the same ownership unit.
@@ -158,7 +171,7 @@ impl<T, Charge> Drop for Shared<T, Charge> {
 }
 
 impl<T, Charge> Reclaimed<T, Charge> {
-    pub(super) fn consume<R>(self, consume: impl FnOnce(T) -> R) -> (R, Charge) {
+    pub(crate) fn consume<R>(self, consume: impl FnOnce(T) -> R) -> (R, Charge) {
         let mut this = ManuallyDrop::new(self);
         // SAFETY: self is consumed, its automatic destructor is suppressed, and
         // these are the only reads of the original payload and charge.

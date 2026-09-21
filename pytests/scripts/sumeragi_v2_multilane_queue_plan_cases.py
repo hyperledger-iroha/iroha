@@ -1336,7 +1336,7 @@ def test_queue_plan_autonomous_only_rejects_binding_in_reexport_module(tmp_path:
     ("method", "PhysicalPublicationGuard<'_, T>::drop", "if self.fair {", "if !self.fair {"),
     ("method", "PhysicalPublicationGuard<'_, T>::drop", "parking_lot::MutexGuard::unlock_fair(guard);", "drop(guard);"),
     ("method", "PhysicalPublicationGuard<'_, T>::drop", "self.guard.take()", "None"),
-    ("struct", "PublicationGuard", "mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>", "PhysicalPublicationGuard<'state, T>"),
+    ("struct", "PublicationGuard", "concread::release::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>", "PhysicalPublicationGuard<'state, T>"),
 ])
 def test_queue_plan_publication_scoped_contract_rejects_release_owner_drift(
     kind: str, symbol: str, old: str, new: str,

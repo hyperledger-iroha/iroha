@@ -8,12 +8,12 @@
 #[derive(Default)]
 pub(crate) struct PublicationMutex<T = ()> {
     inner: parking_lot::Mutex<T>,
-    released: mv::ReleaseNotification,
+    released: concread::release::ReleaseNotification,
 }
 
 /// An original storage mutex guard, retaining the established lock-order boundary.
 pub(crate) struct PublicationGuard<'state, T = ()> {
-    inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,
+    inner: concread::release::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,
 }
 
 /// Original physical guard whose unlock policy is selected before its release.
@@ -35,6 +35,12 @@ impl<T> Drop for PhysicalPublicationGuard<'_, T> {
 }
 
 impl<T> PublicationGuard<'_, T> {
+    /// Unlock the actual mutex and retain its original notification until the
+    /// enclosing aggregate has released every other physical fence.
+    pub(crate) fn release_deferred(self) -> concread::release::DeferredRelease {
+        self.inner.release_deferred(drop).1
+    }
+
     /// Preserve QueuePlan's fair unlock before waiting for Kura publication.
     /// The outer release guard signals only after the physical unlock completes.
     pub(crate) fn unlock_fair(mut self) {
@@ -68,7 +74,7 @@ impl<T> PublicationMutex<T> {
     pub(crate) fn new(value: T) -> Self {
         Self {
             inner: parking_lot::Mutex::new(value),
-            released: mv::ReleaseNotification::default(),
+            released: concread::release::ReleaseNotification::default(),
         }
     }
 
@@ -101,7 +107,9 @@ impl<T> PublicationMutex<T> {
     /// awaiting this event. A wake grants no predecessor or publication authority;
     /// retry must re-acquire the same target and rejoin its original journals.
     /// No publication, height change, timer, or scheduled polling is required.
-    pub(crate) fn try_lock_or_wait(&self) -> Result<PublicationGuard<'_, T>, mv::ReleaseWait> {
+    pub(crate) fn try_lock_or_wait(
+        &self,
+    ) -> Result<PublicationGuard<'_, T>, concread::release::ReleaseWait> {
         let wait = self.released.observe();
         self.try_lock().ok_or(wait)
     }
@@ -213,5 +221,77 @@ mod tests {
             .ok()
             .expect("parking-lot is not poisoned");
         assert_eq!(&*value, &[1, 3]);
+    }
+
+    #[test]
+    fn deferred_notification_reenters_all_original_fences_after_outer_unlock() {
+        struct AcquireBoth {
+            locks: [Arc<PublicationMutex>; 2],
+            observed: AtomicBool,
+        }
+        impl Wake for AcquireBoth {
+            fn wake(self: Arc<Self>) {
+                let first = self.locks[0]
+                    .inner
+                    .try_lock()
+                    .expect("first physical unlock");
+                let second = self.locks[1]
+                    .inner
+                    .try_lock()
+                    .expect("outer physical unlock");
+                self.observed.store(true, Ordering::SeqCst);
+                drop((first, second));
+            }
+        }
+        for unwind in [false, true] {
+            let locks = [
+                Arc::new(PublicationMutex::default()),
+                Arc::new(PublicationMutex::default()),
+            ];
+            let held = locks[0].lock();
+            let outer = locks[1].lock();
+            let mut pending = Box::pin(
+                locks[0]
+                    .try_lock_or_wait()
+                    .err()
+                    .unwrap()
+                    .wait_for_release(),
+            );
+            let probe = Arc::new(AcquireBoth {
+                locks: locks.clone(),
+                observed: AtomicBool::new(false),
+            });
+            let waker = Waker::from(Arc::clone(&probe));
+            assert!(
+                pending
+                    .as_mut()
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+            let released = held.release_deferred();
+            assert!(locks[0].inner.try_lock().is_some());
+            assert!(!probe.observed.load(Ordering::SeqCst));
+            if unwind {
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        // Reverse local order unlocks the enclosing owner first.
+                        let _released = released;
+                        let _outer = outer;
+                        panic!("completion cleanup unwind");
+                    }))
+                    .is_err()
+                );
+            } else {
+                drop(outer);
+                drop(released);
+            }
+            assert!(probe.observed.load(Ordering::SeqCst));
+            assert!(
+                pending
+                    .as_mut()
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_ready()
+            );
+        }
     }
 }

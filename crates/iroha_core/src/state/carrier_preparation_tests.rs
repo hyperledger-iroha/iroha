@@ -6,7 +6,6 @@ use super::*;
 use crate::{
     block::valid::SumeragiV2ValidationContext,
     governance::manifest::LaneManifestRegistry,
-    kura::Kura,
     query::store::LiveQueryStore,
     queue::Queue,
     state::{
@@ -64,13 +63,17 @@ fn genesis(
     for instruction in instructions {
         builder = builder.append_instruction(instruction.clone());
     }
+    let mut nexus = nexus.clone();
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    let proof_policies = crate::da::active_proof_policy_bundle_at_height(&nexus, 1);
     let genesis = builder
         .build_raw()
         .unwrap()
         .with_consensus_meta()
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
             &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
-            Some(crate::da::active_proof_policy_bundle_at_height(nexus, 1)),
+            Some(proof_policies),
             None,
             1_000,
         )
@@ -87,14 +90,16 @@ fn state_for(genesis: &SignedBlock, nexus: &iroha_config::parameters::actual::Ne
         [Account::new(account.clone()).build(&account)],
         [],
     );
-    let mut state = Box::new(State::new_with_chain_and_network_id_for_testing(
+    // Authenticate the supplied catalog before creating its physical lanes.
+    // Runtime reconfiguration cannot replace the immutable pre-genesis baseline.
+    let (state, _) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
         world,
-        Kura::blank_kura_for_testing(),
+        nexus.clone(),
         LiveQueryStore::start_test(),
         ChainId::from("carrier-preparation"),
         NetworkId::from_genesis_hash(genesis.hash()),
-    ));
-    state.set_nexus(nexus.clone()).unwrap();
+    );
+    let state = Box::new(state);
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),

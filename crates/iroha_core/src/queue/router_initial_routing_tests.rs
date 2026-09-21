@@ -83,8 +83,8 @@ fn applies_account_and_instruction_rules() {
         alice_keypair.private_key(),
         vec![InstructionBox::from(mint), InstructionBox::from(register)],
     );
-    let state = blank_state();
-    install_router_nexus(&state, &router);
+    let mut state = blank_state();
+    install_router_nexus(&mut state, &router);
     let decision = router
         .try_route_with_view(&tx, &state.view())
         .expect("routing should resolve");
@@ -111,13 +111,13 @@ fn canonical_config_router_defers_untargeted_single_lane_routing_to_state() {
         alice_keypair.private_key(),
         vec![role_registration_instruction(&alice_id, "single_lane")],
     );
-    let state = blank_state();
+    let mut state = blank_state();
     let router = ConfigLaneRouter::new(
         LaneRoutingPolicy::default(),
         DataSpaceCatalog::default(),
         LaneCatalog::default(),
     );
-    install_router_nexus(&state, &router);
+    install_router_nexus(&mut state, &router);
     let with_view = router
         .try_route_with_view(&tx, &state.view())
         .expect("canonical single-lane routing should resolve");
@@ -169,8 +169,8 @@ fn config_lane_router_state_free_path_matches_view_path() {
         alice_keypair.private_key(),
         vec![role_registration_instruction(&alice_id, "statefree")],
     );
-    let state = blank_state();
-    install_router_nexus(&state, &router);
+    let mut state = blank_state();
+    install_router_nexus(&mut state, &router);
     let with_view = router
         .try_route_with_view(&tx, &state.view())
         .expect("configured routing should resolve");
