@@ -1670,7 +1670,7 @@ fn proposal_history_wait_retries_only_on_original_release_and_retires_with_owner
         None,
         None,
     );
-    let notification = mv::ReleaseNotification::default();
+    let notification = concread::release::ReleaseNotification::default();
     let error = crate::state::StateBlockStartError::<()>::History(
         crate::state::BlockHashAdmissionError::Busy(notification.observe()),
     );

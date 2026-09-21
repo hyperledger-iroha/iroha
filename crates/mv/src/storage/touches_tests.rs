@@ -181,7 +181,7 @@ fn touch_sorted_unique_growth_moves_original_key_allocations_without_copying() {
     let keys = [30, 10, 50, 20, 40].map(|value| Payload::input(value, &budget, &stats));
     let mut set = without_allocations(SortedTouches::new);
     assert_eq!(set.len(), 0);
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         insert(&mut set, &keys[0], &budget, &stats);
         let first_pointer = set.iter().next().unwrap().pointer();
         for key in &keys[1..] {
@@ -250,7 +250,7 @@ fn touch_exact_joined_capacity_and_one_byte_below_preserve_original_state() {
     drop(plan);
     assert_eq!(identity(&set), (0, 0, 0));
     assert_eq!(stats.copies.load(SeqCst), 0);
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         without_allocations(|| drop(blocker));
         let blocker = budget
             .try_reserve_bytes(budget.limit_bytes() - prior - demand.bytes())
@@ -278,7 +278,7 @@ fn touch_preparation_abandonment_and_copy_panic_leave_old_array_and_keys_exact()
     let stats = Stats::new();
     let keys = [7, 8].map(|value| Payload::input(value, &budget, &stats));
     let mut set = SortedTouches::new();
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         insert(&mut set, &keys[0], &budget, &stats);
         let before = (
             identity(&set),
@@ -330,7 +330,7 @@ fn touch_arbitrary_key_drop_panic_drains_remaining_prefix_and_refunds_real_owner
     let stats = Stats::new();
     let keys = [1, 2, 3].map(|value| Payload::input(value, &budget, &stats));
     let mut set = SortedTouches::new();
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         for key in &keys {
             insert(&mut set, key, &budget, &stats);
         }
@@ -395,7 +395,7 @@ fn touch_plan_extends_original_demand_and_preserves_exact_provider_remainder() {
     let mut base = AllocationDemand::new();
     let shell_layout = Layout::new::<u128>();
     base.add_layout(shell_layout).unwrap();
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         let plan = without_allocations(|| set.plan::<usize, Policy>(&key, base).unwrap());
         let total = plan.demand();
         assert_eq!(

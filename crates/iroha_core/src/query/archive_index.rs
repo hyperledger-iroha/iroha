@@ -17,23 +17,23 @@ pub(super) enum ArchiveIndexLockError {
     /// The original physical writer unwound while holding the index.
     Poisoned,
     /// Another physical reader or writer currently prevents publication.
-    Busy(mv::ReleaseWait),
+    Busy(concread::release::ReleaseWait),
 }
 
 /// One original archive index and its inseparable release notification source.
 pub(super) struct ArchiveIndexLock<T> {
     inner: RwLock<T>,
-    released: mv::ReleaseNotification,
+    released: concread::release::ReleaseNotification,
 }
 
 /// Read custody signals after unlock, including unwinding without writer poison.
 pub(super) struct ArchiveIndexReadGuard<'index, T> {
-    inner: mv::ReleaseGuard<'index, RwLockReadGuard<'index, T>>,
+    inner: concread::release::ReleaseGuard<'index, RwLockReadGuard<'index, T>>,
 }
 
 /// Write custody preserves the standard lock's poison behavior on unwind.
 pub(super) struct ArchiveIndexWriteGuard<'index, T> {
-    inner: mv::ReleaseGuard<'index, RwLockWriteGuard<'index, T>>,
+    inner: concread::release::ReleaseGuard<'index, RwLockWriteGuard<'index, T>>,
 }
 
 impl<T> ArchiveIndexLock<T> {
@@ -41,7 +41,7 @@ impl<T> ArchiveIndexLock<T> {
     pub(super) fn new(value: T) -> Self {
         Self {
             inner: RwLock::new(value),
-            released: mv::ReleaseNotification::default(),
+            released: concread::release::ReleaseNotification::default(),
         }
     }
 

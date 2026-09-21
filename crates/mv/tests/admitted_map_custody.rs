@@ -394,7 +394,7 @@ fn input(budget: &AllocationBudget, order: usize) -> (Payload, Payload) {
 }
 
 fn map(budget: &AllocationBudget, counters: &Arc<Counters>) -> Map {
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         Map::try_new_with_node_custody(|demand| Policy::admit(budget, counters, demand, None))
             .unwrap()
     })
@@ -405,7 +405,7 @@ fn insert(map: &Map, budget: &AllocationBudget, counters: &Arc<Counters>, order:
     let start = NEXT_RECORD.load(SeqCst);
     let mut planned_allocations = 0;
     let ((owner, previous), allocations) = counted(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             map.try_insert_admitted(key, value, |demand| {
                 planned_allocations = demand.allocations();
                 Policy::admit(budget, counters, demand, None)
@@ -426,7 +426,7 @@ fn insert(map: &Map, budget: &AllocationBudget, counters: &Arc<Counters>, order:
 
 fn commit(map: &Map, budget: &AllocationBudget, owner: Owned) {
     without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let writer = map
                 .try_write_owned(owner)
                 .unwrap_or_else(|_| panic!("original owner refused"));
@@ -471,7 +471,7 @@ fn complete_demand_refusal_allocates_nothing_and_retries_the_original_input_afte
         .unwrap();
     let mut demand_bytes = 0;
     let ((key, value), error) = without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             map.try_insert_admitted(key, value, |demand| {
                 demand_bytes = demand.bytes();
                 Policy::admit(&budget, &counters, demand, None)
@@ -490,8 +490,8 @@ fn complete_demand_refusal_allocates_nothing_and_retries_the_original_input_afte
     assert!(demand_bytes > 0);
     assert_eq!((key.pointer(), value.pointer()), pointers);
     assert!(map.read().is_empty());
-    budget.with_deferred_refund_notifications(|| drop(blocking_credit));
-    let (owner, old) = budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| drop(blocking_credit));
+    let (owner, old) = budget.with_deferred_refund_notifications(|_| {
         map.try_insert_admitted(key, value, |demand| {
             Policy::admit(&budget, &counters, demand, None)
         })
@@ -502,7 +502,7 @@ fn complete_demand_refusal_allocates_nothing_and_retries_the_original_input_afte
     assert_live_credits(&budget);
     commit(&map, &budget, owner);
     assert_eq!(map.read().get(&7).unwrap().pointer(), pointers.1);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -547,12 +547,12 @@ fn nonuniform_nested_payloads_split_and_grow_while_original_readers_retain_actua
         assert!(value.bytes.iter().all(|byte| *byte == expected as u8));
     }
     let retained = budget.reserved_bytes();
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(original)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(original)));
     assert!(RECORDS[old_id].freed.load(SeqCst));
     assert!(RECORDS[old_id].refunded.load(SeqCst));
     assert!(budget.reserved_bytes() < retained);
     assert_live_credits(&budget);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -571,7 +571,7 @@ fn detached_public_owner_rejects_foreign_and_busy_maps_without_readmission_or_co
     let admissions = counters.admissions.load(SeqCst);
     let records = NEXT_RECORD.load(SeqCst);
     let owner = without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let (owner, error) = decoy.try_write_owned(owner).err().expect("foreign owner");
             assert_eq!(error, OwnedWriteError::Changed);
             let held = original
@@ -594,7 +594,7 @@ fn detached_public_owner_rejects_foreign_and_busy_maps_without_readmission_or_co
     commit(&original, &budget, owner);
     assert_eq!(original.read().get(&1).unwrap().pointer(), pointer);
     assert!(original.read().get(&2).is_none());
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop((decoy, original))));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop((decoy, original))));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -611,7 +611,7 @@ fn replacement_and_detached_successor_keep_their_original_storage_after_map_drop
     let original_id = map.read().get(&7).unwrap().id();
     let (key, value) = input(&budget, 7);
     let replacement_pointer = value.pointer();
-    let (owner, previous) = budget.with_deferred_refund_notifications(|| {
+    let (owner, previous) = budget.with_deferred_refund_notifications(|_| {
         map.try_insert_admitted(key, value, |demand| {
             Policy::admit(&budget, &counters, demand, None)
         })
@@ -626,18 +626,18 @@ fn replacement_and_detached_successor_keep_their_original_storage_after_map_drop
     assert_eq!(owner.to_snapshot().len(), 1);
     assert_eq!(owner.get(&7).unwrap().pointer(), replacement_pointer);
     assert_live_credits(&budget);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     // The detached cursor retains its real original root and base generation.
     // The returned value independently retains its actual nested allocation.
     assert!(!RECORDS[original_id].freed.load(SeqCst));
     assert!(!RECORDS[previous_id].freed.load(SeqCst));
     assert_eq!(owner.get(&7).unwrap().pointer(), replacement_pointer);
     assert!(previous.bytes.iter().all(|byte| *byte == 7));
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(owner)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(owner)));
     assert!(RECORDS[original_id].freed.load(SeqCst));
     assert!(!RECORDS[previous_id].freed.load(SeqCst));
     assert_live_credits(&budget);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(previous)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(previous)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -661,7 +661,7 @@ fn every_partial_leaf_clone_unwind_reclaims_new_storage_and_preserves_published_
         let start = NEXT_RECORD.load(SeqCst);
         let (key, value) = input(&budget, 9);
         let result = catch_unwind(AssertUnwindSafe(|| {
-            budget.with_deferred_refund_notifications(|| {
+            budget.with_deferred_refund_notifications(|_| {
                 let _ = map.try_insert_admitted(key, value, |demand| {
                     Policy::admit(&budget, &counters, demand, Some(fail_at))
                 });
@@ -676,7 +676,7 @@ fn every_partial_leaf_clone_unwind_reclaims_new_storage_and_preserves_published_
         reclaimed_since(start);
         let (key, value) = input(&budget, 10);
         let ((key, value), error) = without_allocations(|| {
-            budget.with_deferred_refund_notifications(|| {
+            budget.with_deferred_refund_notifications(|_| {
                 map.try_insert_admitted(key, value, |_| -> Result<Policy, ()> {
                     panic!("poisoned writer must not readmit")
                 })
@@ -685,8 +685,8 @@ fn every_partial_leaf_clone_unwind_reclaims_new_storage_and_preserves_published_
             })
         });
         assert!(matches!(error, MapAdmissionError::Poisoned));
-        budget.with_deferred_refund_notifications(|| drop((key, value, original)));
-        without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+        budget.with_deferred_refund_notifications(|_| drop((key, value, original)));
+        without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
         reclaimed_since(0);
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -704,7 +704,7 @@ impl Wake for Reenter {
     fn wake(self: Arc<Self>) {
         let mut slot = self.input.lock().unwrap();
         let (key, value) = slot.take().unwrap();
-        let (input, error) = self.budget.with_deferred_refund_notifications(|| {
+        let (input, error) = self.budget.with_deferred_refund_notifications(|_| {
             self.map
                 .try_insert_admitted(key, value, |_| Err::<Policy, _>(()))
                 .err()
@@ -742,7 +742,7 @@ fn old_reader_and_abort_refunds_wake_only_after_the_original_writer_unlocks() {
     let waker = Waker::from(Arc::clone(&wake));
     let mut context = Context::from_waker(&waker);
     let mut wait = None;
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         let held = map
             .try_write_owned(unpublished)
             .unwrap_or_else(|_| panic!("original writer"));
@@ -778,8 +778,8 @@ fn old_reader_and_abort_refunds_wake_only_after_the_original_writer_unlocks() {
     );
     assert_eq!(map.read().len(), 2);
     assert!(map.read().get(&3).is_none());
-    budget.with_deferred_refund_notifications(|| drop((wait, waker, wake)));
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    budget.with_deferred_refund_notifications(|_| drop((wait, waker, wake)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -795,7 +795,7 @@ fn edit(
     let start = NEXT_RECORD.load(SeqCst);
     let mut planned_allocations = 0;
     let (result, allocations) = counted(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             map.try_insert_owned_admitted(owner, key, value, |demand| {
                 planned_allocations = demand.allocations();
                 Policy::admit(budget, counters, demand, None)
@@ -850,16 +850,16 @@ fn retained_successor_grows_and_replaces_entries_before_one_atomic_publication()
     let previous = previous.expect("same private entry replacement");
     assert_eq!(previous.pointer(), pointers[7]);
     assert_eq!(owner.to_snapshot().len(), 128);
-    budget.with_deferred_refund_notifications(|| drop(previous));
+    budget.with_deferred_refund_notifications(|_| drop(previous));
     commit(&map, &budget, owner);
     assert!(original.is_empty());
     let published = map.read();
     assert_eq!(published.len(), 128);
     assert_eq!(published.get(&7).unwrap().pointer(), replacement);
     without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| drop((published, original)))
+        budget.with_deferred_refund_notifications(|_| drop((published, original)))
     });
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -880,7 +880,7 @@ fn retained_capacity_refusal_preserves_private_entries_and_input_then_retries() 
         .unwrap();
     let records = NEXT_RECORD.load(SeqCst);
     let ((owner, (key, value)), error) = without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             map.try_insert_owned_admitted(owner, key, value, |demand| {
                 Policy::admit(&budget, &counters, demand, None)
             })
@@ -898,13 +898,13 @@ fn retained_capacity_refusal_preserves_private_entries_and_input_then_retries() 
     assert_eq!(owner.to_snapshot().len(), 1);
     assert!(map.read().is_empty());
     assert!(!map.is_poisoned());
-    budget.with_deferred_refund_notifications(|| drop(blocker));
+    budget.with_deferred_refund_notifications(|_| drop(blocker));
     let (owner, previous) = edit(&map, &budget, &counters, owner, key, value);
     assert!(previous.is_none());
     assert_eq!(owner.get(&7).unwrap().pointer(), pointers.1);
     commit(&map, &budget, owner);
     assert_eq!(map.read().len(), 2);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
 }
 
@@ -926,7 +926,7 @@ fn retained_edits_refuse_foreign_busy_and_changed_generations_before_admission()
     );
     let never = |_| -> Result<Policy, ()> { panic!("invalid owner was readmitted") };
     let (owner, key, value) = without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let ((owner, (key, value)), error) = foreign
                 .try_insert_owned_admitted(owner, key, value, never)
                 .err()
@@ -961,7 +961,7 @@ fn retained_edits_refuse_foreign_busy_and_changed_generations_before_admission()
     assert!(original.read().get(&1).is_some());
     assert!(original.read().get(&0).is_none());
     without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| drop((owner, key, value, original, foreign)))
+        budget.with_deferred_refund_notifications(|_| drop((owner, key, value, original, foreign)))
     });
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -990,14 +990,14 @@ fn fully_exhausted_budget_can_abort_all_retained_edits_without_allocating() {
         .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
         .unwrap();
     let blocked_bytes = blocker.remaining_bytes();
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(owner)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(owner)));
     assert_eq!(budget.reserved_bytes(), baseline + blocked_bytes);
     assert_eq!(map.read().get(&255).unwrap().pointer(), original_pointer);
     assert_eq!(map.read().len(), 1);
     reclaimed_since(start);
-    budget.with_deferred_refund_notifications(|| drop(blocker));
+    budget.with_deferred_refund_notifications(|_| drop(blocker));
     assert_live_credits(&budget);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
 }
 
@@ -1020,7 +1020,7 @@ fn later_copy_unwind_aborts_the_whole_private_successor_and_preserves_published_
         let owner = insert(&map, &budget, &counters, 100);
         let (key, value) = input(&budget, 0);
         let result = catch_unwind(AssertUnwindSafe(|| {
-            budget.with_deferred_refund_notifications(|| {
+            budget.with_deferred_refund_notifications(|_| {
                 let _ = map.try_insert_owned_admitted(owner, key, value, |demand| {
                     Policy::admit(&budget, &counters, demand, Some(fail_at))
                 });
@@ -1036,8 +1036,8 @@ fn later_copy_unwind_aborts_the_whole_private_successor_and_preserves_published_
         assert!(map.read().get(&100).is_none());
         assert_eq!(budget.reserved_bytes(), baseline);
         reclaimed_since(start);
-        without_allocations(|| budget.with_deferred_refund_notifications(|| drop(old)));
-        without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+        without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(old)));
+        without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
         reclaimed_since(0);
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -1065,7 +1065,7 @@ fn private_leaf_split_unwind_reclaims_all_previous_edits_without_publication() {
         }
     }
     let (split_at, copies) = split.expect("first private leaf split within both node geometries");
-    budget.with_deferred_refund_notifications(|| drop((owner, probe)));
+    budget.with_deferred_refund_notifications(|_| drop((owner, probe)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
     for fail_at in 1..=copies {
@@ -1082,7 +1082,7 @@ fn private_leaf_split_unwind_reclaims_all_previous_edits_without_publication() {
         }
         let (key, value) = input(&budget, split_at);
         let result = catch_unwind(AssertUnwindSafe(|| {
-            budget.with_deferred_refund_notifications(|| {
+            budget.with_deferred_refund_notifications(|_| {
                 let _ = map.try_insert_owned_admitted(owner, key, value, |demand| {
                     Policy::admit(&budget, &counters, demand, Some(fail_at))
                 });
@@ -1093,7 +1093,7 @@ fn private_leaf_split_unwind_reclaims_all_previous_edits_without_publication() {
         assert!(map.read().is_empty());
         assert_eq!(budget.reserved_bytes(), baseline);
         reclaimed_since(start);
-        without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+        without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
         reclaimed_since(0);
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -1116,7 +1116,7 @@ fn retired_tracking_charge_unwind_sees_installed_bookkeeping_and_aborts_all_priv
     let (key, value) = input(&budget, 1);
     PANIC_CHARGE.store(first_tracking, SeqCst);
     let result = catch_unwind(AssertUnwindSafe(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let _ = map.try_insert_owned_admitted(owner, key, value, |demand| {
                 Policy::admit(&budget, &counters, demand, None)
             });
@@ -1132,7 +1132,7 @@ fn retired_tracking_charge_unwind_sees_installed_bookkeeping_and_aborts_all_priv
     assert!(map.read().is_empty());
     assert_eq!(budget.reserved_bytes(), baseline);
     reclaimed_since(start);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -1174,7 +1174,7 @@ fn full_budget_checkpoint_abort_restores_original_private_entries_buffers_and_cr
     let parent_last = first_record + 3;
     let baseline = budget.reserved_bytes();
     let start = NEXT_RECORD.load(SeqCst);
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         let mut writer = map
             .try_write_owned(owner)
             .unwrap_or_else(|_| panic!("original writer"));
@@ -1201,7 +1201,7 @@ fn full_budget_checkpoint_abort_restores_original_private_entries_buffers_and_cr
     });
     assert_eq!(map.read().len(), 1);
     assert_eq!(map.read().get(&0).unwrap().pointer(), parent_pointer);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -1217,7 +1217,7 @@ fn nested_checkpoint_apply_abort_and_sibling_apply_preserve_original_parent_unti
     let owner = insert(&map, &budget, &counters, 0);
     let parent_pointer = owner.get(&0).unwrap().pointer();
     let baseline = budget.reserved_bytes();
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         let mut writer = map
             .try_write_owned(owner)
             .unwrap_or_else(|_| panic!("original writer"));
@@ -1269,8 +1269,8 @@ fn nested_checkpoint_apply_abort_and_sibling_apply_preserve_original_parent_unti
     assert!(map.read().get(&6).is_some());
     assert!(map.read().get(&7).is_some());
     assert!(map.read().get(&1).is_none());
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(old)));
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(old)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -1289,7 +1289,7 @@ fn caught_checkpoint_edit_panic_cannot_read_detach_or_publish_the_original_curso
         let baseline = budget.reserved_bytes();
         let start = NEXT_RECORD.load(SeqCst);
         let owner = insert(&map, &budget, &counters, 1);
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let mut writer = map
                 .try_write_owned(owner)
                 .unwrap_or_else(|_| panic!("original writer"));
@@ -1321,7 +1321,7 @@ fn caught_checkpoint_edit_panic_cannot_read_detach_or_publish_the_original_curso
         assert_eq!(map.read().len(), 1);
         assert_eq!(budget.reserved_bytes(), baseline);
         reclaimed_since(start);
-        without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+        without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
         reclaimed_since(0);
     }
 }
@@ -1334,7 +1334,7 @@ fn checkpoint_capacity_refusal_keeps_child_state_and_original_input_for_retry() 
     let counters = Arc::new(Counters::default());
     let map = map(&budget, &counters);
     let owner = insert(&map, &budget, &counters, 0);
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         let mut writer = map
             .try_write_owned(owner)
             .unwrap_or_else(|_| panic!("original writer"));
@@ -1374,7 +1374,7 @@ fn checkpoint_capacity_refusal_keeps_child_state_and_original_input_for_retry() 
         without_allocations(|| writer.commit());
     });
     assert_eq!(map.read().len(), 3);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -1390,7 +1390,7 @@ fn checkpoint_buffer_refund_panic_restores_parent_ownership_and_forbids_publicat
     let parent_id = owner.get(&0).unwrap().id();
     let baseline = budget.reserved_bytes();
     let start = NEXT_RECORD.load(SeqCst);
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         let mut writer = map
             .try_write_owned(owner)
             .unwrap_or_else(|_| panic!("original writer"));
@@ -1419,7 +1419,7 @@ fn checkpoint_buffer_refund_panic_restores_parent_ownership_and_forbids_publicat
     });
     assert!(map.is_poisoned());
     assert!(map.read().is_empty());
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -1440,7 +1440,7 @@ fn admitted_removal_funds_all_path_sibling_and_separator_copies_until_empty() {
         let original_pointer = original.get(&0).unwrap().pointer();
         let original_id = original.get(&0).unwrap().id();
         let mut present = [true; 128];
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             for step in 0..128 {
                 // Ascending/descending force both edge sibling cases; this odd
                 // permutation visits every interior key exactly once as well.
@@ -1489,7 +1489,7 @@ fn admitted_removal_funds_all_path_sibling_and_separator_copies_until_empty() {
             assert!(map.read().is_empty());
             without_allocations(|| drop(original));
         });
-        without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+        without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
         reclaimed_since(0);
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -1506,7 +1506,7 @@ fn admitted_removal_refusal_and_absence_preserve_original_private_generation() {
         let owner = insert(&map, &budget, &counters, order);
         commit(&map, &budget, owner);
     }
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         let mut writer = map
             .try_write_admitted(|demand| Policy::admit(&budget, &counters, demand, None))
             .unwrap();
@@ -1577,7 +1577,7 @@ fn admitted_removal_nested_abort_restores_original_nodes_at_full_capacity() {
         let owner = insert(&map, &budget, &counters, order);
         commit(&map, &budget, owner);
     }
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         let mut writer = map
             .try_write_admitted(|demand| Policy::admit(&budget, &counters, demand, None))
             .unwrap();
@@ -1636,7 +1636,7 @@ fn admitted_removal_clone_unwind_cannot_publish_and_refunds_private_copies() {
         // Fanout changes the number of actual copies. Observe the same edit in
         // an aborted checkpoint first, then inject at its first, middle and last
         // copy so every supported tree shape reaches the requested crash cut.
-        let copies = budget.with_deferred_refund_notifications(|| {
+        let copies = budget.with_deferred_refund_notifications(|_| {
             let mut writer = map
                 .try_write_admitted(|demand| Policy::admit(&budget, &counters, demand, None))
                 .unwrap();
@@ -1667,7 +1667,7 @@ fn admitted_removal_clone_unwind_cannot_publish_and_refunds_private_copies() {
         };
         let baseline = budget.reserved_bytes();
         let start = NEXT_RECORD.load(SeqCst);
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let mut writer = map
                 .try_write_admitted(|demand| Policy::admit(&budget, &counters, demand, None))
                 .unwrap();
@@ -1691,8 +1691,8 @@ fn admitted_removal_clone_unwind_cannot_publish_and_refunds_private_copies() {
         assert_eq!(map.read().get(&0).unwrap().pointer(), pointer);
         assert_eq!(budget.reserved_bytes(), baseline);
         reclaimed_since(start);
-        budget.with_deferred_refund_notifications(|| drop(original));
-        budget.with_deferred_refund_notifications(|| drop(map));
+        budget.with_deferred_refund_notifications(|_| drop(original));
+        budget.with_deferred_refund_notifications(|_| drop(map));
         reclaimed_since(0);
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -1705,7 +1705,7 @@ fn admitted_writer_start(map: &Map, budget: &AllocationBudget, counters: &Arc<Co
     let values = counters.values.load(SeqCst);
     let mut required = None;
     let ((owner, bytes), allocations) = counted(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let writer = map
                 .try_write_admitted(|demand| {
                     required = Some(demand);
@@ -1758,8 +1758,8 @@ fn admitted_empty_writer_starts_without_edits_and_grows_under_separate_admission
     commit(&map, &budget, owner);
     assert_eq!(map.read().len(), 40);
     assert!(original.is_empty());
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(original)));
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(original)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -1792,14 +1792,14 @@ fn admitted_populated_writer_shares_original_entries_and_aborts_without_allocati
         .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
         .unwrap();
     assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(owner)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(owner)));
     assert_eq!(original.len(), 40);
     assert_eq!(map.read().len(), 40);
     assert!(!map.is_poisoned());
-    budget.with_deferred_refund_notifications(|| drop(blocker));
+    budget.with_deferred_refund_notifications(|_| drop(blocker));
     assert_eq!(budget.reserved_bytes(), before);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(original)));
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(original)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -1833,7 +1833,7 @@ fn admitted_writer_start_refuses_one_byte_below_and_accepts_exact_complete_deman
     let held = budget.reserved_bytes();
     let calls = counters.admissions.load(SeqCst);
     let refused = without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             map.try_write_admitted(|observed| {
                 assert_eq!(observed, demand);
                 Policy::admit(&budget, &counters, observed, None)
@@ -1851,11 +1851,11 @@ fn admitted_writer_start_refuses_one_byte_below_and_accepts_exact_complete_deman
     assert_eq!(NEXT_RECORD.load(SeqCst), records);
     assert!(map.read().is_empty());
     assert!(!map.is_poisoned());
-    budget.with_deferred_refund_notifications(|| drop(blocker));
+    budget.with_deferred_refund_notifications(|_| drop(blocker));
     let blocker = budget
         .try_reserve_bytes(budget.limit_bytes() - before - demand.bytes())
         .unwrap();
-    let owner = budget.with_deferred_refund_notifications(|| {
+    let owner = budget.with_deferred_refund_notifications(|_| {
         map.try_write_admitted(|observed| {
             assert_eq!(observed, demand);
             Policy::admit(&budget, &counters, observed, None)
@@ -1867,10 +1867,10 @@ fn admitted_writer_start_refuses_one_byte_below_and_accepts_exact_complete_deman
     assert_eq!(NEXT_RECORD.load(SeqCst), records + 2);
     assert_eq!(counters.keys.load(SeqCst), 0);
     assert_eq!(counters.values.load(SeqCst), 0);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(owner)));
-    budget.with_deferred_refund_notifications(|| drop(blocker));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(owner)));
+    budget.with_deferred_refund_notifications(|_| drop(blocker));
     assert_eq!(budget.reserved_bytes(), before);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -1922,14 +1922,14 @@ type UndoMap = BptreeMap<Payload, Option<Payload>, Prepaid<Policy>>;
 type UndoOwned = BptreeMapOwned<Payload, Option<Payload>, Prepaid<Policy>>;
 
 fn undo_map(budget: &AllocationBudget, counters: &Arc<Counters>) -> UndoMap {
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         UndoMap::try_new_with_node_custody(|demand| Policy::admit(budget, counters, demand, None))
             .unwrap()
     })
 }
 
 fn undo_start(map: &UndoMap, budget: &AllocationBudget, counters: &Arc<Counters>) -> UndoOwned {
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         map.try_write_admitted(|demand| Policy::admit(budget, counters, demand, None))
             .unwrap_or_else(|error| panic!("original undo start refused: {error:?}"))
             .detach()
@@ -1938,7 +1938,7 @@ fn undo_start(map: &UndoMap, budget: &AllocationBudget, counters: &Arc<Counters>
 
 fn undo_commit(map: &UndoMap, budget: &AllocationBudget, owner: UndoOwned) {
     without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             map.try_write_owned(owner)
                 .unwrap_or_else(|_| panic!("original undo owner refused"))
                 .commit();
@@ -1957,7 +1957,7 @@ fn pair_edit(
     let calls = counters.admissions.load(SeqCst);
     let mut complete_demand = None;
     let (result, allocations) = counted(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             maps.0
                 .try_insert_with_undo_owned_admitted(
                     owners.0,
@@ -2011,7 +2011,7 @@ fn pair_complete_demand_refusal_preserves_original_inputs_and_exact_budget_retry
     let mut planned = None;
     let mut probes = 0;
     let ((owner, undo_owner, key, value), error) = without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             current
                 .try_insert_with_undo_owned_admitted(
                     owner,
@@ -2049,7 +2049,7 @@ fn pair_complete_demand_refusal_preserves_original_inputs_and_exact_budget_retry
     let held = budget.reserved_bytes();
     let calls = counters.admissions.load(SeqCst);
     let ((owner, undo_owner, key, value), error) = without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             current
                 .try_insert_with_undo_owned_admitted(
                     owner,
@@ -2083,13 +2083,13 @@ fn pair_complete_demand_refusal_preserves_original_inputs_and_exact_budget_retry
         (counters.keys.load(SeqCst), counters.values.load(SeqCst)),
         clones
     );
-    budget.with_deferred_refund_notifications(|| drop(blocker));
+    budget.with_deferred_refund_notifications(|_| drop(blocker));
     let blocker = budget
         .try_reserve_bytes(budget.limit_bytes() - before - demand.bytes())
         .unwrap();
     let calls = counters.admissions.load(SeqCst);
     let (((owner, undo_owner), previous), allocations) = counted(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             current
                 .try_insert_with_undo_owned_admitted(
                     owner,
@@ -2123,21 +2123,21 @@ fn pair_complete_demand_refusal_preserves_original_inputs_and_exact_budget_retry
     assert_eq!(old.get(&7).unwrap().pointer(), old_pointer);
     assert_eq!(current.read().get(&7).unwrap().pointer(), old_pointer);
     assert!(undo.read().is_empty());
-    budget.with_deferred_refund_notifications(|| drop(blocker));
+    budget.with_deferred_refund_notifications(|_| drop(blocker));
     assert_live_credits(&budget);
     let blocker = budget
         .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
         .unwrap();
     assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
     without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| drop((owner, undo_owner, previous)))
+        budget.with_deferred_refund_notifications(|_| drop((owner, undo_owner, previous)))
     });
-    budget.with_deferred_refund_notifications(|| drop(blocker));
+    budget.with_deferred_refund_notifications(|_| drop(blocker));
     assert_eq!(budget.reserved_bytes(), baseline);
     reclaimed_since(private_start);
     assert!(!current.is_poisoned() && !undo.is_poisoned());
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(old)));
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop((current, undo))));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop(old)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop((current, undo))));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -2168,7 +2168,7 @@ fn pair_first_none_and_some_preimages_survive_replacement_growth_and_reader_cust
             pair_edit((&current, &undo), &budget, &counters, owners, (key, value));
         assert_eq!(previous.is_some(), order == 0);
         assert_eq!(next.0.get(&order).unwrap().pointer(), value_pointer);
-        budget.with_deferred_refund_notifications(|| drop(previous));
+        budget.with_deferred_refund_notifications(|_| drop(previous));
         owners = next;
     }
     assert!(owners.1.get(&64).unwrap().is_none());
@@ -2210,7 +2210,7 @@ fn pair_first_none_and_some_preimages_survive_replacement_growth_and_reader_cust
                     .iter()
                     .all(|byte| *byte == 0)
             );
-            budget.with_deferred_refund_notifications(|| drop(previous));
+            budget.with_deferred_refund_notifications(|_| drop(previous));
             owners = next;
         }
     }
@@ -2240,11 +2240,11 @@ fn pair_first_none_and_some_preimages_survive_replacement_growth_and_reader_cust
     assert!(old_undo.is_empty());
     assert!(!RECORDS[original_id].freed.load(SeqCst));
     assert!(!RECORDS[original_id].refunded.load(SeqCst));
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop((old, old_undo))));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop((old, old_undo))));
     assert!(RECORDS[original_id].freed.load(SeqCst));
     assert!(RECORDS[original_id].refunded.load(SeqCst));
     assert_live_credits(&budget);
-    without_allocations(|| budget.with_deferred_refund_notifications(|| drop((current, undo))));
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| drop((current, undo))));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -2265,7 +2265,7 @@ fn pair_callback_and_nested_clone_panics_preserve_both_published_roots_and_recla
             commit(&current, &budget, owner);
         }
         let (key, value) = input(&budget, 99);
-        let (undo_owner, replaced) = budget.with_deferred_refund_notifications(|| {
+        let (undo_owner, replaced) = budget.with_deferred_refund_notifications(|_| {
             undo.try_insert_admitted(key, Some(value), |demand| {
                 Policy::admit(&budget, &counters, demand, None)
             })
@@ -2287,7 +2287,7 @@ fn pair_callback_and_nested_clone_panics_preserve_both_published_roots_and_recla
         let mut callbacks = 0;
         PANIC_PAIR_UNDO_VALUE.with(|flag| flag.set(phase == 3));
         let outcome = catch_unwind(AssertUnwindSafe(|| {
-            budget.with_deferred_refund_notifications(|| {
+            budget.with_deferred_refund_notifications(|_| {
                 let _ = current.try_insert_with_undo_owned_admitted(
                     owners.0,
                     &undo,
@@ -2327,8 +2327,12 @@ fn pair_callback_and_nested_clone_panics_preserve_both_published_roots_and_recla
         assert_eq!(budget.reserved_bytes(), baseline);
         reclaimed_since(start);
         assert_live_credits(&budget);
-        without_allocations(|| budget.with_deferred_refund_notifications(|| drop((old, old_undo))));
-        without_allocations(|| budget.with_deferred_refund_notifications(|| drop((current, undo))));
+        without_allocations(|| {
+            budget.with_deferred_refund_notifications(|_| drop((old, old_undo)))
+        });
+        without_allocations(|| {
+            budget.with_deferred_refund_notifications(|_| drop((current, undo)))
+        });
         reclaimed_since(0);
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -2346,7 +2350,7 @@ fn pair_foreign_and_busy_roles_return_original_nested_inputs_without_readmission
     let other_undo = undo_map(&budget, &counters);
     let owner = insert(&current, &budget, &counters, 7);
     let (undo_key, undo_value) = input(&budget, 99);
-    let (undo_owner, old) = budget.with_deferred_refund_notifications(|| {
+    let (undo_owner, old) = budget.with_deferred_refund_notifications(|_| {
         undo.try_insert_admitted(undo_key, Some(undo_value), |demand| {
             Policy::admit(&budget, &counters, demand, None)
         })
@@ -2379,7 +2383,7 @@ fn pair_foreign_and_busy_roles_return_original_nested_inputs_without_readmission
     let records = NEXT_RECORD.load(SeqCst);
     let calls = counters.admissions.load(SeqCst);
     let ((owner, undo_owner, key, value), error) = without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             current
                 .try_insert_with_undo_owned_admitted(
                     owner,
@@ -2399,7 +2403,7 @@ fn pair_foreign_and_busy_roles_return_original_nested_inputs_without_readmission
     ));
     assert_identity(&owner, &undo_owner, &key, &value);
     let ((owner, undo_owner, key, value), error) = without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             other_current
                 .try_insert_with_undo_owned_admitted(owner, &undo, undo_owner, key, value, never)
                 .err()
@@ -2418,7 +2422,7 @@ fn pair_foreign_and_busy_roles_return_original_nested_inputs_without_readmission
     let records = NEXT_RECORD.load(SeqCst);
     let calls = counters.admissions.load(SeqCst);
     let (owner, undo_owner, key, value) = without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let held = undo
                 .try_write_owned(competing_undo)
                 .unwrap_or_else(|_| panic!("undo competitor"));
@@ -2441,7 +2445,7 @@ fn pair_foreign_and_busy_roles_return_original_nested_inputs_without_readmission
     let records = NEXT_RECORD.load(SeqCst);
     let calls = counters.admissions.load(SeqCst);
     let (owner, undo_owner, key, value) = without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let held = current
                 .try_write_owned(competing_current)
                 .unwrap_or_else(|_| panic!("current competitor"));
@@ -2471,7 +2475,7 @@ fn pair_foreign_and_busy_roles_return_original_nested_inputs_without_readmission
     assert_eq!(owner.get(&8).unwrap().pointer(), pointers.3);
     assert!(undo_owner.get(&8).unwrap().is_none());
     without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             drop((owner, undo_owner, current, undo, other_current, other_undo))
         })
     });

@@ -1656,7 +1656,7 @@ macro_rules! build_world_view {
 pub struct BlockHashes {
     inner: BlockHashStorage,
     budget: mv::allocation::AllocationBudget,
-    released: mv::ReleaseNotification,
+    released: concread::release::ReleaseNotification,
     committed_height: AtomicUsize,
 }
 
@@ -1928,7 +1928,7 @@ impl BlockHashes {
         Self {
             inner: BlockHashStorage::EmergencyFastEmpty,
             budget: mv::allocation::AllocationBudget::new(0),
-            released: mv::ReleaseNotification::default(),
+            released: concread::release::ReleaseNotification::default(),
             committed_height: AtomicUsize::new(0),
         }
     }
@@ -1941,7 +1941,7 @@ impl BlockHashes {
         Self {
             inner: BlockHashStorage::EmergencyFastMapped(mapping),
             budget: mv::allocation::AllocationBudget::new(0),
-            released: mv::ReleaseNotification::default(),
+            released: concread::release::ReleaseNotification::default(),
             committed_height: AtomicUsize::new(committed_height),
         }
     }
@@ -1957,7 +1957,6 @@ impl BlockHashes {
     }
     /// Capture the current immutable generation without copying history.
     pub fn view(&self) -> BlockHashesView<'_> {
-        let _release = self.released.guard(());
         let inner = match &self.inner {
             BlockHashStorage::Owned(map) => BlockHashesViewInner::Owned(map.read()),
             BlockHashStorage::EmergencyFastMapped(mapping) => {
@@ -1971,7 +1970,6 @@ impl BlockHashes {
         let inner = match &self.inner {
             BlockHashStorage::Owned(map) => {
                 let view = map.try_read()?;
-                drop(self.released.guard(()));
                 BlockHashesViewInner::Owned(view)
             }
             BlockHashStorage::EmergencyFastMapped(mapping) => {
@@ -1987,7 +1985,7 @@ impl BlockHashes {
     }
     #[cfg(test)]
     fn writer_available(&self) -> bool {
-        self.budget.with_deferred_refund_notifications(|| {
+        self.budget.with_deferred_refund_notifications(|_| {
             self.map()
                 .is_none_or(|map| map.try_write_admitted(|d| self.admit(d)).is_ok())
         })
@@ -2009,7 +2007,7 @@ impl<'a> BlockHashesBlock<'a> {
             "emergency Fast block hashes are read-only; restart in Strict mode before mutation",
         );
         let release = inner.released.guard(());
-        let work = inner.budget.with_deferred_refund_notifications(|| {
+        let work = inner.budget.with_deferred_refund_notifications(|_| {
             let mut work = map
                 .try_write_admitted(|d| inner.admit(d))
                 .expect("fixture hash writer admission")
@@ -2062,7 +2060,7 @@ impl BlockHashesBlock<'_> {
             );
             // Explicit fixture owners may build multiple hashes. Production
             // acquisition always reserves exactly one successor before World.
-            self.inner.budget.with_deferred_refund_notifications(|| {
+            self.inner.budget.with_deferred_refund_notifications(|_| {
                 self.work
                     .try_insert_admitted(self.work.len(), hash, |d| self.inner.admit(d))
                     .expect("fixture history insertion admission");
@@ -2132,11 +2130,7 @@ impl DetachedBlockHashes {
         let Some(map) = target.map() else {
             return Ok(false);
         };
-        let result = self.work.try_matches_current(map);
-        if result.is_ok() {
-            drop(target.released.guard(()));
-        }
-        result
+        self.work.try_matches_current(map)
     }
     pub(crate) fn matches_block_predecessor(&self, block: &BlockHashesBlock<'_>) -> bool {
         self.mode == block.mode
@@ -4788,7 +4782,7 @@ pub enum LaneLifecycleError {
         /// Original physical lock which prevented acquisition.
         field: &'static str,
         /// Release observation captured before probing that lock.
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
     },
 }
 /// Errors surfaced while installing runtime ZK configuration into committed state.
@@ -27971,7 +27965,7 @@ impl State {
     /// waiting on this exact mutex observation; a wake requires a fresh probe.
     pub(crate) fn try_lock_lane_lifecycle_work_admission(
         &self,
-    ) -> Result<PublicationGuard<'_>, mv::ReleaseWait> {
+    ) -> Result<PublicationGuard<'_>, concread::release::ReleaseWait> {
         self.lane_lifecycle_lock.try_lock_or_wait()
     }
     fn lane_consensus_lifecycle_snapshot(&self) -> LaneConsensusLifecycleSnapshot {
@@ -55686,7 +55680,7 @@ impl<'state> StateBlock<'state> {
         >,
     ) -> Result<(), TransactionsBlockError> {
         let hash_budget = self.block_hashes.inner.budget.clone();
-        hash_budget.with_deferred_refund_notifications(|| {
+        hash_budget.with_deferred_refund_notifications(|_| {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         if let Err(error) = self.verify_execution_output_publication() {
             error!(
@@ -55771,6 +55765,8 @@ impl<'state> StateBlock<'state> {
             Ok(())
         };
         let merge_runtime_effects = self.merge_execution_runtime_effects();
+        // Outlive the component writers and commit fence, including unwind.
+        let membership_retirement;
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
             // Keep the linear finality/output and native-source owners alive
@@ -56220,7 +56216,7 @@ impl<'state> StateBlock<'state> {
             let _view_generation = state_ref.begin_state_view_write();
             let state_write_lock_hold_start = Instant::now();
             let tx_commit_start = Instant::now();
-            transactions.publish();
+            membership_retirement = transactions.publish();
             let tx_commit_hold = tx_commit_start.elapsed();
             // Membership was admitted before every fallible resource step.
             // The exact retained journals now publish under one State writer.
@@ -56430,6 +56426,7 @@ impl<'state> StateBlock<'state> {
             }
         }
         drop(_state_commit_lock);
+        drop(membership_retirement);
         drop(hash_retirement);
         Ok(())
         })

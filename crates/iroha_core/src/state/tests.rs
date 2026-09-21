@@ -26621,7 +26621,7 @@ lane_relay_state_test! { lane_relay_publication_retains_lifecycle_fence_through_
             .then(|| state.lane_lifecycle_lock.try_lock_or_wait().err())
             .flatten()
             .map(|wait| wait.wait_for_release());
-        let poll = |wait: &mut mv::ReleaseFuture| {
+        let poll = |wait: &mut concread::release::ReleaseFuture| {
             std::future::Future::poll(
                 std::pin::Pin::new(wait),
                 &mut std::task::Context::from_waker(std::task::Waker::noop()),

@@ -3,10 +3,15 @@ use std::{alloc::Layout, marker::PhantomData};
 use concread::ebrcell::{EbrCellOwned, Untracked};
 
 use crate::{
-    BlockMode, PublicationPreparationError, PublicationPreparationResult, ReleaseGuard,
-    ReleaseNotification, Value,
+    BlockMode, PublicationCleanup, PublicationPreparationError, PublicationPreparationResult,
+    ReleaseGuard, ReleaseNotification, Value,
     publication::{CapturedPublication, NextPublication, Publication},
 };
+
+#[path = "cell/physical.rs"]
+mod physical;
+use physical::PreparedCellWriters;
+pub use physical::PublishedPublication;
 /// Multi-version storage for a single value.
 ///
 /// Charged cells require both original allocation owners before cloning either
@@ -363,18 +368,24 @@ impl<V: Value, Admission, Charge: Send + Sync + 'static> Detached<V, Admission, 
         PreparedPublication<'target, V, Admission, Installation, Charge>,
         Self,
         E,
+        Installation,
     > {
-        if let Err(error) = self
+        let mut cleanup = PublicationCleanup::empty();
+        let (checked, probe) = self
             .metadata
             .predecessor
-            .try_check_current(&target.publication)
-        {
-            return Err((self, error));
+            .try_check_current(&target.publication);
+        cleanup.identities[0] = probe;
+        if let Err(error) = checked {
+            return Err((self, error, cleanup));
         }
         let installation = match admit(&self, target) {
             Ok(installation) => installation,
-            Err(error) => return Err((self, PublicationPreparationError::Admission(error))),
+            Err(error) => {
+                return Err((self, PublicationPreparationError::Admission(error), cleanup));
+            }
         };
+        cleanup.installation = Some(installation);
         let Self {
             revert,
             blocks,
@@ -396,6 +407,7 @@ impl<V: Value, Admission, Charge: Send + Sync + 'static> Detached<V, Admission, 
                         metadata,
                     },
                     error,
+                    cleanup,
                 ));
             }
         };
@@ -408,7 +420,8 @@ impl<V: Value, Admission, Charge: Send + Sync + 'static> Detached<V, Admission, 
                 } else {
                     PublicationPreparationError::after_failed_acquisition(wait)
                 };
-                let revert = revert.release_with(|writer| writer.detach());
+                let (revert, released) = revert.release_deferred(|writer| writer.detach());
+                cleanup.writers[1] = Some(released);
                 return Err((
                     Self {
                         revert,
@@ -416,22 +429,22 @@ impl<V: Value, Admission, Charge: Send + Sync + 'static> Detached<V, Admission, 
                         metadata,
                     },
                     error,
+                    cleanup,
                 ));
             }
         };
-        let prepared = PreparedPublication {
-            revert,
-            blocks,
-            publication: &target.publication,
+        let mut prepared = PreparedPublication {
+            writers: PreparedCellWriters::new(revert, blocks, cleanup.identities[0].take()),
             metadata,
-            installation,
+            installation: cleanup.installation.take().expect("original installation"),
         };
-        if let Err(error) = prepared
-            .metadata
-            .predecessor
-            .try_check_current(&target.publication)
-        {
-            return Err((prepared.abort(), error));
+        if let Err(error) = prepared.writers.prepare(
+            target,
+            &prepared.metadata.predecessor,
+            prepared.metadata.dirty,
+        ) {
+            let (journal, cleanup) = prepared.abort();
+            return Err((journal, error, cleanup));
         }
         Ok(prepared)
     }
@@ -447,9 +460,7 @@ pub struct PreparedPublication<
     Installation,
     Charge: Send + Sync + 'static = Untracked,
 > {
-    revert: CellWriter<'target, Option<V>, Charge>,
-    blocks: CellWriter<'target, V, Charge>,
-    publication: &'target Publication,
+    writers: PreparedCellWriters<'target, V, Charge>,
     metadata: DetachedMetadata<Admission>,
     // Release temporary resources after the original writers and payloads.
     installation: Installation,
@@ -458,23 +469,28 @@ pub struct PreparedPublication<
 impl<V: Value, Admission, Installation, Charge: Send + Sync + 'static>
     PreparedPublication<'_, V, Admission, Installation, Charge>
 {
-    /// Release both writer locks and return the exact original allocation owners.
-    pub fn abort(self) -> Detached<V, Admission, Charge> {
+    /// Release both writers and return the original journals and deferred cleanup.
+    /// Retain the cleanup until every enclosing component and fence has unlocked.
+    pub fn abort(
+        self,
+    ) -> (
+        Detached<V, Admission, Charge>,
+        PublicationCleanup<Installation>,
+    ) {
         let Self {
-            revert,
-            blocks,
-            publication: _,
+            writers,
             metadata,
             installation,
         } = self;
-        let blocks = blocks.release_with(|writer| writer.detach());
-        let revert = revert.release_with(|writer| writer.detach());
-        drop(installation);
-        Detached {
-            revert,
-            blocks,
-            metadata,
-        }
+        let (blocks, revert, retirement) = writers.abort(installation);
+        (
+            Detached {
+                revert,
+                blocks,
+                metadata,
+            },
+            retirement,
+        )
     }
 
     /// Publish once, returning capture and temporary installation reservations.
@@ -483,23 +499,20 @@ impl<V: Value, Admission, Installation, Charge: Send + Sync + 'static>
     /// The original next identity was allocated before detachment. Collector and
     /// other control bookkeeping still require their own admission; this method
     /// makes no complete heap-budget or allocation-free commit guarantee.
-    pub fn publish(self) -> (Admission, Installation) {
+    pub fn publish(self) -> PublishedPublication<V, Admission, Installation, Charge> {
         let Self {
-            revert,
-            blocks,
-            publication,
+            writers,
             metadata,
             installation,
         } = self;
         let DetachedMetadata {
             predecessor: _,
             mode: _,
-            dirty,
+            dirty: _,
             next,
             admission,
         } = metadata;
-        publish_pair(blocks, revert, publication, next, dirty, true);
-        (admission, installation)
+        writers.publish(next, admission, installation)
     }
 }
 

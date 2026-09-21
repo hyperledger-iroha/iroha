@@ -1263,7 +1263,7 @@ pub(crate) struct BodyValidationBusy {
     /// The physical resource whose acquisition failed.
     pub(crate) resource: &'static str,
     /// Original release observation, retaining no storage or State guard.
-    pub(crate) wait: mv::ReleaseWait,
+    pub(crate) wait: concread::release::ReleaseWait,
     /// Wake destination belonging to the original validation service.
     wake: std::task::Waker,
 }
@@ -1271,7 +1271,7 @@ impl BodyValidationBusy {
     /// Join a failed physical probe to its original runner notification.
     pub(crate) fn new(
         resource: &'static str,
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
         wake: std::task::Waker,
     ) -> Self {
         Self {
@@ -1288,7 +1288,7 @@ impl BodyValidationBusy {
 }
 
 /// One bounded physical history dependency retained by its original proposal owner.
-pub(crate) struct HistoryAdmissionWait(mv::ReleaseFuture);
+pub(crate) struct HistoryAdmissionWait(concread::release::ReleaseFuture);
 impl std::fmt::Debug for HistoryAdmissionWait {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -1298,7 +1298,7 @@ impl std::fmt::Debug for HistoryAdmissionWait {
 }
 impl HistoryAdmissionWait {
     /// Register before returning to the runner, including releases racing registration.
-    pub(crate) fn new(wait: mv::ReleaseWait, wake: &std::task::Waker) -> Self {
+    pub(crate) fn new(wait: concread::release::ReleaseWait, wake: &std::task::Waker) -> Self {
         let mut pending = Self(wait.wait_for_release());
         if pending.is_ready(wake) {
             wake.wake_by_ref();
@@ -1325,7 +1325,7 @@ pub(crate) enum LocalValidationRefusal {
     #[error("proposal validation awaits local Queue ownership release")]
     QueueRelease {
         /// Release observed while holding the original Queue ownership cut.
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
         /// Original runner wake destination, also used for worker capacity.
         wake: std::task::Waker,
     },
@@ -5174,8 +5174,8 @@ mod history_admission_wait_tests {
     #[test]
     fn history_admission_registers_original_release_and_release_before_registration() {
         for early in [false, true] {
-            let original = mv::ReleaseNotification::default();
-            let unrelated = mv::ReleaseNotification::default();
+            let original = concread::release::ReleaseNotification::default();
+            let unrelated = concread::release::ReleaseNotification::default();
             let release = original.observe();
             let count = Arc::new(WakeCount(AtomicUsize::new(0)));
             let wake = std::task::Waker::from(Arc::clone(&count));

@@ -31,8 +31,37 @@ pub enum PublicationPreparationError<E> {
 
 /// Successful preparation or the exact original journal and its local refusal.
 /// The error retains custody so a caller can defer without rebuilding execution.
-pub type PublicationPreparationResult<Prepared, Journal, E> =
-    Result<Prepared, (Journal, PublicationPreparationError<E>)>;
+pub type PublicationPreparationResult<Prepared, Journal, E, Installation> = Result<
+    Prepared,
+    (
+        Journal,
+        PublicationPreparationError<E>,
+        PublicationCleanup<Installation>,
+    ),
+>;
+
+/// Original notifications and admission retained after a refused or aborted pair.
+/// This owns no physical lock. The aggregate must keep it until all enclosing
+/// participants have released, including on an error return. No source is
+/// fabricated for an acquisition that did not happen.
+#[must_use = "retain original cleanup through the enclosing publication fences"]
+pub struct PublicationCleanup<Installation> {
+    pub(crate) _readers: [Option<concread::release::DeferredRelease>; 2],
+    pub(crate) writers: [Option<concread::release::DeferredRelease>; 2],
+    pub(crate) identities: [Option<IdentityRetirement>; 2],
+    pub(crate) installation: Option<Installation>,
+}
+
+impl<I> PublicationCleanup<I> {
+    pub(crate) fn empty() -> Self {
+        Self {
+            _readers: [None, None],
+            writers: [None, None],
+            identities: [None, None],
+            installation: None,
+        }
+    }
+}
 
 impl<E> PublicationPreparationError<E> {
     /// Classify failed physical acquisition using its pre-probe observation.
@@ -81,6 +110,49 @@ pub(crate) struct Publication {
 pub(crate) struct CapturedPublication {
     owner: Identity<Owner>,
     version: Identity<Version>,
+}
+
+/// Exact identity mutex retained before any participant transfers ownership.
+pub(crate) struct PreparedIdentity<'a> {
+    version: ReleaseGuard<'a, std::sync::MutexGuard<'a, Identity<Version>>>,
+}
+
+/// Released identity and original predecessor storage, retained through cleanup.
+pub(crate) struct IdentityRetirement {
+    _version: Option<Identity<Version>>,
+    _release: concread::release::DeferredRelease,
+}
+
+impl PreparedIdentity<'_> {
+    pub(crate) fn abort(self) -> IdentityRetirement {
+        let ((), release) = self.version.release_deferred(drop);
+        IdentityRetirement {
+            _version: None,
+            _release: release,
+        }
+    }
+
+    /// Transfer all participants under the already acquired identity mutex.
+    /// Callbacks must only move ownership and release physical locks; arbitrary
+    /// retirement stays with the returned owner after the enclosing fences.
+    pub(crate) fn publish_retaining<Published, Retirement>(
+        mut self,
+        next: NextPublication,
+        publish: impl FnOnce() -> Published,
+        release: impl FnOnce(Published) -> Retirement,
+    ) -> (Retirement, IdentityRetirement) {
+        let published = publish();
+        let version = std::mem::replace(&mut **self.version, next.0);
+        let retirement = release(published);
+        let ((), released) = self.version.release_deferred(drop);
+        (
+            retirement,
+            IdentityRetirement {
+                _version: Some(version),
+                _release: released,
+            },
+        )
+    }
 }
 
 /// Opaque local equality of a block's original owner, predecessor and mode.
@@ -201,9 +273,24 @@ impl CapturedPublication {
     pub(crate) fn try_check_current<E>(
         &self,
         publication: &Publication,
-    ) -> Result<(), PublicationPreparationError<E>> {
+    ) -> (
+        Result<(), PublicationPreparationError<E>>,
+        Option<IdentityRetirement>,
+    ) {
+        match self.try_prepare_current(publication) {
+            Ok(identity) => (Ok(()), Some(identity.abort())),
+            Err((error, retirement)) => (Err(error), retirement),
+        }
+    }
+
+    /// Retain the exact identity after a nonblocking predecessor authentication.
+    pub(crate) fn try_prepare_current<'a, E>(
+        &self,
+        publication: &'a Publication,
+    ) -> Result<PreparedIdentity<'a>, (PublicationPreparationError<E>, Option<IdentityRetirement>)>
+    {
         if !Shared::ptr_eq(&self.owner, &publication.owner) {
-            return Err(PublicationPreparationError::Changed);
+            return Err((PublicationPreparationError::Changed, None));
         }
         let wait = publication.released.observe();
         match publication
@@ -211,10 +298,15 @@ impl CapturedPublication {
             .try_lock()
             .map(|guard| publication.released.poisoning_guard(guard))
         {
-            Ok(version) if Shared::ptr_eq(&self.version, &version) => Ok(()),
-            Ok(_) => Err(PublicationPreparationError::Changed),
-            Err(TryLockError::WouldBlock) => Err(PublicationPreparationError::Busy(wait)),
-            Err(TryLockError::Poisoned(_)) => Err(PublicationPreparationError::Poisoned),
+            Ok(version) if Shared::ptr_eq(&self.version, &version) => {
+                Ok(PreparedIdentity { version })
+            }
+            Ok(version) => Err((
+                PublicationPreparationError::Changed,
+                Some(PreparedIdentity { version }.abort()),
+            )),
+            Err(TryLockError::WouldBlock) => Err((PublicationPreparationError::Busy(wait), None)),
+            Err(TryLockError::Poisoned(_)) => Err((PublicationPreparationError::Poisoned, None)),
         }
     }
 

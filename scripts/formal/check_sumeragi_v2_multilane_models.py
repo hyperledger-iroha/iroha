@@ -2036,7 +2036,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "PublicationMutex",
         (
             "inner: parking_lot::Mutex<T>,",
-            "released: mv::ReleaseNotification,",
+            "released: concread::release::ReleaseNotification,",
         ),
     ),
     (
@@ -2044,7 +2044,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "struct",
         "PublicationGuard",
         (
-            "inner: mv::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,",
+            "inner: concread::release::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,",
         ),
     ),
     (

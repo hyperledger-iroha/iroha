@@ -1616,11 +1616,11 @@ impl Wake for WakeCount {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
-fn poll(wait: &mut mv::ReleaseFuture, wakes: &Arc<WakeCount>) -> Poll<()> {
+fn poll(wait: &mut concread::release::ReleaseFuture, wakes: &Arc<WakeCount>) -> Poll<()> {
     Pin::new(wait).poll(&mut Context::from_waker(&Waker::from(Arc::clone(wakes))))
 }
 
-fn busy_wait(error: CarrierPhysicalPreparationError<Infallible>) -> mv::ReleaseWait {
+fn busy_wait(error: CarrierPhysicalPreparationError<Infallible>) -> concread::release::ReleaseWait {
     match error {
         CarrierPhysicalPreparationError::Fence { wait, .. }
         | CarrierPhysicalPreparationError::Kura(KuraPublicationPreparationError::Busy {
@@ -1822,11 +1822,11 @@ fn aggregate_acquisition_holds_every_family_without_publishing_or_losing_origina
     assert_eq!(state.state_view_generation(), generation);
     assert!(matches!(
         world_probe.try_prepare_publication(&state.world, |_, _| Ok::<_, Infallible>(())),
-        Err((_, WorldPublicationError::Field(_)))
+        Err((_, WorldPublicationError::Field(_), _))
     ));
     assert!(matches!(
         runtime_probe.try_prepare_publication(&state, |_, _| Ok::<_, Infallible>(())),
-        Err((_, RuntimePublicationError::Component { .. }))
+        Err((_, RuntimePublicationError::Component { .. }, _))
     ));
     let retry = prepared.abort();
     assert_fences_free_except(&state, "");
@@ -2581,3 +2581,163 @@ fn attached_foreign_checkpoint_never_grants_state_acquisition() {
 
 #[path = "queue_publication_tests.rs"]
 mod queue_publication_tests;
+
+#[test]
+fn completion_fences_defer_original_callbacks_until_commit_unlock_on_return_and_unwind() {
+    use crate::publication_lock::PublicationMutex;
+    struct Reenter {
+        state: [Arc<PublicationMutex>; 3],
+        kura: Arc<crate::kura::Kura>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for Reenter {
+        fn wake(self: Arc<Self>) {
+            for lock in &self.state {
+                assert!(
+                    lock.try_lock_or_wait().is_ok(),
+                    "all original State fences released"
+                );
+            }
+            assert!(
+                self.kura.try_publication_lease().is_ok(),
+                "all original Kura fences released"
+            );
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    for unwind in [false, true] {
+        let locks = std::array::from_fn(|_| Arc::new(PublicationMutex::default()));
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let fences = CarrierFences {
+            _state: StateFences {
+                _commit: locks[0].lock(),
+                _lifecycle: locks[1].lock(),
+                _write: locks[2].lock(),
+            },
+            _queue: None,
+            _kura: kura.try_publication_lease().unwrap(),
+        };
+        let probe = Arc::new(Reenter {
+            state: locks.clone(),
+            kura: Arc::clone(&kura),
+            wakes: AtomicUsize::new(0),
+        });
+        let waker = Waker::from(Arc::clone(&probe));
+        let mut waits: Vec<_> = locks
+            .iter()
+            .map(|lock| lock.try_lock_or_wait().err().unwrap().wait_for_release())
+            .collect();
+        let Err(KuraPublicationPreparationError::Busy { wait, .. }) = kura.try_publication_lease()
+        else {
+            panic!("original Kura fence held");
+        };
+        waits.push(wait.wait_for_release());
+        for wait in &mut waits {
+            assert!(
+                Pin::new(wait)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+        }
+        let completion = fences.release_for_completion();
+        assert_eq!(probe.wakes.load(Ordering::SeqCst), 0);
+        assert!(
+            locks[0].try_lock_or_wait().is_err(),
+            "completion retains Apply serialization"
+        );
+        if unwind {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let _completion = completion;
+                    panic!("derived completion work unwound");
+                }))
+                .is_err()
+            );
+        } else {
+            drop(completion);
+        }
+        assert_eq!(probe.wakes.load(Ordering::SeqCst), 4);
+        for wait in &mut waits {
+            assert!(
+                Pin::new(wait)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_ready()
+            );
+        }
+    }
+}
+
+#[test]
+fn carrier_abort_drop_and_unwind_release_all_original_fences_before_component_wake() {
+    struct Reenter {
+        state: Arc<State>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for Reenter {
+        fn wake(self: Arc<Self>) {
+            assert_fences_free_except(&self.state, "");
+            assert!(self.state.kura.try_publication_lease().is_ok());
+            assert_eq!(self.state.committed_height(), 0);
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    for finish in 0..3 {
+        let (state, decision) = fixture_decision();
+        let state: Arc<State> = state.into();
+        let generation = state.state_view_generation();
+        let competitor = state
+            .world
+            .block()
+            .try_detach_journals(|_| Ok::<_, Infallible>(()))
+            .unwrap();
+        let prepared = acquire(decision, &state);
+        let (competitor, error, _cleanup) = competitor
+            .try_prepare_publication(&state.world, |_, _| Ok::<_, Infallible>(()))
+            .err()
+            .unwrap();
+        drop(_cleanup);
+        let WorldPublicationError::Field(crate::state::world_journals::publication::FieldRefusal {
+            cause: mv::PublicationPreparationError::Busy(wait),
+            ..
+        }) = error
+        else {
+            panic!("original World component must be held");
+        };
+        let mut wait = wait.wait_for_release();
+        let probe = Arc::new(Reenter {
+            state: Arc::clone(&state),
+            wakes: AtomicUsize::new(0),
+        });
+        let waker = Waker::from(Arc::clone(&probe));
+        assert!(
+            Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        match finish {
+            0 => {
+                drop(prepared.abort());
+            }
+            1 => drop(prepared),
+            _ => {
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        let _prepared = prepared;
+                        panic!("abandon complete carrier during unwind");
+                    }))
+                    .is_err()
+                );
+            }
+        }
+        assert_eq!(probe.wakes.load(Ordering::SeqCst), 1);
+        assert!(
+            Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(&waker))
+                .is_ready()
+        );
+        assert_eq!(state.state_view_generation(), generation);
+        if finish != 2 {
+            assert!(competitor.matches_current(&state.world));
+        }
+    }
+}

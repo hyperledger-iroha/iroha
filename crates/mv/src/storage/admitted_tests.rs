@@ -184,7 +184,7 @@ fn direct_and_reacquired_publication_install_whole_pair_before_charge_cleanup_pa
             live: Mutex::new(Vec::new()),
             panic_on: AtomicUsize::new(usize::MAX),
         });
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let storage = tracked_storage(&budget, &records);
             let provider = |component, demand: AllocationDemand| {
                 Ok::<_, AdmittedStorageError>(Policy {
@@ -281,7 +281,7 @@ fn direct_and_reacquired_publication_install_whole_pair_before_charge_cleanup_pa
             assert_eq!(storage.blocks.read().get(&7), Some(&71));
             assert_eq!(storage.revert.read().get(&7), Some(&Some(70)));
             assert_eq!(
-                predecessor.try_check_current::<()>(&storage.publication),
+                predecessor.try_check_current::<()>(&storage.publication).0,
                 Err(PublicationPreparationError::Changed)
             );
             assert_eq!(old_current.get(&7), Some(&70));
@@ -316,7 +316,7 @@ fn refused_admitted_acquisition_signals_only_the_original_released_writer() {
         records: Arc::clone(&records),
         component: 0,
     };
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         let storage = tracked_storage(&budget, &records);
         let (seed, _) = storage
             .blocks
@@ -657,6 +657,118 @@ impl AdmittedStoragePolicy for ReplacementPolicy {
 
 type ReplacementStorage = Storage<u64, u64, Prepaid<ReplacementPolicy>>;
 
+#[test]
+fn admitted_block_abandonment_unlocks_both_writers_before_native_wakes() {
+    struct Probe {
+        storage: Arc<ReplacementStorage>,
+        budget: AllocationBudget,
+        calls: AtomicUsize,
+        panic_once: std::sync::atomic::AtomicBool,
+    }
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            let provider = |demand: AllocationDemand| {
+                Ok::<_, ()>(ReplacementPolicy(
+                    self.budget.try_reserve_bytes(demand.bytes()).unwrap(),
+                ))
+            };
+            assert!(
+                self.storage.revert.is_poisoned()
+                    || self.storage.revert.try_write_admitted(provider).is_ok()
+            );
+            assert!(
+                self.storage.blocks.is_poisoned()
+                    || self.storage.blocks.try_write_admitted(provider).is_ok()
+            );
+            self.calls.fetch_add(1, SeqCst);
+            assert!(
+                !self.panic_once.swap(false, SeqCst),
+                "native wake interrupted abandonment"
+            );
+        }
+    }
+    for replacement in [false, true] {
+        for mode in 0..3 {
+            let budget = AllocationBudget::new(1 << 20);
+            let _context = ReplacementContext::new(&budget);
+            let storage = Arc::new(replacement_fixture(&budget));
+            let before = replacement_rows(&storage.view());
+            let undo_before: Vec<_> = storage
+                .revert
+                .read()
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect();
+            let predecessor = storage.publication.capture();
+            let probe = Arc::new(Probe {
+                storage: Arc::clone(&storage),
+                budget: budget.clone(),
+                calls: AtomicUsize::new(0),
+                panic_once: std::sync::atomic::AtomicBool::new(mode == 2),
+            });
+            let waker = Waker::from(Arc::clone(&probe));
+            let mut context = Context::from_waker(&waker);
+            let mut undo = std::pin::pin!(storage.revert_released.observe().wait_for_release());
+            let mut current = std::pin::pin!(storage.blocks_released.observe().wait_for_release());
+            assert!(undo.as_mut().poll(&mut context).is_pending());
+            assert!(current.as_mut().poll(&mut context).is_pending());
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let operation = |block: &mut Block<'_, _, _, _>| {
+                    let mut tx = block.try_transaction_admitted().unwrap();
+                    tx.try_insert_admitted(9, 99).unwrap();
+                    tx.apply();
+                    assert!(mode != 1, "callback interrupted abandonment");
+                    Err::<(), _>(())
+                };
+                if replacement {
+                    storage.try_with_admitted_replacement(operation)
+                } else {
+                    storage.try_with_admitted_block(operation)
+                }
+            }));
+            if mode == 0 {
+                assert!(matches!(result, Ok(Err(AdmittedBlockError::Callback(())))));
+            } else {
+                assert!(result.is_err());
+            }
+            let poisoned = mode == 1;
+            assert_eq!(
+                (storage.revert.is_poisoned(), storage.blocks.is_poisoned()),
+                (poisoned, poisoned)
+            );
+            assert_eq!(
+                (
+                    storage.revert_released.observe().is_poisoned(),
+                    storage.blocks_released.observe().is_poisoned()
+                ),
+                (poisoned, poisoned)
+            );
+            assert_eq!(probe.calls.load(SeqCst), 2);
+            assert!(undo.as_mut().poll(&mut context).is_ready());
+            assert!(current.as_mut().poll(&mut context).is_ready());
+            assert_eq!(replacement_rows(&storage.view()), before);
+            assert_eq!(
+                storage
+                    .revert
+                    .read()
+                    .iter()
+                    .map(|(key, value)| (*key, *value))
+                    .collect::<Vec<_>>(),
+                undo_before
+            );
+            assert_eq!(
+                predecessor.try_check_current::<()>(&storage.publication).0,
+                Ok(())
+            );
+            if !poisoned {
+                storage
+                    .try_with_admitted_block(|_| Ok::<_, ()>(()))
+                    .unwrap();
+            }
+        }
+    }
+}
+
 fn replacement_fixture(budget: &AllocationBudget) -> ReplacementStorage {
     let storage = ReplacementStorage::try_new_admitted(budget.clone()).unwrap();
     storage
@@ -715,7 +827,7 @@ fn admitted_replacement_retains_mode_and_restored_preimages_through_callback_abo
             assert!(matches!(result, Err(AdmittedBlockError::Callback(()))));
             assert_eq!(budget.reserved_bytes(), before);
             assert_eq!(
-                predecessor.try_check_current::<()>(&storage.publication),
+                predecessor.try_check_current::<()>(&storage.publication).0,
                 Ok(())
             );
             assert_eq!(storage.blocks.read().get(&2), Some(&21));
@@ -758,7 +870,7 @@ fn admitted_replacement_contention_names_only_the_original_held_writer() {
         let budget = AllocationBudget::new(1 << 20);
         let _context = ReplacementContext::new(&budget);
         let storage = replacement_fixture(&budget);
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let provider = |demand: AllocationDemand| {
                 Ok::<_, AdmittedStorageError>(ReplacementPolicy(
                     budget.try_reserve_bytes(demand.bytes()).unwrap(),
@@ -799,7 +911,7 @@ fn admitted_replacement_contention_names_only_the_original_held_writer() {
             assert_eq!(release, expected);
             assert_eq!(budget.reserved_bytes(), before);
             assert_eq!(
-                predecessor.try_check_current::<()>(&storage.publication),
+                predecessor.try_check_current::<()>(&storage.publication).0,
                 Ok(())
             );
             let mut future = std::pin::pin!(release.wait_for_release());
@@ -847,7 +959,7 @@ fn admitted_replacement_of_empty_undo_still_records_replace_mode() {
         })
         .unwrap();
     assert_eq!(
-        predecessor.try_check_current::<()>(&storage.publication),
+        predecessor.try_check_current::<()>(&storage.publication).0,
         Err(PublicationPreparationError::Changed)
     );
     drop(storage);
@@ -882,7 +994,7 @@ fn admitted_replacement_final_undo_clear_refusal_preserves_original_pair() {
     ));
     assert_eq!(REPLACEMENT_POLICY_CALLS.with(|calls| calls.get()), 2);
     assert_eq!(
-        predecessor.try_check_current::<()>(&storage.publication),
+        predecessor.try_check_current::<()>(&storage.publication).0,
         Ok(())
     );
     assert_eq!(storage.blocks.read().get(&2), Some(&21));
@@ -929,7 +1041,7 @@ fn admitted_replacement_callback_cleanup_cannot_publish_a_partial_owner() {
     assert!(result.is_err());
     assert_eq!(budget.reserved_bytes(), before);
     assert_eq!(
-        predecessor.try_check_current::<()>(&storage.publication),
+        predecessor.try_check_current::<()>(&storage.publication).0,
         Ok(())
     );
     assert_eq!(storage.blocks.read().get(&2), Some(&21));
@@ -978,7 +1090,7 @@ fn admitted_replacement_second_plan_refusal_returns_a_healthy_original_pair() {
         }
         assert_eq!(budget.reserved_bytes(), before);
         assert_eq!(
-            predecessor.try_check_current::<()>(&storage.publication),
+            predecessor.try_check_current::<()>(&storage.publication).0,
             Ok(())
         );
         assert_eq!(storage.blocks.read().get(&2), Some(&21));
@@ -1027,7 +1139,7 @@ fn admitted_replacement_planning_refusal_discards_the_restored_private_prefix() 
     );
     assert_eq!(budget.reserved_bytes(), before);
     assert_eq!(
-        predecessor.try_check_current::<()>(&storage.publication),
+        predecessor.try_check_current::<()>(&storage.publication).0,
         Ok(())
     );
     assert_eq!(current.get(&2), Some(&21));

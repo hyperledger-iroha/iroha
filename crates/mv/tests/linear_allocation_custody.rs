@@ -718,7 +718,7 @@ fn scoped_old_reader_refund_frees_original_storage_before_unlock_notification() 
     let waker = Waker::from(Arc::clone(&wake));
     let mut context = Context::from_waker(&waker);
     let mut wait = None;
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         let held = owner
             .write_charged(|data, layouts| charges(&budget, data, layouts, 3))
             .unwrap();
@@ -943,7 +943,7 @@ fn original_admitted_input_survives_refusal_detach_and_reattach_without_readmiss
         (&**writer.input.payload) as *const Reader as usize,
         input_pointer.load(SeqCst)
     );
-    budget.with_deferred_refund_notifications(|| without_allocations(|| writer.commit()));
+    budget.with_deferred_refund_notifications(|_| without_allocations(|| writer.commit()));
     assert_eq!(owner.read().value, 29);
     assert_eq!(CREATED_WRITERS.load(SeqCst), 1);
     drop(owner);
@@ -997,7 +997,7 @@ fn admitted_input_abort_and_constructor_panic_refund_after_original_scope_unlock
         let mut wait = None;
         PANIC_CREATE.store(panic_create, SeqCst);
         let result = catch_unwind(AssertUnwindSafe(|| {
-            budget.with_deferred_refund_notifications(|| {
+            budget.with_deferred_refund_notifications(|_| {
                 let writer = owner
                     .write_charged(|_, layouts| {
                         let admission = input_admission(&budget, layouts)?;

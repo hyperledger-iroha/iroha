@@ -18,16 +18,69 @@ mod lane_retirement_observer {
         }
     }
 
-    fn poll(wait: &mut mv::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
+    fn poll(wait: &mut concread::release::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
         let waker = Waker::from(Arc::clone(count));
         Pin::new(wait).poll(&mut Context::from_waker(&waker))
     }
 
-    fn waiting(queue: &Queue) -> mv::ReleaseWait {
+    fn waiting(queue: &Queue) -> concread::release::ReleaseWait {
         queue
             .try_lock_lane_retirement_observer()
             .err()
             .expect("the original transition mutex is held")
+    }
+
+    #[test]
+    fn deferred_cut_unlocks_all_original_queue_fences_before_reentrant_callbacks() {
+        use crate::publication_lock::PublicationMutex;
+        struct Reenter {
+            queue: Arc<Queue>,
+            outer: Arc<PublicationMutex>,
+            wakes: AtomicUsize,
+        }
+        impl Wake for Reenter {
+            fn wake(self: Arc<Self>) {
+                assert!(self.outer.try_lock_or_wait().is_ok(), "outer fence released");
+                assert!(self.queue.lane_reservation_transition_lock.try_lock_or_wait().is_ok());
+                assert!(self.queue.push_remove_lock.try_lock_or_wait().is_ok());
+                assert!(self.queue.lane_reservations.try_lock_or_wait().is_ok());
+                self.wakes.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        for unwind in [false, true] {
+            let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+            let queue = Arc::new(Queue::test(config_factory(), &time_source));
+            let outer = Arc::new(PublicationMutex::default());
+            let guard = outer.lock();
+            let cut = queue.try_lock_lane_retirement_observer().unwrap().try_into_cut().unwrap();
+            let mut waits = [
+                queue.lane_reservation_transition_lock.try_lock_or_wait().err().unwrap().wait_for_release(),
+                queue.push_remove_lock.try_lock_or_wait().err().unwrap().wait_for_release(),
+                queue.lane_reservations.try_lock_or_wait().err().unwrap().wait_for_release(),
+            ];
+            let probe = Arc::new(Reenter { queue: Arc::clone(&queue), outer: Arc::clone(&outer), wakes: AtomicUsize::new(0) });
+            let waker = Waker::from(Arc::clone(&probe));
+            for wait in &mut waits {
+                assert!(Pin::new(wait).poll(&mut Context::from_waker(&waker)).is_pending());
+            }
+            let released = cut.release_deferred();
+            assert_eq!(probe.wakes.load(Ordering::SeqCst), 0);
+            if unwind {
+                assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let _released = released;
+                    let _outer = guard;
+                    panic!("Queue completion unwind");
+                })).is_err());
+            } else {
+                drop(guard);
+                drop(released);
+            }
+            assert_eq!(probe.wakes.load(Ordering::SeqCst), 3);
+            for wait in &mut waits {
+                assert!(Pin::new(wait).poll(&mut Context::from_waker(&waker)).is_ready());
+            }
+            assert!(!queue.transaction_selection_durability_faulted());
+        }
     }
 
     #[test]
@@ -560,7 +613,7 @@ mod replay_terminal_release {
         lease
     }
 
-    fn defer_committed_cleanup(fixture: &GloballyBoundGuardFixture) -> mv::ReleaseFuture {
+    fn defer_committed_cleanup(fixture: &GloballyBoundGuardFixture) -> concread::release::ReleaseFuture {
         commit_globally_bound_fixture_directly(fixture);
         assert_eq!(
             fixture

@@ -26,7 +26,7 @@ impl<'service> OriginalCarrierQueue<'service> {
     /// The caller must authenticate `belongs_to` before this physical probe.
     pub(crate) fn try_observe(
         &self,
-    ) -> Result<QueueLaneRetirementObserver<'service>, mv::ReleaseWait> {
+    ) -> Result<QueueLaneRetirementObserver<'service>, concread::release::ReleaseWait> {
         self.queue.try_lock_lane_retirement_observer()
     }
 

@@ -5296,7 +5296,7 @@ def test_merge_frontier_deferral_semantics_survive_digest_refresh(tmp_path: Path
         ('classify_merge_state_validation', 'self.validated_merge_execution_candidate = None;', 'let _ = &self.validated_merge_execution_candidate;', 'local history refusal'),
         ('classify_merge_state_validation', 'error.release_wait()', 'None', 'local history refusal'),
         ('classify_merge_state_validation', 'MergeCandidateValidationError::Frontier(error.to_string())', 'MergeCandidateValidationError::Invalid(error.to_string())', 'local history refusal'),
-        ('classify_merge_state_validation', 'HistoryAdmissionWait::new(wait.clone(), &wake)', 'HistoryAdmissionWait::new(mv::ReleaseNotification::default().observe(), &wake)', 'local history refusal'),
+        ('classify_merge_state_validation', 'HistoryAdmissionWait::new(wait.clone(), &wake)', 'HistoryAdmissionWait::new(concread::release::ReleaseNotification::default().observe(), &wake)', 'local history refusal'),
         ('classify_merge_state_validation', 'Ok(MergeCandidateValidation::Deferred)', 'Ok(MergeCandidateValidation::Ready)', 'local history refusal'),
         ('authorize_local_merge_claim', 'let state_publication_lease = state.consensus_publication_lease();', 'let state_publication_lease = ();', 'signing validates the exact generation'),
         ('authorize_local_merge_claim', 'let kura_publication_lease = kura.canonical_publication_lease();', 'let kura_publication_lease = ();', 'signing validates the exact generation'),

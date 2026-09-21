@@ -22213,7 +22213,7 @@ pub(super) mod tests {
         adapter
             .install_lane_drain_queue(Arc::clone(&queue))
             .unwrap();
-        let notification = mv::ReleaseNotification::default();
+        let notification = concread::release::ReleaseNotification::default();
         let error = crate::state::MergeLedgerCommitError::BlockHashAdmission(
             crate::state::BlockHashAdmissionError::Busy(notification.observe()),
         );

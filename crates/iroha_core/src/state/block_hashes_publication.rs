@@ -8,14 +8,24 @@ use concread::bptree::{BptreeMapPreparedCommit, OwnedWriteError};
 pub(crate) struct PreparedBlockHashes<'target, Installation> {
     owner: NativeLaneStateOwner,
     prepared: BptreeMapPreparedCommit<'target, usize, HashOf<BlockHeader>, BlockHashMode>,
-    notification: mv::ReleaseGuard<'target, ()>,
+    notification: concread::release::ReleaseGuard<'target, ()>,
     mode: mv::BlockMode,
     visible_len: usize,
     height: usize,
     committed_height: &'target AtomicUsize,
     installation: Installation,
 }
-fn refusal<E>(error: OwnedWriteError, wait: mv::ReleaseWait) -> mv::PublicationPreparationError<E> {
+/// Original abort notifications and resources after the hash writer unlocks.
+pub(crate) struct AbortedBlockHashes<Installation> {
+    _owner: NativeLaneStateOwner,
+    _release: [concread::release::DeferredRelease; 2],
+    _installation: Installation,
+}
+
+fn refusal<E>(
+    error: OwnedWriteError,
+    wait: concread::release::ReleaseWait,
+) -> mv::PublicationPreparationError<E> {
     match error {
         OwnedWriteError::Changed => mv::PublicationPreparationError::Changed,
         OwnedWriteError::Poisoned => mv::PublicationPreparationError::Poisoned,
@@ -39,7 +49,7 @@ impl DetachedBlockHashes {
         let Some(map) = target.map() else {
             return Err((self, mv::PublicationPreparationError::Changed));
         };
-        let wait = target.released.observe();
+        let wait = map.observe_reader_release();
         match self.observe_current(target) {
             Ok(true) => {}
             Ok(false) => return Err((self, mv::PublicationPreparationError::Changed)),
@@ -75,6 +85,7 @@ impl DetachedBlockHashes {
             }
         };
         let notification = target.released.guard(());
+        let wait = map.observe_reader_release();
         let prepared = match writer.try_prepare_commit() {
             Ok(prepared) => prepared,
             Err((writer, error)) => {
@@ -108,8 +119,9 @@ impl<'target, Installation> PreparedBlockHashes<'target, Installation> {
         self.owner.clone()
     }
     /// Release physical locks and return the same private tree for retry.
-    pub(crate) fn abort(self) -> DetachedBlockHashes {
+    pub(crate) fn abort(self) -> (DetachedBlockHashes, AbortedBlockHashes<Installation>) {
         let Self {
+            owner,
             prepared,
             notification,
             mode,
@@ -117,15 +129,23 @@ impl<'target, Installation> PreparedBlockHashes<'target, Installation> {
             installation,
             ..
         } = self;
-        let work = prepared.abort().detach();
-        drop(notification);
-        drop(installation);
-        DetachedBlockHashes {
-            work,
-            mode,
-            visible_len,
-            reserved_tip: None,
-        }
+        let (writer, reader) = prepared.abort_retaining();
+        let work = writer.detach();
+        let ((), writer) = notification.release_deferred(drop);
+        let retirement = AbortedBlockHashes {
+            _owner: owner,
+            _release: [reader, writer],
+            _installation: installation,
+        };
+        (
+            DetachedBlockHashes {
+                work,
+                mode,
+                visible_len,
+                reserved_tip: None,
+            },
+            retirement,
+        )
     }
     /// Publish without allocation; retain cleanup until aggregate fences release.
     pub(crate) fn publish(self) -> PublishedBlockHashes<'target, Installation> {
@@ -151,7 +171,7 @@ impl<'target, Installation> PreparedBlockHashes<'target, Installation> {
 pub(crate) struct PublishedBlockHashes<'a, Installation> {
     _retirement:
         concread::bptree::BptreeMapCommitRetirement<usize, HashOf<BlockHeader>, BlockHashMode>,
-    _notification: mv::ReleaseGuard<'a, ()>,
+    _notification: concread::release::ReleaseGuard<'a, ()>,
     _installation: Installation,
 }
 

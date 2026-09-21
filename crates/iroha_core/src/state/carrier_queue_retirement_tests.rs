@@ -175,7 +175,7 @@ struct NoopWake;
 impl Wake for NoopWake {
     fn wake(self: Arc<Self>) {}
 }
-fn poll(wait: &mut mv::ReleaseFuture) -> Poll<()> {
+fn poll(wait: &mut concread::release::ReleaseFuture) -> Poll<()> {
     Pin::new(wait).poll(&mut Context::from_waker(&Waker::from(Arc::new(NoopWake))))
 }
 

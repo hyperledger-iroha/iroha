@@ -1931,17 +1931,14 @@ MV_OWNERSHIP_STAGES = (
         'allocation::tests::partition_retains_exact_original_pool_and_conserves_real_credits',
     )),
     ('actual writer release observations', (
-        'release::tests::a_nonpoisoning_guard_unwind_does_not_poison_later_contention',
-        'release::tests::acquisition_unwind_notifies_after_raw_lock_release_without_a_published_guard',
-        'release::tests::cancellation_and_waker_replacement_do_not_steal_another_wait',
-        'release::tests::cell_abort_detach_and_publication_release_the_actual_busy_writer',
-        'release::tests::cell_prepared_and_storage_original_guards_notify_every_release_path',
-        'release::tests::inner_guard_destructor_panic_still_signals_after_its_physical_lock_releases',
-        'release::tests::partial_writer_acquisition_does_not_wake_its_own_refused_lock',
-        'release::tests::release_before_registration_is_retained_and_other_sources_do_not_wake',
-        'release::tests::release_racing_first_poll_cannot_be_lost',
-        'release::tests::storage_revert_preimage_clone_panic_wakes_an_already_registered_retry',
-        'release::tests::storage_prepared_drop_abort_and_publish_release_the_original_writers',
+        'release_tests::a_nonpoisoning_guard_unwind_does_not_poison_later_contention',
+        'release_tests::inner_guard_destructor_panic_still_signals_after_its_physical_lock_releases',
+        'release_tests::acquisition_unwind_notifies_after_raw_lock_release_without_a_published_guard',
+        'release_tests::cell_abort_detach_and_publication_release_the_actual_busy_writer',
+        'release_tests::cell_prepared_and_storage_original_guards_notify_every_release_path',
+        'release_tests::partial_writer_acquisition_does_not_wake_its_own_refused_lock',
+        'release_tests::storage_revert_preimage_clone_panic_wakes_an_already_registered_retry',
+        'release_tests::storage_prepared_drop_abort_and_publish_release_the_original_writers',
     )),
     ('charged current and undo Cell ownership', (
         'cell::charged_allocation_tests::detached_abort_keeps_original_journal_and_publish_never_returns_generation_charges',
@@ -1953,18 +1950,25 @@ MV_OWNERSHIP_STAGES = (
         'cell::charged_allocation_tests::untouched_detached_publication_releases_only_unused_current_charge',
     )),
     ('original Storage successor publication', (
+        'storage::admitted_tests::admitted_block_abandonment_unlocks_both_writers_before_native_wakes',
         'storage::publication_tests::abort_keeps_original_owner_available_after_another_component_refuses',
         'storage::publication_tests::busy_writers_return_same_journal_and_release_partial_acquisition',
         'storage::publication_tests::changed_raw_map_generation_refuses_original_owner_before_any_installation',
+        'storage::publication_tests::executing_block_abandonment_releases_both_writers_and_preserves_actual_poison',
         'storage::publication_tests::foreign_aba_and_admission_race_cannot_publish_a_stale_journal',
         'storage::publication_tests::installation_retains_original_successors_and_both_reservations_survive_publication',
         'storage::publication_tests::original_map_and_undo_survive_both_busy_writers_abort_and_publication_without_clones',
+        'storage::publication_tests::preparation_retains_readers_and_identity_and_published_cleanup_spans_the_aggregate',
         'storage::publication_tests::prepared_delta_matches_direct_commit_and_preserves_existing_readers',
+        'storage::publication_tests::prepared_pair_abandonment_releases_both_writers_and_preserves_actual_poison',
+        'storage::publication_tests::replacement_opening_panic_releases_both_original_writers_before_notifying',
         'storage::publication_tests::replacement_restores_discarded_tip_only_keys_and_candidate_undo',
         'storage::publication_tests::untouched_noop_and_absent_touches_publish_exact_undo_transitions',
+        'cell::publication_tests::prepared_cell_identity_and_cleanup_remain_owned_through_aggregate_unlock',
     )),
     ('move-only Storage journal detachment', (
         'storage::detached_tests::aborted_children_and_noop_touches_survive_detachment_without_invented_entries',
+        'storage::detached_tests::capture_and_abort_release_both_writers_before_native_wake_even_on_unwind',
         'storage::detached_tests::detached_values_outlive_the_storage_without_a_reader_pin',
         'storage::detached_tests::detachment_retains_original_values_without_clones_and_releases_reservation_last',
         'storage::detached_tests::direct_insert_and_reverted_predecessor_cannot_reuse_original_identity',
@@ -2044,6 +2048,7 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::tests::native_driver_source_recovery_rejoins_original_owner_after_foreign_refusal',
     )),
     ('finite World journal shell planning', (
+        'state::world_journals::tests::publication_tests::world_publication_retains_original_busy_notification_until_aggregate_unlock',
         'state::world_journals::resources::tests::world_shell_plan_matches_constructed_capture_and_installation_layouts',
         'state::world_journals::resources::tests::world_shell_reservation_holds_capture_abort_retry_and_refunds_after_drop',
         'state::world_journals::resources::tests::world_shell_planning_never_reads_targets_or_acquires_held_writers',
@@ -2218,9 +2223,37 @@ MV_ADMITTED_MAP_STAGES = (
         'storage_custody::storage_publication_identity_is_prepaid_and_retained_after_storage_drop',
         'storage_custody::storage_writer_identity_refusal_precedes_policies_and_preserves_retry',
     )),
+    ('funded detached Storage capture and scoped publication', (
+        'storage_custody::capture::captured_prepaid_successors_detach_abort_and_publish_at_full_capacity_without_copy',
+        'storage_custody::capture::captured_prepaid_refusals_return_original_owner_for_exact_retry',
+        'storage_custody::capture::captured_prepaid_replacement_retains_mode_and_rejects_a_changed_pair',
+        'storage_custody::capture::captured_prepaid_pair_shares_one_scope_through_publication_abort_and_unwind',
+        'storage_custody::capture::captured_prepaid_caught_edit_panic_cannot_escape_as_a_journal',
+    )),
 )
 
 CONCREAD_STAGES = (
+    ('native physical release ownership', (
+        'release::tests::release_before_registration_is_retained_and_other_sources_do_not_wake',
+        'release::tests::first_registered_wake_can_reenter_both_initialized_notification_locks',
+        'release::tests::panicking_first_waker_still_notifies_the_remaining_original_cohort',
+        'release::tests::cancellation_and_waker_replacement_do_not_steal_another_wait',
+        'release::tests::replacing_a_waker_allows_its_destructor_to_observe_the_same_source',
+        'release::tests::ready_wait_releases_its_last_waker_outside_the_notification_lock',
+        'release::tests::release_racing_first_poll_cannot_be_lost',
+        'release::tests::ownership_phase_transfer_defers_original_release_until_final_owner_drops',
+        'release::tests::ownership_phase_transfer_unwind_releases_and_poisons_original_observation',
+        'release::tests::physical_release_disarms_only_later_retirement_poisoning',
+        'release::tests::paired_release_uses_actual_poison_and_unlocks_both_before_callback_unwind',
+        'release::tests::deferred_release_keeps_original_wait_and_ignores_later_cleanup_unwind',
+        'release::tests::fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup',
+    )),
+    ('actual reader mutex readiness', (
+        'internals::lincowcell::identity_preparation_tests::reader_wait_survives_refused_writer_release_and_registration_races',
+        'internals::lincowcell::identity_preparation_tests::reader_release_covers_reads_advice_abort_and_both_commit_paths',
+        'internals::lincowcell::identity_preparation_tests::reader_abort_retains_notification_until_the_original_writer_releases',
+        'internals::lincowcell::identity_preparation_tests::reader_wake_unwind_preserves_physical_poison_and_original_commit',
+    )),
     ('admitted B+ tree planning and retained edits', (
         'bptree::admission::tests::demand_overflow_preserves_the_original_sum_and_zero_layout_needs_no_allocation',
         'bptree::admission::tests::empty_map_plan_includes_both_shells_fixed_buffers_and_full_root_growth_bound',
@@ -3697,15 +3730,16 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
 def validate_mv_test_registration(root: Path) -> None:
     """Reject stale registered MV names before Cargo; native listing stays authoritative.
 
-    This is a bounded lexical guard for eight explicit, flat test modules, not a
+    This is a bounded lexical guard for nine explicit, flat test modules, not a
     Rust parser or a claim that the selected subset exhausts each module.
     The existing pure lexer runs from the same captured source as this gate.
     """
     owners = (
         ("publication::nonblocking_tests::", "publication.rs", "publication_nonblocking_tests.rs", "nonblocking_tests"),
         ("allocation::tests::", "allocation.rs", "allocation_tests.rs", "tests"),
-        ("release::tests::", "release.rs", "release_tests.rs", "tests"),
+        ("release_tests::", "lib.rs", "release_tests.rs", "release_tests"),
         ("cell::charged_allocation_tests::", "cell.rs", "cell/charged_allocation_tests.rs", "charged_allocation_tests"),
+        ("cell::publication_tests::", "cell.rs", "cell/publication_tests.rs", "publication_tests"),
         ("storage::publication_tests::", "storage.rs", "storage/publication_tests.rs", "publication_tests"),
         ("storage::detached_tests::", "storage.rs", "storage/detached_tests.rs", "detached_tests"),
         ("storage::admitted_tests::", "storage.rs", "storage/admitted_tests.rs", "admitted_tests"),
@@ -3731,7 +3765,7 @@ def validate_mv_test_registration(root: Path) -> None:
             if len(matches) != 1:
                 raise ValueError(f"registered MV module edge differs: {parent} -> {child}")
         lib = source("lib.rs")[1]
-        for module in ("allocation", "release", "cell", "storage", "publication"):
+        for module in ("allocation", "cell", "storage", "publication"):
             if len(re.findall(r'^(?:pub )?mod ' + module + r';$', lib, re.MULTILINE)) != 1:
                 raise ValueError(f"registered MV crate module differs: {module}")
         edge("storage.rs", "storage/touches.rs", "touches")

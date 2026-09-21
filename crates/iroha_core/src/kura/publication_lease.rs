@@ -30,7 +30,7 @@ pub(crate) enum KuraPublicationPreparationError {
         /// Original Kura mutex which prevented the joint acquisition.
         field: &'static str,
         /// Release observation captured before probing that mutex.
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
     },
     /// The actual Kura requires storage repair, not a lock-release retry.
     Storage(Error),
@@ -362,6 +362,24 @@ impl<'kura> KuraPublicationLease<'kura> {
 }
 
 impl KuraPublicationLease<'_> {
+    /// Release every physical Kura fence without invoking retry callbacks.
+    /// The caller retains these original notifications through its outer fences.
+    pub(crate) fn release_deferred(self) -> [concread::release::DeferredRelease; 4] {
+        let Self {
+            _sidecar,
+            _geometry,
+            _canonical,
+            _prune,
+            ..
+        } = self;
+        [
+            _sidecar.release_deferred(),
+            _geometry.release_deferred(),
+            _canonical.release_deferred(),
+            _prune.release_deferred(),
+        ]
+    }
+
     /// Pending canonical bytes captured before the inner publication fences.
     /// Prune/canonical custody keeps this snapshot valid for the lease lifetime.
     pub(super) fn pending_canonical_bytes(&self) -> u64 {

@@ -10,11 +10,14 @@ use core::fmt::Debug;
 /// Finite prepaid custody for explicitly enumerated allocation layouts.
 pub mod allocation;
 mod publication;
+use concread::release::{ReleaseGuard, ReleaseNotification, ReleaseWait};
 pub use publication::{
-    BlockPublicationIdentity, PublicationPreparationError, PublicationPreparationResult,
+    BlockPublicationIdentity, PublicationCleanup, PublicationPreparationError,
+    PublicationPreparationResult,
 };
-mod release;
-pub use release::{ReleaseFuture, ReleaseGuard, ReleaseNotification, ReleaseWait};
+#[cfg(test)]
+#[path = "release_tests.rs"]
+mod release_tests;
 
 /// How a block acquired its exact published predecessor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

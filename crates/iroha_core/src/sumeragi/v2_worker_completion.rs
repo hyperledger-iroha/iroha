@@ -440,7 +440,7 @@ impl LifecycleValidateCompletionAckV1 {
 pub(in crate::sumeragi) struct RetainedLocalLifecycleValidateV1 {
     dispatch: DurableValidateDispatch,
     refusal: super::v2_body_store::LocalValidationRefusal,
-    release: Option<mv::ReleaseFuture>,
+    release: Option<concread::release::ReleaseFuture>,
     ack: LifecycleValidateCompletionAckV1,
 }
 /// Result of revisiting a retained local dependency; no lifecycle row was rewritten.

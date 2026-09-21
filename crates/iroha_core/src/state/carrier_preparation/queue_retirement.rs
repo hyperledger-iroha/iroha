@@ -27,14 +27,14 @@ pub(in crate::state) enum CarrierQueueRetirementError {
     /// The original Queue is physically held by independent work.
     Busy {
         field: &'static str,
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
     },
     /// The exact old route still owns work; retry only after its real release.
     Pending {
         lane: LaneId,
         dataspace: DataSpaceId,
         incarnation: Hash,
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
     },
     /// Ambiguous Queue durability cannot be treated as an empty route.
     Unavailable(QueueLaneRetirementUnavailable),
@@ -51,7 +51,30 @@ pub(in crate::state) struct CarrierQueueRetirement<'queue> {
     _cut: QueueLaneRetirementCut<'queue>,
 }
 
+/// Original route metadata and notifications after all Queue locks are released.
+/// Keep this cleanup until every enclosing State/Kura fence has released.
+pub(super) struct ReleasedCarrierQueue {
+    _routes: Vec<(LaneId, DataSpaceId, Hash)>,
+    _state_owner: NativeLaneStateOwner,
+    _released: [concread::release::DeferredRelease; 3],
+}
+
 impl<'queue> CarrierQueueRetirement<'queue> {
+    /// Unlock the original cut while retaining all cleanup through outer fences.
+    pub(super) fn release_deferred(self) -> ReleasedCarrierQueue {
+        let Self {
+            state_owner,
+            routes,
+            _cut,
+            ..
+        } = self;
+        ReleasedCarrierQueue {
+            _released: _cut.release_deferred(),
+            _routes: routes,
+            _state_owner: state_owner,
+        }
+    }
+
     /// Observe every exact predecessor route under the shared Queue predicate.
     /// Aggregate installation admission must cover this vector and Queue scan.
     pub(in crate::state) fn try_new(

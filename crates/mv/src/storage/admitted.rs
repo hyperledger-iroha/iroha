@@ -6,12 +6,16 @@
 //! Native mutex and release notification storage remain separately funded.
 //! Transactions additionally admit their ordered local touch owners.
 //! Replacement and snapshot restoration admit each edit and its incoming copies.
-//! Capture/detachment and mutable access remain unavailable until funded.
+//! Detached owners retain original funding; joint preparation borrows its pool scope.
+//! Mutable payload access still requires a closed admission policy.
 
 use super::*;
 use crate::{
     ReleaseWait,
-    allocation::{AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation},
+    allocation::{
+        AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation,
+        AllocationScope,
+    },
 };
 use concread::bptree::{
     AllocationDemand, ClonePlanning, MapAdmissionError, NodeFunding, PairInsertError,
@@ -63,6 +67,8 @@ pub enum AdmittedStorageError {
     Changed,
     /// The original finite pool cannot admit the complete demand.
     Allocation(AllocationRefusal),
+    /// Publication was attempted outside the original pool's active scope.
+    ScopeIdentity,
     /// A policy returned a reservation from another pool.
     PolicyIdentity,
     /// A policy did not retain the full original requested demand.
@@ -216,8 +222,7 @@ struct AdmittedWriters<'a, K: Key, V: Value, P>
 where
     P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
-    revert: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, Option<V>, Prepaid<P>>>,
-    blocks: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, Prepaid<P>>>,
+    writers: StorageWriters<'a, K, V, Prepaid<P>>,
     next: NextPublication,
 }
 
@@ -299,7 +304,7 @@ where
     /// untracked node path is used. Native mutex and release notification storage
     /// are explicit remaining scope, not charged by this admission.
     pub fn try_new_admitted(budget: AllocationBudget) -> Result<Self, AdmittedStorageError> {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let current = BptreeMap::<K, V, Prepaid<P>>::node_custody_allocation_demand()
                 .map_err(AdmittedStorageError::Planning)?;
             let undo = BptreeMap::<K, Option<V>, Prepaid<P>>::node_custody_allocation_demand()
@@ -323,6 +328,31 @@ where
         })
     }
 
+    /// Execute once and retain the actual current/undo successors without publishing.
+    ///
+    /// Opening, reset/replacement, edits and detachment use the original pool's
+    /// synchronous refund scope. Both physical writers release before the journal
+    /// leaves. The callback's result remains attached as separate caller admission;
+    /// it must not be used to fund earlier execution retroactively. A callback
+    /// error abandons both private trees. Capture itself allocates and copies nothing.
+    pub fn try_capture_admitted_block<Admission, E>(
+        &self,
+        mode: BlockMode,
+        operation: impl for<'s> FnOnce(&mut Block<'s, K, V, Prepaid<P>>) -> Result<Admission, E>,
+    ) -> Result<Detached<K, V, Admission, Prepaid<P>>, AdmittedBlockError<E>> {
+        let budget = self
+            .allocation
+            .as_ref()
+            .expect("admitted Storage original pool");
+        budget.with_deferred_refund_notifications(|_| {
+            let mut block = self
+                .open_admitted_block(mode)
+                .map_err(AdmittedBlockError::Admission)?;
+            let admission = operation(&mut block).map_err(AdmittedBlockError::Callback)?;
+            Ok(block.detach_owned(admission))
+        })
+    }
+
     /// Run one ordinary block under the original two writers and finite pool.
     ///
     /// Both writer shells and the next identity are admitted together, then the retained undo map is
@@ -334,7 +364,8 @@ where
     /// The original pool defers refund wakes across acquisition, callback and
     /// final writer destruction. Do not catch an edit panic and keep using the
     /// block: both original cursors and this aggregate remain unusable. This admits
-    /// insertion and removal; World execution and detached publication remain unfunded.
+    /// insertion and removal; complete World execution and aggregate State
+    /// publication still require their own admission policies.
     pub fn try_with_admitted_block<R, E>(
         &self,
         operation: impl for<'s> FnOnce(&mut Block<'s, K, V, Prepaid<P>>) -> Result<R, E>,
@@ -373,19 +404,17 @@ where
         snapshot: &super::snapshot::Snapshot<'_, K, V, M>,
         budget: AllocationBudget,
     ) -> Result<Self, AdmittedStorageError> {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let restored = Self::try_new_admitted(budget.clone())?;
-            let AdmittedWriters {
-                mut revert,
-                mut blocks,
-                next,
-            } = restored.open_admitted_writers()?;
+            let AdmittedWriters { mut writers, next } = restored.open_admitted_writers()?;
+            let OriginalWriters { revert, blocks } = writers.as_mut();
             for (key, value) in snapshot.current().iter() {
-                insert_copy(&mut blocks, key, value, &budget)?;
+                insert_copy(blocks, key, value, &budget)?;
             }
             for (key, value) in snapshot.revert_map().iter() {
-                insert_copy(&mut revert, key, value, &budget)?;
+                insert_copy(revert, key, value, &budget)?;
             }
+            let OriginalWriters { revert, blocks } = writers.into_original();
             publish_pair(blocks, revert, &restored.publication, next, true);
             Ok(restored)
         })
@@ -400,21 +429,13 @@ where
             .allocation
             .as_ref()
             .expect("admitted Storage original pool");
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let mut block = self
                 .open_admitted_block(mode)
                 .map_err(AdmittedBlockError::Admission)?;
             let output = operation(&mut block).map_err(AdmittedBlockError::Callback)?;
             block.assert_admitted_operable();
-            let Block {
-                revert,
-                blocks,
-                dirty,
-                publication,
-                next,
-                ..
-            } = block;
-            publish_pair(blocks, revert, publication, next, dirty);
+            block.publish();
             Ok(output)
         })
     }
@@ -448,12 +469,9 @@ where
         // Refused/poisoned acquisition must not allocate an unused identity.
         // Its original reservation already exists; both writers now belong to
         // this opening, before reset, replacement copying or user execution.
+        let writers = StorageWriters::new(self, revert, blocks);
         let next = NextPublication::from_admission(identity);
-        Ok(AdmittedWriters {
-            revert,
-            blocks,
-            next,
-        })
+        Ok(AdmittedWriters { writers, next })
     }
 
     fn open_admitted_block(
@@ -464,16 +482,13 @@ where
             .allocation
             .as_ref()
             .expect("admitted Storage original pool");
-        let AdmittedWriters {
-            mut revert,
-            mut blocks,
-            next,
-        } = self.open_admitted_writers()?;
+        let AdmittedWriters { mut writers, next } = self.open_admitted_writers()?;
         let predecessor = self.publication.capture();
+        let OriginalWriters { revert, blocks } = writers.as_mut();
         if mode == BlockMode::Replace {
             for (key, previous) in revert.iter() {
                 if let Some(value) = previous {
-                    insert_copy(&mut blocks, key, value, budget)?;
+                    insert_copy(blocks, key, value, budget)?;
                 } else {
                     let removed = blocks
                         .try_remove_admitted(key, |demand| admit::<P>(budget, demand))
@@ -486,12 +501,9 @@ where
             .try_clear_admitted(|demand| admit::<P>(budget, demand))
             .map_err(edit_error)?;
         Ok(Block {
-            revert,
-            blocks,
+            writers,
             dirty: mode == BlockMode::Replace,
             failed: false,
-            allocation: Some(budget),
-            publication: &self.publication,
             predecessor,
             next,
             mode,
@@ -510,8 +522,8 @@ where
             !self.failed,
             "admitted block edit unwound; abandon both writers"
         );
-        self.blocks.len();
-        self.revert.len();
+        self.writers.as_ref().blocks.len();
+        self.writers.as_ref().revert.len();
     }
 
     /// Insert current plus its missing first preimage under one checked demand.
@@ -523,11 +535,16 @@ where
         value: V,
     ) -> Result<Option<V>, ((K, V), AdmittedStorageError)> {
         self.assert_admitted_operable();
-        let budget = self.allocation.expect("admitted block original pool");
+        let budget = self
+            .writers
+            .target
+            .allocation
+            .as_ref()
+            .expect("admitted block original pool");
         self.failed = true;
-        let result = self
-            .blocks
-            .try_insert_with_undo_admitted(&mut self.revert, key, value, |demand, _key| {
+        let OriginalWriters { revert, blocks } = self.writers.as_mut();
+        let result = blocks
+            .try_insert_with_undo_admitted(revert, key, value, |demand, _key| {
                 admit::<P>(budget, demand)
             })
             .map_err(|(input, error)| {
@@ -556,13 +573,16 @@ where
     /// copy panic therefore forbids publication of this original block.
     pub fn try_remove_admitted(&mut self, key: K) -> Result<Option<V>, (K, AdmittedStorageError)> {
         self.assert_admitted_operable();
-        let budget = self.allocation.expect("admitted block original pool");
+        let budget = self
+            .writers
+            .target
+            .allocation
+            .as_ref()
+            .expect("admitted block original pool");
         self.failed = true;
-        let result = self
-            .blocks
-            .try_remove_with_undo_admitted(&mut self.revert, key, |demand, _key| {
-                admit::<P>(budget, demand)
-            })
+        let OriginalWriters { revert, blocks } = self.writers.as_mut();
+        let result = blocks
+            .try_remove_with_undo_admitted(revert, key, |demand, _key| admit::<P>(budget, demand))
             .map_err(|(key, error)| {
                 let error = match error {
                     PairRemoveError::Planning(error) => AdmittedStorageError::Planning(error),
@@ -584,16 +604,222 @@ where
         Q: Ord + ?Sized,
     {
         self.assert_admitted_operable();
-        self.blocks.get(key)
+        self.writers.as_ref().blocks.get(key)
     }
 
     /// Number of private current entries.
     pub fn len(&self) -> usize {
         self.assert_admitted_operable();
-        self.blocks.len()
+        self.writers.as_ref().blocks.len()
     }
     /// Whether the private current map has no entries.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+/// Original prepaid successors held only within their pool's synchronous scope.
+///
+/// Multiple owners from the same pool can be prepared together. The scope outlives
+/// every physical writer, including abort and unwind. It supplies local refund
+/// ordering; a complete State owner still supplies joint visibility and finality.
+///
+/// Detached custody can leave the scope after abort:
+/// ```
+/// use concread::bptree::{ClonePlanning, Prepaid};
+/// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy, Detached, Storage}};
+/// fn release<P>(budget: &AllocationBudget, target: &Storage<u64, u64, Prepaid<P>>,
+///     journal: Detached<u64, u64, (), Prepaid<P>>) -> Detached<u64, u64, (), Prepaid<P>>
+/// where P: AdmittedStoragePolicy + ClonePlanning<u64, u64> + ClonePlanning<u64, Option<u64>> {
+///     budget.with_deferred_refund_notifications(|scope| {
+///         match journal.try_prepare_admitted(scope, target) {
+///             Ok(prepared) => prepared.abort().0,
+///             Err((journal, _, cleanup)) => { drop(cleanup); journal },
+///         }
+///     })
+/// }
+/// ```
+/// A physical preparation cannot leave that same scope:
+/// ```compile_fail
+/// use concread::bptree::{ClonePlanning, Prepaid};
+/// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy,
+///     AdmittedPreparedPublication, Detached, Storage}};
+/// fn escape<'a, P>(budget: &'a AllocationBudget, target: &'a Storage<u64, u64, Prepaid<P>>,
+///     journal: Detached<u64, u64, (), Prepaid<P>>) -> AdmittedPreparedPublication<'a, 'a, u64, u64, (), P>
+/// where P: AdmittedStoragePolicy + ClonePlanning<u64, u64> + ClonePlanning<u64, Option<u64>> {
+///     budget.with_deferred_refund_notifications(|scope| {
+///         match journal.try_prepare_admitted(scope, target) {
+///             Ok(prepared) => prepared,
+///             Err(_) => panic!("local refusal"),
+///         }
+///     })
+/// }
+/// ```
+#[must_use = "publish or abort the original prepared pair inside its allocation scope"]
+pub struct AdmittedPreparedPublication<'scope, 'target, K: Key, V: Value, Admission, P>
+where
+    P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    inner: PreparedPublication<'target, K, V, Admission, (), Prepaid<P>>,
+    _scope: &'scope AllocationScope<'scope>,
+}
+
+/// Published cleanup confined to its original admitted notification scope.
+/// Keep this owner until every aggregate participant has released its locks.
+/// The notification owner cannot escape the pool scope after publication:
+/// ```compile_fail
+/// use concread::bptree::{ClonePlanning, Prepaid};
+/// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy,
+///     AdmittedPublishedPublication, Detached, Storage}};
+/// fn escape<'a, P>(budget: &'a AllocationBudget, target: &'a Storage<u64, u64, Prepaid<P>>,
+///     journal: Detached<u64, u64, (), Prepaid<P>>) -> AdmittedPublishedPublication<'a, u64, u64, (), P>
+/// where P: AdmittedStoragePolicy + ClonePlanning<u64, u64> + ClonePlanning<u64, Option<u64>> {
+///     budget.with_deferred_refund_notifications(|scope| {
+///         match journal.try_prepare_admitted(scope, target) {
+///             Ok(prepared) => prepared.publish(),
+///             Err(_) => panic!("local refusal"),
+///         }
+///     })
+/// }
+/// ```
+pub struct AdmittedPublishedPublication<'scope, K: Key, V: Value, Admission, P>
+where
+    P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    inner: PublishedPublication<K, V, Admission, (), Prepaid<P>>,
+    _scope: &'scope AllocationScope<'scope>,
+}
+
+impl<K: Key, V: Value, Admission, P> AdmittedPublishedPublication<'_, K, V, Admission, P>
+where
+    P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    /// Retire released physical owners before returning the caller's admission.
+    pub fn into_admission(self) -> Admission {
+        self.inner.into_reservations().0
+    }
+}
+
+/// Aborted physical notifications confined to the original allocation scope.
+/// The detached journal can leave the scope; this cleanup cannot.
+/// ```compile_fail
+/// use concread::bptree::{ClonePlanning, Prepaid};
+/// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy,
+///     AdmittedAbortedPublication, Detached, Storage}};
+/// fn escape<'a, P>(budget: &'a AllocationBudget, target: &'a Storage<u64, u64, Prepaid<P>>,
+///     journal: Detached<u64, u64, (), Prepaid<P>>) -> AdmittedAbortedPublication<'a>
+/// where P: AdmittedStoragePolicy + ClonePlanning<u64, u64> + ClonePlanning<u64, Option<u64>> {
+///     budget.with_deferred_refund_notifications(|scope| {
+///         match journal.try_prepare_admitted(scope, target) {
+///             Ok(prepared) => prepared.abort().1,
+///             Err(_) => panic!("local refusal"),
+///         }
+///     })
+/// }
+/// ```
+/// Refusal cleanup has the same scope constraint as explicit abort:
+/// ```compile_fail
+/// use concread::bptree::{ClonePlanning, Prepaid};
+/// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy,
+///     AdmittedAbortedPublication, Detached, Storage}};
+/// fn escape<'a, P>(budget: &'a AllocationBudget, target: &'a Storage<u64, u64, Prepaid<P>>,
+///     journal: Detached<u64, u64, (), Prepaid<P>>) -> AdmittedAbortedPublication<'a>
+/// where P: AdmittedStoragePolicy + ClonePlanning<u64, u64> + ClonePlanning<u64, Option<u64>> {
+///     budget.with_deferred_refund_notifications(|scope| {
+///         match journal.try_prepare_admitted(scope, target) {
+///             Err((_, _, cleanup)) => cleanup,
+///             Ok(_) => panic!("expected local refusal"),
+///         }
+///     })
+/// }
+/// ```
+pub struct AdmittedAbortedPublication<'scope> {
+    _inner: PublicationCleanup<()>,
+    _scope: &'scope AllocationScope<'scope>,
+}
+
+impl<'scope, K: Key, V: Value, Admission, P>
+    AdmittedPreparedPublication<'scope, '_, K, V, Admission, P>
+where
+    P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    /// Release both writers and return the original journal for a later retry.
+    pub fn abort(
+        self,
+    ) -> (
+        Detached<K, V, Admission, Prepaid<P>>,
+        AdmittedAbortedPublication<'scope>,
+    ) {
+        let (journal, retirement) = self.inner.abort();
+        (
+            journal,
+            AdmittedAbortedPublication {
+                _inner: retirement,
+                _scope: self._scope,
+            },
+        )
+    }
+
+    /// Publish the original pair and retain cleanup with its caller admission.
+    /// Every aggregate participant must already be prepared and authorized.
+    pub fn publish(self) -> AdmittedPublishedPublication<'scope, K, V, Admission, P> {
+        AdmittedPublishedPublication {
+            inner: self.inner.publish(),
+            _scope: self._scope,
+        }
+    }
+}
+
+impl<K: Key, V: Value, Admission, P> Detached<K, V, Admission, Prepaid<P>>
+where
+    P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    /// Prepare the exact retained pair without allocation or payload copying.
+    ///
+    /// The original pool scope must enclose every participating writer. Foreign,
+    /// busy, poisoned and changed targets return this same journal. Only detached
+    /// owners can leave the scope; a prepared physical owner cannot escape it.
+    pub fn try_prepare_admitted<'scope, 'target>(
+        self,
+        scope: &'scope AllocationScope<'scope>,
+        target: &'target Storage<K, V, Prepaid<P>>,
+    ) -> Result<
+        AdmittedPreparedPublication<'scope, 'target, K, V, Admission, P>,
+        (
+            Self,
+            PublicationPreparationError<AdmittedStorageError>,
+            AdmittedAbortedPublication<'scope>,
+        ),
+    > {
+        if !scope.belongs_to(
+            target
+                .allocation
+                .as_ref()
+                .expect("admitted Storage original pool"),
+        ) {
+            return Err((
+                self,
+                PublicationPreparationError::Admission(AdmittedStorageError::ScopeIdentity),
+                AdmittedAbortedPublication {
+                    _inner: PublicationCleanup::empty(),
+                    _scope: scope,
+                },
+            ));
+        }
+        self.prepare_publication(target, |_, _| Ok::<(), AdmittedStorageError>(()))
+            .map(|inner| AdmittedPreparedPublication {
+                inner,
+                _scope: scope,
+            })
+            .map_err(|(journal, error, cleanup)| {
+                (
+                    journal,
+                    error,
+                    AdmittedAbortedPublication {
+                        _inner: cleanup,
+                        _scope: scope,
+                    },
+                )
+            })
     }
 }

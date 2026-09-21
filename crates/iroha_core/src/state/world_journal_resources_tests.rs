@@ -43,7 +43,7 @@ fn world_shell_plan_matches_constructed_capture_and_installation_layouts() {
         );
         let prepared = retained
             .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
-            .unwrap_or_else(|(_, error)| panic!("fixture preparation refused: {error:?}"));
+            .unwrap_or_else(|(_, error, _)| panic!("fixture preparation refused: {error:?}"));
         {
             let (retry_vector, prepared_vector, prepared_layouts) =
                 prepared.observed_shell_layouts();
@@ -62,7 +62,7 @@ fn world_shell_plan_matches_constructed_capture_and_installation_layouts() {
                 "original boxes remain allocated inside the prepared wrappers"
             );
         }
-        let retained = prepared.abort();
+        let retained = prepared.abort().0;
         assert_eq!(retained.fields.as_ptr(), retained_pointer);
         assert_eq!(
             observed_capture(&retained),
@@ -107,21 +107,22 @@ fn world_shell_reservation_holds_capture_abort_retry_and_refunds_after_drop() {
     ));
     let prepared = retained
         .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
-        .unwrap_or_else(|(_, error)| panic!("fixture preparation refused: {error:?}"));
+        .unwrap_or_else(|(_, error, _)| panic!("fixture preparation refused: {error:?}"));
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
-    let retained = prepared.abort();
+    let retained = prepared.abort().0;
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     let held_writer = world.soradns_last_publish_ms.block();
-    let (retained, error) = retained
+    let (retained, error, _cleanup) = retained
         .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
         .err()
         .expect("busy owner must preserve retained shells and reservation");
+    drop(_cleanup);
     assert!(matches!(error, WorldPublicationError::Field(_)));
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     drop(held_writer);
     let prepared = retained
         .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
-        .unwrap_or_else(|(_, error)| panic!("fixture retry refused: {error:?}"));
+        .unwrap_or_else(|(_, error, _)| panic!("fixture retry refused: {error:?}"));
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     drop(prepared);
     assert_eq!(budget.reserved_bytes(), 0);

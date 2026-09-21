@@ -284,3 +284,24 @@ destroys its moved payload, then drops its charge. Payload unwind conservatively
 retains the charge. There is no weak-reference or raw-ownership API. MV uses this
 owner for funded publication identities instead of guessing a standard-library
 `Arc` layout. The internal reserved-shell and reclamation operations remain private.
+
+### Physical reader readiness
+
+The canonical `release` module owns lock observations for Concread, MV and Core.
+Linear cells expose `observe_reader_release` for their actual active-reader mutex;
+all acquisitions notify after unlocking. Pinned immutable readers and writer
+release do not substitute for that mutex. Published commit retirement retains the
+same notification after releasing both physical locks and delivers it during
+cleanup, allowing aggregate publishers to finish their visibility interval first.
+Later cleanup unwind preserves the physical lock's earlier poison verdict. Native
+notification/control allocations and complete aggregate abort ordering remain
+separate obligations. See the [source-coupled record](../../docs/history/2026-09-21/native-reader-readiness.md).
+
+A release guard can transfer to a fallible prepared phase without notifying on
+success or refusal. `release_deferred` returns the original retained value and
+same notification owner after physical unlock. Native prepared tree commits can
+abort while retaining the actual reader notification alongside their original
+writer; EBR prepared commits can return their original writer. These primitives
+allow MV to finish all physical preparation before component transfer and retain
+successful cleanup through aggregate fences. The [component boundary record](../../docs/history/2026-09-21/prepared-component-retirement.md)
+distinguishes this from unfinished whole-State failure handling.

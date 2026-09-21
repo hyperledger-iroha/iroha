@@ -109,7 +109,7 @@ fn prepare<Admission>(
 ) -> PreparedRuntimeJournals<'_, Admission, ()> {
     journal
         .try_prepare_publication(state, |_, _| Ok::<_, Infallible>(()))
-        .unwrap_or_else(|(_, error)| panic!("runtime publication: {error:?}"))
+        .unwrap_or_else(|(_, error, _)| panic!("runtime publication: {error:?}"))
 }
 
 fn original_topology_allocation<Admission>(journal: &RuntimeJournals<Admission>) -> *const PeerId {
@@ -203,7 +203,7 @@ fn runtime_publication_holds_all_four_writers_and_matches_direct_current_and_und
                 probes
                     .$field
                     .try_prepare_publication(&state.$field, |_, _| Ok::<_, Infallible>(())),
-                Err((_, PublicationPreparationError::Busy(_)))
+                Err((_, PublicationPreparationError::Busy(_), _))
             ));
         };
     }
@@ -211,7 +211,7 @@ fn runtime_publication_holds_all_four_writers_and_matches_direct_current_and_und
     held!(commit_topology);
     held!(prev_commit_topology);
     held!(lane_consensus_contexts);
-    let journal = prepared.abort();
+    let journal = prepared.abort().0;
     assert_eq!(retained(&journal), originals);
     assert_eq!(original_topology_allocation(&journal), pointer);
     assert!(journal.matches_current(&state));
@@ -289,7 +289,7 @@ fn runtime_busy_at_each_field_returns_exact_journals_and_releases_earlier_writer
         ($field:ident) => {{
             let busy = state.$field.block();
             let released = Arc::new(AtomicBool::new(false));
-            let (returned, error) = journal
+            let (returned, error, _cleanup) = journal
                 .try_prepare_publication(&state, |_, _| {
                     Ok::<_, Infallible>(ResourceGuard {
                         state: &state,
@@ -299,6 +299,7 @@ fn runtime_busy_at_each_field_returns_exact_journals_and_releases_earlier_writer
                 })
                 .err()
                 .expect("busy original component");
+            drop(_cleanup);
             let RuntimePublicationError::Component {
                 field,
                 cause: PublicationPreparationError::Busy(wait),
@@ -357,7 +358,7 @@ fn runtime_late_changed_field_restores_original_custody_and_releases_installatio
         },
     );
     let pointer = original_topology_allocation(&journal);
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&state, |_, target| {
             assert_writers_released_except(target, None);
             // Same visible value, different actual current/undo identity in the
@@ -371,6 +372,7 @@ fn runtime_late_changed_field_restores_original_custody_and_releases_installatio
         })
         .err()
         .expect("late exact identity mismatch");
+    drop(_cleanup);
     assert!(matches!(
         error,
         RuntimePublicationError::Component {
@@ -409,7 +411,7 @@ fn runtime_installation_refusal_precedes_all_writer_acquisition_and_preserves_or
     let journal = capture(original, ());
     let pointer = original_topology_allocation(&journal);
     let mut called = 0;
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&state, |candidate, target| {
             called += 1;
             assert_eq!(original_topology_allocation(candidate), pointer);
@@ -418,6 +420,7 @@ fn runtime_installation_refusal_precedes_all_writer_acquisition_and_preserves_or
         })
         .err()
         .expect("required capacity refusal");
+    drop(_cleanup);
     assert_eq!(called, 1);
     assert!(matches!(
         error,
@@ -459,7 +462,7 @@ fn runtime_capture_and_installation_guards_outlive_all_writers_on_drop_abort_and
         match operation {
             0 => drop(prepared),
             1 => {
-                let journal = prepared.abort();
+                let journal = prepared.abort().0;
                 assert!(installation.load(Ordering::SeqCst));
                 assert!(!retained.load(Ordering::SeqCst));
                 assert!(journal.matches_current(&state));
@@ -491,10 +494,11 @@ fn runtime_equal_values_from_another_state_do_not_supply_original_publication_id
     let mut original = blocks(&state, BlockMode::Ordinary);
     mutate(&mut original, 2);
     let journal = capture(original, ());
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&foreign, |_, _| Ok::<_, Infallible>(()))
         .err()
         .expect("equal foreign owner");
+    drop(_cleanup);
     assert!(matches!(
         error,
         RuntimePublicationError::Component {

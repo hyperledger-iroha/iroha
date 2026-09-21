@@ -11,7 +11,7 @@ use crate::kura::{
 };
 use crate::publication_lock::PublicationGuard;
 use crate::state::carrier_preparation::queue_retirement::{
-    CarrierQueueRetirement, CarrierQueueRetirementError,
+    CarrierQueueRetirement, CarrierQueueRetirementError, ReleasedCarrierQueue,
 };
 use crate::state::{
     State,
@@ -51,7 +51,7 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparat
         /// State lock which prevented acquisition.
         field: &'static str,
         /// Observation captured before probing that actual lock.
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
     },
     /// Hash or membership storage could not retain its exact original writer.
     Component {
@@ -226,10 +226,19 @@ struct CarrierFences<'target> {
     _kura: KuraPublicationLease<'target>,
 }
 
+/// Apply serialization with cleanup from already unlocked physical fences.
+/// Commit unlocks first on ordinary drop and unwind, before any retained callback.
+struct CompletionFences<'target> {
+    _commit: PublicationGuard<'target>,
+    _state: [concread::release::DeferredRelease; 2],
+    _queue: Option<ReleasedCarrierQueue>,
+    _kura: [concread::release::DeferredRelease; 4],
+}
+
 impl<'target> CarrierFences<'target> {
     /// Keep serialization of Apply while releasing every physical writer/fence
     /// needed by derived persistence and cache readers after visibility changes.
-    fn release_for_completion(self) -> PublicationGuard<'target> {
+    fn release_for_completion(self) -> CompletionFences<'target> {
         let Self {
             _state: state,
             _queue: queue,
@@ -240,11 +249,15 @@ impl<'target> CarrierFences<'target> {
             _lifecycle: lifecycle,
             _commit: commit,
         } = state;
-        drop(write);
-        drop(lifecycle);
-        drop(queue);
-        drop(kura);
-        commit
+        let state = [write.release_deferred(), lifecycle.release_deferred()];
+        let queue = queue.map(CarrierQueueRetirement::release_deferred);
+        let kura = kura.release_deferred();
+        CompletionFences {
+            _commit: commit,
+            _state: state,
+            _queue: queue,
+            _kura: kura,
+        }
     }
 }
 
@@ -252,6 +265,11 @@ impl<'target> CarrierFences<'target> {
 /// authority to publish outside the complete carrier consumer.
 /// The full carrier owns this group before its capture and binding reservations.
 pub(in crate::state::carrier_preparation::journals) struct AcquiredCarrierComponents<'target> {
+    original: Option<AcquiredCarrierParticipants<'target>>,
+}
+
+/// Original participants remain one owned unit until publication or joint abort.
+pub(in crate::state::carrier_preparation::journals) struct AcquiredCarrierParticipants<'target> {
     world: PreparedWorld<'target, (), ()>,
     runtime: PreparedRuntimeJournals<'target, (), ()>,
     transactions: PreparedDetachedTransactionsBlock<'target, ()>,
@@ -259,7 +277,36 @@ pub(in crate::state::carrier_preparation::journals) struct AcquiredCarrierCompon
     _fences: CarrierFences<'target>,
 }
 
-impl AcquiredCarrierComponents<'_> {
+impl<'target> AcquiredCarrierComponents<'target> {
+    fn into_original(mut self) -> AcquiredCarrierParticipants<'target> {
+        self.original.take().expect("original carrier participants")
+    }
+
+    fn abort(self) -> DetachedCarrierComponents {
+        self.into_original().abort()
+    }
+}
+
+impl<'target> std::ops::Deref for AcquiredCarrierComponents<'target> {
+    type Target = AcquiredCarrierParticipants<'target>;
+    fn deref(&self) -> &Self::Target {
+        self.original
+            .as_ref()
+            .expect("original carrier participants")
+    }
+}
+
+impl Drop for AcquiredCarrierComponents<'_> {
+    fn drop(&mut self) {
+        if let Some(original) = self.original.take() {
+            // Joint abort unlocks every participant and enclosing fence before
+            // destroying any returned journal or invoking its original callbacks.
+            drop(original.abort());
+        }
+    }
+}
+
+impl AcquiredCarrierParticipants<'_> {
     fn abort(self) -> DetachedCarrierComponents {
         // Reverse local drop order also keeps fences behind all components if
         // abort bookkeeping unwinds before the explicit release below.
@@ -272,11 +319,17 @@ impl AcquiredCarrierComponents<'_> {
             _fences: original_fences,
         } = self;
         fences = original_fences;
-        let world = world.abort();
-        let runtime = runtime.abort();
-        let transactions = transactions.abort();
-        let block_hashes = block_hashes.abort();
-        drop(fences);
+        let (world, world_retirement) = world.abort();
+        let (runtime, runtime_retirement) = runtime.abort();
+        let (transactions, transactions_retirement) = transactions.abort();
+        let (block_hashes, block_hashes_retirement) = block_hashes.abort();
+        drop(fences.release_for_completion());
+        drop((
+            world_retirement,
+            runtime_retirement,
+            transactions_retirement,
+            block_hashes_retirement,
+        ));
         DetachedCarrierComponents {
             world,
             runtime,
@@ -556,6 +609,7 @@ impl<Admission, BindingAdmission>
             {
                 Ok(prepared) => prepared,
                 Err((block_hashes, cause)) => {
+                    drop(fences.release_for_completion());
                     return Err((
                         DetachedCarrierComponents {
                             world,
@@ -575,7 +629,9 @@ impl<Admission, BindingAdmission>
             {
                 Ok(prepared) => prepared,
                 Err((transactions, cause)) => {
-                    let block_hashes = block_hashes.abort();
+                    let (block_hashes, block_hashes_retirement) = block_hashes.abort();
+                    drop(fences.release_for_completion());
+                    drop(block_hashes_retirement);
                     return Err((
                         DetachedCarrierComponents {
                             world,
@@ -593,9 +649,15 @@ impl<Admission, BindingAdmission>
             let runtime =
                 match runtime.try_prepare_publication(target, |_, _| Ok::<_, Infallible>(())) {
                     Ok(prepared) => prepared,
-                    Err((runtime, error)) => {
-                        let transactions = transactions.abort();
-                        let block_hashes = block_hashes.abort();
+                    Err((runtime, error, runtime_retirement)) => {
+                        let (transactions, transactions_retirement) = transactions.abort();
+                        let (block_hashes, block_hashes_retirement) = block_hashes.abort();
+                        drop(fences.release_for_completion());
+                        drop((
+                            runtime_retirement,
+                            transactions_retirement,
+                            block_hashes_retirement,
+                        ));
                         return Err((
                             DetachedCarrierComponents {
                                 world,
@@ -611,10 +673,17 @@ impl<Admission, BindingAdmission>
                 .try_prepare_publication(&target.world, |_, _| Ok::<_, Infallible>(()))
             {
                 Ok(prepared) => prepared,
-                Err((world, error)) => {
-                    let runtime = runtime.abort();
-                    let transactions = transactions.abort();
-                    let block_hashes = block_hashes.abort();
+                Err((world, error, world_retirement)) => {
+                    let (runtime, runtime_retirement) = runtime.abort();
+                    let (transactions, transactions_retirement) = transactions.abort();
+                    let (block_hashes, block_hashes_retirement) = block_hashes.abort();
+                    drop(fences.release_for_completion());
+                    drop((
+                        world_retirement,
+                        runtime_retirement,
+                        transactions_retirement,
+                        block_hashes_retirement,
+                    ));
                     return Err((
                         DetachedCarrierComponents {
                             world,
@@ -627,11 +696,13 @@ impl<Admission, BindingAdmission>
                 }
             };
             Ok(AcquiredCarrierComponents {
-                world,
-                runtime,
-                transactions,
-                block_hashes,
-                _fences: fences,
+                original: Some(AcquiredCarrierParticipants {
+                    world,
+                    runtime,
+                    transactions,
+                    block_hashes,
+                    _fences: fences,
+                }),
             })
         });
         macro_rules! retain {

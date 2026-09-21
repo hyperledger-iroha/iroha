@@ -5170,7 +5170,10 @@ impl V2ApplyService {
         )
     }
     fn classify_autoscale_retirement_queue_release(
-        release: Result<Option<mv::ReleaseWait>, crate::queue::QueueLaneRetirementUnavailable>,
+        release: Result<
+            Option<concread::release::ReleaseWait>,
+            crate::queue::QueueLaneRetirementUnavailable,
+        >,
         wake: std::task::Waker,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,

@@ -32,7 +32,7 @@ impl From<StateBlockStartError<MergeLedgerCommitError>> for MergeLedgerCommitErr
 pub enum BlockHashAdmissionError {
     /// Another physical owner must release the original history lock.
     #[error("canonical hash history is busy")]
-    Busy(mv::ReleaseWait),
+    Busy(concread::release::ReleaseWait),
     /// The configured finite pool refused the complete operation.
     #[error("canonical hash history capacity: {0}")]
     Capacity(mv::allocation::AllocationRefusal),
@@ -44,7 +44,7 @@ pub enum BlockHashAdmissionError {
     Poisoned,
     /// The observed original generation was replaced before acquisition.
     #[error("canonical hash history predecessor changed")]
-    Changed(mv::ReleaseWait),
+    Changed(concread::release::ReleaseWait),
     /// Emergency Fast startup does not permit a successor.
     #[error("emergency Fast history is read-only; restart in Strict mode")]
     ReadOnly,
@@ -52,7 +52,7 @@ pub enum BlockHashAdmissionError {
 
 impl BlockHashAdmissionError {
     /// The original release observation, only when releasing another owner can help.
-    pub fn release_wait(&self) -> Option<&mv::ReleaseWait> {
+    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
         match self {
             Self::Busy(wait) | Self::Changed(wait) => Some(wait),
             Self::Capacity(mv::allocation::AllocationRefusal::Capacity { release, .. }) => {
@@ -64,7 +64,7 @@ impl BlockHashAdmissionError {
 }
 impl<E: std::fmt::Debug> StateBlockStartError<E> {
     /// Preserve the original history release without retrying a deterministic stage failure.
-    pub fn release_wait(&self) -> Option<&mv::ReleaseWait> {
+    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
         match self {
             Self::History(error) => error.release_wait(),
             Self::Stage(_) => None,
@@ -127,7 +127,7 @@ impl BlockHashes {
     fn admission_error(
         &self,
         error: MapAdmissionError<mv::allocation::AllocationRefusal>,
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
     ) -> BlockHashAdmissionError {
         match error {
             MapAdmissionError::Busy => BlockHashAdmissionError::Busy(wait),
@@ -143,7 +143,7 @@ impl BlockHashes {
         initial: impl IntoIterator<Item = HashOf<BlockHeader>>,
         budget: mv::allocation::AllocationBudget,
     ) -> Result<Self, BlockHashAdmissionError> {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let map = BlockHashMap::try_new_with_node_custody(|demand| {
                 budget
                     .try_reserve_bytes(demand.bytes())
@@ -153,7 +153,7 @@ impl BlockHashes {
             let owner = Self {
                 inner: BlockHashStorage::Owned(map),
                 budget: budget.clone(),
-                released: mv::ReleaseNotification::default(),
+                released: concread::release::ReleaseNotification::default(),
                 committed_height: AtomicUsize::new(0),
             };
             for (index, hash) in initial.into_iter().enumerate() {
@@ -181,7 +181,7 @@ impl BlockHashes {
         &self,
         replacement: bool,
     ) -> Result<BlockHashesBlock<'_>, BlockHashAdmissionError> {
-        self.budget.with_deferred_refund_notifications(|| {
+        self.budget.with_deferred_refund_notifications(|_| {
             let map = self.map().ok_or(BlockHashAdmissionError::ReadOnly)?;
             let wait = self.released.observe();
             let view = self.try_view().map_err(|error| match error {

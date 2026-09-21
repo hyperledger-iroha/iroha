@@ -35,11 +35,11 @@ impl Wake for WakeCount {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
-fn poll(wait: &mut mv::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
+fn poll(wait: &mut concread::release::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
     let waker = Waker::from(Arc::clone(count));
     Pin::new(wait).poll(&mut Context::from_waker(&waker))
 }
-fn waiting(lock: &PublicationMutex) -> mv::ReleaseFuture {
+fn waiting(lock: &PublicationMutex) -> concread::release::ReleaseFuture {
     lock.try_lock_or_wait()
         .err()
         .expect("actual mutex is held")

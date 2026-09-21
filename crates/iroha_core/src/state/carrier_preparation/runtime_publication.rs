@@ -1,7 +1,10 @@
 //! Acquire all four original runtime owners before publishing any component.
 
 use super::*;
-use mv::{PublicationPreparationError, cell::PreparedPublication};
+use mv::{
+    PublicationPreparationError,
+    cell::{PreparedPublication, PublishedPublication},
+};
 use std::convert::Infallible;
 
 /// A local installation refusal which retains the complete original journals.
@@ -37,17 +40,37 @@ pub(in crate::state::carrier_preparation::journals) struct PreparedRuntimeJourna
     installation: Installation,
 }
 
+/// Released original runtime components and their resource owners.
+/// Collector and wake callbacks remain deferred until the enclosing State unlocks.
+pub(in crate::state::carrier_preparation::journals) struct PublishedRuntimeJournals<A, I> {
+    _canonical_runtime: PublishedPublication<SnapshotNexusRuntime, (), ()>,
+    _commit_topology: PublishedPublication<Vec<PeerId>, (), ()>,
+    _prev_commit_topology: PublishedPublication<Vec<PeerId>, (), ()>,
+    _lane_consensus_contexts: PublishedPublication<LaneConsensusContextsV1, (), ()>,
+    _admission: A,
+    _installation: I,
+}
+
+/// Original aborted runtime notifications and their installation reservation.
+pub(in crate::state::carrier_preparation::journals) struct AbortedRuntimeJournals<I> {
+    _components: [Option<mv::PublicationCleanup<()>>; 4],
+    _installation: Option<I>,
+}
+
 macro_rules! prepare_components {
     ($target:ident, $admission:ident, $installation:ident;
         [$($done:ident,)*]; [$next:ident, $($rest:ident,)*]) => {{
         let $next = match $next.try_prepare_publication(&$target.$next, |_, _| Ok::<_, Infallible>(())) {
             Ok(prepared) => prepared,
-            Err(($next, cause)) => {
+            Err(($next, cause, refused)) => {
                 $(let $done = $done.abort();)*
-                drop($installation);
+                let retirement = AbortedRuntimeJournals {
+                    _components: [$(Some($done.1),)* Some(refused), $({ let _ = stringify!($rest); None },)*],
+                    _installation: Some($installation),
+                };
                 return Err((RuntimeJournals {
-                    $($done,)* $next, $($rest,)* admission: $admission,
-                }, RuntimePublicationError::Component { field: stringify!($next), cause }));
+                    $($done: $done.0,)* $next, $($rest,)* admission: $admission,
+                }, RuntimePublicationError::Component { field: stringify!($next), cause }, retirement));
             }
         };
         prepare_components!($target, $admission, $installation;
@@ -76,11 +99,24 @@ impl<Admission> RuntimeJournals<Admission> {
         admit: impl FnOnce(&Self, &State) -> Result<Installation, E>,
     ) -> Result<
         PreparedRuntimeJournals<'target, Admission, Installation>,
-        (Self, RuntimePublicationError<E>),
+        (
+            Self,
+            RuntimePublicationError<E>,
+            AbortedRuntimeJournals<Installation>,
+        ),
     > {
         let installation = match admit(&self, target) {
             Ok(installation) => installation,
-            Err(error) => return Err((self, RuntimePublicationError::Admission(error))),
+            Err(error) => {
+                return Err((
+                    self,
+                    RuntimePublicationError::Admission(error),
+                    AbortedRuntimeJournals {
+                        _components: std::array::from_fn(|_| None),
+                        _installation: None,
+                    },
+                ));
+            }
         };
         let Self {
             canonical_runtime,
@@ -99,7 +135,10 @@ impl<Admission, Installation> PreparedRuntimeJournals<'_, Admission, Installatio
     /// Release every writer and return the original journals and capture guard.
     pub(in crate::state::carrier_preparation::journals) fn abort(
         self,
-    ) -> RuntimeJournals<Admission> {
+    ) -> (
+        RuntimeJournals<Admission>,
+        AbortedRuntimeJournals<Installation>,
+    ) {
         let Self {
             canonical_runtime,
             commit_topology,
@@ -112,14 +151,25 @@ impl<Admission, Installation> PreparedRuntimeJournals<'_, Admission, Installatio
         let commit_topology = commit_topology.abort();
         let prev_commit_topology = prev_commit_topology.abort();
         let lane_consensus_contexts = lane_consensus_contexts.abort();
-        drop(installation);
-        RuntimeJournals {
-            canonical_runtime,
-            commit_topology,
-            prev_commit_topology,
-            lane_consensus_contexts,
-            admission,
-        }
+        let retirement = AbortedRuntimeJournals {
+            _components: [
+                Some(canonical_runtime.1),
+                Some(commit_topology.1),
+                Some(prev_commit_topology.1),
+                Some(lane_consensus_contexts.1),
+            ],
+            _installation: Some(installation),
+        };
+        (
+            RuntimeJournals {
+                canonical_runtime: canonical_runtime.0,
+                commit_topology: commit_topology.0,
+                prev_commit_topology: prev_commit_topology.0,
+                lane_consensus_contexts: lane_consensus_contexts.0,
+                admission,
+            },
+            retirement,
+        )
     }
 
     /// Publish each prepared pair once and return both actual resource guards.
@@ -128,7 +178,7 @@ impl<Admission, Installation> PreparedRuntimeJournals<'_, Admission, Installatio
     /// This component does not supply aggregate atomic visibility by itself.
     pub(in crate::state::carrier_preparation::journals) fn publish(
         self,
-    ) -> (Admission, Installation) {
+    ) -> PublishedRuntimeJournals<Admission, Installation> {
         let Self {
             canonical_runtime,
             commit_topology,
@@ -137,10 +187,13 @@ impl<Admission, Installation> PreparedRuntimeJournals<'_, Admission, Installatio
             admission,
             installation,
         } = self;
-        canonical_runtime.publish();
-        commit_topology.publish();
-        prev_commit_topology.publish();
-        lane_consensus_contexts.publish();
-        (admission, installation)
+        PublishedRuntimeJournals {
+            _canonical_runtime: canonical_runtime.publish(),
+            _commit_topology: commit_topology.publish(),
+            _prev_commit_topology: prev_commit_topology.publish(),
+            _lane_consensus_contexts: lane_consensus_contexts.publish(),
+            _admission: admission,
+            _installation: installation,
+        }
     }
 }

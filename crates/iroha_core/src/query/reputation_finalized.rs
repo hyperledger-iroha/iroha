@@ -9300,7 +9300,7 @@ pub enum ReputationFinalizedArchiveError {
     #[error("finalized reputation archive index is busy")]
     IndexBusy {
         /// Release Kura and State fences before awaiting this actual index owner.
-        wait: mv::ReleaseWait,
+        wait: concread::release::ReleaseWait,
     },
     /// Another original candidate retains the archive predecessor and capacity.
     #[error("finalized reputation archive has an outstanding candidate capture")]

@@ -68,16 +68,22 @@ where
         &mut self,
     ) -> Result<Transaction<'_, K, V, Prepaid<P>>, AdmittedStorageError> {
         self.assert_admitted_operable();
-        let allocation = self.allocation.expect("original admitted block pool");
+        let allocation = self
+            .writers
+            .target
+            .allocation
+            .as_ref()
+            .expect("original admitted block pool");
         self.failed = true;
-        let blocks = match self.blocks.checkpoint() {
+        let OriginalWriters { revert, blocks } = self.writers.as_mut();
+        let blocks = match blocks.checkpoint() {
             Ok(blocks) => blocks,
             Err(error) => {
                 self.failed = false;
                 return Err(AdmittedStorageError::Planning(error));
             }
         };
-        let revert = match self.revert.checkpoint() {
+        let revert = match revert.checkpoint() {
             Ok(revert) => revert,
             Err(error) => {
                 drop(blocks);

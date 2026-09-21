@@ -50,7 +50,7 @@ values or allocate successor generations. It acquires both original writers
 without waiting and checks the exact captured identity under those writers;
 Storage retains its next publication identity from block opening; Cell allocates
 its next identity during capture.
-A refusal returns the unchanged journal. A prepared publication can be aborted
+A refusal returns `(journal, error, cleanup)`, retaining the unchanged journal and original notification/resource cleanup. The caller keeps cleanup until enclosing participants unlock. A prepared publication can be aborted
 back to that journal without changing visible state. Publishing consumes the
 prepared pair and returns both capture and installation reservations to the
 aggregate caller; the caller owns their eventual transfer/release.
@@ -118,7 +118,9 @@ original identity charges until their last reference releases them, even after
 the storage is gone. Identity retirement releases credits after the visibility
 lock and physical writers have unlocked. `try_with_admitted_block` holds both original writers inside the pool's
 refund scope, clears the actual undo tree through admitted reset, and lends a
-private block to a synchronous callback. Its `try_insert_admitted` and
+private block to a synchronous callback. `try_capture_admitted_block` uses the
+same opening/edit path and returns the exact detached current/undo successors
+with the callback result attached; capture neither allocates nor copies values. Its `try_insert_admitted` and
 `try_remove_admitted` fund current and missing first-preimage edits together.
 Removal records an explicit None for an absent key and marks dirty only when
 a value was present. The owned query drops under the original pair failure guard.
@@ -139,6 +141,23 @@ Read-only views and exclusive history retain original allocation owners.
 whose traversal state stays inline. Views, blocks and transactions can scan a
 fully exhausted pool without copying payloads or allocating iterator storage.
 
+`AllocationBudget::with_deferred_refund_notifications` lends a thread-bound scope
+token. Prepaid detached journals require that same original pool token when they
+`try_prepare_admitted`. Multiple pairs can prepare inside one scope. Prepared
+physical owners cannot escape it or move to another thread; `abort` returns the
+same journal without writer borrows and `publish` installs its original nodes.
+Foreign/busy/poisoned ownership and stale current/undo generations preserve exact
+retry custody. Capture and explicit abort release both physical writers before
+either native release signal, including callbacks that unwind. Opening an ordinary
+or admitted block and reattaching a prepared pair share one original writer owner.
+It retains both locks through reset, replacement copies, execution and snapshot
+restoration, and releases both before abandonment callbacks. It observes the
+actual locks' poison states after destruction and freezes both verdicts before
+notifying, so a later payload or wake panic cannot falsely poison a released
+healthy writer. State still supplies complete resource policy, aggregate
+visibility and QC/Kura authority; all aggregate physical preparation and cleanup
+ordering remain required.
+
 `Block::try_transaction_admitted` lends both original checkpoints to a private
 transaction. Both admitted insertion and removal join the canonical current/undo
 demand with the exact ordered touch-array growth and policy-owned key copy before one
@@ -151,9 +170,21 @@ both private successors before retiring displaced checkpoint storage. Cleanup
 panic also makes the original block unusable.
 
 World storage remains Untracked pending native lock/runtime and release
-control storage, mutable access, detached capture, concrete model payload policies
+control storage, mutable access, concrete model payload policies
 and configured aggregate integration. Replacement and snapshot restoration admit
 each edit; they do not bound aggregate restoration work or complete State admission.
+
+Release observations use `concread::release`, the physical storage owner's single
+implementation. Native active-reader contention has its own source; releasing a
+writer cannot satisfy that wait. Published tree retirement retains the original
+reader notification after physical unlock, so the enclosing publisher can drop it
+after its visibility fences. Detached map preparation retains native active-reader
+mutexes and the exact identity guard; Cell preparation retains its EBR owners and
+identity. Their publish methods acquire no further lock and return cleanup with
+caller reservations. Keep those returned owners until enclosing fences release.
+Prepaid published cleanup cannot leave the original pool scope. Preparation abort
+and whole-State cleanup still need aggregate ordering; these component APIs do
+not establish that boundary.
 
 TODO: compose these component publications with exact aggregate State predecessor
 ownership, membership, hash history, archive/resource reservations and finality.
@@ -164,3 +195,18 @@ Cell publication also retains both original writers through pair identity rotati
 Epoch reclamation and release callbacks run after physical unlock, including
 current-only replacement that retains undo. A cleanup panic cannot poison the
 release hint for a physical lock that was already released successfully.
+
+Prepared publication abort returns `(journal, cleanup)`. Keep `cleanup` until all
+participants of the enclosing publication attempt have released their physical
+locks, then retry the same journal. Prepaid cleanup remains in its original
+allocation scope. This API does not make acquisition failures across an entire
+State aggregate callback-safe by itself.
+
+Failed preparation uses the same MV-wide `PublicationCleanup` owner as explicit
+abort. The preliminary identity observation, partially acquired writers/readers,
+final identity refusal and installation reservation stay with that owner. Runtime,
+TriggerSet and World return their aggregate cleanup, including failed World field
+shells. A retained carrier releases its State/Queue/Kura fences before retiring
+World/runtime refusal cleanup. This covers returned errors; panic propagation
+during acquisition, earlier Kura/State/Queue probes and successor acquisitions
+still require enclosing ownership.

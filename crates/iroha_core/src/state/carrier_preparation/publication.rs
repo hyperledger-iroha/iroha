@@ -315,18 +315,21 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         } = journals;
         admission = retained_admission;
         let hash_retirement;
-        let AcquiredCarrierComponents {
+        let membership_retirement;
+        let world_retirement;
+        let runtime_retirement;
+        let AcquiredCarrierParticipants {
             world,
             runtime,
             transactions,
             block_hashes,
             _fences: fences,
-        } = components;
+        } = components.into_original();
 
         let state_owner = block_hashes.state_owner();
         let generation = target.begin_state_view_write();
-        transactions.publish();
-        runtime.publish();
+        membership_retirement = transactions.publish();
+        runtime_retirement = runtime.publish();
         if update_da_mapping {
             target
                 .da_shard_cursors
@@ -338,7 +341,8 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             .lifecycle
             .take()
             .map(|effects| effects.publish(target, &generation, true));
-        let (_, mut extra_events, (), ()) = world.publish();
+        let (_, mut extra_events, retirement, (), ()) = world.publish();
+        world_retirement = retirement;
         world_effects.publish(target);
         let da_post_publication = effects
             .da_commitments
@@ -374,6 +378,9 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         }
         publication_events.append(&mut extra_events);
         drop(commit);
+        drop(membership_retirement);
+        drop(runtime_retirement);
+        drop(world_retirement);
         drop(hash_retirement);
         Ok(PublishedCarrier {
             block: valid,
