@@ -29,7 +29,7 @@ filesystems stream only when all remaining copies fit beside the working reserve
 later Cargo writes can still allocate new blocks for changed cloned content.
 The default basic scope keeps deployment custody, authentication, application and
 startup admission checks plus real four-validator Applied transactions and restart.
-After configuration, MV ownership controls execute before exact Pending Kura
+After configuration, MV and Concread ownership controls execute before exact Pending Kura
 recovery controls. Either prerequisite stops qualification on failure before
 other startup checks, shipping builds or network execution. These controls use
 the same complete native compile graph; focused development checks can compile
@@ -119,7 +119,7 @@ STAGES = (
         "taira::tests::final_canary_expired_window_rejects_before_fee_quote_or_dispatch",
         "taira::tests::final_canary_submit_uses_original_deadline_after_initial_read_and_post",
         "taira::tests::final_canary_submit_verifies_exact_proof_without_replaying_post",
-        "taira::tests::faucet_preparation_deadline_stops_http_and_cpu_work_before_dispatch",
+        "taira::tests::faucet_preparation_deadline_stops_http_before_dispatch",
         "taira::tests::core_pending_reason_codec_is_closed_and_round_trips_every_variant",
         "taira_public_reset::host::tests::every_core_pending_report_variant_reaches_the_exact_host_consumer",
         "taira_public_reset::host::tests::core_terminal_reports_map_to_exact_executor_recovery_classes",
@@ -135,7 +135,6 @@ STAGES = (
     ("public doctor producer and deployment contract", (
         "taira::tests::doctor_basic_scope_accepts_unsynchronized_time_and_excludes_advanced_routes",
         "taira::tests::doctor_faucet_policy_checks_both_scopes_without_authentication",
-        "taira::tests::doctor_faucet_policy_requires_exact_canonical_v1_fields",
         "taira::tests::doctor_tools_list_consumes_pages_and_rejects_invalid_cursors",
         "taira::tests::doctor_reports_bounded_mcp_application_error_codes",
         "taira::tests::doctor_mock_healthy_flow_reports_ok",
@@ -730,6 +729,7 @@ TORII_UNIT_STAGES += (("signed account permission query preservation", (
 )),)
 
 DISPATCHER_TRANSITION_STAGES = (("reversible dispatcher upgrade and native plan preparation", (
+    "taira_public_reset::host::dispatcher_transition::tests::copy::dispatcher_transition_private_copy_modes_survive_restrictive_umask",
     "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_apply_and_rollback_preserve_exact_original_bytes",
     "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_completed_replays_do_not_republish",
     "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_interrupted_publication_resumes_every_checked_boundary",
@@ -1203,6 +1203,10 @@ DATA_MODEL_STAGES += (("required nullable lifecycle runtime root codecs", (
     "nexus::tests::lane_lifecycle_status_json_rejects_duplicate_unknown_and_missing_fields",
 )),)
 
+DATA_MODEL_STAGES += (("exact canonical asset identifier decoders", (
+    "asset::id::tests::asset_definition_id_requires_exact_canonical_text_across_decoders",
+)),)
+
 DATA_MODEL_STAGES += (("authenticated executed transaction inclusion", (
     "query::canonical_output_inclusion_tests::ordinary_committed_transaction_verifies_against_exact_carrier_block",
     "query::canonical_output_inclusion_tests::authenticated_execution_inclusion_binds_complete_carrier_and_rejects_merge_authority",
@@ -1257,6 +1261,11 @@ NETWORK_OBSERVATION_STAGES += (('public epoch maintenance fixture admission', (
     'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup',
     'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
     'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
+)),)
+
+NETWORK_OBSERVATION_STAGES += (('retained native canary failure evidence', (
+    'production_beacon_bootstrap::canary_receipt::failed_canary_receipts_are_retained_before_parse_and_outcome_checks',
+    'production_beacon_bootstrap::canary_receipt::retained_canary_receipt_requires_every_binding_and_applied_height',
 )),)
 
 # One genuine custody ceremony owns every retained network assertion: paid
@@ -1451,6 +1460,9 @@ HARNESS_TARGETS = {
     "mv": ("native MV ownership", "mv", "lib", ["-p", "mv", "--lib"]),
     "mv-ebr": ("native EBR allocation custody", "ebr_allocation_custody", "test", ["-p", "mv", "--test", "ebr_allocation_custody"]),
     "mv-map": ("native owned map generations", "map_owned_generations", "test", ["-p", "mv", "--test", "map_owned_generations"]),
+    "mv-admitted-map": ("native admitted map custody", "admitted_map_custody", "test", ["-p", "mv", "--test", "admitted_map_custody"]),
+    "concread": ("native admitted B+ tree ownership", "concread", "lib", ["-p", "concread", "--lib"]),
+    "wallet": ("native wallet resource bounds", "iroha_wallet", "lib", ["-p", "iroha_wallet", "--lib"]),
     "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad", "--lib"]),
     "config-unit": ("native configuration unit contracts", "iroha_config", "lib", ["-p", "iroha_config", "--lib"]),
     "data-model": ("native canonical catalog parameters", "iroha_data_model", "lib", ["-p", "iroha_data_model", "--lib"]),
@@ -1894,7 +1906,7 @@ CORE_ADMISSION_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
 
 
 # Portable ownership prerequisites; every selected leaf runs in both scopes.
-MV_OWNERSHIP_HARNESSES = ("mv", "mv-ebr", "mv-map")
+MV_OWNERSHIP_HARNESSES = ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
 
 MV_OWNERSHIP_STAGES = (
     ('finite resident allocation pool', (
@@ -1972,17 +1984,180 @@ MV_MAP_STAGES = (("original owned map successors across refusal and publication"
 )),)
 
 
+# Native cutover owners run before process/network qualification. These checks
+# retain exact sources and resource obligations; they do not open live ingress.
+CORE_NATIVE_CONNECTION_STAGES = (
+    ('native process transport and exact source recovery', (
+        'state::tests::native_transport_production_poll_retries_real_actor_pressure_without_substitution',
+        'state::tests::native_transport_production_poll_fences_closed_actor_without_losing_fanout',
+        'state::tests::native_transport_production_decision_reaches_global_nonmembers_after_rollover',
+        'state::tests::native_driver_source_recovery_rejoins_original_owner_after_foreign_refusal',
+    )),
+    ('finite World journal shell planning', (
+        'state::world_journals::resources::tests::world_shell_plan_matches_constructed_capture_and_installation_layouts',
+        'state::world_journals::resources::tests::world_shell_reservation_holds_capture_abort_retry_and_refunds_after_drop',
+        'state::world_journals::resources::tests::world_shell_planning_never_reads_targets_or_acquires_held_writers',
+        'state::world_journals::resources::tests::world_shell_planning_checks_each_sum_count_and_vector_layout_overflow',
+        'state::carrier_preparation::journals::tests::carrier_journal_shell_plan_precedes_execution_and_survives_capture',
+    )),
+    ('retained candidate descriptors and exact marker custody', (
+        'sumeragi::v2_body_store::tests::retained_validation_tests::incomplete_retained_owner_cannot_authorize_a_marker_even_when_resume_reports_success',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::ready_retained_owner_skips_capture_resume_through_marker_retry_and_cache',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_marker_file_sync_refusal_keeps_owner_through_retry_abort_and_consume',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_reproposal_directory_sync_refusal_preserves_prior_confirmed_receipt',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_consumption_tombstone_rejects_delayed_earlier_round_without_execution',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_validation_requires_exact_store_and_existing_cached_owner',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_descriptor_capacity_refuses_before_execution_or_marker_write',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_descriptor_byte_admission_precedes_allocation_and_execution',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_descriptor_charge_outlives_payload_and_wakes_exact_pool_retry',
+        'sumeragi::v2_body_store::tests::retained_validation_tests::retained_descriptor_zero_and_overflow_do_not_allocate_or_execute',
+    )),
+    ('original service Queue retirement publication', (
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::original_queue_cut_binds_retirement_and_replacement_until_drop',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::empty_decoy_queue_and_foreign_state_never_supply_original_cut',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::malformed_captured_retirement_route_releases_original_queue_cut',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::pending_queue_work_releases_without_applying_the_blocked_carrier',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::queue_cut_does_not_replace_kura_or_original_geometry_authority',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::sticky_queue_fault_revokes_retained_retirement_before_storage_or_visibility',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::immutable_apply_service_exposes_only_its_actual_state_and_queue',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::original_queue_cut_completes_retirement_storage_without_publishing_state',
+    )),
+    ('retained carrier physical publication and release', (
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::retained_execution_phases_survive_marker_reproposal_and_publication_refusals',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::retained_capture_refusal_resumes_original_archives_before_any_validation_marker',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::physical_preparation_diagnostics_retain_storage_cause_and_busy_owner',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_state_and_header_are_required_before_witness_or_archive_writes',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::joint_publication_persists_both_original_archives_without_state_effects_or_relocking',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::foreign_archive_refusal_precedes_state_acquisition_and_returns_complete_retry',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::source_substitution_refuses_before_state_acquisition_and_retains_original_retry',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::changed_carrier_wire_refuses_source_join_and_restored_owner_reauthenticates',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::every_busy_carrier_family_releases_earlier_writers_and_retains_exact_retry',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::aggregate_acquisition_holds_every_family_without_publishing_or_losing_originals',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::geometry_refusal_returns_original_decision_and_releases_every_physical_writer',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::geometry_backend_contention_releases_writers_and_waits_for_actual_backend_release',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::lifecycle_effect_refusal_precedes_storage_and_preserves_exact_retry',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::installation_refusal_precedes_all_fences_and_returns_the_decided_carrier',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::changed_world_predecessor_releases_all_earlier_families_without_rebinding',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::actual_validation_overlay_defers_at_hash_before_taking_its_world_writers',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::identical_foreign_state_cannot_replace_the_original_physical_owners',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::all_reservations_outlive_component_writers_and_state_fences_on_drop_and_abort',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_kura_contention_returns_exact_decided_carrier_and_release_driven_retry',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_kura_storage_failure_returns_carrier_and_releases_all_acquired_owners',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::checkpoint_storage_refusal_precedes_state_and_retains_exact_originals',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::exact_checkpoint_retry_preserves_receipt_across_physical_abort',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::attached_foreign_checkpoint_never_grants_state_acquisition',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::queue_publication_tests::signed_retirement_and_replacement_publish_once_under_original_service_queue_cut',
+    )),
+    ('original carrier geometry retries and retirement', (
+        'state::carrier_geometry_preparation::tests::carrier_geometry_captures_original_predecessor_and_drop_does_not_publish',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_identity_requires_its_exact_captured_header',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_rejects_changed_header_and_forged_pending_predecessor',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_rejects_ownerless_successor_and_ignores_physical_cache',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_replacement_uses_actual_undo_including_retired_lineage',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_completion_requires_original_state_and_exact_header_before_effects',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_retirement_and_replacement_require_original_queue_custody',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_foreign_lease_refuses_before_descriptor_capture_or_effects',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_preparation_is_pure_and_root_change_refuses_before_raw_effects',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_retries_sync_failure_under_held_lease_without_state_publication',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_completion_requires_original_prepared_descriptors',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_completed_catalog_refuses_identical_replacement_journal',
+        'state::carrier_geometry_preparation::tests::carrier_geometry_no_change_completion_has_no_mapping_or_storage_owner',
+    )),
+    ('actual terminal carrier publication', (
+        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::tests::consumes_original_journals_once_with_one_visibility_interval',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::tests::wrong_retained_header_returns_original_decision_and_releases_every_writer',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::tests::prevalidation_returns_owner_without_visibility_then_real_owner_publishes',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::tests::foreign_geometry_returns_original_owner_before_any_visibility_change',
+    )),
+    ('native publication and original driver Apply settlement', (
+        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_single_publishes_original_sources_and_exact_checkpoint_once',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_atomic_publishes_original_sources_and_exact_checkpoint_once',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_driver_settles_original_closed_apply_only_after_real_publication',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_published_terminal_retires_closed_body_without_local_qc',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_published_terminal_checks_unacknowledged_durable_decision',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_published_terminal_refuses_conflicting_durable_decision',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_published_terminal_checks_unlaunched_decision',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_published_terminal_refuses_conflicting_unlaunched_decision',
+    )),
+)
+CORE_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
+CORE_STAGES += CORE_NATIVE_CONNECTION_STAGES
+
+
+MV_ADMITTED_MAP_STAGES = (
+    ('finite admitted map custody and original writer start', (
+        'complete_demand_refusal_allocates_nothing_and_retries_the_original_input_after_release',
+        'nonuniform_nested_payloads_split_and_grow_while_original_readers_retain_actual_credits',
+        'detached_public_owner_rejects_foreign_and_busy_maps_without_readmission_or_copy',
+        'replacement_and_detached_successor_keep_their_original_storage_after_map_drop',
+        'every_partial_leaf_clone_unwind_reclaims_new_storage_and_preserves_published_references',
+        'old_reader_and_abort_refunds_wake_only_after_the_original_writer_unlocks',
+        'retained_successor_grows_and_replaces_entries_before_one_atomic_publication',
+        'retained_capacity_refusal_preserves_private_entries_and_input_then_retries',
+        'retained_edits_refuse_foreign_busy_and_changed_generations_before_admission',
+        'fully_exhausted_budget_can_abort_all_retained_edits_without_allocating',
+        'later_copy_unwind_aborts_the_whole_private_successor_and_preserves_published_storage',
+        'private_leaf_split_unwind_reclaims_all_previous_edits_without_publication',
+        'retired_tracking_charge_unwind_sees_installed_bookkeeping_and_aborts_all_private_nodes',
+        'full_budget_checkpoint_abort_restores_original_private_entries_buffers_and_credits',
+        'nested_checkpoint_apply_abort_and_sibling_apply_preserve_original_parent_until_commit',
+        'caught_checkpoint_edit_panic_cannot_read_detach_or_publish_the_original_cursor',
+        'checkpoint_capacity_refusal_keeps_child_state_and_original_input_for_retry',
+        'checkpoint_buffer_refund_panic_restores_parent_ownership_and_forbids_publication',
+        'admitted_empty_writer_starts_without_edits_and_grows_under_separate_admission',
+        'admitted_populated_writer_shares_original_entries_and_aborts_without_allocations',
+        'admitted_writer_start_refuses_one_byte_below_and_accepts_exact_complete_demand',
+    )),
+)
+
+CONCREAD_STAGES = (
+    ('admitted B+ tree planning and retained edits', (
+        'bptree::admission::tests::demand_overflow_preserves_the_original_sum_and_zero_layout_needs_no_allocation',
+        'bptree::admission::tests::empty_map_plan_includes_both_shells_fixed_buffers_and_full_root_growth_bound',
+        'bptree::admission::tests::exhausted_generation_refuses_before_admission_or_successor_allocation',
+        'bptree::admission::tests::unsupported_payload_returns_original_owners_without_calling_admission',
+        'bptree::admission::tests::initial_node_admission_refusal_constructs_no_root_or_reader',
+        'bptree::admission::tests::retained_edits_keep_the_original_cursor_and_refused_tracking_then_publish_once',
+        'bptree::admission::tests::tracking_growth_checks_overflow_before_changing_demand_or_allocating',
+    )),
+    ('admitted original B+ tree writer start', (
+        'bptree::admission::tests::writer_start::start_plan_is_only_two_shells_and_empty_tracking_with_checked_generation',
+        'bptree::admission::tests::writer_start::empty_and_populated_starts_keep_exact_tree_and_zero_buffers_without_payload_work',
+        'bptree::admission::tests::writer_start::start_busy_and_admission_refusal_allocate_nothing_and_preserve_published_state',
+        'bptree::admission::tests::writer_start::exhausted_start_refuses_before_callback_or_allocation',
+        'bptree::admission::tests::writer_start::provider_drop_panic_poisoned_start_never_publishes_or_returns_a_writer',
+        'bptree::admission::tests::writer_start::started_original_writer_admits_later_growth_and_checkpoint_abort_without_new_credit',
+    )),
+    ('original cursor checkpoint ownership', (
+        'internals::bptree::cursor::checkpoint::tests::abort_restores_original_root_tag_length_and_both_buffers_after_repeated_growth',
+        'internals::bptree::cursor::checkpoint::tests::nested_apply_transfers_original_buffers_and_outer_abort_restores_them',
+        'internals::bptree::cursor::checkpoint::tests::applied_newest_tag_survives_and_sibling_reuse_follows_actual_child_reclamation',
+        'internals::bptree::cursor::checkpoint::tests::exhausted_private_tag_refuses_without_allocating_or_changing_any_owner',
+    )),
+)
+
+WALLET_STAGES = (("bounded faucet proof-of-work deadline", (
+    "faucet_pow::resource_tests::faucet_preparation_deadline_stops_cpu_work_before_dispatch",
+)),)
+
+CLIENT_STAGES += (("canonical public faucet advertisement decoder", (
+    "account_bootstrap::tests::faucet_discovery_requires_exact_canonical_v1_fields",
+)),)
+
 def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]:
     """Select honest test coverage without changing shipping features or artifacts."""
     if qualification_scope not in QUALIFICATION_SCOPES:
         raise CheckError("native qualification scope must be basic or full")
     selected = {
         "mv": MV_OWNERSHIP_STAGES, "mv-ebr": MV_EBR_STAGES, "mv-map": MV_MAP_STAGES,
+        "mv-admitted-map": MV_ADMITTED_MAP_STAGES, "concread": CONCREAD_STAGES,
         "config": CONFIG_STAGES, "config-unit": CONFIG_UNIT_STAGES, "data-model": DATA_MODEL_STAGES,
         "kagami": KAGAMI_STAGES,
         "proof": PROOF_STAGES, "proof-flows": PROOF_FLOW_STAGES,
         "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES,
-        "test-network": TEST_NETWORK_STAGES, "client": CLIENT_STAGES,
+        "test-network": TEST_NETWORK_STAGES, "client": CLIENT_STAGES, "wallet": WALLET_STAGES,
         "torii-unit": TORII_UNIT_STAGES, "torii": TORII_STAGES,
         "torii-shared": TORII_SHARED_STAGES, "torii-lifecycle": TORII_LIFECYCLE_STAGES,
         "daemon": DAEMON_STAGES, "network": NETWORK_STAGES, "cli": STAGES,
@@ -2226,7 +2401,7 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
     missing = [harness for harness in harnesses if harness not in observed]
     if missing:
         raise CheckError("native test metadata check omitted selected test targets: " + ", ".join(missing))
-    print(f"[taira-prequalify] native test metadata check passed in {elapsed:.1f}s; "
+    print(f"[taira-check] native test metadata check passed in {elapsed:.1f}s; "
           "full harness compilation remains required", flush=True)
 
 
@@ -3645,6 +3820,10 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     # scopes. Deferred cases have compile coverage, never fabricated test passes.
     early_stages, selections, compile_only = native_harness_plan(scoped_stages, shipping)
     if selections:
+        # Expand macros and type-check the exact test graph before expensive codegen.
+        # Keep the same feature union, environment, target lane and held locks; a
+        # metadata pass neither publishes test executables nor qualifies a regression.
+        check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
             for name in compile_only:

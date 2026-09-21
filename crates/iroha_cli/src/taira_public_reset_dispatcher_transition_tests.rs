@@ -2,6 +2,9 @@
 use super::*;
 use std::cell::Cell;
 
+#[path = "taira_public_reset_dispatcher_transition_copy_tests.rs"]
+mod copy;
+
 struct Fixture {
     _temp: tempfile::TempDir,
     plan: Plan,
@@ -31,7 +34,7 @@ fn file(path: &Path, bytes: &[u8], mode: u32) -> Pin {
     }
 }
 fn fixture() -> Fixture {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = super::super::super::private_custody_test_dir("taira-dispatcher-transition-");
     let dir = temp.path().canonicalize().unwrap();
     fs::create_dir(dir.join("proc")).unwrap();
     fs::set_permissions(dir.join("proc"), fs::Permissions::from_mode(0o700)).unwrap();
@@ -375,7 +378,24 @@ fn sealed_records(plan: &Plan) -> (HostLeaseV1, HostProgressV1, Value) {
         last_rollback_rank: 0,
         rolled_back_hosts: Vec::new(),
     };
-    let terminal = norito::json!({"schema": (super::super::super::JOURNAL_SCHEMA_V1), "qualification_scope": ("core_testnet"), "deployment_id": ("retained-predecessor"), "inventory_sha256": (p.inventory_sha256), "authorization_sha256": (p.authorization_sha256), "authorization_nonce": (p.authorization_nonce), "status": ("completed"), "phase": ("completed"), "next_step": (p.completed_next_step), "recovery_intent": (Value::Null), "touched_validators": (SLUGS[..4].to_vec()), "edge_touched": (true), "edge_rollback_complete": (false), "rollback_next_validator": (0), "failure_summary": (""), "rollback_failures": (Vec::<String>::new())});
+    let terminal = norito::json!({
+        "schema": (super::super::super::JOURNAL_SCHEMA_V1),
+        "qualification_scope": "core_testnet",
+        "deployment_id": "retained-predecessor",
+        "inventory_sha256": (p.inventory_sha256),
+        "authorization_sha256": (p.authorization_sha256),
+        "authorization_nonce": (p.authorization_nonce),
+        "status": "completed",
+        "phase": "completed",
+        "next_step": (p.completed_next_step),
+        "recovery_intent": (Value::Null),
+        "touched_validators": (SLUGS[..4].to_vec()),
+        "edge_touched": true,
+        "edge_rollback_complete": false,
+        "rollback_next_validator": 0,
+        "failure_summary": "",
+        "rollback_failures": (Vec::<String>::new()),
+    });
     (lease, progress, terminal)
 }
 #[test]
@@ -542,7 +562,29 @@ fn qualification_records() -> (Candidate, Vec<Value>) {
         pin.mode = 0o400;
     }
     c.capture.sha256 = c.preparation.sha256.clone();
-    let base = norito::json!({"commit": (c.commit), "tree": (c.tree), "signer_fingerprint": (c.signer_fingerprint), "native_check_scope": ("basic"), "native_incremental": (false), "native_linker": ("default"), "environment_sha256": ("0".repeat(64)), "native_environment_sha256": ("1".repeat(64)), "target": ("aarch64-unknown-linux-gnu"), "profile": ("release"), "jobs": (6), "source_unchanged": (true), "toolchain_unchanged": (true), "source_snapshot_sha256": ("2".repeat(64)), "source_root": ("/producer/source"), "source_output_target": ("/producer/target"), "compiler_tools": {}, "tools": {}, "command": [], "release_qualified": (false), "deployed": (false)});
+    let base = norito::json!({
+        "commit": (c.commit),
+        "tree": (c.tree),
+        "signer_fingerprint": (c.signer_fingerprint),
+        "native_check_scope": "basic",
+        "native_incremental": false,
+        "native_linker": "default",
+        "environment_sha256": ("0".repeat(64)),
+        "native_environment_sha256": ("1".repeat(64)),
+        "target": "aarch64-unknown-linux-gnu",
+        "profile": "release",
+        "jobs": 6,
+        "source_unchanged": true,
+        "toolchain_unchanged": true,
+        "source_snapshot_sha256": ("2".repeat(64)),
+        "source_root": "/producer/source",
+        "source_output_target": "/producer/target",
+        "compiler_tools": {},
+        "tools": {},
+        "command": [],
+        "release_qualified": false,
+        "deployed": false,
+    });
     let mut result = base.clone();
     let mut request = base;
     for (key, value) in [
@@ -560,8 +602,18 @@ fn qualification_records() -> (Candidate, Vec<Value>) {
         ("sorafs-node", "sorafs_node"),
         ("kagami", "iroha_kagami"),
     ] {
-        produced.push(norito::json!({"name": (name), "package": (package), "path": (format!("/producer/output/attempts/000001/bin/{name}")), "sha256": ("b".repeat(64)), "size": (20)}));
-        copied.push(norito::json!({"name": (name), "sha256": ("b".repeat(64)), "size": (20)}));
+        produced.push(norito::json!({
+            "name": name,
+            "package": package,
+            "path": (format!("/producer/output/attempts/000001/bin/{name}")),
+            "sha256": ("b".repeat(64)),
+            "size": 20,
+        }));
+        copied.push(norito::json!({
+            "name": name,
+            "sha256": ("b".repeat(64)),
+            "size": 20,
+        }));
     }
     set(&mut result, "artifacts", Value::Array(produced));
     set(
@@ -570,12 +622,46 @@ fn qualification_records() -> (Candidate, Vec<Value>) {
         Value::String("attempts/000001".into()),
     );
     set(&mut result, "timings_seconds", norito::json!({}));
-    let checks = norito::json!({"request": (request), "passed": (true)});
-    let binary = norito::json!({"commit": (c.commit), "destination": (format!("{import}/artifacts/bin")), "artifacts": (copied), "all_hashes_verified": (true), "activated": (false)});
-    let source = norito::json!({"commit": (c.commit), "tree": (c.tree), "signer_fingerprint": (c.signer_fingerprint), "source_root": (format!("{import}/source/source")), "clean": (true), "signature_verified": (true), "object_inventory_verified": (true), "history_included": (false), "runtime_files_transferred": (false), "runtime_files_included": (false), "activated": (false), "sha256": ("c".repeat(64)), "size": (10), "source_bytes": (10), "file_count": (1), "result_sha256": (c.preparation.sha256)});
+    let checks = norito::json!({
+        "request": request,
+        "passed": true,
+    });
+    let binary = norito::json!({
+        "commit": (c.commit),
+        "destination": (format!("{import}/artifacts/bin")),
+        "artifacts": copied,
+        "all_hashes_verified": true,
+        "activated": false,
+    });
+    let source = norito::json!({
+        "commit": (c.commit),
+        "tree": (c.tree),
+        "signer_fingerprint": (c.signer_fingerprint),
+        "source_root": (format!("{import}/source/source")),
+        "clean": true,
+        "signature_verified": true,
+        "object_inventory_verified": true,
+        "history_included": false,
+        "runtime_files_transferred": false,
+        "runtime_files_included": false,
+        "activated": false,
+        "sha256": ("c".repeat(64)),
+        "size": 10,
+        "source_bytes": 10,
+        "file_count": 1,
+        "result_sha256": (c.preparation.sha256),
+    });
     copied.extend([
-        norito::json!({"name": ("source.pack"), "sha256": ("c".repeat(64)), "size": (10)}),
-        norito::json!({"name": ("source-capture.json"), "sha256": ("d".repeat(64)), "size": (10)}),
+        norito::json!({
+            "name": "source.pack",
+            "sha256": ("c".repeat(64)),
+            "size": 10,
+        }),
+        norito::json!({
+            "name": "source-capture.json",
+            "sha256": ("d".repeat(64)),
+            "size": 10,
+        }),
     ]);
     for (name, pin) in [
         ("result.json", &c.preparation),
@@ -583,10 +669,39 @@ fn qualification_records() -> (Candidate, Vec<Value>) {
         ("checks.json", &c.checks),
         ("capture.json", &c.capture),
     ] {
-        copied.push(norito::json!({"name": (format!("preparation/{name}")), "sha256": (pin.sha256), "size": (pin.size)}));
+        copied.push(norito::json!({
+            "name": (format!("preparation/{name}")),
+            "sha256": (pin.sha256),
+            "size": (pin.size),
+        }));
     }
-    let transfer = norito::json!({"schema": ("taira.release-transfer.v1"), "commit": (c.commit), "tree": (c.tree), "signer_fingerprint": (c.signer_fingerprint), "result_sha256": (c.preparation.sha256), "runtime_root": (RUNTIME), "rows": (copied), "allocation": {"bytes": (140), "files": (10), "directories": (6)}});
-    let completed = norito::json!({"schema": ("taira.release-transfer.completed.v1"), "request_sha256": (c.transfer_request.sha256), "binary_transfer": {"path": (c.binary_transfer.path), "sha256": (c.binary_transfer.sha256)}, "source_transfer": {"path": (c.source_transfer.path), "sha256": (c.source_transfer.sha256)}, "activated": (false)});
+    let transfer = norito::json!({
+        "schema": "taira.release-transfer.v1",
+        "commit": (c.commit),
+        "tree": (c.tree),
+        "signer_fingerprint": (c.signer_fingerprint),
+        "result_sha256": (c.preparation.sha256),
+        "runtime_root": RUNTIME,
+        "rows": copied,
+        "allocation": {
+            "bytes": 140,
+            "files": 10,
+            "directories": 6,
+        },
+    });
+    let completed = norito::json!({
+        "schema": "taira.release-transfer.completed.v1",
+        "request_sha256": (c.transfer_request.sha256),
+        "binary_transfer": {
+            "path": (c.binary_transfer.path),
+            "sha256": (c.binary_transfer.sha256),
+        },
+        "source_transfer": {
+            "path": (c.source_transfer.path),
+            "sha256": (c.source_transfer.sha256),
+        },
+        "activated": false,
+    });
     (
         c,
         vec![result, request, checks, binary, source, transfer, completed],
@@ -711,11 +826,45 @@ fn dispatcher_transition_prepare_reuses_current_typed_split_source_bindings() {
                 daemon_commit.clone(),
             ),
         ] {
-            artifacts.push(norito::json!({"role": (role), "path": (path), "sha256": ("c".repeat(64)), "size": (20), "mode": (mode), "source_commit": (commit)}));
+            artifacts.push(norito::json!({
+                "role": role,
+                "path": path,
+                "sha256": ("c".repeat(64)),
+                "size": 20,
+                "mode": mode,
+                "source_commit": commit,
+            }));
         }
-        validators.push(norito::json!({"commit": (config_commit), "release_root": (release), "argv": [(daemon), ("--config"), (format!("{service}/current/config/config.toml")), ("--sora")], "artifacts": (artifacts), "service_state": {"state": ("stopped"), "value": {"device": (10), "inode": (20)}}}));
+        validators.push(norito::json!({
+            "commit": config_commit,
+            "release_root": release,
+            "argv": [
+                daemon,
+                "--config",
+                (format!("{service}/current/config/config.toml")),
+                "--sora",
+            ],
+            "artifacts": artifacts,
+            "service_state": {
+                "state": "stopped",
+                "value": {
+                    "device": 10,
+                    "inode": 20,
+                },
+            },
+        }));
     }
-    let value = norito::json!({"schema": ("iroha.taira.dispatcher-current-runtime.v1"), "host_identity_sha256": ("d".repeat(64)), "validators": (validators), "edge": {"commit": (config_commit), "release_root": (format!("/srv/taira/edge/releases/{config_commit}")), "cli_sha256": ("e".repeat(64)), "config_sha256": ("f".repeat(64))}});
+    let value = norito::json!({
+        "schema": "iroha.taira.dispatcher-current-runtime.v1",
+        "host_identity_sha256": ("d".repeat(64)),
+        "validators": validators,
+        "edge": {
+            "commit": config_commit,
+            "release_root": (format!("/srv/taira/edge/releases/{config_commit}")),
+            "cli_sha256": ("e".repeat(64)),
+            "config_sha256": ("f".repeat(64)),
+        },
+    });
     let typed: prepare::CurrentRuntime = json::from_value(value.clone()).unwrap();
     prepare::validate_runtime(&typed).unwrap();
     let mut wrong = value.clone();

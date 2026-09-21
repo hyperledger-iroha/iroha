@@ -339,7 +339,8 @@ pub(super) fn valid_software_signer_handle(role: SignerRoleV1, value: &str) -> b
         SignerRoleV1::ReleaseManifest
         | SignerRoleV1::StreamToken
         | SignerRoleV1::FinalPromotionProvenance
-        | SignerRoleV1::FinalPromotionAccountTransaction => return false,
+        | SignerRoleV1::FinalPromotionAccountTransaction
+        | SignerRoleV1::TopologyApproval => return false,
     };
     let prefix = format!("software://sorafs/{role_segment}/");
     iroha_config::parameters::validate_production_runtime_handle(value).is_ok()

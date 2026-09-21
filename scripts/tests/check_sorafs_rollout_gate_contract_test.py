@@ -7996,7 +7996,7 @@ def test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io() -> None:
     assert "validate_existing_file_path" in release_cli
     assert 'validate_existing_file_path "aggregate release manifest"' in release_cli
     assert re.search(
-        r'validate_existing_executable_file_path\s*\\\s*"authenticated external software Ed25519 signer adapter"\s*\\\s*"\$external_signer"',
+        r'validate_existing_executable_file_path\s*\\\s*"authenticated external Ed25519 signer adapter"\s*\\\s*"\$external_signer"',
         release_cli,
     )
     assert '"native release-manifest verifier"' in release_cli
@@ -20024,7 +20024,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "Aggregate promotion also rechecks the lane-proven reference SDK release digest relationships: manifest-bound artifact fingerprints must match `valid_release_manifest_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`, and governance-approval release-key fingerprints must match `valid_release_key_fingerprints` before final promotion can report ready.",
         "The reference SDK release gate fail-closes when more than one valid release manifest, policy, or release key anchor appears, and clears the mixed `valid_release_manifest_digests`, `valid_policy_digests`, or `valid_release_key_fingerprints` set before aggregate promotion can report ready.",
         "Release-manifest, policy, and release-key binding failures are recorded on the offending artifact before required-kind validity is computed, so the JSON summary matches the fail-closed release decision.",
-        "Signed-manifest policy, key, hardware backend, positive revisions, and finalized operation anchors are derived only from a freshly verified native hardware receipt. Governance approval separately requires policy and `--public-key-fingerprint-hex` inputs",
+        "Signed-manifest policy, key, positive revisions, and finalized operation anchors are derived only from a freshly verified native operation receipt. Governance approval separately requires policy and `--public-key-fingerprint-hex` inputs",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
         "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, Swift, and C# wrappers",
         "Archive live operator smoke evidence for the published `iroha` archives and cookbook replay before declaring SF-11 fully released",

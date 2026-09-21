@@ -90,6 +90,12 @@ its own private `retained-public-release-v1` intent directory. Missing epoch
 authority is never created. Those advisory locks are not represented as a
 continuous fence against every supervisor creator.
 
+Live-reference refusals retain bounded diagnostics in the existing stderr evidence:
+the total count and up to eight PID, reference-kind and selected-public-path rows.
+Path prefixes stop at 256 characters, with a full-path SHA256 and explicit
+truncation/omission counts. Process arguments, environment and unrelated paths
+are excluded. This shared binary/source diagnostic leaves refusal policy unchanged.
+
 Before any unlink, all selected binaries are renamed exclusively to exact
 same-directory quarantine names recorded in the durable intent. Current
 inventory/unit bindings, supervisor absence, process descriptors/maps and

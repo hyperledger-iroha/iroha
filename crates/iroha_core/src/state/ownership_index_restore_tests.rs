@@ -298,8 +298,13 @@ fn grouped_projection_keeps_complete_buckets_and_ignores_absent_records() {
     let projected = grouped(&source.history(), |_, value| *value);
     assert_eq!(encoded(&source), original);
     assert_eq!(
-        projected.snapshot().revert_map(),
-        &BTreeMap::from([
+        projected
+            .snapshot()
+            .revert_map()
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect::<BTreeMap<_, _>>(),
+        BTreeMap::from([
             (7, Some(BTreeSet::from([1, 2]))),
             (8, None),
             (9, Some(BTreeSet::from([3]))),

@@ -77,7 +77,7 @@ use iroha_executor_data_model::permission::{
     },
     parameter::{CanSetHijiriParameters, CanSetParameters},
     query::{CanReadAllLedgerData, CanReadRestrictedDataspace},
-    smart_contract::{CanManageSmartContractCodeRegistrars, CanRegisterSmartContractCode},
+    smart_contract::{CanGrantSmartContractCodeManagement, CanManageSmartContractCode},
 };
 use iroha_genesis::{
     GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1,
@@ -4182,14 +4182,11 @@ fn append_localnet_contract_permissions_for_client(
         }
     };
     push_unique(enact_governance, client_account_id.clone());
-    // Only the generated runtime operator controls registrar admission. Builders may receive
-    // deployment authority from this manager; registration never grants onward delegation.
+    // Only the generated runtime operator controls privileged contract-code administration.
+    // Registered builders publish immutable code with normal fees and no management grant.
+    push_unique(CanManageSmartContractCode.into(), client_account_id.clone());
     push_unique(
-        CanRegisterSmartContractCode.into(),
-        client_account_id.clone(),
-    );
-    push_unique(
-        CanManageSmartContractCodeRegistrars.into(),
+        CanGrantSmartContractCodeManagement.into(),
         client_account_id.clone(),
     );
     push_unique(CanSetParameters.into(), client_account_id.clone());
@@ -10755,12 +10752,12 @@ mod tests {
         assert_ne!(client_account_id, localnet_client_account_id());
         let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
             .expect("parse generated Taira genesis");
-        let registrar_grantees = manifest
+        let code_management_grantees = manifest
             .instructions()
             .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
             .filter_map(|grant| match grant {
                 GrantBox::Permission(grant)
-                    if CanRegisterSmartContractCode::try_from(grant.object()).is_ok() =>
+                    if CanManageSmartContractCode::try_from(grant.object()).is_ok() =>
                 {
                     Some(grant.destination().clone())
                 }
@@ -10768,16 +10765,16 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(
-            registrar_grantees,
+            code_management_grantees,
             vec![client_account_id.clone()],
-            "only the generated client receives registrar authority, exactly once"
+            "only the generated client receives contract-code management authority, exactly once"
         );
         let managers = manifest
             .instructions()
             .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
             .filter_map(|grant| match grant {
                 GrantBox::Permission(grant)
-                    if CanManageSmartContractCodeRegistrars::try_from(grant.object()).is_ok() =>
+                    if CanGrantSmartContractCodeManagement::try_from(grant.object()).is_ok() =>
                 {
                     Some(grant.destination().clone())
                 }

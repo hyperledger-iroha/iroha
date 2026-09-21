@@ -147,7 +147,7 @@ impl SignerStreamTokenObservationRequestV1 {
 }
 
 /// Exact signed state subject, with a completion row only in the completed phase.
-#[derive(Clone, Copy, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub enum SignerStreamTokenStateSubjectV1 {
     /// Current custody has no synthetic token or completed operation.
     CurrentCustody {
@@ -165,7 +165,7 @@ pub enum SignerStreamTokenStateSubjectV1 {
         /// Full role-signing message size.
         signing_payload_size: u64,
         /// Immutable row authenticated by the observer under its finalized operation anchor.
-        completed_operation: SignerCompletedOperationV1,
+        completed_operation: Box<SignerCompletedOperationV1>,
     },
 }
 impl SignerStreamTokenStateSubjectV1 {

@@ -28,6 +28,31 @@ receipt journal and offline verification command are implemented. The
 independently signed evidence schema has no production observer that derives and
 signs its observations from real finalized custody and operation records.
 
+## Release-manifest canonical operation boundary
+
+The daemon's private `release_manifest::ceremony` owner pins the complete signer
+binding, original verified custody, reviewed raw manifest, intent and reservation.
+It derives only the ordered RolePayload, AuditRecord, Provenance and Response
+messages, verifies the exact preceding signatures, and rechecks the receiving
+operation before key I/O. Completion consumes that owner. The existing sign path
+still stages the complete immutable receipt before the authoritative completion
+CAS and verifies fresh completion before release; recovery does not sign again.
+
+This is a producer prerequisite. Role13 remains rejected by the external software
+adapter/protocol. A configured production path still needs native ReleaseManifest
+custody/permission/Current Check and operation authority, a state/finality provider
+using actual State/Kura/Queue, qualified observer/time/floor and fee/submission
+assembly, and an authenticated software key adapter carrying all four ordered
+operations plus ambiguous recovery. Injected provider tests and a local receipt
+journal establish none of that authority. The integrated daemon harness passes
+all seven new ceremony-owner controls and all 111 signer-operation tests;
+`target/first-release-release-ceremony-native/identity.json` records the copied
+binary and unchanged observed inputs. Its observation was captured while the
+development rebuild was queued/running, not as a before-build release seal.
+No production qualification is implied. The separate
+[software-adapter validation record](../../docs/history/2026-09-21/sorafs-signing-adapter-validation.md)
+records promotion controls and actual pinned-cosign cryptographic tests.
+
 ## Existing configuration and transport
 
 The closest complete public configuration is

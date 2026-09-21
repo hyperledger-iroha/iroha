@@ -1261,7 +1261,12 @@ AsyncCandidateItemProposalRound(defaultRound, item) ==
            defaultRound.context, item.envelope.height, item.envelope.view)
 
 AsyncCandidateEvidenceProposalRound(defaultRound, evidence) ==
-  IF evidence \in AsyncNetworkItems
+  \* Initial local candidates precede transport initialization.  Their explicit
+  \* no-evidence sentinel cannot belong to any authenticated carrier below;
+  \* return its original round without evaluating state-derived wire owners.
+  IF evidence = NoAsyncItem
+  THEN defaultRound
+  ELSE IF evidence \in AsyncNetworkItems
   THEN AsyncCandidateItemProposalRound(defaultRound, evidence)
   ELSE IF evidence \in QcRecordSet
   THEN AsyncCandidateRound(
@@ -2041,8 +2046,208 @@ AsyncEvidenceTyped(evidence) ==
   \/ AsyncTcRecordTyped(evidence)
   \/ evidence \in BodyRecordSet
 
+(***************************************************************************
+Structural membership in the unchanged route-neutral origin carrier avoids
+materializing the powerset-valued certificate universe for every local seed.
+QC semantic values have an original preimage with empty signers; TC semantic
+values have an original preimage with empty votes.  These are product-carrier
+type predicates, so they deliberately add no validity, phase, height, or rank
+correlations beyond those already present in AsyncCandidateCausalOriginTyped.
+
+The evidence image uses the exact {kind, source, envelope} wire-record domain,
+which is disjoint from every Core evidence carrier.  For FiniteAsyncNetworkItems,
+this premise is supplied by the unchanged complete AsyncTypeInvariant:
+AsyncTransportHistoryTypeInvariant and AsyncPacketContentTypeInvariant type
+retained/sent/active and packet items; publishable items use AsyncNetworkItem.
+NoAsyncItem keeps its first-branch priority even if a finite carrier includes it.
+The original image sets and carrier remain available to deductive proofs.
+***************************************************************************)
+AsyncCandidateQcSemanticPayloadTyped(qc) ==
+  /\ DOMAIN qc = {"context", "height", "view", "phase", "subject"}
+  /\ qc.context \in ContextRecords
+  /\ qc.height \in Heights
+  /\ qc.view \in Views
+  /\ qc.phase \in Phases
+  /\ qc.subject \in Subjects
+
+AsyncCandidatePrepareQcSemanticPayloadTyped(qc) ==
+  IF qc = NoPrepareQC THEN TRUE
+  ELSE AsyncCandidateQcSemanticPayloadTyped(qc)
+
+AsyncCandidateTcSemanticPayloadTyped(tc) ==
+  /\ DOMAIN tc = {"context", "height", "view", "highestPrepareQc"}
+  /\ tc.context \in ContextRecords
+  /\ tc.height \in Heights
+  /\ tc.view \in Views
+  /\ AsyncCandidatePrepareQcSemanticPayloadTyped(tc.highestPrepareQc)
+
+AsyncCandidateTcOptionSemanticPayloadTyped(tc) ==
+  IF tc = NoTimeoutCertificate THEN TRUE
+  ELSE AsyncCandidateTcSemanticPayloadTyped(tc)
+
+AsyncCandidateTimeoutVoteSemanticPayloadTyped(vote) ==
+  /\ DOMAIN vote =
+       {"context", "height", "view", "signer", "highestPrepareQc",
+        "highRank", "highSubject"}
+  /\ vote.context \in ContextRecords
+  /\ vote.height \in Heights
+  /\ vote.view \in Views
+  /\ vote.signer \in ValidatorIds
+  /\ AsyncCandidatePrepareQcSemanticPayloadTyped(vote.highestPrepareQc)
+  /\ vote.highRank \in Ranks
+  /\ vote.highSubject \in SubjectOrNone
+
+AsyncCandidateProposalSemanticPayloadTyped(proposal) ==
+  /\ DOMAIN proposal =
+       {"context", "height", "view", "subject", "proposer",
+        "timeoutCertificate", "highestPrepareQc", "justifyRank",
+        "justifySubject"}
+  /\ proposal.context \in ContextRecords
+  /\ proposal.height \in Heights
+  /\ proposal.view \in Views
+  /\ proposal.subject \in Subjects
+  /\ proposal.proposer \in ValidatorIds
+  /\ AsyncCandidateTcOptionSemanticPayloadTyped(proposal.timeoutCertificate)
+  /\ AsyncCandidatePrepareQcSemanticPayloadTyped(proposal.highestPrepareQc)
+  /\ proposal.justifyRank \in Ranks
+  /\ proposal.justifySubject \in SubjectOrNone
+
+AsyncRouteNeutralCandidateItemStructurallyTyped(item) ==
+  IF item = AsyncRouteNeutralCandidateItem(NoAsyncItem)
+  THEN TRUE
+  ELSE \E wire \in AsyncNetworkItems:
+         item = AsyncRouteNeutralCandidateItem(wire)
+
+AsyncRouteNeutralCandidateEvidenceStructurallyTyped(evidence) ==
+  /\ DOMAIN evidence = {"kind", "payload"}
+  /\ CASE evidence.kind = "NoEvidence" -> evidence.payload = NoAsyncItem
+       [] evidence.kind = "NetworkItem" ->
+            \E wire \in AsyncNetworkItems:
+              /\ wire # NoAsyncItem
+              /\ evidence.payload = AsyncRouteNeutralCandidateItem(wire)
+       [] evidence.kind = "Proposal" ->
+            AsyncCandidateProposalSemanticPayloadTyped(evidence.payload)
+       [] evidence.kind = "Vote" -> evidence.payload \in VoteRecordSet
+       [] evidence.kind = "TimeoutVote" ->
+            AsyncCandidateTimeoutVoteSemanticPayloadTyped(evidence.payload)
+       [] evidence.kind = "QC" ->
+            AsyncCandidateQcSemanticPayloadTyped(evidence.payload)
+       [] evidence.kind = "TC" ->
+            AsyncCandidateTcSemanticPayloadTyped(evidence.payload)
+       [] evidence.kind = "Body" -> evidence.payload \in BodyRecordSet
+       [] OTHER -> FALSE
+
+(***************************************************************************
+Structural recognition of the unchanged raw deferred-handoff carrier. These
+predicates expand product/image membership only; they deliberately do not add
+the owner/leader/phase correlations of AsyncCandidateTyped. The normalized
+item/evidence image predicates retain their exact finite-wire typing premise:
+all wire values have the original {kind, source, envelope} shape, established
+by the unchanged complete transport and packet typing conjunction.
+***************************************************************************)
+AsyncCandidateProposalCarrierTyped(proposal) ==
+  /\ DOMAIN proposal =
+       {"context", "height", "view", "subject", "proposer",
+        "timeoutCertificate", "highestPrepareQc", "justifyRank",
+        "justifySubject"}
+  /\ proposal.context \in ContextRecords
+  /\ proposal.height \in Heights
+  /\ proposal.view \in Views
+  /\ proposal.subject \in Subjects
+  /\ proposal.proposer \in ValidatorIds
+  /\ IF proposal.timeoutCertificate = NoTimeoutCertificate
+     THEN TRUE
+     ELSE AsyncTcRecordTyped(proposal.timeoutCertificate)
+  /\ proposal.highestPrepareQc \in PrepareQcOptionSet
+  /\ proposal.justifyRank \in Ranks
+  /\ proposal.justifySubject \in SubjectOrNone
+
+AsyncCandidateEvidenceCarrierTyped(evidence) ==
+  \/ evidence = NoAsyncItem
+  \/ evidence \in AsyncNetworkItems
+  \/ AsyncCandidateProposalCarrierTyped(evidence)
+  \/ evidence \in VoteRecordSet
+  \/ evidence \in TimeoutVoteRecordSet
+  \/ evidence \in QcRecordSet
+  \/ AsyncTcRecordTyped(evidence)
+  \/ evidence \in BodyRecordSet
+
+AsyncCandidateCausalOriginCarrierTyped(origin) ==
+  /\ DOMAIN origin =
+       {"target", "context", "height", "leader", "view", "subject",
+        "phase", "owner", "kind", "payload"}
+  /\ origin.target \in ValidatorIds
+  /\ origin.context \in ContextRecords
+  /\ origin.height \in Heights
+  /\ origin.leader \in ValidatorIds
+  /\ origin.view \in Views
+  /\ origin.subject \in SubjectOrNone
+  /\ origin.phase \in AsyncWorkKinds
+  /\ origin.owner \in ValidatorIds
+  /\ origin.kind = "CausalOrigin"
+  /\ DOMAIN origin.payload =
+       {"workKind", "item", "authority", "body", "manifest", "commitment"}
+  /\ origin.payload.workKind \in AsyncWorkKinds
+  /\ AsyncRouteNeutralCandidateItemStructurallyTyped(origin.payload.item)
+  /\ AsyncRouteNeutralCandidateEvidenceStructurallyTyped(origin.payload.authority)
+  /\ origin.payload.body \in SubjectOrNone
+  /\ origin.payload.manifest \in SubjectOrNone
+  /\ origin.payload.commitment \in SubjectOrNone
+
+AsyncCandidateCarrierTyped(candidate) ==
+  /\ DOMAIN candidate = AsyncCandidateDomain
+  /\ candidate.class \in AsyncCommandClasses
+  /\ candidate.kind \in AsyncWorkKinds
+  /\ candidate.node \in ValidatorIds
+  /\ candidate.height \in Heights
+  /\ candidate.view \in Views
+  /\ candidate.subject \in SubjectOrNone
+  /\ candidate.item \in AsyncNetworkItems \cup {NoAsyncItem}
+  /\ candidate.consumerContext \in ContextRecords
+  /\ candidate.consumerView \in Views
+  /\ candidate.consumerGeneration \in Generations
+  /\ AsyncCandidateEvidenceCarrierTyped(candidate.evidence)
+  /\ candidate.bodyIdentity \in SubjectOrNone
+  /\ candidate.manifestIdentity \in SubjectOrNone
+  /\ candidate.commitmentIdentity \in SubjectOrNone
+  /\ candidate.proposalRound \in AsyncCandidateRoundSet
+  /\ candidate.semanticPhase \in AsyncCandidateSemanticPhases
+  /\ AsyncCandidateCausalOriginCarrierTyped(candidate.causalOrigin)
+
+AsyncDeferredHandoffCarrierTyped(handoff) ==
+  IF handoff = NoAsyncDeferredHandoff
+  THEN TRUE
+  ELSE /\ DOMAIN handoff = {"active", "candidate", "identity"}
+       /\ handoff.active = TRUE
+       /\ AsyncCandidateCarrierTyped(handoff.candidate)
+       /\ handoff.identity = ExactAsyncCandidateIdentity(handoff.candidate)
+
+AsyncDeferredHandoffMapCarrierTyped(handoffs) ==
+  /\ DOMAIN handoffs = ValidatorIds
+  /\ \A node \in ValidatorIds:
+       AsyncDeferredHandoffCarrierTyped(handoffs[node])
+
 AsyncCandidateCausalOriginTyped(origin) ==
-  /\ origin \in AsyncCandidateCausalOriginSet
+  /\ DOMAIN origin =
+       {"target", "context", "height", "leader", "view", "subject",
+        "phase", "owner", "kind", "payload"}
+  /\ origin.target \in ValidatorIds
+  /\ origin.context \in ContextRecords
+  /\ origin.height \in Heights
+  /\ origin.leader \in ValidatorIds
+  /\ origin.view \in Views
+  /\ origin.subject \in SubjectOrNone
+  /\ origin.phase \in AsyncWorkKinds
+  /\ origin.owner \in ValidatorIds
+  /\ origin.kind = "CausalOrigin"
+  /\ DOMAIN origin.payload =
+       {"workKind", "item", "authority", "body", "manifest", "commitment"}
+  /\ origin.payload.workKind \in AsyncWorkKinds
+  /\ AsyncRouteNeutralCandidateItemStructurallyTyped(origin.payload.item)
+  /\ AsyncRouteNeutralCandidateEvidenceStructurallyTyped(origin.payload.authority)
+  /\ origin.payload.body \in SubjectOrNone
+  /\ origin.payload.manifest \in SubjectOrNone
+  /\ origin.payload.commitment \in SubjectOrNone
   /\ origin.owner = origin.target
   /\ origin.leader = Leader(origin.context, origin.view)
   /\ origin.payload.workKind = origin.phase
@@ -10581,6 +10786,41 @@ AsyncLeaderWireLifecycleRecordSet ==
      status \in AsyncLeaderWireLifecycleStatuses,
      ingressPredecessors \in
        [AsyncIngressSources -> 0..AsyncIngressCapacity]}
+
+\* Recognize the exact raw constructor image without enumerating its
+\* unbounded ordinal domains. This adds no current-context, owner, status,
+\* physical/scheduler ordering, or lifecycle authorization restriction.
+\* Values are record/function coordinates, and original wire constructors
+\* are defined on the same AsyncNetworkItems admitted by the image filter.
+AsyncLeaderWireLifecycleRecordCarrierTyped(record) ==
+  /\ DOMAIN record =
+       {"recipient", "item", "identity", "slot", "context",
+        "height", "view", "subject", "phase", "causalOrigin",
+        "admissionOrdinal", "physicalAdmissionOrdinal",
+        "schedulerOrdinal", "departurePhysicalCut", "status",
+        "ingressPredecessors"}
+  /\ record.item \in AsyncNetworkItems
+  /\ record.item.kind \in AsyncLeaderWireKinds
+  /\ record.context \in ContextRecords
+  /\ record.admissionOrdinal \in Nat
+  /\ record.admissionOrdinal # 0
+  /\ record.physicalAdmissionOrdinal \in Nat
+  /\ record.schedulerOrdinal \in Nat
+  /\ record.schedulerOrdinal # 0
+  /\ record.departurePhysicalCut \in Nat
+  /\ record.status \in AsyncLeaderWireLifecycleStatuses
+  /\ record.ingressPredecessors
+       \in [AsyncIngressSources -> 0..AsyncIngressCapacity]
+  /\ record.recipient = record.item.envelope.recipient
+  /\ record.identity =
+       AsyncLeaderWireLifecycleIdentityAt(record.item, record.context)
+  /\ record.slot = AsyncLeaderWireLifecycleSlot(record.item)
+  /\ record.height = DeliveryHeight(record.item)
+  /\ record.view = DeliveryView(record.item)
+  /\ record.subject = AsyncLeaderWireLifecycleSubject(record.item)
+  /\ record.phase = record.item.kind
+  /\ record.causalOrigin =
+       AsyncLeaderWireLifecycleCausalOriginAt(record.item, record.context)
 
 AsyncLeaderWireLifecycleRecordsForSlot(slot) ==
   {record \in asyncLeaderWireLifecycles: record.slot = slot}
@@ -27693,8 +27933,8 @@ AsyncSharedSchedulerOrdinalInjectionInvariant ==
          => record.ordinal #
               AsyncRetransmitLifecycleOrdinal(record.node)
   /\ \A node \in ValidatorIds:
-       /\ AsyncTimeoutLifecycleOwned(node)
-       /\ AsyncRetransmitLifecycleOwned(node)
+       (AsyncTimeoutLifecycleOwned(node)
+        /\ AsyncRetransmitLifecycleOwned(node))
          => AsyncTimeoutLifecycleOrdinal(node) #
               AsyncRetransmitLifecycleOrdinal(node)
 
@@ -28409,8 +28649,7 @@ AsyncDeferredTopologyTypeInvariant ==
   /\ DOMAIN asyncDeferredCompletionQueues = ValidatorIds
   /\ DOMAIN asyncDeferredProgressQueues = ValidatorIds
   /\ DOMAIN asyncDeferredNormalQueues = ValidatorIds
-  /\ asyncDeferredHandoffs
-       \in [ValidatorIds -> AsyncDeferredHandoffSet]
+  /\ AsyncDeferredHandoffMapCarrierTyped(asyncDeferredHandoffs)
   /\ asyncNextDeferredClass \in
        [ValidatorIds -> AsyncCommandClasses]
   /\ asyncDeferredDrainOwed \in [ValidatorIds -> BOOLEAN]
@@ -29137,7 +29376,7 @@ AsyncLeaderWireLifecycleTyped(record) ==
         "admissionOrdinal", "physicalAdmissionOrdinal",
         "schedulerOrdinal", "departurePhysicalCut", "status",
         "ingressPredecessors"}
-  /\ record \in AsyncLeaderWireLifecycleRecordSet
+  /\ AsyncLeaderWireLifecycleRecordCarrierTyped(record)
   /\ record.recipient \in ValidatorIds
   /\ record.item.kind \in AsyncLeaderWireKinds
   /\ record.item.envelope.recipient = record.recipient
@@ -29286,8 +29525,8 @@ AsyncLeaderWireIngressCarrierOwnershipInvariant ==
 
 AsyncLeaderWireLifecycleTypeInvariant ==
   /\ IsFiniteSet(asyncLeaderWireLifecycles)
-  /\ asyncLeaderWireLifecycles
-       \subseteq AsyncLeaderWireLifecycleRecordSet
+  /\ \A record \in asyncLeaderWireLifecycles:
+       AsyncLeaderWireLifecycleRecordCarrierTyped(record)
   /\ Cardinality(asyncLeaderWireLifecycles)
        <= Cardinality(AsyncLeaderWireLifecycleSlotSet)
   /\ \A record \in asyncLeaderWireLifecycles:

@@ -136,7 +136,7 @@ fn release_context_handler_validates_its_public_projection() {
 
 fn generic_lock_custody(state: &State) -> GovernanceLockCustody {
     GovernanceLockCustody {
-        escrowed: !state.gov.min_bond_amount.is_zero(),
+        escrowed: true,
         asset_definition_id: state.gov.voting_asset_id.clone(),
         bond_escrow_account: state.gov.bond_escrow_account.clone(),
         slash_receiver_account: state.gov.slash_receiver_account.clone(),
@@ -635,7 +635,7 @@ fn mk_governance_harness(with_permissions: bool) -> GovHarness {
             norito::json!({ "referendum_id": "any" }),
         );
         let register_contract: Permission =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                 .into();
         let mut world_block = world.block();
         let mut world_tx = world_block.transaction_without_telemetry(LaneConfig::default(), 0);
@@ -1863,6 +1863,10 @@ async fn governance_get_handlers_reject_noncanonical_selectors_before_lookup() {
             .await
             .expect_err("noncanonical selectors must fail before referendum lookup");
         assert_conversion(&error);
+        let error = handle_gov_get_tally(state.clone(), axum::extract::Path(invalid))
+            .await
+            .expect_err("noncanonical selectors must fail before tally lookup");
+        assert_conversion(&error);
     }
     let error = handle_gov_get_locks(state.clone(), axum::extract::Path(" referendum".to_owned()))
         .await
@@ -1884,8 +1888,11 @@ async fn gov_get_tally_applies_conviction_factor() {
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query);
     let mut cfg = state.gov.clone();
+    cfg.min_bond_amount = Quantity::zero();
     cfg.conviction_step_blocks = 2;
     cfg.max_conviction = 4;
+    cfg.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+    cfg.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
     state.set_gov(cfg);
     let custody = generic_lock_custody(&state);
     let rid = "rid-tally-conviction".to_string();
@@ -1900,6 +1907,11 @@ async fn gov_get_tally_applies_conviction_factor() {
                 h_end: 10,
                 status: GovernanceReferendumStatus::Open,
                 mode: GovernanceReferendumMode::Plain,
+                plain_context: iroha_core::query::standalone_plain_test_fixture::context(
+                    &stx.gov, 0,
+                ),
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
             },
         );
         let mut locks = GovernanceLocksForReferendum::default();
@@ -1934,18 +1946,18 @@ async fn gov_get_tally_applies_conviction_factor() {
     );
 }
 #[tokio::test]
-async fn gov_get_tally_uses_referendum_end_for_closed_plain_view() {
+async fn gov_get_tally_retains_closed_result_after_all_locks_are_released() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query);
     let mut cfg = state.gov.clone();
     cfg.conviction_step_blocks = 1;
     cfg.max_conviction = 1;
+    cfg.min_turnout = 4;
     state.set_gov(cfg);
     let rid = "rid-tally-closed-lock".to_string();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block_hash = iroha_crypto::HashOf::new(&header);
-    let custody = generic_lock_custody(&state);
     {
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1953,35 +1965,34 @@ async fn gov_get_tally_uses_referendum_end_for_closed_plain_view() {
             rid.clone(),
             GovernanceReferendumRecord {
                 h_start: 0,
-                h_end: 0,
+                h_end: 1,
                 status: GovernanceReferendumStatus::Closed,
                 mode: GovernanceReferendumMode::Plain,
+                plain_context: iroha_core::query::standalone_plain_test_fixture::context(
+                    &tx.gov, 0,
+                ),
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::Decided(
+                        iroha_data_model::governance::conviction::PlainVotingDecisionV1 {
+                            approve: 3,
+                            reject: 0,
+                            abstain: 0,
+                            approved: false,
+                        },
+                    ),
             },
         );
-        let mut locks = GovernanceLocksForReferendum::default();
-        locks.locks.insert(
-            ALICE_ID.clone(),
-            GovernanceLockRecord {
-                owner: ALICE_ID.clone(),
-                amount: 9_u64.into(),
-                slashed: Quantity::zero(),
-                expiry_height: 0,
-                direction: 0,
-                duration_blocks: 0,
-                custody,
-            },
-        );
-        tx.world.governance_locks_mut().insert(rid.clone(), locks);
         tx.apply();
         let iroha_core::state::StateBlock { world, .. } = block;
         world.commit();
     }
     state.push_block_hash_for_testing(block_hash);
+    state.push_block_hash_for_testing(block_hash);
 
     let response = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
         .await
         .expect("closed PLAIN tally");
-    assert_eq!(response.0.evaluated_block_height, 1);
+    assert_eq!(response.0.evaluated_block_height, 2);
     assert_eq!(response.0.approve, 3);
     assert_eq!(response.0.reject, 0);
     assert_eq!(response.0.abstain, 0);
@@ -2003,6 +2014,10 @@ async fn gov_get_tally_projects_zk_abstentions() {
                 h_end: 10,
                 status: GovernanceReferendumStatus::Closed,
                 mode: GovernanceReferendumMode::Zk,
+                plain_context:
+                    iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
             },
         );
         tx.world.elections_mut().insert(
@@ -2043,11 +2058,107 @@ async fn gov_get_tally_rejects_missing_referendum() {
         ))
     ));
 }
+
+#[tokio::test]
+async fn gov_get_tally_retains_one_corpus_and_anchor_after_later_publication() {
+    use iroha_data_model::governance::conviction::PlainVotingResultV1;
+
+    let mut state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let mut governance = state.gov.clone();
+    governance.conviction_step_blocks = 1;
+    governance.max_conviction = 1;
+    governance.min_bond_amount = Quantity::zero();
+    state.set_gov(governance);
+    let rid = "tally-captured-view".to_owned();
+    let context = iroha_core::query::standalone_plain_test_fixture::context(&state.gov, 0);
+    let publish = |height, parent, totals: [u128; 3]| {
+        let header = BlockHeader::new(
+            core::num::NonZeroU64::new(height).unwrap(),
+            parent,
+            None,
+            height * 1_000,
+            0,
+        );
+        let hash = header.hash();
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.world.governance_referenda_mut().insert(
+            rid.clone(),
+            GovernanceReferendumRecord {
+                h_start: 1,
+                h_end: 100,
+                status: GovernanceReferendumStatus::Open,
+                mode: GovernanceReferendumMode::Plain,
+                plain_context: context.clone(),
+                plain_result: PlainVotingResultV1::Pending,
+            },
+        );
+        // These are query-projection fixtures. Bond conservation is exercised
+        // separately by the funded Core ballot lifecycle tests.
+        let mut locks = GovernanceLocksForReferendum::default();
+        for ((owner, direction), weight) in [
+            (iroha_test_samples::BOB_ID.clone(), 0),
+            (iroha_test_samples::CARPENTER_ID.clone(), 1),
+            (iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(), 2),
+        ]
+        .into_iter()
+        .zip(totals)
+        {
+            locks.locks.insert(
+                owner.clone(),
+                GovernanceLockRecord {
+                    owner,
+                    amount: Quantity::from(weight * weight),
+                    slashed: Quantity::zero(),
+                    expiry_height: 100,
+                    direction,
+                    duration_blocks: 1,
+                    custody: generic_lock_custody(&state),
+                },
+            );
+        }
+        tx.world.governance_locks_mut().insert(rid.clone(), locks);
+        tx.apply();
+        block
+            .commit_empty_block_for_testing()
+            .expect("publish fixture corpus and its exact block-hash journal together");
+        hash
+    };
+    let first_hash = publish(1, None, [7, 3, 5]);
+    let captured = state.query_view();
+    let second_hash = publish(2, Some(first_hash), [70, 30, 50]);
+
+    let old = governance_tally_from_view(&captured, rid.clone()).unwrap();
+    assert_eq!([old.approve, old.reject, old.abstain], [7, 3, 5]);
+    assert_eq!(old.evaluated_block_height, 1);
+    assert_eq!(old.evaluated_block_hash, hex::encode(first_hash.as_ref()));
+    let current = governance_tally_from_view(&state.query_view(), rid).unwrap();
+    assert_eq!(
+        [current.approve, current.reject, current.abstain],
+        [70, 30, 50]
+    );
+    assert_eq!(current.evaluated_block_height, 2);
+    assert_eq!(
+        current.evaluated_block_hash,
+        hex::encode(second_hash.as_ref())
+    );
+}
 #[tokio::test]
 async fn gov_get_tally_rejects_invalid_plain_direction() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query);
+    let mut state = State::new_for_testing(World::default(), kura, query);
+    let mut governance = state.gov.clone();
+    governance.min_bond_amount = Quantity::zero();
+    governance.conviction_step_blocks = 1;
+    governance.max_conviction = 1;
+    governance.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+    governance.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
+    state.set_gov(governance);
     let custody = generic_lock_custody(&state);
     let rid = "rid-tally-invalid-direction".to_string();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
@@ -2061,6 +2172,11 @@ async fn gov_get_tally_rejects_invalid_plain_direction() {
                 h_end: 10,
                 status: GovernanceReferendumStatus::Open,
                 mode: GovernanceReferendumMode::Plain,
+                plain_context: iroha_core::query::standalone_plain_test_fixture::context(
+                    &tx.gov, 0,
+                ),
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
             },
         );
         let mut locks = GovernanceLocksForReferendum::default();
@@ -2071,11 +2187,18 @@ async fn gov_get_tally_rejects_invalid_plain_direction() {
                 amount: 9_u64.into(),
                 slashed: Quantity::zero(),
                 expiry_height: 100,
-                direction: 3,
+                direction: 0,
                 duration_blocks: 4,
                 custody,
             },
         );
+        let referendum = tx.world.governance_referenda().get(&rid).unwrap();
+        assert_eq!(
+            iroha_core::state::plain_governance_tally(referendum, Some(&locks), 0).unwrap(),
+            [3, 0, 0],
+            "the otherwise valid fixture must project before corrupting direction"
+        );
+        locks.locks.get_mut(&ALICE_ID).unwrap().direction = 3;
         tx.world.governance_locks_mut().insert(rid.clone(), locks);
         tx.apply();
         let iroha_core::state::StateBlock { world, .. } = block;
@@ -2085,9 +2208,13 @@ async fn gov_get_tally_rejects_invalid_plain_direction() {
         .await
         .expect_err("an invalid direction must fail closed");
     let message = conversion_message(err);
-    assert!(
-        message.contains("invalid direction 3"),
-        "unexpected tally error: {message}"
+    assert_eq!(
+        message,
+        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+            "persisted plain-governance lock direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)"
+                .into(),
+        )
+        .to_string()
     );
 }
 #[tokio::test]
@@ -2140,6 +2267,11 @@ async fn legacy_referendum_reads_reject_stored_typed_proposal_fingerprints() {
                 h_end: 10,
                 status: GovernanceReferendumStatus::Open,
                 mode: GovernanceReferendumMode::Plain,
+                plain_context: iroha_core::query::standalone_plain_test_fixture::context(
+                    &tx.gov, 0,
+                ),
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
             },
         );
         tx.apply();
@@ -2173,6 +2305,8 @@ async fn gov_get_tally_rejects_accumulator_overflow() {
     let mut cfg = state.gov.clone();
     cfg.conviction_step_blocks = 1;
     cfg.max_conviction = u64::MAX;
+    cfg.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+    cfg.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
     state.set_gov(cfg);
     let custody = generic_lock_custody(&state);
     let rid = "rid-tally-overflow".to_string();
@@ -2188,6 +2322,11 @@ async fn gov_get_tally_rejects_accumulator_overflow() {
                 h_end: u64::MAX,
                 status: GovernanceReferendumStatus::Open,
                 mode: GovernanceReferendumMode::Plain,
+                plain_context: iroha_core::query::standalone_plain_test_fixture::context(
+                    &tx.gov, 0,
+                ),
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
             },
         );
         let mut locks = GovernanceLocksForReferendum::default();
@@ -2204,6 +2343,14 @@ async fn gov_get_tally_rejects_accumulator_overflow() {
                     custody: custody.clone(),
                 },
             );
+            if locks.locks.len() == 1 {
+                let referendum = tx.world.governance_referenda().get(&rid).unwrap();
+                assert_eq!(
+                    iroha_core::state::plain_governance_tally(referendum, Some(&locks), 0).unwrap(),
+                    [u128::from(u64::MAX) * u128::from(u64::MAX), 0, 0],
+                    "one maximum-width lock fits before the second overflows the category"
+                );
+            }
         }
         tx.world.governance_locks_mut().insert(rid.clone(), locks);
         tx.apply();
@@ -2214,9 +2361,12 @@ async fn gov_get_tally_rejects_accumulator_overflow() {
         .await
         .expect_err("overflowing tally must fail");
     let message = conversion_message(err);
-    assert!(
-        message.contains("governance tally arithmetic overflow"),
-        "unexpected tally error: {message}"
+    assert_eq!(
+        message,
+        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+            "plain-governance category tally exceeds the exact u128 domain".into(),
+        )
+        .to_string()
     );
 }
 #[test]

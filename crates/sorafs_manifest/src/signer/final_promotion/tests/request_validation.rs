@@ -39,7 +39,7 @@ fn public_request_validation_rejects_invalid_or_substituted_coordinates() {
             "mutation {field}"
         );
     }
-    let mut changed_control = fixture.current.clone();
+    let mut changed_control = fixture.current;
     changed_control.current_anchor.state_digest[0] ^= 1;
     let changed_custody = verify_signer_custody_use_v1(
         &fixture.receipt.custody_record,

@@ -361,10 +361,11 @@ fn signatures_order_bytes_messages_provenance_and_response_are_bound() {
 
 #[test]
 fn other_purpose_authorizations_never_upgrade_to_release_receipts() {
-    for mutate in [|s: &mut SignerCustodyStatementV1| {
-        s.binding.role = SignerRoleV1::Promotion;
-        s.binding.purpose = SignerPurposeBindingV1::NativeOrPromotion;
-    }] {
+    {
+        let mutate = |s: &mut SignerCustodyStatementV1| {
+            s.binding.role = SignerRoleV1::Promotion;
+            s.binding.purpose = SignerPurposeBindingV1::NativeOrPromotion;
+        };
         let mut f = fixture();
         let mut record: SignerCustodyRecordV1 =
             norito::decode_canonical(&f.receipt.custody_record).unwrap();

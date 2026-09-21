@@ -17392,6 +17392,7 @@ state_test! { sync governance_restore_rejects_oversized_plain_ballot_corpus
         );
     }
     let mut world = World::default();
+    world.governance_referenda.insert("oversized-plain-restore".to_owned(), indexed_plain_referendum());
     world
         .governance_locks
         .insert("oversized-plain-restore".to_owned(), locks);
@@ -36608,7 +36609,21 @@ fn governance_lock_custody_fixture() -> GovernanceLockCustody {
         slash_receiver_account: (*BOB_ID).clone(),
     }
 }
+fn indexed_plain_referendum() -> GovernanceReferendumRecord {
+    let mut governance = iroha_config::parameters::actual::Governance::default();
+    governance.conviction_step_blocks = 1;
+    governance.min_bond_amount = Quantity::zero();
+    GovernanceReferendumRecord {
+        h_start: 1,
+        h_end: 100,
+        status: GovernanceReferendumStatus::Open,
+        mode: GovernanceReferendumMode::Plain,
+        plain_context: crate::query::standalone_plain_test_fixture::context(&governance, 0),
+        plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
+    }
+}
 fn indexed_governance_lock(owner: AccountId, expiry_height: u64) -> GovernanceLockRecord {
+    let governance = iroha_config::parameters::actual::Governance::default();
     GovernanceLockRecord {
         owner,
         amount: Quantity::from(1_u32),
@@ -36616,7 +36631,12 @@ fn indexed_governance_lock(owner: AccountId, expiry_height: u64) -> GovernanceLo
         expiry_height,
         direction: 0,
         duration_blocks: 1,
-        custody: governance_lock_custody_fixture(),
+        custody: GovernanceLockCustody {
+            escrowed: true,
+            asset_definition_id: governance.voting_asset_id,
+            bond_escrow_account: governance.bond_escrow_account,
+            slash_receiver_account: governance.slash_receiver_account,
+        },
     }
 }
 fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRecord {
@@ -36910,6 +36930,8 @@ state_test! { sync state_restore_rejects_proposal_backed_standalone_referendum_s
             h_end: 20,
             status: GovernanceReferendumStatus::Proposed,
             mode: GovernanceReferendumMode::Zk,
+            plain_context: iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+                    plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
         },
     );
     let state = State::new(
@@ -41154,6 +41176,12 @@ fn state_snapshot_restore_rebuilds_governance_and_bounded_vpn_indexes() {
     seed_snapshot_asset_incarnations(&mut world);
     let referendum_a = "restart-lock-a".to_owned();
     let referendum_b = "restart-lock-b".to_owned();
+    world
+        .governance_referenda
+        .insert(referendum_a.clone(), indexed_plain_referendum());
+    world
+        .governance_referenda
+        .insert(referendum_b.clone(), indexed_plain_referendum());
     world.governance_locks.insert(
         referendum_a.clone(),
         GovernanceLocksForReferendum {
@@ -41669,6 +41697,7 @@ state_test! { sync transaction_failure_rolls_back_asset_world_and_trigger_change
 state_test! { sync execute_called_trigger_failure_rolls_back_state
     let state = blank_state();
     let trigger_id: TriggerId = "rollback_trigger".parse().unwrap();
+    let missing_domain = DomainId::try_new("dummy", "universal").unwrap();
     let_row! { asset_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").unwrap(), "xor".parse().unwrap(), ) };
     // Commit initial domain, account, and the by-call trigger.
     let_row! { block = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(1).unwrap()); }) };
@@ -41684,7 +41713,7 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let_row! { create_asset = Register::asset_definition(AssetDefinition::numeric( asset_definition_id.clone(), "xor", iroha_data_model::asset::AssetBalancePolicy::Global, Some(DomainId::try_new("wonderland", "universal").unwrap()), )) };
-        let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
+        let fail_isi = Unregister::domain(missing_domain.clone());
         let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
         let_row! { trigger = Trigger::new( trigger_id.clone(), Action::new( instructions, Repeats::Indefinitely, ALICE_ID.clone(), ExecuteTriggerEventFilter::new() .for_trigger(trigger_id.clone()) .under_authority(ALICE_ID.clone()), ) .expect("trigger action fixture satisfies validation invariants"), ) };
         Register::trigger(trigger)
@@ -41697,18 +41726,36 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
     let_row! { block = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(2).unwrap()); }) };
     {
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
-        let_row! { event = ExecuteTriggerEvent { trigger_id: trigger_id.clone(), authority: ALICE_ID.clone(), args: Json::default(), } };
-        let_row! { err = stx .execute_called_trigger(&trigger_id, &event) .expect_err("trigger should fail to execute") };
-        match err {
-            TransactionRejectionReason::Validation(
-                ValidationFail::InstructionFailed(InstructionExecutionError::Find(
-                    FindError::Domain(_),
-                ))
-                | ValidationFail::NotPermitted(_),
-            ) => {}
-            other => panic!("unexpected rejection: {other:?}"),
-        }
+        // The actual signed executor establishes callback ownership before
+        // dispatch; calling the private callback body directly has no such owner.
+        let mut builder = TransactionBuilder::new(
+            state.network_id,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(vec![], None),
+        );
+        builder.set_creation_time(block.as_ref().header().creation_time());
+        let signed = builder
+            .with_instructions([ExecuteTrigger::new(trigger_id.clone())])
+            .sign(ALICE_KEYPAIR.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(signed));
+        let mut cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let (_, result) = state_block.validate_transaction(accepted, &mut cache);
+        let err = result.expect_err("trigger should fail to execute");
+        assert!(
+            matches!(
+                &err,
+                TransactionRejectionReason::Validation(
+                    ValidationFail::InstructionFailed(InstructionExecutionError::Find(
+                        FindError::Domain(domain),
+                    ))
+                ) if domain == &missing_domain
+            ),
+            "the callback must reach its failing domain instruction: {err:?}"
+        );
+        assert!(
+            state_block.world.asset_definition(&asset_definition_id).is_err(),
+            "failed callback effects must be absent from the still-live parent block"
+        );
     }
     let view = state.view();
     assert!(
@@ -41761,6 +41808,28 @@ state_test! { sync self_calling_trigger_stops_at_synchronous_execution_depth
         "a rejected recursive execution must not consume the repeat budget"
     );
 }
+// Direct callback-boundary fixtures retain a real signed source before the
+// body. They deliberately do not assert full Network admission or publication.
+fn signed_callback_boundary_source(
+    state: &State,
+    header: BlockHeader,
+    instructions: Vec<InstructionBox>,
+) -> iroha_data_model::transaction::SignedTransaction {
+    let mut builder = TransactionBuilder::new(
+        state.network_id,
+        ALICE_ID.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
+    builder.set_creation_time(
+        header
+            .creation_time()
+            .saturating_sub(Duration::from_millis(1)),
+    );
+    builder
+        .with_instructions(instructions)
+        .sign(ALICE_KEYPAIR.private_key())
+}
+
 state_test! { sync data_trigger_depth_u8_max_rejects_without_panicking_or_wrapping
     use iroha_data_model::prelude::DataEvent;
     let state = blank_state();
@@ -41804,13 +41873,23 @@ state_test! { sync data_trigger_depth_u8_max_rejects_without_panicking_or_wrappi
     }
     block.commit_world_overlay_for_testing().expect("commit trigger setup");
     let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let callback_source = signed_callback_boundary_source(&state, header, vec![
+        Register::domain(Domain::new(
+            DomainId::try_new("depth_seed", "universal").expect("valid direct callback source domain"),
+        )).into(),
+    ]);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
+    // Keep this exact signed source alive through the direct callback body.
+    // A rejected/unfitted unit overlay is dropped, never applied as a Network row.
+    transaction.current_entrypoint_index = Some(0);
+    transaction.tx_call_hash = Some(Hash::from(callback_source.hash_as_entrypoint()));
+    transaction.current_tx_hash = Some(callback_source.hash());
     let_row! { event = data_pre::DomainEvent::Created( Domain::new(DomainId::try_new("depth_seed", "universal").expect("valid seed domain")) .build(&ALICE_ID), ) };
     transaction
         .world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event)));
     let_row! { error = transaction .execute_data_triggers_dfs(&ALICE_ID) .expect_err("the first depth beyond 255 must be rejected") };
     assert_eq!(
         error,
@@ -41832,8 +41911,18 @@ state_test! { sync data_trigger_fanout_rejects_the_two_hundred_fifty_seventh_fir
     use iroha_data_model::prelude::DataEvent;
     let state = blank_state();
     let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let callback_source = signed_callback_boundary_source(&state, header, vec![
+        Register::domain(Domain::new(
+            DomainId::try_new("fanout_seed", "universal").expect("valid direct callback source domain"),
+        )).into(),
+    ]);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
+    // Keep this exact signed source alive through the direct callback body.
+    // A rejected/unfitted unit overlay is dropped, never applied as a Network row.
+    transaction.current_entrypoint_index = Some(0);
+    transaction.tx_call_hash = Some(Hash::from(callback_source.hash_as_entrypoint()));
+    transaction.current_tx_hash = Some(callback_source.hash());
     let authorities = (1_u8..=5)
         .map(|seed| {
             let key = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
@@ -41885,7 +41974,7 @@ state_test! { sync data_trigger_fanout_rejects_the_two_hundred_fifty_seventh_fir
     transaction
         .world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event)));
 
     let_row! { error = transaction
         .execute_data_triggers_dfs(&ALICE_ID)
@@ -41903,8 +41992,18 @@ state_test! { sync data_trigger_firing_cap_is_shared_across_multiple_drains
     use iroha_data_model::prelude::DataEvent;
     let state = blank_state();
     let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let callback_source = signed_callback_boundary_source(&state, header, vec![
+        Register::domain(Domain::new(
+            DomainId::try_new("multi_drain_0", "universal").expect("valid direct callback source domain"),
+        )).into(),
+    ]);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
+    // Keep this exact signed source alive through the direct callback body.
+    // A rejected/unfitted unit overlay is dropped, never applied as a Network row.
+    transaction.current_entrypoint_index = Some(0);
+    transaction.tx_call_hash = Some(Hash::from(callback_source.hash_as_entrypoint()));
+    transaction.current_tx_hash = Some(callback_source.hash());
     transaction.world.add_account_permission(
         &ALICE_ID,
         iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
@@ -41950,7 +42049,7 @@ state_test! { sync data_trigger_firing_cap_is_shared_across_multiple_drains
         transaction
             .world
             .internal_event_buf
-            .push(Arc::new(DataEvent::Domain(event)));
+            .push(SharedDataEvent::from(DataEvent::Domain(event)));
         let steps = transaction
             .execute_data_triggers_dfs(&ALICE_ID)
             .expect("each firing through the transaction-wide cap succeeds");
@@ -41967,7 +42066,7 @@ state_test! { sync data_trigger_firing_cap_is_shared_across_multiple_drains
     transaction
         .world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(overflow_event)));
+        .push(SharedDataEvent::from(DataEvent::Domain(overflow_event)));
     let error = transaction
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect_err("the transaction-wide two-hundred-fifty-seventh firing must be rejected");
@@ -41979,6 +42078,41 @@ state_test! { sync data_trigger_firing_cap_is_shared_across_multiple_drains
         ),
         "unexpected multi-drain rejection: {error:?}"
     );
+}
+state_test! { sync shared_data_event_emission_retains_one_owner_through_internal_scan_and_external_delivery
+    let state = blank_state();
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let mut block = state.block(header);
+    let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Created(
+        Domain::new(DomainId::try_new("event_owner", "universal").expect("domain id"))
+            .build(&ALICE_ID),
+    ));
+    let retained = {
+        let mut transaction = block.transaction();
+        transaction.world.emit_events([event.clone(), event.clone()]);
+        assert_eq!(transaction.world.internal_event_buf.len(), 2);
+        let external = transaction.world.external_event_buf.iter()
+            .map(|event| event.as_shared_data_event().expect("emitted data event").clone())
+            .collect::<Vec<_>>();
+        assert_eq!(external.len(), 2);
+        assert_eq!(external[0], external[1]);
+        assert!(!core::ptr::eq(external[0].as_ref(), external[1].as_ref()));
+        for (internal, external) in transaction.world.internal_event_buf.iter().zip(&external) {
+            assert!(core::ptr::eq(internal.as_ref(), external.as_ref()));
+        }
+        let scan = transaction.capture_data_event_scan(1).expect("actual emitted batch");
+        assert!(transaction.world.internal_event_buf.is_empty());
+        assert_eq!(scan.events.len(), 2);
+        for (internal, external) in scan.events.iter().zip(&external) {
+            assert!(core::ptr::eq(internal.as_ref(), external.as_ref()));
+        }
+        drop(scan);
+        external
+    };
+    drop(block);
+    for held in retained {
+        assert_eq!(held.as_ref(), &event);
+    }
 }
 state_test! { sync data_trigger_matching_scans_large_event_batches_lazily
     use iroha_data_model::prelude::DataEvent;
@@ -42019,14 +42153,14 @@ state_test! { sync data_trigger_matching_scans_large_event_batches_lazily
                 .expect("seed data trigger")
         );
     }
-    let_row! { event = Arc::new(DataEvent::Domain(data_pre::DomainEvent::Created(
+    let_row! { event = SharedDataEvent::from(DataEvent::Domain(data_pre::DomainEvent::Created(
         Domain::new(DomainId::try_new("lazy_seed", "universal").expect("valid domain"))
             .build(&ALICE_ID),
     ))) };
     transaction
         .world
         .internal_event_buf
-        .extend((0..1_024).map(|_| Arc::clone(&event)));
+        .extend((0..1_024).map(|_| event.clone()));
 
     let mut scan = transaction
         .capture_data_event_scan(1)
@@ -42036,17 +42170,25 @@ state_test! { sync data_trigger_matching_scans_large_event_batches_lazily
         scan.candidates.is_empty(),
         "capturing a batch must not materialise any event×trigger matches"
     );
-    transaction
+    let (matched, _, _, _) = transaction
         .next_data_trigger_match(&mut scan)
         .expect("first lazy match")
         .expect("first trigger matches");
+    assert!(core::ptr::eq(
+        matched.as_shared_data_event().expect("data trigger event").as_ref(),
+        event.as_ref(),
+    ));
     assert_eq!(scan.event_index, 1);
     assert_eq!(scan.candidates.len(), 64);
     assert_eq!(scan.candidate_index, 1);
-    transaction
+    let (matched, _, _, _) = transaction
         .next_data_trigger_match(&mut scan)
         .expect("second lazy match")
         .expect("second trigger matches");
+    assert!(core::ptr::eq(
+        matched.as_shared_data_event().expect("data trigger event").as_ref(),
+        event.as_ref(),
+    ));
     assert_eq!(scan.event_index, 1);
     assert_eq!(scan.candidate_index, 2);
 }
@@ -42109,7 +42251,7 @@ state_test! { sync data_trigger_index_scan_is_charged_before_max_population_allo
     transaction
         .world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event)));
 
     let mut scan = transaction
         .capture_data_event_scan(1)
@@ -42180,7 +42322,7 @@ state_test! { sync data_trigger_filter_recheck_and_firing_share_the_block_gas_bu
     transaction
         .world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event)));
 
     let_row! { error = transaction
         .execute_data_triggers_dfs(&ALICE_ID)
@@ -42253,7 +42395,7 @@ state_test! { sync native_trigger_instructions_are_not_an_unmetered_execution_pa
     transaction
         .world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event)));
 
     let_row! { error = transaction
         .execute_data_triggers_dfs(&ALICE_ID)
@@ -42440,7 +42582,7 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
             contract_address.clone(),
             ALICE_ID.clone(),
         );
-        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode .into() };
+        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode .into() };
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant contract deployment permission");
@@ -42911,7 +43053,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
             contract_address.clone(),
             ALICE_ID.clone(),
         );
-        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode .into() };
+        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode .into() };
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant contract deployment permission");
@@ -43205,7 +43347,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
             contract_address.clone(),
             ALICE_ID.clone(),
         );
-        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode .into() };
+        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode .into() };
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant alias-transfer callback deployment permission");
@@ -44363,6 +44505,9 @@ fn governance_lock_index_rebuild_rejects_invalid_authoritative_records_fail_atom
     let sentinel = BTreeMap::from([(77_u64, BTreeSet::from([(sentinel_id, ALICE_ID.clone())]))]);
     let assert_rejected = |record: GovernanceLockRecord, expected: &str| {
         let mut world = World::new();
+        world
+            .governance_referenda
+            .insert(referendum_id.clone(), indexed_plain_referendum());
         world.governance_lock_expiry_index = sentinel.clone().into_iter().collect();
         world.governance_locks.insert(
             referendum_id.clone(),
@@ -44401,7 +44546,10 @@ fn governance_lock_index_rebuild_rejects_invalid_authoritative_records_fail_atom
     let mut fractional = indexed_governance_lock(ALICE_ID.clone(), 10);
     fractional.amount =
         Quantity::try_from_numeric(Numeric::new(1_u32, 1)).expect("positive fractional fixture");
-    assert_rejected(fractional, "outside the exact integer u128 tally domain");
+    assert_rejected(
+        fractional,
+        "bond is not representable at the frozen asset scale",
+    );
 }
 
 #[test]
@@ -44419,6 +44567,10 @@ fn governance_lock_restore_preserves_fractional_zk_bonds() {
             h_end: 10,
             status: GovernanceReferendumStatus::Open,
             mode: GovernanceReferendumMode::Zk,
+            plain_context:
+                iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+            plain_result:
+                iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
         },
     );
     world.governance_locks.insert(
@@ -44432,9 +44584,7 @@ fn governance_lock_restore_preserves_fractional_zk_bonds() {
         .rebuild_governance_read_indexes()
         .expect("fractional ZK bonds are outside PLAIN tally-domain validation");
     world
-        .validate_plain_governance_tally_capacity(
-            &iroha_config::parameters::actual::Governance::default(),
-        )
+        .validate_plain_governance_tally_capacity()
         .expect("fractional ZK bonds do not participate in the PLAIN tally");
     assert!(
         world
@@ -44446,10 +44596,17 @@ fn governance_lock_restore_preserves_fractional_zk_bonds() {
 }
 
 #[test]
-fn restored_plain_governance_tally_capacity_is_checked_against_loaded_configuration() {
+fn restored_plain_governance_tally_capacity_is_checked_against_frozen_context() {
+    let mut governance = iroha_config::parameters::actual::Governance::default();
+    governance.conviction_step_blocks = 1;
+    governance.max_conviction = u64::MAX;
+    governance.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+    governance.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let mut record = indexed_governance_lock(ALICE_ID.clone(), u64::MAX);
     record.amount = Quantity::from(u128::MAX);
-    record.duration_blocks = u64::MAX;
+    record.duration_blocks = u64::MAX - 1;
+    record.custody.bond_escrow_account = governance.bond_escrow_account.clone();
+    record.custody.slash_receiver_account = governance.slash_receiver_account.clone();
     let mut second = record.clone();
     second.owner = BOB_ID.clone();
     let mut world = World::new();
@@ -44459,15 +44616,20 @@ fn restored_plain_governance_tally_capacity_is_checked_against_loaded_configurat
             locks: BTreeMap::from([(ALICE_ID.clone(), record.clone()), (BOB_ID.clone(), second)]),
         },
     );
-    let mut governance = iroha_config::parameters::actual::Governance::default();
-    governance.conviction_step_blocks = 1;
-    governance.max_conviction = u64::MAX;
+    let mut referendum = indexed_plain_referendum();
+    referendum.plain_context = crate::query::standalone_plain_test_fixture::context(&governance, 0);
+    record
+        .validate_plain_context(referendum.plain_policy().unwrap())
+        .expect("a voter is distinct from both frozen custody accounts");
+    world
+        .governance_referenda
+        .insert("aggregate-overflow".to_owned(), referendum);
 
     let error = world
-        .validate_plain_governance_tally_capacity(&governance)
+        .validate_plain_governance_tally_capacity()
         .expect_err("restored aggregate outside u128 must fail before block execution");
     assert!(
-        error.contains("exceed the exact configured tally domain"),
+        error.contains("exceed the exact frozen tally domain"),
         "unexpected aggregate restore rejection: {error}"
     );
 
@@ -44478,7 +44640,7 @@ fn restored_plain_governance_tally_capacity_is_checked_against_loaded_configurat
         },
     );
     world
-        .validate_plain_governance_tally_capacity(&governance)
+        .validate_plain_governance_tally_capacity()
         .expect("one maximum-width lock remains exactly representable");
 }
 
@@ -45890,4 +46052,228 @@ fn lane_storage_identity_projects_one_exact_canonical_runtime_image() {
             .merge_log_path("root")
             .starts_with("root/merge_ledger/instances")
     );
+}
+
+#[test]
+fn frozen_plain_projection_rejects_malformed_corpus_and_restores_slashed_positions() {
+    use iroha_data_model::governance::conviction::{PlainVotingContextV1, PlainVotingResultV1};
+    use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
+    let mut referendum = indexed_plain_referendum();
+    let PlainVotingContextV1::Conviction(policy) = &mut referendum.plain_context else {
+        unreachable!()
+    };
+    policy.minimum_bond = 10_u64.into();
+    policy.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+    policy.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
+    let mut lock = indexed_governance_lock(ALICE_ID.clone(), 10);
+    lock.custody.bond_escrow_account = policy.bond_escrow_account.clone();
+    lock.custody.slash_receiver_account = policy.slash_receiver_account.clone();
+    lock.amount = 4_u64.into();
+    lock.slashed = 6_u64.into();
+    let mut world = World::new();
+    world
+        .governance_referenda
+        .insert("slash-restore".into(), referendum.clone());
+    for (remaining, slashed) in [(4_u64, 6_u64), (0, 10)] {
+        lock.amount = remaining.into();
+        lock.slashed = slashed.into();
+        lock.validate_plain_context(referendum.plain_policy().unwrap())
+            .expect("the original bond still meets the positive frozen minimum");
+        let locks = GovernanceLocksForReferendum {
+            locks: BTreeMap::from([(ALICE_ID.clone(), lock.clone())]),
+        };
+        world
+            .governance_locks
+            .insert("slash-restore".into(), locks.clone());
+        world
+            .rebuild_governance_read_indexes()
+            .expect("majority/full slash retains valid original bond");
+        world.validate_plain_governance_tally_capacity().unwrap();
+        assert!(plain_governance_tally(&referendum, Some(&locks), 1).is_ok());
+    }
+    let mut wrong_owner = GovernanceLocksForReferendum {
+        locks: BTreeMap::from([(BOB_ID.clone(), lock.clone())]),
+    };
+    let owner_error = crate::smartcontracts::isi::world::isi::plain_governance_tally_v1(
+        &wrong_owner,
+        None,
+        Some(1),
+        referendum.plain_policy().unwrap(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            &owner_error,
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message))
+                if message == "plain lock owner does not match its corpus key"
+        ),
+        "unexpected corpus rejection: {owner_error:?}"
+    );
+    assert_eq!(
+        plain_governance_tally(&referendum, Some(&wrong_owner), 1).unwrap_err(),
+        owner_error.to_string()
+    );
+    wrong_owner.locks.clear();
+    lock.direction = 3;
+    wrong_owner.locks.insert(ALICE_ID.clone(), lock.clone());
+    assert!(
+        plain_governance_tally(&referendum, Some(&wrong_owner), 1)
+            .unwrap_err()
+            .contains("direction")
+    );
+    for field in ["slashed", "duration_blocks"] {
+        let mut json = norito::json::to_value(&lock).unwrap();
+        json.as_object_mut().unwrap().remove(field);
+        assert!(
+            norito::json::from_value::<GovernanceLockRecord>(json).is_err(),
+            "missing {field} has no V1 layout"
+        );
+    }
+    let mut closed = referendum;
+    let PlainVotingContextV1::Conviction(policy) = &closed.plain_context else {
+        unreachable!()
+    };
+    closed.plain_result = PlainVotingResultV1::Decided(policy.decide([4, 2, 1]).unwrap());
+    closed.status = GovernanceReferendumStatus::Closed;
+    world.governance_locks = Default::default();
+    world
+        .governance_referenda
+        .insert("slash-restore".into(), closed.clone());
+    world
+        .rebuild_governance_read_indexes()
+        .expect("closed result remains after all locks released");
+    assert_eq!(
+        plain_governance_tally(&closed, None, 999).unwrap(),
+        [4, 2, 1]
+    );
+    closed.plain_result = PlainVotingResultV1::Pending;
+    world
+        .governance_referenda
+        .insert("slash-restore".into(), closed);
+    assert!(
+        world
+            .rebuild_governance_read_indexes()
+            .unwrap_err()
+            .contains("context/result")
+    );
+}
+
+#[test]
+fn frozen_plain_minimum_bond_is_enforced_by_validator_tally_and_restore() {
+    use iroha_data_model::governance::conviction::{PlainVotingContextV1, PlainVotingResultV1};
+    use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
+
+    const BELOW_MINIMUM: &str = "original public conviction bond is below its frozen minimum";
+    let referendum_id = "minimum-bond-restore";
+    let mut referendum = indexed_plain_referendum();
+    let PlainVotingContextV1::Conviction(policy) = &mut referendum.plain_context else {
+        unreachable!()
+    };
+    policy.minimum_bond = 10_u64.into();
+    policy.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+    policy.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
+    let mut valid_lock = indexed_governance_lock(ALICE_ID.clone(), 10);
+    valid_lock.amount = 10_u64.into();
+    valid_lock.custody.bond_escrow_account = policy.bond_escrow_account.clone();
+    valid_lock.custody.slash_receiver_account = policy.slash_receiver_account.clone();
+    valid_lock.validate_plain_context(policy).unwrap();
+    let mut locks = GovernanceLocksForReferendum {
+        locks: BTreeMap::from([(ALICE_ID.clone(), valid_lock.clone())]),
+    };
+    assert!(plain_governance_tally(&referendum, Some(&locks), 1).is_ok());
+    let mut world = World::new();
+    world
+        .governance_referenda
+        .insert(referendum_id.into(), referendum.clone());
+    world
+        .governance_locks
+        .insert(referendum_id.into(), locks.clone());
+    world
+        .rebuild_governance_read_indexes()
+        .expect("exact-minimum baseline is valid");
+
+    for (remaining, slashed) in [(9_u64, 0_u64), (4, 5), (0, 9)] {
+        let mut lock = valid_lock.clone();
+        lock.amount = remaining.into();
+        lock.slashed = slashed.into();
+        assert_eq!(
+            lock.validate_plain_context(referendum.plain_policy().unwrap())
+                .unwrap_err(),
+            BELOW_MINIMUM
+        );
+        locks.locks.insert(ALICE_ID.clone(), lock);
+        let tally_error = crate::smartcontracts::isi::world::isi::plain_governance_tally_v1(
+            &locks,
+            None,
+            Some(1),
+            referendum.plain_policy().unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                &tally_error,
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message))
+                    if message == BELOW_MINIMUM
+            ),
+            "unexpected original-bond rejection: {tally_error:?}"
+        );
+        assert_eq!(
+            plain_governance_tally(&referendum, Some(&locks), 1).unwrap_err(),
+            tally_error.to_string()
+        );
+        world
+            .governance_locks
+            .insert(referendum_id.into(), locks.clone());
+        assert_eq!(
+            world.rebuild_governance_read_indexes().unwrap_err(),
+            BELOW_MINIMUM
+        );
+    }
+
+    // A retained decision does not depend on current locks, but restore must still reject
+    // an impossible retained position instead of installing it into the expiry index.
+    let mut closed = referendum.clone();
+    closed.plain_result =
+        PlainVotingResultV1::Decided(closed.plain_policy().unwrap().decide([4, 2, 1]).unwrap());
+    closed.status = GovernanceReferendumStatus::Closed;
+    world
+        .governance_referenda
+        .insert(referendum_id.into(), closed.clone());
+    assert_eq!(
+        plain_governance_tally(&closed, Some(&locks), 999).unwrap(),
+        [4, 2, 1]
+    );
+    assert_eq!(
+        world.rebuild_governance_read_indexes().unwrap_err(),
+        BELOW_MINIMUM
+    );
+    assert_eq!(
+        world
+            .governance_referenda
+            .view()
+            .get(referendum_id)
+            .unwrap()
+            .plain_result,
+        closed.plain_result
+    );
+
+    // Zero units are a valid zero-weight position only under an explicit zero minimum.
+    let PlainVotingContextV1::Conviction(policy) = &mut referendum.plain_context else {
+        unreachable!()
+    };
+    policy.minimum_bond = Quantity::zero();
+    valid_lock.amount = Quantity::zero();
+    valid_lock.validate_plain_context(policy).unwrap();
+    locks.locks.insert(ALICE_ID.clone(), valid_lock);
+    assert_eq!(
+        plain_governance_tally(&referendum, Some(&locks), 1).unwrap(),
+        [0; 3]
+    );
+    world
+        .governance_referenda
+        .insert(referendum_id.into(), referendum);
+    world.governance_locks.insert(referendum_id.into(), locks);
+    world
+        .rebuild_governance_read_indexes()
+        .expect("explicit zero-minimum zero-position is valid");
 }

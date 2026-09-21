@@ -104,7 +104,7 @@ const SNAPSHOT_LAYOUT_LANGUAGE_V1: &[u8] =
 const COMMITMENT_LANGUAGE_V1: &[u8] =
     b"commitment-mask[plane]=blinding[plane];mask-order=plane-order;C_plane=sum_v(value[plane,v]*G[v])+blinding[plane]*H;one-nonzero-canonical-blinding-and-one-canonical-nonidentity-33B-point-per-plane;basis=ZkAmsT256BulletproofSuiteV1:G[0..16384)+H";
 const SOURCE_CONTEXT_LANGUAGE_V1: &[u8] =
-    b"context-order=native40-inventory,basis,mapping,source-replay-record,source-opening-record,canonical-reopen-record,radix-range-record";
+    b"context-order=native40-inventory,basis,mapping,source-replay-record,source-opening-record,radix-range-record";
 const PRODUCTION_BLOCKER_LANGUAGE_V1: &[u8] =
     b"current-upstream-does-not-own-one-authenticated-snapshot-containing-all-9288-exact-values,blindings,and-matching-commitments;ordered-two-spool-storage-does-not-supply-authenticated-source-to-pair-handoff-or-commitment-equations;replay-cursor-does-not-yet-authenticate-plane-slots;production-seal-remains-Infallible";
 
@@ -313,7 +313,6 @@ fn plane_mapping_digest_v1() -> Result<[u8; 32], PlaneOpeningErrorV1> {
 struct PlaneOpeningSourceContextV1 {
     source_replay_record_digest: [u8; 32],
     source_opening_record_digest: [u8; 32],
-    canonical_reopen_record_digest: [u8; 32],
     radix_range_record_digest: [u8; 32],
 }
 
@@ -331,7 +330,6 @@ fn plane_context_digest_v1(
         mapping_digest,
         axes.source_replay_record_digest,
         axes.source_opening_record_digest,
-        axes.canonical_reopen_record_digest,
         axes.radix_range_record_digest,
     ] {
         hash.update(&require_nonzero_v1(digest)?);
@@ -339,6 +337,23 @@ fn plane_context_digest_v1(
     absorb_len_prefixed_v1(&mut hash, SOURCE_CONTEXT_LANGUAGE_V1)?;
     absorb_len_prefixed_v1(&mut hash, PRODUCTION_BLOCKER_LANGUAGE_V1)?;
     require_nonzero_v1(hash.finalize())
+}
+
+/// Hash the existing context language only from a view minted by the original source.
+pub(in crate::vega::zk_ams::mkhe) fn materialized_plane_context_digest_v1(
+    source: &crate::vega::zk_ams::mkhe::collective::MaterializedPlaneContextV1<'_>,
+) -> Result<[u8; 32], super::ZkAmsMkheErrorV1> {
+    let [
+        source_replay_record_digest,
+        source_opening_record_digest,
+        radix_range_record_digest,
+    ] = source.axes_v1();
+    plane_context_digest_v1(PlaneOpeningSourceContextV1 {
+        source_replay_record_digest,
+        source_opening_record_digest,
+        radix_range_record_digest,
+    })
+    .map_err(|_| super::ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
 
 fn approved_snapshot_plan_v1(
@@ -377,7 +392,6 @@ fn plane_record_digest_v1(record: &PlaneOpeningRecordV1) -> Result<[u8; 32], Pla
         record.context_digest,
         record.source_context_axes.source_replay_record_digest,
         record.source_context_axes.source_opening_record_digest,
-        record.source_context_axes.canonical_reopen_record_digest,
         record.source_context_axes.radix_range_record_digest,
         record.ordered_snapshot_plan_digest,
         record.authenticated_snapshot_digest,
@@ -479,6 +493,11 @@ impl Drop for TestAuthenticatedSnapshotHarnessV1 {
 
 #[path = "vector_arithmetic_plane_openings_v1/ordered_snapshot_v1.rs"]
 mod ordered_snapshot_v1;
+pub(in crate::vega::zk_ams::mkhe) use ordered_snapshot_v1::{
+    OrderedPlaneSpoolSnapshotV1, OrderedPlaneSpoolWriterV1, OrderedSnapshotErrorV1,
+    OrderedStorageSessionBudgetV1, QMaskSFileMemoryV1, QMaskSFilePlanV1, QMaskSFileV1,
+    SealedQMaskSFileV1, WrittenQMaskSBlockFileV1,
+};
 #[path = "vector_arithmetic_plane_openings_v1/replay_caps_v1.rs"]
 mod replay_caps_v1;
 

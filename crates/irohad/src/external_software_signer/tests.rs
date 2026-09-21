@@ -23,6 +23,7 @@ use sorafs_manifest::{
 };
 use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
 const WRAPPING_KEY: [u8; 32] = [0xA5; 32];
+mod topology;
 
 #[test]
 fn unimplemented_purposes_cannot_provision_an_unusable_signer() {
@@ -34,6 +35,7 @@ fn unimplemented_purposes_cannot_provision_an_unusable_signer() {
         SignerRoleV1::StreamToken,
         SignerRoleV1::FinalPromotionProvenance,
         SignerRoleV1::FinalPromotionAccountTransaction,
+        SignerRoleV1::TopologyApproval,
     ] {
         let configured = provisioning(role, SignerKeyAlgorithmV1::Ed25519);
         assert!(configured.purpose_binding.validates_role(role));
@@ -172,6 +174,7 @@ fn provisioning(
         SignerRoleV1::ReleaseManifest => "release-manifest",
         SignerRoleV1::FinalPromotionProvenance => "final-promotion-provenance",
         SignerRoleV1::FinalPromotionAccountTransaction => "final-promotion-account-transaction",
+        SignerRoleV1::TopologyApproval => "topology-approval",
     };
     let purpose_binding = match role {
         SignerRoleV1::ProofOutcome
@@ -206,6 +209,9 @@ fn provisioning(
                 deployment_id: "production-primary".into(),
             }
         }
+        SignerRoleV1::TopologyApproval => SignerPurposeBindingV1::TopologyApproval {
+            deployment_id: "production-primary".into(),
+        },
         SignerRoleV1::ReleaseManifest => SignerPurposeBindingV1::ReleaseManifest {
             deployment_id: "production-primary".into(),
         },

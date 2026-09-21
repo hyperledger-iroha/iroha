@@ -1116,6 +1116,9 @@ pub mod snapshot {
     /// JSON restoration uses additional transient memory; operators should size this below
     /// available restore headroom for their representative world state.
     pub const MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1_073_741_824_usize);
+    /// Aggregate requested bytes held by authenticated snapshot payload read buffers.
+    /// One maximum-sized payload fits; typed restore and writer output are separate.
+    pub const MAX_READ_BUFFER_BYTES: NonZeroUsize = MAX_PAYLOAD_BYTES;
     /// Maximum typed-decoder nesting depth for one snapshot payload.
     ///
     /// Keep the default tied to the codec's structural ceiling so a default

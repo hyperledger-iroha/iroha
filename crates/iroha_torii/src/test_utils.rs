@@ -1056,6 +1056,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             store_dir: WithOrigin::inline(std::env::temp_dir()),
             merkle_chunk_size_bytes: defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES,
             max_payload_bytes: defaults::snapshot::MAX_PAYLOAD_BYTES,
+            max_read_buffer_bytes: defaults::snapshot::MAX_READ_BUFFER_BYTES,
             resources: Default::default(),
             verification_public_key: None,
             signing_private_key: None,

@@ -242,11 +242,12 @@ def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation)
     assert not any("digest" in e or "must have one" in e for e in errors), errors
 
 
-def test_retained_service_keeps_original_producer_until_payload_release(fixture):
+@pytest.mark.parametrize("before", ["candidates", "_descriptor_admission"])
+def test_retained_service_keeps_original_producer_until_payload_and_descriptor_release(fixture, before):
     root, helper, checker, _ = fixture
     path = root / checker.native_preparation_contract.VALIDATION_CUSTODY
     helper.replace_once_after(path, "struct RetainedBodyValidationService", "    validator: P,", "")
-    helper.replace_once_after(path, "struct RetainedBodyValidationService", "    candidates:", "    validator: P,\n    candidates:")
+    helper.replace_once_after(path, "struct RetainedBodyValidationService", f"    {before}:", f"    validator: P,\n    {before}:")
     errors = validate(fixture)
     assert any("retained carrier" in e for e in errors), errors
     assert not any("digest" in e or "must have one" in e for e in errors), errors
@@ -640,7 +641,7 @@ def test_terminal_carrier_rejects_owner_mutation(fixture, owner, symbol, old, ne
     pytest.param("GEOMETRY_CARRIER", "requires_queue_custody", "!pending.plan.retire.is_empty()", "false", id="retired-route"),
     pytest.param("GEOMETRY_CARRIER", "requires_queue_custody", "!pending.catalog_update.replaced_lane_ids.is_empty()", "false", id="replaced-route"),
     pytest.param("GEOMETRY_CARRIER", "complete_under", "!self.matches_publication_target(target, header)", "false", id="completion-binding"),
-    pytest.param("GEOMETRY_CARRIER", "complete_under", "self.requires_queue_custody()", "false", id="completion-queue-refusal"),
+    pytest.param("GEOMETRY_CARRIER", "complete_under", "!self.has_queue_custody(target, header, queue)", "false", id="completion-queue-proof"),
     pytest.param("GEOMETRY_CARRIER", "complete_under", "raw.publish_catalog_under(lease, None)", "raw.publish_catalog_under(other_lease, None)", id="catalog-lease"),
     pytest.param("GEOMETRY_CARRIER", "complete_under", "raw.reauthenticate_catalog_under(lease)", "raw.reauthenticate_catalog_under(other_lease)", id="completed-catalog-lease"),
     pytest.param("GEOMETRY_CARRIER", "complete_under", "geometry: self,", "geometry: other,", id="completed-original-owner"),
@@ -650,7 +651,7 @@ def test_terminal_carrier_rejects_owner_mutation(fixture, owner, symbol, old, ne
     pytest.param("PHYSICAL_CARRIER", "try_complete_geometry", "let journals = &mut self.decision.journals;", "let journals = &mut self.decision.journals; let _fresh = self.target.kura.try_publication_lease()?;", id="no-fresh-kura-lease"),
     pytest.param("PHYSICAL_CARRIER", "try_complete_geometry", ".try_lock_or_wait()", ".lock()", id="no-blocking-backend-lock"),
     pytest.param("TERMINAL_CARRIER", "publish", "journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()", "false", id="exact-lifecycle-effects"),
-    pytest.param("TERMINAL_CARRIER", "publish", "journals.geometry.requires_queue_custody()", "false", id="publisher-queue-refusal"),
+    pytest.param("TERMINAL_CARRIER", "publish", "journals.components._fences._queue.as_ref(),", "None,", id="publisher-original-queue-proof"),
     pytest.param("TERMINAL_CARRIER", "publish", ".sync_mapping(&effects.nexus.lane_config)", ".sync_mapping(&other_mapping)", id="accepted-mapping"),
     pytest.param("TERMINAL_CARRIER", "publish", ".lifecycle\n            .take()", ".lifecycle\n            .clone()", id="consume-lifecycle"),
     pytest.param("TERMINAL_CARRIER", "publish", "if let Some(post) = lifecycle_post_publication {\n            post.publish(target);\n        }", "drop(lifecycle_post_publication);", id="consume-lifecycle-post-work"),
@@ -897,3 +898,116 @@ def test_geometry_pending_capacity_snapshot_precedes_inner_fences(fixture):
     helper.replace_once_after(path, anchor, snapshot, "")
     helper.replace_once_after(path, anchor, geometry, geometry + "\n" + snapshot)
     assert any("reorders executable relation" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("owner,anchor,old,new", [
+    ("APPLY", "fn carrier_queue_source", "&self.queue", "&other.queue"),
+    ("APPLY", "fn carrier_queue_source", "&self.state", "&other.state"),
+    ("QUEUE_SOURCE", "impl<'service>", "pub(super) fn new", "pub(crate) fn new"),
+    ("QUEUE_SOURCE", "fn owns_cut", "#[cfg(test)]", ""),
+    ("QUEUE_SOURCE", "fn owns_cut", "    pub(crate) fn for_test", "    pub(crate) fn arbitrary(state: &State, queue: &Queue) -> Self { Self { state, queue } }\n    #[cfg(test)] pub(crate) fn for_test"),
+    ("QUEUE_SOURCE", "struct OriginalCarrierQueue", "state: &'service State", "pub(crate) state: &'service State"),
+    ("QUEUE_SOURCE", "fn belongs_to", "core::ptr::eq(self.state, state)", "true"),
+    ("QUEUE_SOURCE", "fn owns_cut", "cut.belongs_to(self.queue)", "true"),
+    ("QUEUE_SOURCE", "fn try_observe", "self.queue.try_lock_lane_retirement_observer()", "other.try_lock_lane_retirement_observer()"),
+    ("QUEUE_OWNER", "impl QueueLaneRetirementCut", "core::ptr::eq(self.observer.queue, queue)", "true"),
+    ("QUEUE_OWNER", "impl QueueLaneRetirementCut", "self.observer.durability_faulted()", "false"),
+    ("QUEUE_OWNER", "impl QueueLaneRetirementCut", "self.observer.queue.lane_pending_work_release_locked(", "other.lane_pending_work_release_locked("),
+    ("QUEUE_OWNER", "fn lane_pending_work_release_locked", "let scope = (lane_id, dataspace_id, lane_incarnation)", "let scope = (lane_id, dataspace_id, other_incarnation)"),
+    ("QUEUE_OWNER", "fn lane_pending_work_release_locked", "if self.transaction_selection_durability_faulted()", "if false"),
+    ("QUEUE_OWNER", "fn lane_pending_work_release_locked", ".is_none_or(|owned| self.lane_has_pending_route_work(&owned, lane_id, dataspace_id))", ".is_some_and(|owned| self.lane_has_pending_route_work(&owned, lane_id, dataspace_id))"),
+    ("QUEUE_OWNER", "fn lane_pending_work_release_locked", "Ok(Some(wait))", "Ok(None)"),
+    ("QUEUE_RETIREMENT", "fn try_new", "!source.belongs_to(target)", "false"),
+    ("QUEUE_RETIREMENT", "fn try_new", "!geometry.matches_publication_target(target, header)", "false"),
+    ("QUEUE_RETIREMENT", "fn try_new", "!source.owns_cut(&cut)", "false"),
+    ("QUEUE_RETIREMENT", "fn try_new", "cut.lane_pending_work_release(lane, dataspace, incarnation)", "Ok(None)"),
+    ("QUEUE_RETIREMENT", "fn try_new", "return Err(CarrierQueueRetirementError::Pending", "return Err(CarrierQueueRetirementError::InvalidDecision"),
+    ("QUEUE_RETIREMENT", "fn try_new", "_cut: cut", "_cut: other_cut"),
+    ("QUEUE_RETIREMENT", "fn ensure_available", "self._cut.durability_faulted()", "false"),
+    ("QUEUE_RETIREMENT", "fn authenticates", "self.ensure_available().is_err()", "false"),
+    ("QUEUE_RETIREMENT", "fn authenticates", "self.header != header", "false"),
+    ("QUEUE_RETIREMENT", "fn authenticates", "!Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)", "false"),
+    ("QUEUE_RETIREMENT", "fn authenticates", "self.routes.get(index) != Some(&(lane, dataspace, incarnation))", "false"),
+    ("QUEUE_RETIREMENT", "fn authenticates", "index == self.routes.len()", "true"),
+    ("GEOMETRY_CARRIER", "fn for_each_retirement_route", ".previous_catalog", ".updated_catalog"),
+    ("GEOMETRY_CARRIER", "fn for_each_retirement_route", ".previous_lane_incarnations", ".updated_lane_incarnations"),
+    ("GEOMETRY_CARRIER", "fn for_each_retirement_route", "!lane_incarnation_is_zero(*incarnation)", "true"),
+    ("GEOMETRY_CARRIER", "fn has_queue_custody", "queue.is_some_and(|queue| queue.authenticates(target, self, header))", "queue.is_none_or(|queue| queue.authenticates(target, self, header))"),
+    ("PHYSICAL_CARRIER", "fn try_prepare_physical", "None => Some(CarrierQueueRetirementError::Missing)", "None => None"),
+    ("PHYSICAL_CARRIER", "fn try_prepare_physical", "Some(source) if !source.belongs_to(target)", "Some(source) if false"),
+    ("PHYSICAL_CARRIER", "fn try_prepare_physical", "observer\n                    .try_into_cut()", "observer\n                    .try_into_cut().await"),
+    ("PHYSICAL_CARRIER", "fn try_acquire", "lock.try_lock_or_wait()", "lock.lock()"),
+    ("PHYSICAL_CARRIER", "fn try_complete_geometry", "journals.components._fences._queue.as_ref()", "None"),
+    ("TERMINAL_CARRIER", "fn publish(", ".and_then(|queue| queue.ensure_available().err())", ".and_then(|queue| None)"),
+])
+def test_carrier_retirement_requires_original_queue_and_shared_release_predicate(fixture, owner, anchor, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner), anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in e or "sticky Queue fault" in e for e in errors), errors
+    assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("mutation", ["observer-after-state", "cut-after-components", "release-before-write", "fault-before-storage", "fences-before-components"])
+def test_carrier_retirement_rejects_guard_and_sticky_fault_reordering(fixture, mutation):
+    root, helper, checker, _ = fixture
+    c = checker.native_preparation_contract
+    if mutation == "observer-after-state":
+        helper.replace_once_after(root / c.PHYSICAL_CARRIER, "fn try_prepare_physical", "let queue_observer = if authenticated", "let _early = StateFences::try_acquire(target); let queue_observer = if authenticated")
+    elif mutation == "cut-after-components":
+        helper.replace_once_after(root / c.PHYSICAL_CARRIER, "fn try_prepare_physical", "let queue = match queue_observer", "let _early = journals.try_map_components(); let queue = match queue_observer")
+    elif mutation == "release-before-write":
+        path = root / c.PHYSICAL_CARRIER
+        helper.replace_once_after(path, "fn release_for_completion", "drop(queue);", "")
+        helper.replace_once_after(path, "fn release_for_completion", "drop(write);", "drop(queue); drop(write);")
+    elif mutation == "fault-before-storage":
+        path = root / c.TERMINAL_CARRIER
+        text = path.read_text()
+        start = text.index("        if let Some(error) = self\n", text.index("fn publish("))
+        end = text.index("\n        // Reservations", start)
+        block = text[start:end]
+        text = text[:start] + text[end:]
+        target = text.index("        let update_da_mapping = match self.try_complete_geometry()")
+        path.write_text(text[:target] + block + "\n" + text[target:])
+    else:
+        path = root / c.PHYSICAL_CARRIER
+        helper.replace_once_after(path, "struct AcquiredCarrierComponents", "    _fences: CarrierFences<'target>,\n", "")
+        helper.replace_once_after(path, "struct AcquiredCarrierComponents", "    world:", "    _fences: CarrierFences<'target>,\n    world:")
+    errors = validate(fixture)
+    assert any("executable relation" in e for e in errors), errors
+    assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("owner,anchor,old,new", [
+    ("VALIDATION_CUSTODY", "fn descriptor_layouts", "Layout::array::<Candidate<P::Owner>>(limit)", "Layout::array::<usize>(limit)"),
+    ("VALIDATION_CUSTODY", "fn descriptor_layouts", "Layout::array::<Marker>(limit)", "Layout::array::<Marker>(1)"),
+    ("VALIDATION_CUSTODY", "fn descriptor_layouts", ".map_err(|_| AllocationRefusal::DemandOverflow)?", ".unwrap()"),
+    ("VALIDATION_CUSTODY", "fn descriptor_bytes", ".checked_add(layout.size())", ".saturating_add(layout.size())"),
+    ("VALIDATION_CUSTODY", "fn new(\n        validator", "budget: &AllocationBudget", "budget: Option<&AllocationBudget>"),
+    ("VALIDATION_CUSTODY", "fn new(\n        validator", "budget.try_reserve_layouts(layouts)?", "other.try_reserve_layouts(layouts)?"),
+    ("VALIDATION_CUSTODY", "fn new(\n        validator", "reservation.try_split(layouts[1])?", "reservation.try_split(layouts[0])?"),
+    ("VALIDATION_CUSTODY", "fn new(\n        validator", "_descriptor_admission: descriptor_admission", "_descriptor_admission: other_charge"),
+    ("VALIDATION_CUSTODY", "fn new(\n        validator", "let mut candidates = Vec::new();", "drop(descriptor_admission); let mut candidates = Vec::new();"),
+    ("RETAINED_VALIDATION", "fn retained_validation_service", "            budget,", "            other_budget,"),
+    ("RETAINED_VALIDATION", "fn retained_validation_descriptor_bytes", "self.capacity.max_body_entries", "1"),
+])
+def test_retained_descriptor_admission_requires_actual_checked_layouts_and_original_pool(fixture, owner, anchor, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner), anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in e for e in errors), errors
+    assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("mutation", ["allocate-before-reserve", "charge-drops-before-vectors"])
+def test_retained_descriptor_admission_precedes_allocation_and_outlives_vectors(fixture, mutation):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.VALIDATION_CUSTODY
+    if mutation == "allocate-before-reserve":
+        helper.replace_once_after(path, "fn new(\n        validator", "let layouts = Self::descriptor_layouts(limit)?;", "let mut candidates = Vec::new(); candidates.try_reserve_exact(limit)?; let layouts = Self::descriptor_layouts(limit)?;")
+    else:
+        helper.replace_once_after(path, "struct RetainedBodyValidationService", "    _descriptor_admission: [AllocationCharge; 2],\n", "")
+        helper.replace_once_after(path, "struct RetainedBodyValidationService", "    candidates:", "    _descriptor_admission: [AllocationCharge; 2],\n    candidates:")
+    errors = validate(fixture)
+    assert any("executable relation" in e or "original custody" in e for e in errors), errors
+    assert not any("digest" in e or "must have one" in e for e in errors), errors

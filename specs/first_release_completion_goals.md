@@ -6,6 +6,23 @@ Starting checkout: `f11eed2d6c7113163295e65703d9c206a5ce07d9` (`optimizations`).
 Integration branch: `codex/complete-privacy-sorafs-multilane`.
 The [integration checkpoint](../docs/history/2026-09-20/first-release-integration.md)
 records preservation, implementation boundaries and scoped validation failures.
+The [September 21 runtime checkpoint](../docs/history/2026-09-21/runtime-and-governance-integration.md)
+and [SDK response checkpoint](../docs/history/2026-09-21/js-governance-response-validation.md)
+record subsequent integrated checks. The [native40 migration record](../docs/history/2026-09-21/mkhe-native40-migration.md)
+separates completed evidence-identity hardening from unresolved production work.
+The [C# host record](../docs/history/2026-09-21/csharp-native-runtime.md) records
+native-backed tests and ordinary-stack admission without claiming release closure.
+The [Android consumer record](../docs/history/2026-09-21/android-managed-host-runtime.md)
+records managed and explicit host-JNI execution separately from device qualification.
+The [deferred-handoff record](../docs/history/2026-09-21/deferred-handoff-carrier-validation.md)
+records passing component controls and the remaining failed full liveness run.
+The [retained-source and qualification record](../docs/history/2026-09-21/retained-source-and-qualification-integration.md)
+records first-mask ownership tests, fixture migration and published-schema work.
+The [SCCP Java consumer record](../docs/history/2026-09-21/sccp-java-source-consumer-integration.md)
+tracks assertion migration, the executed native evidence-validator join, and
+the package producer with final candidate execution still outstanding.
+The [prepared insertion and stream record](../docs/history/2026-09-21/prepared-insertion-and-s-stream-integration.md)
+records bounded component ownership changes and their remaining qualification.
 
 The component ledgers remain the detailed acceptance authorities:
 [privacy](privacy_first_release_closure.md),
@@ -42,6 +59,8 @@ release goal.
   omission of accepted ballots, or extra subset tally may supply recovery.
   A protocol meeting these requirements is still a cryptographic design
   deliverable; no rejected trustee or voter-held recovery design is approved.
+  The [standalone protocol contract](standalone_election_protocol_contract.md)
+  defines the required fault, phase, disclosure and rejection boundaries.
 
 ## Ordered goals
 
@@ -57,8 +76,8 @@ release goal.
 | F08 | Open | BFV qualification — crypto and independent reviewers | Full relation/40-limb replay, full-size/eight-party adversaries and measured bounds; real governed parameter/lattice/noise/qROM evidence before production qualification can accept. |
 | F09 | Open | Exact12 completion — engine owners | Complete engine-specific soundness/key/provenance work and every adversarial, maximum-shape, resource, native/SDK/hardware and deployment requirement in the privacy ledger. |
 | F10 | Open | Product privacy integration — product/Core owners | Confidential authority/conservation; Kaigi proof/relay/lifecycle; Parliament ballot/deadline/beacon/restart and independent protocol review. |
-| F11 | Open | Standalone elections — protocol and product owners | Reviewed construction satisfying every fixed election requirement, then dedicated credential/ballot/tally circuits, confidential bond positions, exact closed-corpus state, SDKs and dropout/restart/resource qualification. |
-| F12 | Queued after interfaces settle | Canonical APIs and SDK/native packages — SDK/release owners | One typed V1 surface; double regeneration; matching Rust, Kotlin/Java consumers, Swift, JS, Python and C# execution; complete five-target native artifacts and installation checks. |
+| F11 | Active; private protocol unresolved | Standalone elections — protocol and product owners | Reviewed construction satisfying every fixed election requirement, then dedicated credential/ballot/tally circuits, confidential bond positions, exact closed-corpus state, SDKs and dropout/restart/resource qualification. Public conviction arithmetic and real bond conservation are prerequisites, not anonymous-election completion. |
+| F12 | Active; final regeneration after interfaces settle | Canonical APIs and SDK/native packages — SDK/release owners | One typed V1 surface; double regeneration; matching Rust, Kotlin/Java consumers, Swift, JS, Python and C# execution; complete five-target native artifacts and installation checks. |
 | F13 | Active; final runs after implementation | Formal/runtime/hardware qualification — validation owners | Required formal bounds, all current-Native four-validator scenarios, larger-network resilience/scaling, full-proof hardware parity/fault quarantine and unchanged-candidate resource evidence. |
 | F14 | Queued after F01–F13 | Audit, candidate sealing and promotion — release/operators/reviewers | Resolve required audit findings; exact-source complete validation; genuine signed release and promotion evidence, authenticated publication/readback, and rollback qualification. |
 

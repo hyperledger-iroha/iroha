@@ -62,7 +62,7 @@ class IndependentCheckpointTests(unittest.TestCase):
         for group, selection in (("CORE_STAGES", "core"), ("STAGES", "cli"), ("NETWORK_STAGES", "network")):
             stack.enter_context(patch.object(gate, group, ((selection, (selection + "_first",)),)))
         for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks",
-                         "require_network_fixture_capacity"):
+                         "require_network_fixture_capacity", "check_test_harnesses"):
             stack.enter_context(patch.object(gate, function))
         # Compilation alone is mocked; the exact-copy, custody/release, census,
         # subprocess result checks, preparation records and retry path are real.

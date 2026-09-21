@@ -5284,16 +5284,55 @@ export interface ToriiGovernanceProposalResult {
   proposal: ToriiGovernanceProposalRecord | null;
 }
 
+/** Lossless unsigned JSON integer; bigint is used above Number.MAX_SAFE_INTEGER. */
+export type ToriiGovernanceUnsigned = number | bigint;
+
+export interface ToriiPlainConvictionPolicyV1 {
+  asset_definition_id: string;
+  asset_scale: number;
+  conviction_step_blocks: ToriiGovernanceUnsigned;
+  max_conviction: ToriiGovernanceUnsigned;
+  approval_threshold_numerator: ToriiGovernanceUnsigned;
+  approval_threshold_denominator: ToriiGovernanceUnsigned;
+  minimum_turnout: ToriiGovernanceUnsigned;
+  minimum_bond: string;
+  bond_escrow_account: string;
+  slash_receiver_account: string;
+}
+export interface ToriiPlainVotingDecisionV1 {
+  approve: ToriiGovernanceUnsigned;
+  reject: ToriiGovernanceUnsigned;
+  abstain: ToriiGovernanceUnsigned;
+  approved: boolean;
+}
+export type ToriiGovernanceReferendumRecord = {
+  h_start: ToriiGovernanceUnsigned;
+  h_end: ToriiGovernanceUnsigned;
+} & (
+  | { mode: "Zk"; status: "Proposed" | "Open" | "Closed";
+      plain_context: { kind: "NotApplicable"; content: null };
+      plain_result: { kind: "NotApplicable"; content: null } }
+  | { mode: "Plain"; plain_context: { kind: "Conviction"; content: ToriiPlainConvictionPolicyV1 } } & (
+      | { status: "Proposed" | "Open"; plain_result: { kind: "Pending"; content: null } }
+      | { status: "Closed"; plain_result: { kind: "Decided"; content: ToriiPlainVotingDecisionV1 } }
+    )
+);
+/** Exact wire response after closed-schema, lossless decoding. */
+export type ToriiGovernanceReferendumResponse =
+  | { found: false }
+  | { found: true; referendum: ToriiGovernanceReferendumRecord };
 export interface ToriiGovernanceReferendumResult {
   found: boolean;
-  referendum: Record<string, unknown> | null;
+  referendum: ToriiGovernanceReferendumRecord | null;
 }
 
 export interface ToriiGovernanceTally {
   referendum_id: string;
-  approve: number;
-  reject: number;
-  abstain: number;
+  evaluated_block_height: ToriiGovernanceUnsigned;
+  evaluated_block_hash: string;
+  approve: ToriiGovernanceUnsigned;
+  reject: ToriiGovernanceUnsigned;
+  abstain: ToriiGovernanceUnsigned;
 }
 
 export interface ToriiGovernanceTallyResult {
@@ -5313,10 +5352,10 @@ export interface ToriiGovernanceLockRecord {
   owner: string;
   amount: string;
   slashed: string;
-  expiry_height: number;
+  expiry_height: ToriiGovernanceUnsigned;
   direction: number;
-  duration_blocks: number;
-  custody: ToriiGovernanceLockCustody | null;
+  duration_blocks: ToriiGovernanceUnsigned;
+  custody: ToriiGovernanceLockCustody;
 }
 
 export interface ToriiGovernanceLocksResult {
@@ -5324,6 +5363,12 @@ export interface ToriiGovernanceLocksResult {
   referendum_id: string;
   locks: Record<string, ToriiGovernanceLockRecord>;
 }
+
+/** Exact nested Core corpus; the typed convenience method projects its inner map. */
+export type ToriiGovernanceLocksResponse =
+  | { found: false; referendum_id: string }
+  | { found: true; referendum_id: string;
+      locks: { locks: Record<string, ToriiGovernanceLockRecord> } };
 
 export interface ToriiGovernanceUnlockStats {
   height_current: number;
@@ -11894,7 +11939,7 @@ export declare class ToriiClient {
   getGovernanceReferendum(
     referendumId: string,
     options: RequiredCanonicalRequestOptions,
-  ): Promise<Record<string, unknown> | null>;
+  ): Promise<ToriiGovernanceReferendumResponse | null>;
   getGovernanceReferendumTyped(
     referendumId: string,
     options: RequiredCanonicalRequestOptions,
@@ -11902,7 +11947,7 @@ export declare class ToriiClient {
   getGovernanceTally(
     referendumId: string,
     options: RequiredCanonicalRequestOptions,
-  ): Promise<Record<string, unknown> | null>;
+  ): Promise<ToriiGovernanceTally | null>;
   getGovernanceTallyTyped(
     referendumId: string,
     options: RequiredCanonicalRequestOptions,
@@ -11910,7 +11955,7 @@ export declare class ToriiClient {
   getGovernanceLocks(
     referendumId: string,
     options: RequiredCanonicalRequestOptions,
-  ): Promise<Record<string, unknown> | null>;
+  ): Promise<ToriiGovernanceLocksResponse | null>;
   getGovernanceLocksTyped(
     referendumId: string,
     options: RequiredCanonicalRequestOptions,

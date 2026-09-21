@@ -1,19 +1,19 @@
 //! Purpose-bound source openings for the Phase-23 global lookup. The first authenticated pass
 //! creates 344 `Csrc` commitments in `j=256*b+i` order and binds packing coordinate `k=64*i+b`,
-//! retaining only a confidential blinding spool, public points, and the upstream owners. A private
-//! coordinate-free second pass can later form two weighted columns. No plaintext mirror or `Cpack`
-//! exists, and every proof, authority, receipt, RSS, and release gate is false.
+//! retaining only a confidential blinding spool, public points, and the upstream owners.
+//! Authenticated source replay remains owned by its existing consuming proof stages. No plaintext
+//! mirror or `Cpack` exists, and every proof, authority, receipt, RSS, and release gate is false.
 
 #![allow(
     dead_code,
-    reason = "the production entropy and reopen seals are uninhabited"
+    reason = "the production source ingress remains uninhabited"
 )]
 #![cfg_attr(
     not(test),
     allow(
         unreachable_code,
         unused_variables,
-        reason = "the production reopen seal is intentionally uninhabited"
+        reason = "the production source ingress is intentionally uninhabited"
     )
 )]
 use super::super::super::super::super::super::{
@@ -23,9 +23,8 @@ use super::super::super::{
     PHASE23_CANONICAL_BLOCKS_PER_RECORD_V1, PHASE23_MAIN_BLOCK_BYTES_V1, PHASE23_RECORD_COUNT_V1,
 };
 use super::{
-    AUTHENTICATION_TAG_BYTES_V1, GLOBAL_LOOKUP_TOPOLOGY_KAT_V1, Phase23GlobalLookupSourceReplayV1,
-    TOTAL_REPLAY_IO_BYTES_V1, map_leaf_error_v1, validate_canonical_source_block_v1,
-    validate_replay_record_v1,
+    AUTHENTICATION_TAG_BYTES_V1, GLOBAL_LOOKUP_TOPOLOGY_KAT_V1, TOTAL_REPLAY_IO_BYTES_V1,
+    map_leaf_error_v1, validate_canonical_source_block_v1,
 };
 use crate::{
     generalized_bulletproof::{ProofSuite, SecretMultiexpBuilder, SecretPoint},
@@ -39,7 +38,6 @@ use crate::{
         sponge::Keccak256,
     },
 };
-use core::convert::Infallible;
 use iroha_crypto::confidential_spool::{
     ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
@@ -63,25 +61,7 @@ const SOURCE_OPENING_BLINDING_WRITE_AND_SEAL_READ_BYTES_V1: u64 =
     2 * SOURCE_OPENING_BLINDING_FILE_BYTES_V1;
 const SOURCE_OPENING_CURRENT_REPLAY_IO_BYTES_V1: u64 =
     TOTAL_REPLAY_IO_BYTES_V1 + SOURCE_OPENING_BLINDING_WRITE_AND_SEAL_READ_BYTES_V1;
-const CANONICAL_REOPEN_BLOCK_COUNT_V1: usize =
-    PHASE23_RECORD_COUNT_V1 * PHASE23_CANONICAL_BLOCKS_PER_RECORD_V1;
-const CANONICAL_REOPEN_PLAINTEXT_BYTES_V1: u64 =
-    CANONICAL_REOPEN_BLOCK_COUNT_V1 as u64 * PHASE23_MAIN_BLOCK_BYTES_V1 as u64;
-const CANONICAL_REOPEN_AUTHENTICATED_READ_BYTES_V1: u64 = CANONICAL_REOPEN_BLOCK_COUNT_V1 as u64
-    * (PHASE23_MAIN_BLOCK_BYTES_V1 as u64 + AUTHENTICATION_TAG_BYTES_V1);
-const SOURCE_OPENING_LIFECYCLE_IO_BYTES_V1: u64 =
-    SOURCE_OPENING_CURRENT_REPLAY_IO_BYTES_V1 + CANONICAL_REOPEN_AUTHENTICATED_READ_BYTES_V1;
 const SOURCE_OPENING_NEW_SCALAR_MIRROR_FILE_BYTES_V1: u64 = 0;
-const WEIGHTED_COLUMN_COUNT_V1: usize = 2;
-const WEIGHTED_COLUMN_SCALAR_BYTES_V1: usize =
-    WEIGHTED_COLUMN_COUNT_V1 * SOURCE_OPENING_SCALARS_PER_GROUP_V1 * core::mem::size_of::<Scalar>();
-const WEIGHTED_COLUMN_GROUP_WEIGHT_BYTES_V1: usize =
-    SOURCE_OPENING_GROUP_COUNT_V1 * core::mem::size_of::<Scalar>();
-const WEIGHTED_COLUMN_SOURCE_CHUNK_BYTES_V1: usize = PHASE23_MAIN_BLOCK_BYTES_V1;
-const WEIGHTED_COLUMN_NAMED_HEAP_BYTES_V1: usize = WEIGHTED_COLUMN_SCALAR_BYTES_V1
-    + WEIGHTED_COLUMN_GROUP_WEIGHT_BYTES_V1
-    + WEIGHTED_COLUMN_SOURCE_CHUNK_BYTES_V1;
-const WEIGHTED_COLUMN_NAMED_HEAP_CEILING_BYTES_V1: usize = 2_700_000;
 const SOURCE_OPENING_MAPPING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.mapping\0";
 const SOURCE_OPENING_CONTEXT_DOMAIN_V1: &[u8] =
@@ -94,10 +74,6 @@ const SOURCE_OPENING_RECORD_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.record\0";
 const SOURCE_OPENING_BLINDING_ORDER_V1: &[u8] =
     b"slot=commitment-ordinal=record*8+group;scalar=canonical-T256-big-endian";
-const CANONICAL_REOPEN_SCHEDULE_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.canonical-reopen-schedule\0";
-const CANONICAL_REOPEN_RECORD_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.canonical-reopen-record\0";
 const SOURCE_GROUP_ORDER_V1: &[u8] = b"record-major:43-records*8-groups";
 const SOURCE_TO_PACKING_MAP_V1: &[u8] = b"group-local:b=0..64;i=0..256;j=256*b+i;k=64*i+b";
 const SOURCE_SNAPSHOT_BINDING_RULE_V1: &[u8] =
@@ -128,13 +104,7 @@ const _: () = {
     assert!(SOURCE_OPENING_BLINDING_FILE_BYTES_V1 == 16_512);
     assert!(SOURCE_OPENING_BLINDING_WRITE_AND_SEAL_READ_BYTES_V1 == 33_024);
     assert!(SOURCE_OPENING_CURRENT_REPLAY_IO_BYTES_V1 == 350_120_448);
-    assert!(CANONICAL_REOPEN_BLOCK_COUNT_V1 == 22_016);
-    assert!(CANONICAL_REOPEN_PLAINTEXT_BYTES_V1 == 180_355_072);
-    assert!(CANONICAL_REOPEN_AUTHENTICATED_READ_BYTES_V1 == 180_707_328);
-    assert!(SOURCE_OPENING_LIFECYCLE_IO_BYTES_V1 == 530_827_776);
     assert!(SOURCE_OPENING_NEW_SCALAR_MIRROR_FILE_BYTES_V1 == 0);
-    assert!(WEIGHTED_COLUMN_NAMED_HEAP_BYTES_V1 == 1_067_776);
-    assert!(WEIGHTED_COLUMN_NAMED_HEAP_BYTES_V1 < WEIGHTED_COLUMN_NAMED_HEAP_CEILING_BYTES_V1);
     assert!(SOURCE_OPENING_MATERIALIZED_V1);
     assert!(!SOURCE_SAME_OPENING_PROVED_V1);
     assert!(!PACKING_SAME_OPENING_PROVED_V1);
@@ -318,6 +288,9 @@ fn source_opening_blinding_context_digest_v1(
 }
 #[path = "source_openings_v1/commitment_session_v1.rs"]
 mod commitment_session_v1;
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use commitment_session_v1::PreparedPlaneOpeningTailV1;
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use commitment_session_v1::{
+    QMaskComplementOpeningsV1,QMaskSBlockAdmissionV1, CompleteQMaskSOpeningsV1, QMaskSOpeningStreamV1, QMaskSErrorV1, QMaskFirstBlockMemoryV1, SampledQMaskSBlockV1};
 pub(in crate::vega::zk_ams::mkhe) use commitment_session_v1::GlobalLookupProofSessionEntropySealV1;
 #[allow(
     unused_imports,
@@ -558,9 +531,6 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1> SourceOpeningAssemblyV1<R> {
             blinding_write_and_seal_read_bytes:
                 SOURCE_OPENING_BLINDING_WRITE_AND_SEAL_READ_BYTES_V1,
             current_replay_io_bytes: SOURCE_OPENING_CURRENT_REPLAY_IO_BYTES_V1,
-            later_canonical_plaintext_bytes: CANONICAL_REOPEN_PLAINTEXT_BYTES_V1,
-            later_canonical_authenticated_read_bytes: CANONICAL_REOPEN_AUTHENTICATED_READ_BYTES_V1,
-            total_lifecycle_io_bytes: SOURCE_OPENING_LIFECYCLE_IO_BYTES_V1,
             new_scalar_mirror_file_bytes: SOURCE_OPENING_NEW_SCALAR_MIRROR_FILE_BYTES_V1,
             source_opening_materialized: SOURCE_OPENING_MATERIALIZED_V1,
             source_same_opening_proved: SOURCE_SAME_OPENING_PROVED_V1,
@@ -676,9 +646,6 @@ struct SourceOpeningRecordV1 {
     blinding_file_bytes: u64,
     blinding_write_and_seal_read_bytes: u64,
     current_replay_io_bytes: u64,
-    later_canonical_plaintext_bytes: u64,
-    later_canonical_authenticated_read_bytes: u64,
-    total_lifecycle_io_bytes: u64,
     new_scalar_mirror_file_bytes: u64,
     source_opening_materialized: bool,
     source_same_opening_proved: bool,
@@ -721,13 +688,6 @@ fn source_opening_record_digest_v1(
     hash.update(&record.blinding_file_bytes.to_be_bytes());
     hash.update(&record.blinding_write_and_seal_read_bytes.to_be_bytes());
     hash.update(&record.current_replay_io_bytes.to_be_bytes());
-    hash.update(&record.later_canonical_plaintext_bytes.to_be_bytes());
-    hash.update(
-        &record
-            .later_canonical_authenticated_read_bytes
-            .to_be_bytes(),
-    );
-    hash.update(&record.total_lifecycle_io_bytes.to_be_bytes());
     hash.update(&record.new_scalar_mirror_file_bytes.to_be_bytes());
     hash.update(&[
         record.source_opening_materialized as u8,
@@ -771,10 +731,6 @@ fn validate_source_opening_record_v1(
         || record.blinding_write_and_seal_read_bytes
             != SOURCE_OPENING_BLINDING_WRITE_AND_SEAL_READ_BYTES_V1
         || record.current_replay_io_bytes != SOURCE_OPENING_CURRENT_REPLAY_IO_BYTES_V1
-        || record.later_canonical_plaintext_bytes != CANONICAL_REOPEN_PLAINTEXT_BYTES_V1
-        || record.later_canonical_authenticated_read_bytes
-            != CANONICAL_REOPEN_AUTHENTICATED_READ_BYTES_V1
-        || record.total_lifecycle_io_bytes != SOURCE_OPENING_LIFECYCLE_IO_BYTES_V1
         || record.new_scalar_mirror_file_bytes != SOURCE_OPENING_NEW_SCALAR_MIRROR_FILE_BYTES_V1
         || !record.source_opening_materialized
         || record.source_same_opening_proved
@@ -800,6 +756,122 @@ pub(in crate::vega::zk_ams::mkhe) struct GlobalLookupSourceOpeningMaterialV1<R> 
     proof_session: commitment_session_v1::RetainedSourceSessionV1<R>,
 }
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1> GlobalLookupSourceOpeningMaterialV1<R> {
+    pub(super) fn prepare_source_packing_openings_v1(&mut self) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_v1()?;
+        self.proof_session.prepare_source_packing_openings_v1()?;
+        self.validate_v1()
+    }
+
+    pub(super) fn ordered_storage_record_v1(&self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+        self.validate_v1()?;
+        Ok(self.record.record_digest)
+    }
+    pub(super) fn admit_next_q_mask_s_block_v1(
+        &mut self,
+        stream: &QMaskSOpeningStreamV1,
+        file: &crate::vega::zk_ams::mkhe::global_lookup_statement_v1::WrittenQMaskSBlockFileV1,
+    ) -> Result<QMaskSBlockAdmissionV1, QMaskSErrorV1> {
+        self.proof_session
+            .admit_next_q_mask_s_block_v1(stream, file)
+    }
+    pub(super) fn continue_q_mask_s_block_v1(
+        &mut self,
+        stream: QMaskSOpeningStreamV1,
+        file: &mut crate::vega::zk_ams::mkhe::global_lookup_statement_v1::QMaskSFileV1,
+        admission: QMaskSBlockAdmissionV1,
+    ) -> Result<QMaskSOpeningStreamV1, QMaskSErrorV1> {
+        self.proof_session
+            .continue_q_mask_s_block_v1(stream, file, admission)
+    }
+    pub(super) fn finish_q_mask_s_openings_v1(
+        &mut self,
+        stream: QMaskSOpeningStreamV1,
+    ) -> Result<CompleteQMaskSOpeningsV1, QMaskSErrorV1> {
+        self.proof_session.finish_q_mask_s_openings_v1(stream)
+    }
+    pub(super) fn begin_q_mask_complements_v1(
+        &mut self,
+        source: &CompleteQMaskSOpeningsV1,
+        file: &crate::vega::zk_ams::mkhe::global_lookup_statement_v1::SealedQMaskSFileV1,
+    ) -> Result<QMaskComplementOpeningsV1, QMaskSErrorV1> {
+        self.proof_session.begin_q_mask_complements_v1(source, file)
+    }
+    pub(super) fn produce_q_mask_complement_block_v1(
+        &mut self,
+        source: &mut CompleteQMaskSOpeningsV1,
+        file: &mut crate::vega::zk_ams::mkhe::global_lookup_statement_v1::SealedQMaskSFileV1,
+        complements: &mut QMaskComplementOpeningsV1,
+    ) -> Result<(), QMaskSErrorV1> {
+        self.proof_session
+            .produce_q_mask_complement_block_v1(source, file, complements)
+    }
+    pub(super) fn finish_q_mask_complements_v1(
+        &mut self,
+        source: &CompleteQMaskSOpeningsV1,
+        file: &crate::vega::zk_ams::mkhe::global_lookup_statement_v1::SealedQMaskSFileV1,
+        complements: &QMaskComplementOpeningsV1,
+    ) -> Result<(), QMaskSErrorV1> {
+        self.proof_session
+            .finish_q_mask_complements_v1(source, file, complements)
+    }
+    pub(super) fn admit_first_q_mask_openings_v1(
+        &mut self,
+        block: &SampledQMaskSBlockV1,
+        file: &crate::vega::zk_ams::mkhe::global_lookup_statement_v1::WrittenQMaskSBlockFileV1,
+    ) -> Result<QMaskSBlockAdmissionV1, QMaskSErrorV1> {
+        self.proof_session
+            .admit_first_q_mask_openings_v1(block, file)
+    }
+    pub(super) fn produce_first_q_mask_openings_v1(
+        &mut self,
+        block: SampledQMaskSBlockV1,
+        admission: QMaskSBlockAdmissionV1,
+    ) -> Result<QMaskSOpeningStreamV1, QMaskSErrorV1> {
+        self.proof_session
+            .produce_first_q_mask_openings_v1(block, admission)
+    }
+
+    pub(super) fn reserve_q_mask_first_memory_v1(
+        &mut self,
+        plan: &crate::vega::zk_ams::mkhe::global_lookup_statement_v1::QMaskSFilePlanV1,
+    ) -> Result<
+        (
+            QMaskFirstBlockMemoryV1,
+            crate::vega::zk_ams::mkhe::global_lookup_statement_v1::QMaskSFileMemoryV1,
+        ),
+        QMaskSErrorV1,
+    > {
+        self.proof_session.reserve_q_mask_first_memory_v1(plan)
+    }
+    pub(super) fn sample_q_mask_first_block_v1(
+        &mut self,
+        memory: QMaskFirstBlockMemoryV1,
+    ) -> Result<SampledQMaskSBlockV1, QMaskSErrorV1> {
+        self.proof_session.sample_q_mask_first_block_v1(memory)
+    }
+
+    pub(super) fn begin_q_mask_kernel_v1(
+        &mut self,
+    ) -> Result<(), crate::vega::zk_ams::mkhe::rns_native_u15_msm::RnsNativeU15MsmErrorV1> {
+        self.validate_v1().map_err(|_| {
+            crate::vega::zk_ams::mkhe::rns_native_u15_msm::RnsNativeU15MsmErrorV1::Source
+        })?;
+        self.proof_session.begin_q_mask_kernel_v1()
+    }
+
+    pub(super) fn begin_stored_plane_replay_v1(&mut self) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_v1()?;
+        self.proof_session.begin_stored_plane_replay_v1()
+    }
+    pub(super) fn validate_stored_plane_tail_v1(
+        &self,
+        ordinal: u16,
+        bytes: &[u8],
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        self.proof_session
+            .validate_stored_plane_tail_v1(ordinal, bytes)
+    }
+
     pub(super) fn require_small_signed_position_v1(
         &self,
         ordinal: u16,
@@ -811,11 +883,13 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1> GlobalLookupSourceOpeningMater
     pub(super) fn commit_prepared_small_signed_v1(
         &mut self,
         statement: &crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::PreparedSmallSignedStatementV1<'_>,
-    ) -> Result<(), ZkAmsMkheErrorV1> {
+    ) -> Result<PreparedPlaneOpeningTailV1, ZkAmsMkheErrorV1> {
         self.validate_v1()?;
-        self.proof_session
+        let tail = self
+            .proof_session
             .commit_prepared_small_signed_v1(statement)?;
-        self.validate_v1()
+        self.validate_v1()?;
+        Ok(tail)
     }
 
     pub(super) fn require_comparator_position_v1(
@@ -829,11 +903,13 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1> GlobalLookupSourceOpeningMater
     pub(super) fn commit_prepared_comparator_v1(
         &mut self,
         statement: &crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::PreparedComparatorStatementV1<'_>,
-    ) -> Result<(), ZkAmsMkheErrorV1> {
+    ) -> Result<PreparedPlaneOpeningTailV1, ZkAmsMkheErrorV1> {
         self.validate_v1()?;
-        self.proof_session
+        let tail = self
+            .proof_session
             .commit_prepared_comparator_v1(statement)?;
-        self.validate_v1()
+        self.validate_v1()?;
+        Ok(tail)
     }
 
     pub(super) fn require_difference_start_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
@@ -854,6 +930,14 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1> GlobalLookupSourceOpeningMater
         self.proof_session
             .commit_prepared_difference_digit_v1(statement)?;
         self.validate_v1()
+    }
+
+    /// Fund only the next original low-digit preparation; no caller budget enters.
+    pub(super) fn admit_low_digit_workspace_v1(
+        &mut self,
+    ) -> Result<crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::LowDigitWorkspaceV1, crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::LowDigitWorkspaceErrorV1>{
+        self.validate_v1().map_err(|_| crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::LowDigitWorkspaceErrorV1::Source)?;
+        self.proof_session.admit_low_digit_workspace_v1()
     }
 
     pub(super) fn require_low_digit_start_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
@@ -920,114 +1004,6 @@ fn commitments_root_v1(
     }
     require_nonzero_opening_digest_v1(hash.finalize())
 }
-/// Future post-rho authority. Production cannot yet provide verifier weights.
-pub(in crate::vega::zk_ams::mkhe) enum GlobalLookupCanonicalReopenSealV1 {
-    Production {
-        post_rho_verifier_weights: Infallible,
-    },
-    #[cfg(test)]
-    TestOnly(ZeroizingT256ScalarVecV1),
-}
-#[cfg(test)]
-impl GlobalLookupCanonicalReopenSealV1 {
-    fn deterministic_test_v1() -> Self {
-        let mut weights = ZeroizingT256ScalarVecV1::with_capacity(SOURCE_OPENING_GROUP_COUNT_V1);
-        for ordinal in 0..SOURCE_OPENING_GROUP_COUNT_V1 {
-            weights.push(Scalar::from_u64(ordinal as u64 + 1));
-        }
-        Self::TestOnly(weights)
-    }
-}
-trait PurposeBoundCanonicalOpeningSinkV1: Sized {
-    type Output;
-    fn absorb_next_scalar_v1(
-        &mut self,
-        scalar: &ZeroizingT256ScalarCopyV1,
-    ) -> Result<(), ZkAmsMkheErrorV1>;
-    fn finish_v1(self) -> Result<Self::Output, ZkAmsMkheErrorV1>;
-}
-struct WeightedOpeningColumnsSinkV1 {
-    group_weights: ZeroizingT256ScalarVecV1,
-    source_column: ZeroizingT256ScalarVecV1,
-    packing_column: ZeroizingT256ScalarVecV1,
-    next_scalar: u64,
-}
-impl WeightedOpeningColumnsSinkV1 {
-    fn from_seal_v1(seal: GlobalLookupCanonicalReopenSealV1) -> Result<Self, ZkAmsMkheErrorV1> {
-        let group_weights: ZeroizingT256ScalarVecV1 = match seal {
-            GlobalLookupCanonicalReopenSealV1::Production {
-                post_rho_verifier_weights,
-            } => match post_rho_verifier_weights {},
-            #[cfg(test)]
-            GlobalLookupCanonicalReopenSealV1::TestOnly(weights) => weights,
-        };
-        // Equality-polynomial weights may legitimately be zero when a
-        // verifier challenge is one. This mechanical owner checks only the
-        // exact vector shape; the future transcript owner must supply the
-        // verifier-derived weights without strengthening their predicate.
-        if group_weights.len() != SOURCE_OPENING_GROUP_COUNT_V1 {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-        let mut source_column =
-            ZeroizingT256ScalarVecV1::with_capacity(SOURCE_OPENING_SCALARS_PER_GROUP_V1);
-        let mut packing_column =
-            ZeroizingT256ScalarVecV1::with_capacity(SOURCE_OPENING_SCALARS_PER_GROUP_V1);
-        for _ in 0..SOURCE_OPENING_SCALARS_PER_GROUP_V1 {
-            source_column.push(Scalar::zero());
-            packing_column.push(Scalar::zero());
-        }
-        Ok(Self {
-            group_weights,
-            source_column,
-            packing_column,
-            next_scalar: 0,
-        })
-    }
-}
-impl PurposeBoundCanonicalOpeningSinkV1 for WeightedOpeningColumnsSinkV1 {
-    type Output = WeightedOpeningColumnsV1;
-    fn absorb_next_scalar_v1(
-        &mut self,
-        scalar: &ZeroizingT256ScalarCopyV1,
-    ) -> Result<(), ZkAmsMkheErrorV1> {
-        if self.next_scalar >= SOURCE_OPENING_SCALAR_COUNT_V1 {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-        let group = usize::try_from(self.next_scalar / SOURCE_OPENING_SCALARS_PER_GROUP_V1 as u64)
-            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        let source_j =
-            usize::try_from(self.next_scalar % SOURCE_OPENING_SCALARS_PER_GROUP_V1 as u64)
-                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        let packing_k = source_to_packing_coordinate_v1(source_j)?;
-        let weighted =
-            ZeroizingT256ScalarCopyV1::new(scalar.get() * self.group_weights.as_slice()[group]);
-        self.source_column.as_mut_slice()[source_j] += weighted.get();
-        self.packing_column.as_mut_slice()[packing_k] += weighted.get();
-        self.next_scalar += 1;
-        Ok(())
-    }
-    fn finish_v1(self) -> Result<Self::Output, ZkAmsMkheErrorV1> {
-        if self.next_scalar != SOURCE_OPENING_SCALAR_COUNT_V1
-            || self.group_weights.len() != SOURCE_OPENING_GROUP_COUNT_V1
-            || self.source_column.len() != SOURCE_OPENING_SCALARS_PER_GROUP_V1
-            || self.packing_column.len() != SOURCE_OPENING_SCALARS_PER_GROUP_V1
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-        Ok(WeightedOpeningColumnsV1 {
-            group_weights: self.group_weights,
-            source_column: self.source_column,
-            packing_column: self.packing_column,
-        })
-    }
-}
-struct WeightedOpeningColumnsV1 {
-    group_weights: ZeroizingT256ScalarVecV1,
-    source_column: ZeroizingT256ScalarVecV1,
-    packing_column: ZeroizingT256ScalarVecV1,
-}
-#[path = "source_openings_v1/canonical_reopen_v1.rs"]
-mod canonical_reopen_v1;
 fn map_bulletproof_error_v1(
     _: crate::generalized_bulletproof::GeneralizedBulletproofErrorV1,
 ) -> ZkAmsMkheErrorV1 {

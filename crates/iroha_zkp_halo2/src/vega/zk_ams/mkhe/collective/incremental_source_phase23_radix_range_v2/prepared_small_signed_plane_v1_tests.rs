@@ -22,6 +22,21 @@ struct TestPreparedSmallSignedV1
 }
 
 impl TestPreparedSmallSignedV1 {
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn consume_with_original_tail_v1(
+        self,
+        tail: super::super::super::source_algebra::PreparedPlaneOpeningTailV1,
+        ordinal: u16,
+    ) -> ConfidentialSpoolChunkV1 {
+        let mut opening =
+            PreparedPlaneOpeningV1::from_committed_v1(self.values, tail, ordinal).unwrap();
+        for chunk in 0..32 {
+            drop(opening.emit_next_value_chunk_v1(chunk).unwrap());
+        }
+        let tail = opening.emit_tail_v1().unwrap();
+        opening.finish_v1().unwrap();
+        tail
+    }
+
     pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn for_ordinal_v1(
         ordinal: u16,
     ) -> Self {

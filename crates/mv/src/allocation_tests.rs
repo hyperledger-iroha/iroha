@@ -53,7 +53,7 @@ unsafe impl GlobalAlloc for ObservedAllocator {
 #[global_allocator]
 static ALLOCATOR: ObservedAllocator = ObservedAllocator;
 
-fn without_allocations<R>(operation: impl FnOnce() -> R) -> R {
+pub(super) fn without_allocations<R>(operation: impl FnOnce() -> R) -> R {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
@@ -602,11 +602,19 @@ fn actual_retired_reader_refund_under_a_new_writer_waits_for_its_scope_to_unlock
         }
     }
     let layouts = Owner::writer_allocation_layouts();
-    let budget = AllocationBudget::new(3 * layouts.reader.size() + layouts.cursor.size());
-    let mut initial = budget.try_reserve(layouts.reader).unwrap();
+    let initial_layouts = Owner::initial_allocation_layouts();
+    let budget = AllocationBudget::new(
+        initial_layouts.root.size() + 3 * layouts.reader.size() + layouts.cursor.size(),
+    );
+    let mut initial = budget
+        .try_reserve_layouts([initial_layouts.root, initial_layouts.reader])
+        .unwrap();
     let owner = Arc::new(Owner::new_charged(
         Data(7),
-        initial.try_split(layouts.reader).unwrap(),
+        concread::internals::lincowcell::InitialCharges {
+            root: initial.try_split(initial_layouts.root).unwrap(),
+            reader: initial.try_split(initial_layouts.reader).unwrap(),
+        },
     ));
     drop(initial);
     let oldest = owner.read();
@@ -638,11 +646,14 @@ fn actual_retired_reader_refund_under_a_new_writer_waits_for_its_scope_to_unlock
         drop(oldest);
         assert_eq!(
             budget.reserved_bytes(),
-            2 * layouts.reader.size() + layouts.cursor.size()
+            initial_layouts.root.size() + 2 * layouts.reader.size() + layouts.cursor.size()
         );
         assert_eq!(wake.wakes.load(SeqCst), 0);
         drop(held);
-        assert_eq!(budget.reserved_bytes(), layouts.reader.size());
+        assert_eq!(
+            budget.reserved_bytes(),
+            initial_layouts.root.size() + layouts.reader.size()
+        );
         assert_eq!(wake.wakes.load(SeqCst), 0);
     });
     assert_eq!(wake.wakes.load(SeqCst), 1);
@@ -681,4 +692,61 @@ fn checked_aggregate_bytes_need_no_fabricated_single_allocation_layout() {
         budget.try_reserve_bytes(bytes + 1),
         Err(AllocationRefusal::ExceedsLimit { .. })
     ));
+}
+
+#[test]
+fn partition_prepaid_reservation_preserves_same_pool_without_allocation_or_acquisition() {
+    let budget = AllocationBudget::new(64);
+    let mut parent = budget.try_reserve_bytes(64).unwrap();
+    let mut child = without_allocations(|| parent.try_partition_bytes(24).unwrap());
+    assert_eq!(parent.remaining_bytes(), 40);
+    assert_eq!(child.remaining_bytes(), 24);
+    assert_eq!(budget.reserved_bytes(), 64);
+    assert!(matches!(
+        budget.try_reserve_bytes(1),
+        Err(AllocationRefusal::Capacity { .. })
+    ));
+    let charge = without_allocations(|| child.try_split(layout(24)).unwrap());
+    assert_eq!(charge.layout(), layout(24));
+    assert_eq!(child.remaining_bytes(), 0);
+    without_allocations(|| drop(child));
+    assert_eq!(budget.reserved_bytes(), 64);
+    without_allocations(|| drop(parent));
+    assert_eq!(budget.reserved_bytes(), 24);
+    let replacement = budget.try_reserve_bytes(40).unwrap();
+    assert!(matches!(
+        budget.try_reserve_bytes(1),
+        Err(AllocationRefusal::Capacity { .. })
+    ));
+    without_allocations(|| drop(charge));
+    assert_eq!(budget.reserved_bytes(), 40);
+    without_allocations(|| drop(replacement));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn partition_refusal_and_zero_partition_preserve_original_remaining_and_refund() {
+    let budget = AllocationBudget::new(17);
+    let mut parent = budget.try_reserve_bytes(17).unwrap();
+    let error = without_allocations(|| parent.try_partition_bytes(18)).unwrap_err();
+    assert_eq!(
+        error,
+        InsufficientReservation {
+            requested_bytes: 18,
+            remaining_bytes: 17
+        }
+    );
+    assert_eq!(parent.remaining_bytes(), 17);
+    assert_eq!(budget.reserved_bytes(), 17);
+    let empty = without_allocations(|| parent.try_partition_bytes(0).unwrap());
+    assert_eq!(empty.remaining_bytes(), 0);
+    assert_eq!(parent.remaining_bytes(), 17);
+    without_allocations(|| drop(empty));
+    assert_eq!(budget.reserved_bytes(), 17);
+    let child = without_allocations(|| parent.try_partition_bytes(17).unwrap());
+    assert_eq!(parent.remaining_bytes(), 0);
+    without_allocations(|| drop(parent));
+    assert_eq!(budget.reserved_bytes(), 17);
+    without_allocations(|| drop(child));
+    assert_eq!(budget.reserved_bytes(), 0);
 }

@@ -67,6 +67,12 @@ resumed; changed files, inodes, foreign namespace entries and mismatched intents
 are refused. Check reports target guard hashes; successful apply reports observed
 result hashes for the next reset's public input producer.
 
+Copy staging stays private at mode0600 until its complete bytes match the pinned
+source. The held descriptor then receives the exact final mode before exclusive
+publication, independently of the inherited umask. A resumed private prefix must
+match the source; a staged file already carrying the final mode must be complete
+and hash-identical. Other modes, changed inodes and foreign bytes are refused.
+
 Use the same pinned command with `--action rollback` to restore all six exact old
 byte sequences. Rollback first revalidates the unchanged lease/progress, current
 selectors, state identities, file pins and service states, then uses the same

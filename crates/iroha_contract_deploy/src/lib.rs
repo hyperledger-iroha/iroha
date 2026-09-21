@@ -160,7 +160,7 @@ pub struct DeploymentPreflight {
     pub chain_id: String,
     /// Exact account authority used for authenticated reads and signing.
     pub authority: AccountId,
-    /// Independently observed account and effective registrar/alias permission checks.
+    /// Independently observed account and effective alias permission checks.
     pub authorization: DeploymentAuthorization,
     /// Address codec chain discriminant.
     pub chain_discriminant: u16,
@@ -349,7 +349,7 @@ impl DeploymentService {
             &request.alias,
             state.dataspace_id,
         )
-        .map_err(|source| preflight_error("registrar and alias permissions", source))?;
+        .map_err(|source| preflight_error("owned alias permissions", source))?;
         let address = ContractAddress::derive(
             &self.config.network_id,
             &self.config.account,
@@ -403,6 +403,9 @@ impl DeploymentService {
             });
             quotes.push(quote);
         }
+        self.client
+            .check_funding(&Default::default(), &quotes)
+            .map_err(|source| preflight_error("cumulative deployment funding", source))?;
         let preflight = DeploymentPreflight {
             network_id: self.config.network_id.clone(),
             chain_id: self.config.chain.to_string(),

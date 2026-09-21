@@ -1482,6 +1482,139 @@ mod typed_error_contract_tests {
             .to_bytes()
     }
     #[tokio::test]
+    async fn query_asset_absence_response_preserves_exact_selector_in_both_formats() {
+        use iroha_data_model::{
+            ValidationFail,
+            asset::AssetId,
+            query::error::{FindError, QueryExecutionFail},
+        };
+        let asset = AssetId::new(
+            AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::try_new("missing", "universal").unwrap(),
+                "asset".parse().unwrap(),
+            ),
+            iroha_test_samples::ALICE_ID.clone(),
+        );
+        for format in [ResponseFormat::Norito, ResponseFormat::Json] {
+            let failure = ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::Asset(
+                Box::new(asset.clone()),
+            )));
+            let expected_message = validation_fail_message(&failure);
+            let response = utils::with_current_response_format(format, async {
+                Error::Query(failure).into_response()
+            })
+            .await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            let body = body_bytes(response).await;
+            let decoded = match format {
+                ResponseFormat::Norito => norito::decode_canonical_with_limits::<ErrorEnvelope>(
+                    &body,
+                    norito::canonical_decode_limits(body.len()),
+                )
+                .expect("canonical asset absence response"),
+                ResponseFormat::Json => norito::json::from_slice::<ErrorEnvelope>(&body)
+                    .expect("typed asset absence JSON"),
+            };
+            assert_eq!(decoded.code(), "query_asset_not_found");
+            assert_eq!(decoded.message(), expected_message);
+            assert_eq!(
+                decoded.details.unwrap().query_asset_not_found,
+                Some(asset.clone())
+            );
+        }
+    }
+    #[tokio::test]
+    async fn query_asset_absence_is_not_inferred_from_other_validation_failures() {
+        use iroha_data_model::{
+            ValidationFail,
+            asset::AssetId,
+            isi::error::InstructionExecutionError,
+            query::error::{FindError, QueryExecutionFail},
+        };
+        let definition = AssetDefinitionId::derive_from_components(
+            iroha_model_base::domain::DomainId::try_new("missing", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
+        let asset = AssetId::new(definition.clone(), iroha_test_samples::ALICE_ID.clone());
+        let asset_failure = QueryExecutionFail::Find(FindError::Asset(Box::new(asset)));
+        for failure in [
+            ValidationFail::QueryFailed(QueryExecutionFail::NotFound),
+            ValidationFail::QueryFailed(QueryExecutionFail::Expired),
+            ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::Account(
+                iroha_test_samples::ALICE_ID.clone(),
+            ))),
+            ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::AssetDefinition(
+                definition,
+            ))),
+            ValidationFail::InstructionFailed(InstructionExecutionError::Query(
+                asset_failure.clone(),
+            )),
+            ValidationFail::NotPermitted("query denied".to_owned()),
+        ] {
+            let expected_status = Error::query_status_code(&failure);
+            let response = Error::Query(failure).into_response();
+            assert_eq!(response.status(), expected_status);
+            let body = body_bytes(response).await;
+            let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
+            assert_eq!(envelope.code(), "query_validation_failed");
+            assert!(
+                envelope
+                    .details
+                    .as_ref()
+                    .is_none_or(|details| details.query_asset_not_found.is_none())
+            );
+        }
+        let wrong_status = public_validation_fail_envelope(
+            &ValidationFail::QueryFailed(asset_failure),
+            StatusCode::BAD_REQUEST,
+        );
+        assert_eq!(wrong_status.code(), "query_validation_failed");
+        assert!(wrong_status.details.is_none());
+    }
+    #[tokio::test]
+    async fn canonical_error_response_keeps_asset_selector_only_for_exact_contract() {
+        let asset = iroha_data_model::asset::AssetId::new(
+            AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::try_new("missing", "universal").unwrap(),
+                "asset".parse().unwrap(),
+            ),
+            iroha_test_samples::ALICE_ID.clone(),
+        );
+        for (status, code, preserved) in [
+            (StatusCode::NOT_FOUND, "query_asset_not_found", true),
+            (StatusCode::GONE, "query_asset_not_found", false),
+            (StatusCode::NOT_FOUND, "query_validation_failed", false),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "query_asset_not_found",
+                false,
+            ),
+        ] {
+            let (parts, _) = Response::builder()
+                .status(status)
+                .body(Body::empty())
+                .unwrap()
+                .into_parts();
+            let response = canonical_error_response(
+                parts,
+                ErrorEnvelope::new(code, "asset lookup failed").with_details(ErrorDetails {
+                    query_asset_not_found: Some(asset.clone()),
+                    ..Default::default()
+                }),
+                ResponseFormat::Norito,
+                false,
+            );
+            let envelope: ErrorEnvelope =
+                norito::decode_from_bytes(&body_bytes(response).await).unwrap();
+            assert_eq!(
+                envelope
+                    .details
+                    .and_then(|details| details.query_asset_not_found),
+                preserved.then(|| asset.clone())
+            );
+        }
+    }
+    #[tokio::test]
     async fn error_body_read_deadline_fails_closed_without_blocking_other_errors() {
         let router = with_error_contract_timeout(
             Router::new()

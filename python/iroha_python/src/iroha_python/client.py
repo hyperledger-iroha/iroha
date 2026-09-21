@@ -40,6 +40,11 @@ from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 import requests
 from blake3 import blake3
+from iroha_torii_client._strict_json_response import (
+    decode_exact_json_bytes,
+    expect_status_without_body,
+    read_bounded_identity_response,
+)
 from iroha_torii_client.canonical_request_v1 import (
     require_zero_retry_adapter as _require_zero_retry_adapter,
 )
@@ -53,6 +58,7 @@ from iroha_torii_client.client import (
     ConfidentialGasSchedule,
     ConfigurationSnapshot,
     GovernanceProposalDraft,
+    GovernanceTally,
     MultisigResponse,
     NetworkTimeRttBucket,
     NetworkTimeSample,
@@ -2606,68 +2612,16 @@ def _normalize_sorafs_hedging_billing_limit(value: Any, context: str) -> int:
     return value
 
 
-def _decode_exact_json_bytes(
-    body: Any,
-    context: str,
-    *,
-    maximum_bytes: int = _SORAFS_REPUTATION_RESPONSE_MAX_BYTES,
-) -> Any:
-    if not isinstance(body, (bytes, bytearray, memoryview)):
-        raise ValueError(f"{context} body must be bytes")
-    raw = bytes(body)
-    if not raw:
-        raise ValueError(f"{context} returned an empty body")
-    if len(raw) > maximum_bytes:
-        raise ValueError(f"{context} body exceeds the {maximum_bytes}-byte limit")
-    if raw.startswith(b"\xef\xbb\xbf"):
-        raise ValueError(f"{context} body must not contain a UTF-8 BOM")
-    try:
-        text = raw.decode("utf-8", "strict")
-    except UnicodeDecodeError as exc:
-        raise ValueError(f"{context} body must be strict UTF-8") from exc
-    if not text or text != text.strip():
-        raise ValueError(f"{context} body must be exact JSON without surrounding data")
-
-    def _object_pairs(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
-        decoded: Dict[str, Any] = {}
-        for key, value in pairs:
-            if key in decoded:
-                raise ValueError(f"{context} body contains duplicate object key {key!r}")
-            decoded[key] = value
-        return decoded
-
-    def _integer(literal: str) -> int:
-        if not re.fullmatch(r"(?:0|[1-9][0-9]*)", literal):
-            raise ValueError(f"{context} body contains a noncanonical unsigned integer")
-        return int(literal)
-
-    def _float(literal: str) -> float:
-        raise ValueError(f"{context} body must not contain floating-point numbers: {literal}")
-
-    def _constant(literal: str) -> Any:
-        raise ValueError(f"{context} body must not contain non-finite value {literal}")
-
-    try:
-        return json.loads(
-            text,
-            object_pairs_hook=_object_pairs,
-            parse_int=_integer,
-            parse_float=_float,
-            parse_constant=_constant,
-        )
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{context} body must contain one exact JSON value") from exc
-
-
 def _decode_sorafs_reputation_sse_json(payload: str) -> Any:
     context = "SoraFS reputation SSE data"
     if not isinstance(payload, str) or not payload:
         raise ValueError(f"{context} must be exact compact JSON")
     if any(character.isspace() for character in payload):
         raise ValueError(f"{context} must be exact compact JSON")
-    return _decode_exact_json_bytes(
+    return decode_exact_json_bytes(
         payload.encode("utf-8"),
         context,
+        maximum_bytes=_SORAFS_REPUTATION_RESPONSE_MAX_BYTES,
     )
 
 
@@ -3173,87 +3127,17 @@ def _parse_and_validate_sorafs_reputation_response(
     validator: Callable[[Any, str], Dict[str, Any]],
     context: str,
 ) -> Dict[str, Any]:
-    payload = _decode_exact_json_bytes(
-        _read_bounded_sorafs_reputation_response(
+    payload = decode_exact_json_bytes(
+        read_bounded_identity_response(
             response,
             _SORAFS_REPUTATION_RESPONSE_MAX_BYTES,
             context,
             expected_content_type="application/json",
         ),
         context,
+        maximum_bytes=_SORAFS_REPUTATION_RESPONSE_MAX_BYTES,
     )
     return validator(payload, context)
-
-
-def _read_bounded_sorafs_reputation_response(
-    response: requests.Response,
-    maximum_bytes: int,
-    context: str,
-    *,
-    expected_content_type: str,
-) -> bytes:
-    """Read one identity-encoded response under an actual-byte ceiling."""
-
-    try:
-        content_encoding = response.headers.get("Content-Encoding")
-        if content_encoding is not None and content_encoding.lower() != "identity":
-            raise ValueError(f"{context} Content-Encoding must be identity")
-
-        content_type = response.headers.get("Content-Type")
-        if content_type is None or content_type.split(";", 1)[0].strip().lower() != (
-            expected_content_type
-        ):
-            raise ValueError(
-                f"{context} Content-Type must be {expected_content_type}"
-            )
-
-        declared_length: Optional[int] = None
-        raw_content_length = response.headers.get("Content-Length")
-        if raw_content_length is not None:
-            if re.fullmatch(r"(?:0|[1-9][0-9]*)", raw_content_length) is None:
-                raise ValueError(
-                    f"{context} Content-Length must be a canonical unsigned decimal integer"
-                )
-            declared_length = int(raw_content_length)
-            if declared_length > maximum_bytes:
-                raise ValueError(f"{context} response exceeds its byte limit")
-
-        if isinstance(getattr(response, "_content", False), bytes):
-            raise ValueError(f"{context} transport prebuffered the response body")
-
-        output = bytearray()
-        for chunk in response.iter_content(chunk_size=8_192, decode_unicode=False):
-            if not chunk:
-                continue
-            if not isinstance(chunk, (bytes, bytearray)):
-                raise TypeError(f"{context} response yielded a non-byte chunk")
-            if len(chunk) > maximum_bytes - len(output):
-                raise ValueError(f"{context} response exceeds its byte limit")
-            output.extend(chunk)
-        body = bytes(output)
-
-        if declared_length is not None and declared_length != len(body):
-            raise ValueError(f"{context} response length did not match Content-Length")
-        return body
-    finally:
-        response.close()
-
-
-def _expect_sorafs_reputation_status(
-    response: requests.Response,
-    expected: Iterable[int],
-    context: str,
-) -> None:
-    """Reject unexpected statuses without reading or rendering response bytes."""
-
-    expected_set = set(expected)
-    if response.status_code in expected_set:
-        return
-    response.close()
-    raise RuntimeError(
-        f"{context} returned unexpected status {response.status_code}; "
-        f"expected {sorted(expected_set)}"
-    )
 
 
 def _require_one_shot_transport(
@@ -5677,38 +5561,6 @@ class GovernanceReferendumResult:
             raise TypeError("referendum payload `referendum` must be an object when present")
         copied = dict(referendum) if isinstance(referendum, Mapping) else None
         return cls(found=found, referendum=copied)
-
-
-@dataclass(frozen=True)
-class GovernanceTally:
-    """Referendum tally summary returned by `/v1/gov/tally/{id}`."""
-
-    referendum_id: str
-    approve: int
-    reject: int
-    abstain: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceTally":
-        if not isinstance(payload, Mapping):
-            raise TypeError("tally payload must be a mapping")
-        referendum_id = payload.get("referendum_id")
-        if not isinstance(referendum_id, str):
-            raise TypeError("tally payload missing string `referendum_id`")
-        try:
-            approve = int(payload.get("approve", 0))
-            reject = int(payload.get("reject", 0))
-            abstain = int(payload.get("abstain", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError(
-                "tally payload must contain numeric approve/reject/abstain values"
-            ) from exc
-        return cls(
-            referendum_id=referendum_id,
-            approve=approve,
-            reject=reject,
-            abstain=abstain,
-        )
 
 
 @dataclass(frozen=True)
@@ -14129,7 +13981,7 @@ class DataModelMismatchError(RuntimeError):
 
 _ToriiClientStreamingQueryMixin: type[Any] = create_torii_client_streaming_query_mixin(
     require_crypto=_require_crypto,
-    expect_sorafs_reputation_status=_expect_sorafs_reputation_status,
+    expect_sorafs_reputation_status=expect_status_without_body,
     normalize_count_mode_arg=_normalize_count_mode_arg,
     normalize_optional_string=_normalize_optional_string,
 )
@@ -16395,7 +16247,7 @@ class ToriiClient(
             timeout=timeout,
             context="get_sorafs_reputation_latest",
         )
-        _expect_sorafs_reputation_status(
+        expect_status_without_body(
             response,
             (200, 304, 404),
             "SoraFS reputation latest endpoint",
@@ -16433,7 +16285,7 @@ class ToriiClient(
             timeout=timeout,
             context="get_sorafs_reputation_provider",
         )
-        _expect_sorafs_reputation_status(
+        expect_status_without_body(
             response,
             (200, 304, 404),
             "SoraFS reputation provider endpoint",
@@ -16475,7 +16327,7 @@ class ToriiClient(
             timeout=timeout,
             context="get_sorafs_reputation_snapshot",
         )
-        _expect_sorafs_reputation_status(
+        expect_status_without_body(
             response,
             (200, 304, 404),
             "SoraFS reputation snapshot endpoint",
@@ -16512,7 +16364,7 @@ class ToriiClient(
             timeout=timeout,
             context="get_sorafs_reputation_weights",
         )
-        _expect_sorafs_reputation_status(
+        expect_status_without_body(
             response,
             (200, 304, 404),
             "SoraFS reputation weights endpoint",
@@ -16552,7 +16404,7 @@ class ToriiClient(
             timeout=timeout,
             context="list_sorafs_reputation_events",
         )
-        _expect_sorafs_reputation_status(
+        expect_status_without_body(
             response,
             (200, 304),
             "SoraFS reputation events endpoint",
@@ -16754,7 +16606,7 @@ class ToriiClient(
             timeout=timeout,
             context=context,
         )
-        _expect_sorafs_reputation_status(response, (200,), context)
+        expect_status_without_body(response, (200,), context)
         return self._parse_sorafs_hedging_billing_json_response(
             response,
             context,
@@ -16765,8 +16617,8 @@ class ToriiClient(
         response: requests.Response,
         context: str,
     ) -> Dict[str, Any]:
-        payload = _decode_exact_json_bytes(
-            _read_bounded_sorafs_reputation_response(
+        payload = decode_exact_json_bytes(
+            read_bounded_identity_response(
                 response,
                 _SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES,
                 context,
@@ -16860,11 +16712,11 @@ class ToriiClient(
             timeout=timeout,
             context=context,
         )
-        _expect_sorafs_reputation_status(response, (200,), context)
+        expect_status_without_body(response, (200,), context)
         if response.headers.get("Content-Type") != "application/x-norito":
             response.close()
             raise ValueError(f"{context} Content-Type must be exactly application/x-norito")
-        return _read_bounded_sorafs_reputation_response(
+        return read_bounded_identity_response(
             response,
             _SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES,
             context,
@@ -16924,7 +16776,7 @@ class ToriiClient(
             allow_redirects=False,
             stream=True,
         )
-        _expect_sorafs_reputation_status(response, (200,), context)
+        expect_status_without_body(response, (200,), context)
         return self._parse_sorafs_hedging_billing_json_response(
             response,
             context,
@@ -21024,7 +20876,7 @@ class ToriiClient(
         self._expect_status(response, {200})
         response_context = "prove_account_onboarding_current_state.response"
         payload = _require_mapping(
-            _decode_exact_json_bytes(
+            decode_exact_json_bytes(
                 response.content,
                 response_context,
                 maximum_bytes=ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES,
@@ -23273,37 +23125,26 @@ class ToriiClient(
 
     def get_governance_tally(
         self, referendum_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
-    ) -> Optional[Any]:
-        """GET `/v1/gov/tally/{referendum_id}`."""
+    ) -> Optional[Mapping[str, Any]]:
+        """Return the exact tally response, or ``None`` for an unknown referendum."""
 
         exact_referendum_id = _require_governance_selector_string(
-            referendum_id,
-            "referendum_id",
+            referendum_id, "referendum_id"
         )
-
-        return self._account_request_json(
-            "GET",
-            f"/v1/gov/tally/{quote(exact_referendum_id, safe='')}",
-            canonical_auth=canonical_auth,
-            context="governance tally",
-            expected_status=(200, 404),
+        return self._governance_tally_payload(
+            exact_referendum_id, canonical_auth=canonical_auth
         )
 
     def get_governance_tally_typed(
         self, referendum_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
-    ) -> GovernanceTally:
-        """Typed wrapper for :meth:`get_governance_tally`."""
+    ) -> Optional[GovernanceTally]:
+        """Return an exact typed tally, or ``None`` for an unknown referendum."""
 
         payload = self.get_governance_tally(
             referendum_id, canonical_auth=canonical_auth
         )
         if payload is None:
-            return GovernanceTally(
-                referendum_id=referendum_id,
-                approve=0,
-                reject=0,
-                abstain=0,
-            )
+            return None
         return GovernanceTally.from_payload(payload)
 
     def get_governance_locks(

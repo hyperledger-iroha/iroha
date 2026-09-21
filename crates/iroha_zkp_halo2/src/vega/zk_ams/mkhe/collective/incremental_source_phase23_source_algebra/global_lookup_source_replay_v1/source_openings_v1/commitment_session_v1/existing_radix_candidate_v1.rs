@@ -876,6 +876,7 @@ mod prepared_comparator_commitment_v1;
 pub(super) use prepared_comparator_commitment_v1::{
     RnsNativeComparatorContinuationV1, RnsNativeComparatorTopCommitmentsV1,
     RnsNativeDifferenceCommitmentsV1, RnsNativeSmallSignedCommitmentsV1,
+    RnsNativeStoredPlaneReplayV1,
 };
 
 #[path = "existing_radix_candidate_v1/prepared_commitment_v1.rs"]

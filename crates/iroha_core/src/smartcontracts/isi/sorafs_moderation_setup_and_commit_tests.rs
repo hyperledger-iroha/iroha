@@ -876,9 +876,11 @@ impl PopMaterial {
             &self.root,
             &self.revocations,
             &witness,
-            challenge,
-            verifier_context,
-            presentation_binding,
+            sorafs_manifest::pop_credentials::PopMembershipPresentationV1 {
+                challenge_digest: challenge,
+                verifier_context,
+                presentation_binding_digest: presentation_binding,
+            },
             now_epoch,
         )
         .expect("create moderation PoP proof")

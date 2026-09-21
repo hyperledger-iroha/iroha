@@ -14,6 +14,7 @@ pub const ACCOUNT_DEFAULT_SIGNING_V1: &str = "ed25519";
 
 /// Public, account-free projection for `GET /v1/accounts/capabilities`.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct AccountCapabilitiesV1 {
     /// Exact bootstrap schema version.
     pub schema_version: u16,

@@ -48,6 +48,7 @@ _RUST_BRIDGE_PLATFORM_JNI_PARTS = (
     "crates/connect_norito_bridge/src/platform_jni/part_2.rs",
     "crates/connect_norito_bridge/src/platform_jni/part_3.rs",
     "crates/connect_norito_bridge/src/platform_jni/private_settlement.rs",
+    "crates/connect_norito_bridge/src/platform_jni/kagemusha_reserve_finality.rs",
 )
 _RUST_BRIDGE_SOURCE_FILES = (
     RUST_BRIDGE,
@@ -59,6 +60,7 @@ _RUST_BRIDGE_PLATFORM_JNI_INCLUDES = (
     "platform_jni/part_2.rs",
     "platform_jni/part_3.rs",
     "platform_jni/private_settlement.rs",
+    "platform_jni/kagemusha_reserve_finality.rs",
 )
 C_HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
 _JAVASCRIPT_CAPABILITIES = "javascript/iroha_js/src/privacyCapabilities.js"
@@ -641,13 +643,21 @@ def _javascript_cutover_gates(root: Path) -> dict[str, bool]:
             "requirePrivacyExact12CapabilityAdmissionV1" in transaction,
         )
     )
+    browser_binding_match = re.search(
+        r"^export function getNativeBinding\(\) \{(?P<body>.*?)^\}",
+        browser_loader,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    browser_binding = browser_binding_match.group("body") if browser_binding_match else ""
     browser_fail_closed = all(
         (
             '"./dist/native.js": "./dist/native.browser.js"' in package,
-            "export function getNativeBinding()" in browser_loader,
-            'throw nativeBindingError("iroha_js_host is unavailable in browser builds.")'
-            in browser_loader,
-            "return" not in browser_loader,
+            bool(browser_binding),
+            "const error = new Error(" in browser_binding,
+            'code: { value: "ERR_IROHA_NATIVE_BINDING", enumerable: true }' in browser_binding,
+            'nativeStatus: { value: "browser_unavailable", enumerable: true }' in browser_binding,
+            "throw error;" in browser_binding,
+            "return" not in browser_binding,
             "globalThis" not in browser_loader,
             "mutable global bindings cannot authorize Exact12 native admission" in tests,
             "browser Exact12 exports fail closed even when a fake global binding exists"
@@ -1080,7 +1090,7 @@ def _sdk_result(root: Path, contract: SdkContract) -> dict[str, object]:
         )
     if contract.name == "csharp":
         evidence_start = native.find("internal static void RequireValidCapabilityArchive(")
-        evidence_end = native.find("private static T RunWithNativeStack<T>", evidence_start)
+        evidence_end = native.find("    [DllImport(", evidence_start)
         evidence_validation = (
             native[evidence_start:evidence_end]
             if evidence_start >= 0 and evidence_end > evidence_start

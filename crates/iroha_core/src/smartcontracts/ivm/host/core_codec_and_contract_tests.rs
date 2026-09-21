@@ -540,7 +540,7 @@ pub(super) fn contract_test_state(authority: &AccountId) -> State {
         &state,
         authority,
         authority.clone(),
-        "CanRegisterSmartContractCode",
+        "CanManageSmartContractCode",
     );
     grant_named_permission_to_account(
         &state,
@@ -611,7 +611,7 @@ fn install_contract_with_interface_and_lifecycle(
     let mut tx = block.transaction();
     tx.world.add_account_permission(
         authority,
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into(),
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into(),
     );
     let code_hash =
         register_code_bytes(authority, code, &mut tx).expect("register contract bytecode");

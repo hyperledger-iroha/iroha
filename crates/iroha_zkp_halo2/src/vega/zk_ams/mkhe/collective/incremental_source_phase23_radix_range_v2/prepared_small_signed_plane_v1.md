@@ -33,7 +33,13 @@ each plane; emitted chunks contain 512 scalars. The two compact passes add
 not include the existing validation, MSM, allocator, provider or kernel costs
 and do not qualify peak RSS or whole-proof lifecycle resources.
 
-All 32 chunks must be emitted in order before the source returns. Wrong stage,
+All 32 value chunks and their original canonical opening tail must be emitted
+in order before the source returns. The tail is exactly 16,384 bytes:
+`rho_BE32 || point33 || zero-padding16319`. Its opaque owner is minted from the
+newly admitted inventory ticket and the same retained rho, with no replacement
+randomness. It adds one 32-byte scalar guard and the public point/ordinal while
+the scalar vector is live. Tail emission first erases that vector, then allocates
+the returned chunk. Wrong stage,
 ordinal, occupied slot, malformed source, read failure, entropy failure, MSM
 failure, incomplete emission or unwind consumes the relevant outer owner.
 There is no retry capability or detached statement/point adoption interface.
@@ -53,8 +59,14 @@ original-session rho samples. Tiny files and selected actual MSMs do not
 establish a complete authenticated 43-record source, full 2,064-MSM execution,
 production context authority, or resource qualification.
 
-TODO: connect each consuming value sequence to its canonical stored-opening
-tail. Complete small positive/negative membership and inverse relations,
+TODO: connect each consuming 33-slot sequence to the ordered two-file writer
+and its authenticated complete-pair reopen. Emission does not prove storage.
+Complete small positive/negative membership and inverse relations,
 source-packing same-opening proof with the derived-mask owner, Q-mask
 production, governed source authority and composite admission remain separate
 unfinished obligations. No qualification or release flag changes here.
+
+The [ordered storage handoff](ordered_storage_handoff_v1.md) now routes these
+exact prepared values and original tail into the source-owned two-file writer.
+An attached writer must have completed all 33 writes before source advancement;
+emission alone is internal preparation and supplies no stored-proof authority.

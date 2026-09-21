@@ -4,9 +4,9 @@
   "chain_discriminant": 369,
   "state": "unsigned_operator_review_required",
   "public_inputs_sha256": "eacdf8d3cd1e914502ddd7942aaec888d466f38dc97cf514a00bbd0fab458d63",
-  "base_genesis_sha256": "5eacbab1ca5772e457284627149ac7a294bcba15012f9a5d3a646455d341e4f1",
+  "base_genesis_sha256": "b6908b5b39fdc397a0e2b6d779cb763513db7a31c1ca6c4bcd69de67558c47bd",
   "base_config_sha256": "f9d3c8e37ed3b380f983158015e5651e5a05f29ed93e0897468b703d34e44d1e",
-  "unsigned_genesis_sha256": "4f9507fa3be1a879994ab6c0ca078d4717108ddf6c1c0a40a0a293652c587e81",
+  "unsigned_genesis_sha256": "d546800e56c57fc02259a25d180a2c5b380738e1c79a2057420fab7e857c7af5",
   "public_identities": {
     "onboarding_authority_account_id": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP",
     "api_signer_account_id": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
@@ -151,9 +151,9 @@
       "registered_before_alias_intents": true,
       "unregistered_after_alias_intents": true
     },
-    "contract_deployment_permission_grant": {
+    "contract_code_management_permission_grant": {
       "account_id": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
-      "permission": "CanRegisterSmartContractCode",
+      "permission": "CanManageSmartContractCode",
       "payload": null
     },
     "dpn_permission_grants": [

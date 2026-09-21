@@ -1,8 +1,10 @@
 //! Consuming expansion of authenticated compact comparator values.
 //!
-//! The source retains its replay evidence, seal and snapshot throughout all 32
-//! value chunks. Its original session computes and retains each matching bD/bS
-//! point and blinding before emission. No storage or proof completion is claimed. See `prepared_comparator_plane_v1.md` for the ownership boundary.
+//! The source retains its replay evidence, seal and snapshot through 32 value
+//! chunks and the original admitted opening tail. Its original session computes
+//! and retains each matching point and blinding before emission. An attached
+//! ordered writer advances only after every successful write; no proof or
+//! native40 source qualification is claimed. See `ordered_storage_handoff_v1.md`.
 use super::*;
 use crate::vega::{VegaT256ScalarV1, bulletproof_t256::ZeroizingT256ScalarVecV1};
 use std::sync::OnceLock;
@@ -138,14 +140,17 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> Phase23RadixWitnessMater
             replay_record_digest: self.record.replay_record_digest,
             source_receipt_digest: self.record.source_receipt_digest,
         };
-        self.evidence
+        let tail = self
+            .evidence
             .as_mut()
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?
             .commit_prepared_comparator_v1(&statement)?;
+        let opening =
+            PreparedPlaneOpeningV1::from_committed_v1(values, tail, self.next_comparator_plane)?;
         Ok(PreparedComparatorPlaneV1 {
             live: Some(PreparedComparatorPlaneLiveV1 {
                 source: self,
-                values,
+                opening,
             }),
         })
     }
@@ -153,7 +158,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> Phase23RadixWitnessMater
 
 struct PreparedComparatorPlaneLiveV1<R, K, P> {
     source: Phase23RadixWitnessMaterializedV2<R, K, P>,
-    values: PreparedRadixValuesV1,
+    opening: PreparedPlaneOpeningV1,
 }
 
 /// Move-only prepared values retaining the entire authenticated source owner.
@@ -175,14 +180,46 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> PreparedComparatorPlaneV
             .live
             .take()
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-        let chunk = live.values.emit_next_v1(expected_chunk)?;
+        let chunk = live.opening.emit_next_value_chunk_v1(expected_chunk)?;
         self.live = Some(live);
         Ok(chunk)
     }
 
-    /// Return the sole original source after all 32 value chunks were emitted.
-    /// The original session retains the matching point/rho; emission does not
-    /// assert storage, a canonical 33rd slot, or any opening proof.
+    /// Emit the original admitted tail only after all 32 ordered value chunks.
+    /// Every error consumes the sole original source, values and retained masks.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn emit_opening_tail_v1(
+        &mut self,
+    ) -> Result<ConfidentialSpoolChunkV1, ZkAmsMkheErrorV1> {
+        let mut live = self
+            .live
+            .take()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        let tail = live.opening.emit_tail_v1()?;
+        self.live = Some(live);
+        Ok(tail)
+    }
+
+    /// Consume the actual prepared opening into its source-owned ordered writer.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn store_v1(
+        mut self,
+    ) -> Result<Phase23RadixWitnessMaterializedV2<R, K, P>, ZkAmsMkheErrorV1> {
+        let mut live = self
+            .live
+            .take()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        let ordinal = live.source.next_comparator_plane;
+        let writer = live
+            .source
+            .ordered_writer
+            .as_mut()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        live.opening.store_v1(writer, ordinal)?;
+        self.live = Some(live);
+        self.finish_v1()
+    }
+
+    /// Return the original source only after all 33 canonical slots were emitted.
+    /// Emission does not assert ordered storage, authenticated reopen or a proof.
     pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn finish_v1(
         mut self,
     ) -> Result<Phase23RadixWitnessMaterializedV2<R, K, P>, ZkAmsMkheErrorV1> {
@@ -190,8 +227,13 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> PreparedComparatorPlaneV
             .live
             .take()
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-        live.values.finish_v1()?;
+        live.opening.finish_v1()?;
         let mut source = live.source;
+        if let Some(writer) = source.ordered_writer.as_ref() {
+            writer
+                .require_next_slot_v1((u64::from(source.next_comparator_plane) + 1) * 33)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        }
         // Recheck the exact private ordinal before advancing; never wrap 7,224.
         comparator_coordinate_v1(source.next_comparator_plane)?;
         source.next_comparator_plane = source
@@ -412,3 +454,7 @@ mod statement_tests;
 #[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23)
 use statement_tests::TestPreparedComparatorV1;
+
+#[path = "prepared_plane_opening_v1.rs"]
+mod prepared_plane_opening_v1;
+pub(super) use prepared_plane_opening_v1::PreparedPlaneOpeningV1;

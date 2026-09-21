@@ -103,6 +103,8 @@ pub enum SignerRoleV1 {
     ///
     /// This account key is separate from the role-14 provenance receipt key.
     FinalPromotionAccountTransaction = 15,
+    /// Reviewed deployment topology configuration for one exact release candidate.
+    TopologyApproval = 16,
 }
 impl SignerRoleV1 {
     /// Stable role label.
@@ -124,6 +126,7 @@ impl SignerRoleV1 {
             Self::ReleaseManifest => "release_manifest",
             Self::FinalPromotionProvenance => "final_promotion_provenance",
             Self::FinalPromotionAccountTransaction => "final_promotion_account_transaction",
+            Self::TopologyApproval => "topology_approval",
         }
     }
     /// Exact signing domain enforced before any key operation.
@@ -149,6 +152,7 @@ impl SignerRoleV1 {
             Self::FinalPromotionAccountTransaction => {
                 "sorafs.native-transaction.final-promotion-account.v1"
             }
+            Self::TopologyApproval => "sorafs.production-readiness.topology-approval.v1",
         }
     }
     /// Whether this isolated role admits the requested key algorithm.
@@ -166,7 +170,8 @@ impl SignerRoleV1 {
             | Self::PopCredentials
             | Self::ReleaseManifest
             | Self::FinalPromotionProvenance
-            | Self::FinalPromotionAccountTransaction => {
+            | Self::FinalPromotionAccountTransaction
+            | Self::TopologyApproval => {
                 matches!(algorithm, SignerKeyAlgorithmV1::Ed25519)
             }
         }
@@ -191,6 +196,7 @@ impl FromStr for SignerRoleV1 {
             "release_manifest" => Ok(Self::ReleaseManifest),
             "final_promotion_provenance" => Ok(Self::FinalPromotionProvenance),
             "final_promotion_account_transaction" => Ok(Self::FinalPromotionAccountTransaction),
+            "topology_approval" => Ok(Self::TopologyApproval),
             _ => Err(SignerValueParseErrorV1),
         }
     }
@@ -263,6 +269,11 @@ pub enum SignerPurposeBindingV1 {
         /// Canonical deployment identity governed by the account-key signing policy.
         deployment_id: String,
     },
+    /// Exact deployment whose candidate-bound topology configuration may be approved.
+    TopologyApproval {
+        /// Canonical deployment identity governed by the topology signing policy.
+        deployment_id: String,
+    },
 }
 impl SignerPurposeBindingV1 {
     /// Whether this authority is well formed for the exact signing role.
@@ -289,7 +300,10 @@ impl SignerPurposeBindingV1 {
             | (
                 SignerRoleV1::FinalPromotionAccountTransaction,
                 Self::FinalPromotionAccountTransaction { deployment_id },
-            ) => is_production_identity_v1(deployment_id, SIGNER_MAX_ID_BYTES_V1),
+            )
+            | (SignerRoleV1::TopologyApproval, Self::TopologyApproval { deployment_id }) => {
+                is_production_identity_v1(deployment_id, SIGNER_MAX_ID_BYTES_V1)
+            }
             (SignerRoleV1::GovernanceDag, Self::GovernanceDag { publisher_peer_id }) => {
                 !publisher_peer_id.is_empty()
                     && publisher_peer_id.len()
@@ -448,20 +462,35 @@ pub struct SignerOperationIntentV1 {
     /// Independently expected authoritative journal predecessor.
     pub previous_audit: SignerOperationAuditHeadV1,
 }
+
+/// Failure to commit a bounded, canonical signer operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SignerOperationDigestErrorV1 {
+    /// The operation identity or original audit predecessor is incoherent.
+    #[error("invalid signer operation coordinates")]
+    InvalidCoordinates,
+    /// The ordered signature collection exceeds its declared bounds or is empty.
+    #[error("invalid signer operation signature bounds")]
+    InvalidSignatureBounds,
+    /// Canonical Norito encoding failed.
+    #[error("signer operation canonical encoding failed")]
+    Encoding,
+}
+
 impl SignerOperationIntentV1 {
     /// Canonical intent commitment; rejects inert or incoherent request coordinates.
     ///
     /// # Errors
     /// Returns an error for invalid coordinates or canonical encoding failure.
-    pub fn digest(&self) -> Result<[u8; 32], ()> {
+    pub fn digest(&self) -> Result<[u8; 32], SignerOperationDigestErrorV1> {
         if self.operation_id == [0; 32]
             || self.request_digest == [0; 32]
             || self.previous_audit.sequence == u64::MAX
             || (self.previous_audit.sequence == 0) != (self.previous_audit.digest == [0; 32])
         {
-            return Err(());
+            return Err(SignerOperationDigestErrorV1::InvalidCoordinates);
         }
-        digest_canonical(INTENT_DOMAIN, self).map_err(|_| ())
+        digest_canonical(INTENT_DOMAIN, self).map_err(|_| SignerOperationDigestErrorV1::Encoding)
     }
 }
 impl fmt::Debug for SignerOperationIntentV1 {
@@ -620,14 +649,14 @@ pub fn signer_operation_message_digest_v1(message: &[u8]) -> [u8; 32] {
 /// Rejects empty/oversized signature collections or canonical serialization failures.
 pub fn signer_operation_signatures_digest_v1(
     signatures: &[SignerOperationSignatureV1],
-) -> Result<[u8; 32], ()> {
+) -> Result<[u8; 32], SignerOperationDigestErrorV1> {
     if signatures.is_empty()
         || signatures.len() > 4
         || signatures
             .iter()
             .any(|signature| signature.signature.is_empty() || signature.signature.len() > 4096)
     {
-        return Err(());
+        return Err(SignerOperationDigestErrorV1::InvalidSignatureBounds);
     }
     let manifest = signatures
         .iter()
@@ -643,11 +672,66 @@ pub fn signer_operation_signatures_digest_v1(
         })
         .collect::<Vec<_>>();
     digest_canonical(b"iroha.sorafs.signer.operation.signatures.v1", &manifest)
+        .map_err(|_| SignerOperationDigestErrorV1::Encoding)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn intent_digest_rejects_incoherent_coordinates_without_relabeling_them() {
+        let intent = SignerOperationIntentV1 {
+            action: SignerOperationActionV1::Sign,
+            operation_id: [1; 32],
+            request_digest: [2; 32],
+            previous_audit: SignerOperationAuditHeadV1 {
+                sequence: 0,
+                digest: [0; 32],
+            },
+        };
+        let expected = intent.digest().expect("coherent first operation");
+        let mut next = intent;
+        next.previous_audit.sequence = 1;
+        next.previous_audit.digest = [3; 32];
+        assert_ne!(next.digest().unwrap(), expected);
+        for changed in [
+            SignerOperationIntentV1 {
+                operation_id: [0; 32],
+                ..intent
+            },
+            SignerOperationIntentV1 {
+                request_digest: [0; 32],
+                ..intent
+            },
+            SignerOperationIntentV1 {
+                previous_audit: SignerOperationAuditHeadV1 {
+                    sequence: 0,
+                    digest: [1; 32],
+                },
+                ..intent
+            },
+            SignerOperationIntentV1 {
+                previous_audit: SignerOperationAuditHeadV1 {
+                    sequence: 1,
+                    digest: [0; 32],
+                },
+                ..intent
+            },
+            SignerOperationIntentV1 {
+                previous_audit: SignerOperationAuditHeadV1 {
+                    sequence: u64::MAX,
+                    digest: [1; 32],
+                },
+                ..intent
+            },
+        ] {
+            assert_eq!(
+                changed.digest(),
+                Err(SignerOperationDigestErrorV1::InvalidCoordinates)
+            );
+        }
+    }
 
     #[test]
     fn canonical_role_labels_domains_and_release_purpose_are_distinct() {
@@ -721,7 +805,10 @@ mod tests {
             signer_operation_signatures_digest_v1(&[signature.clone(), other.clone()]).unwrap(),
             expected
         );
-        assert!(signer_operation_signatures_digest_v1(&[]).is_err());
+        assert_eq!(
+            signer_operation_signatures_digest_v1(&[]),
+            Err(SignerOperationDigestErrorV1::InvalidSignatureBounds)
+        );
         assert!(signer_operation_signatures_digest_v1(&vec![signature.clone(); 5]).is_err());
         other.signature = vec![0; 4097];
         assert!(signer_operation_signatures_digest_v1(&[other]).is_err());

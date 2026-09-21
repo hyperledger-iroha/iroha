@@ -8,9 +8,8 @@ use super::super::{
     },
     rns_native_qpcs_field_wire::encode_fq2_v1,
     rns_native_qpcs_prefix::Fq2V1,
-    rns_native_qpcs_tree::{
-        RnsNativeProofResourceBudgetV1, RnsNativeQpcsTreeV1, RnsNativeTreeErrorV1,
-    },
+    rns_native_qpcs_tree::{RnsNativeQpcsTreeV1, RnsNativeTreeErrorV1},
+    rns_native_resource_budget::{RnsNativeProofResourceBudgetV1, RnsNativeResourceErrorV1},
 };
 use super::*;
 use crate::vega::zk_ams::mkhe::{
@@ -503,7 +502,9 @@ fn canonical_transcript_and_typed_section_reject_unproven_root_without_full_tree
             &mut budget,
             |_, _| panic!("initial tree must reject before source access")
         ),
-        Err(RnsNativeTreeErrorV1::WorkLimit)
+        Err(RnsNativeTreeErrorV1::Resource(
+            RnsNativeResourceErrorV1::WorkLimit
+        ))
     ));
     let initial_root = fixture_proof_digest_v1(b"unproven-initial-root", 91, 0);
     let transcript = canonical_transcript_v1(initial_root, 91);

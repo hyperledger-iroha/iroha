@@ -373,6 +373,43 @@
         "type": "object",
         "x-iroha-max-bytes": 4096
       },
+      "AccountFaucetAdvertisement": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "asset_definition_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "network_prefix": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "network_id",
+          "network_prefix",
+          "authority",
+          "asset_definition_id",
+          "amount"
+        ],
+        "type": "object",
+        "x-iroha-max-bytes": 4096
+      },
       "AccountFaucetClaim": {
         "additionalProperties": false,
         "properties": {
@@ -394,42 +431,6 @@
           "account_id",
           "pow_anchor_height",
           "pow_nonce_hex"
-        ],
-        "type": "object"
-      },
-      "AccountFaucetPolicy": {
-        "additionalProperties": false,
-        "properties": {
-          "amount": {
-            "$ref": "#/components/schemas/Quantity"
-          },
-          "asset_definition_id": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "authority": {
-            "$ref": "#/components/schemas/CanonicalAccountId"
-          },
-          "chain_discriminant": {
-            "maximum": 65535,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "network_id": {
-            "$ref": "#/components/schemas/NetworkId"
-          },
-          "schema": {
-            "const": "iroha.accounts.faucet.policy.v1",
-            "type": "string"
-          }
-        },
-        "required": [
-          "schema",
-          "network_id",
-          "chain_discriminant",
-          "authority",
-          "asset_definition_id",
-          "amount"
         ],
         "type": "object"
       },
@@ -4522,7 +4523,7 @@
           "creation_time_ms": {
             "description": "Unix timestamp in milliseconds when the block was created.",
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -4568,7 +4569,7 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -4615,7 +4616,7 @@
           "view_change_index": {
             "description": "Consensus view index assigned to the block.",
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           }
@@ -4992,7 +4993,7 @@
           },
           "block_height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -5194,7 +5195,7 @@
         "properties": {
           "multihash_code": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -9184,6 +9185,11 @@
             "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
             "type": "string"
           },
+          "query_asset_not_found": {
+            "description": "Canonical AssetId literal for a completed authoritative asset lookup. It denotes absence only with HTTP 404 and code query_asset_not_found, and must equal the exact requested asset ID.",
+            "minLength": 1,
+            "type": "string"
+          },
           "queue": {
             "$ref": "#/components/schemas/QueueErrorSnapshot"
           },
@@ -9246,6 +9252,79 @@
           "message"
         ],
         "type": "object"
+      },
+      "ExecutionProofProfileV1": {
+        "additionalProperties": false,
+        "properties": {
+          "maximum_proof_bytes": {
+            "description": "Maximum canonical execution envelope, including public replay and proof bytes. Transport and transaction bounds are separate admission conditions.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "profile_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Digest of the complete compiled verifier and profile parameters."
+          },
+          "qualified": {
+            "description": "True only after native correctness, cryptographic, and resource release gates pass.",
+            "type": "boolean"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/ExecutionProofRelationV1",
+            "description": "Closed native relation identity."
+          },
+          "rules_hash": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Commitment to the immutable relation rules."
+          },
+          "target_soundness_bits": {
+            "description": "Release target, not a claim that qualification has already passed.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "Descriptor schema version, exactly one.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "profile_id",
+          "rules_hash",
+          "relation",
+          "target_soundness_bits",
+          "maximum_proof_bytes",
+          "qualified"
+        ],
+        "type": "object"
+      },
+      "ExecutionProofRelationV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "race_v1",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "ExplorerAccountsCursorPage": {
         "additionalProperties": false,
@@ -10518,6 +10597,1315 @@
         ],
         "type": "string"
       },
+      "GameAccessV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "public",
+                "type": "string"
+              },
+              "public_key": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "public_key"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "invite",
+                "type": "string"
+              },
+              "public_key": {
+                "description": "Canonical normalized public-key multihash emitted by PublicKey. Native verification checks its algorithm and payload.",
+                "minLength": 2,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "public_key"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GameCapabilitiesV1": {
+        "additionalProperties": false,
+        "properties": {
+          "current_height": {
+            "description": "Canonical decimal block height emitted from the native unsigned height.",
+            "maxLength": 20,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "enabled": {
+            "const": true,
+            "type": "boolean"
+          },
+          "execution_transport_ready": {
+            "type": "boolean"
+          },
+          "fee_asset_id": {
+            "type": "string"
+          },
+          "item_tie_policy": {
+            "const": "return_to_original_owners",
+            "type": "string"
+          },
+          "max_application_parameter_bytes": {
+            "const": 65536,
+            "type": "integer"
+          },
+          "max_batch_ticks": {
+            "const": 256,
+            "type": "integer"
+          },
+          "max_batches": {
+            "const": 4096,
+            "type": "integer"
+          },
+          "max_input_bytes": {
+            "const": 4096,
+            "type": "integer"
+          },
+          "max_item_stakes_per_slot": {
+            "const": 1,
+            "type": "integer"
+          },
+          "max_participant_data_bytes": {
+            "const": 4096,
+            "type": "integer"
+          },
+          "max_participants": {
+            "const": 32,
+            "type": "integer"
+          },
+          "max_resource_records": {
+            "const": 128,
+            "type": "integer"
+          },
+          "max_resources_per_slot": {
+            "const": 4,
+            "type": "integer"
+          },
+          "max_retained_input_bytes": {
+            "const": 4194304,
+            "type": "integer"
+          },
+          "max_ticks": {
+            "const": 1000000,
+            "type": "integer"
+          },
+          "native_game_sessions": {
+            "const": true,
+            "type": "boolean"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "payout_claims": {
+            "const": true,
+            "type": "boolean"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionProofProfileV1"
+            },
+            "type": "array"
+          },
+          "resource_return_policy": {
+            "const": "return_to_original_owner_at_terminal",
+            "type": "string"
+          },
+          "stake_balance_scope": {
+            "const": "Global",
+            "type": "string"
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "wallet_funds_required_only_for_entry": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "version",
+          "current_height",
+          "network_id",
+          "fee_asset_id",
+          "enabled",
+          "native_game_sessions",
+          "profiles",
+          "execution_transport_ready",
+          "max_participants",
+          "max_input_bytes",
+          "max_participant_data_bytes",
+          "max_application_parameter_bytes",
+          "max_batch_ticks",
+          "max_ticks",
+          "max_batches",
+          "max_retained_input_bytes",
+          "max_item_stakes_per_slot",
+          "max_resources_per_slot",
+          "max_resource_records",
+          "wallet_funds_required_only_for_entry",
+          "payout_claims",
+          "stake_balance_scope",
+          "item_tie_policy",
+          "resource_return_policy"
+        ],
+        "type": "object"
+      },
+      "GameCheckpointV1": {
+        "additionalProperties": false,
+        "properties": {
+          "epoch": {
+            "description": "Consensus-owned generation preventing replay of previous forced input batches.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact immutable session identifier."
+          },
+          "state_root": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Commitment to opaque canonical adapter state bytes at this checkpoint."
+          },
+          "terminal": {
+            "description": "Whether signers claim a terminal prefix; an execution proof must still validate it.",
+            "type": "boolean"
+          },
+          "tick": {
+            "description": "Complete logical tick count at this certified checkpoint.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transcript_root": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Domain-separated commitment to the complete canonical input transcript prefix."
+          }
+        },
+        "required": [
+          "session_id",
+          "epoch",
+          "tick",
+          "transcript_root",
+          "state_root",
+          "terminal"
+        ],
+        "type": "object"
+      },
+      "GameCommitmentSetV1": {
+        "additionalProperties": false,
+        "properties": {
+          "commitments": {
+            "description": "One exact input commitment per permanent slot.",
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            },
+            "type": "array"
+          },
+          "epoch": {
+            "description": "Consensus-owned generation preventing replay of previous forced input batches.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "parent_transcript_root": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Prior certified input transcript commitment extended by this batch."
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact immutable session identifier."
+          },
+          "signatures": {
+            "description": "Every original participant signature in increasing slot order.",
+            "items": {
+              "$ref": "#/components/schemas/GameSlotSignatureV1"
+            },
+            "type": "array"
+          },
+          "start_tick": {
+            "description": "First logical tick controlled by this batch.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "epoch",
+          "start_tick",
+          "parent_transcript_root",
+          "commitments",
+          "signatures"
+        ],
+        "type": "object"
+      },
+      "GameForcedBatchV1": {
+        "additionalProperties": false,
+        "properties": {
+          "dnf_slots": {
+            "description": "Slots newly removed by an expired consensus deadline before this batch.",
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "epoch": {
+            "description": "Consensus-owned generation preventing replay of previous forced input batches.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "inputs": {
+            "description": "Opaque payload per permanent slot; already removed slots use empty bytes.",
+            "items": {
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "start_tick": {
+            "description": "First logical tick controlled by this batch.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch",
+          "start_tick",
+          "inputs",
+          "dnf_slots"
+        ],
+        "type": "object"
+      },
+      "GameItemStakeV1": {
+        "additionalProperties": false,
+        "properties": {
+          "claimed": {
+            "description": "True only once the NFT transfer has completed atomically with the terminal result.",
+            "type": "boolean"
+          },
+          "custody": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Non-signing shared native NFT custody identity."
+          },
+          "metadata_hash": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Frozen original metadata commitment."
+          },
+          "nft_id": {
+            "description": "Exact NFT selected by its authenticated owner.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "recipient": {
+            "description": "Native sole winner, or original owner for ties, no winner and cancellation.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalAccountId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slot": {
+            "description": "Permanent original-owner slot; V1 admits at most one NFT per slot.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "slot",
+          "nft_id",
+          "custody",
+          "metadata_hash",
+          "recipient",
+          "claimed"
+        ],
+        "type": "object"
+      },
+      "GameManifestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/GameAccessV1",
+            "description": "Public or wallet-bound invitation admission."
+          },
+          "application_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Application namespace for compatible clients, committed in the manifest."
+          },
+          "application_parameters": {
+            "description": "Opaque canonical parameters validated by the selected execution relation.",
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "batch_ticks": {
+            "description": "Logical ticks covered by each participant input payload.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_input_bytes": {
+            "description": "Maximum length of one participant input payload.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_participant_data_bytes": {
+            "description": "Maximum length of one entrant's immutable application data.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_participants": {
+            "description": "Maximum fixed roster slots, assigned in join order.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_ticks": {
+            "description": "Maximum logical ticks, divisible by the batch size.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "min_participants": {
+            "description": "Minimum active participants; falling below ends input progress and requires a proved outcome.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "payout_policy": {
+            "$ref": "#/components/schemas/GamePayoutPolicyV1",
+            "description": "Immutable interpretation of a proved outcome for the retained stake pool."
+          },
+          "profile_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Immutable compiled execution-verifier profile identifier."
+          },
+          "version": {
+            "description": "Canonical version bound by the session or proof.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "application_id",
+          "profile_id",
+          "application_parameters",
+          "min_participants",
+          "max_participants",
+          "batch_ticks",
+          "max_ticks",
+          "max_input_bytes",
+          "max_participant_data_bytes",
+          "access",
+          "payout_policy"
+        ],
+        "type": "object"
+      },
+      "GameOutcomeV1": {
+        "additionalProperties": false,
+        "properties": {
+          "result": {
+            "description": "Opaque canonical application result, authenticated by the execution proof.",
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "terminal_tick": {
+            "description": "Proved terminal logical tick; no future input may change the outcome.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "winner_slots": {
+            "description": "Unique eligible payout slots in increasing order, authenticated by the relation.",
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "terminal_tick",
+          "winner_slots",
+          "result"
+        ],
+        "type": "object"
+      },
+      "GameParticipantV1": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Wallet that authorizes the exact stake and receives any eventual payout."
+          },
+          "application_data": {
+            "description": "Immutable participant data interpreted only by the selected application adapter.",
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "dnf_at_tick": {
+            "description": "First consensus removal tick; removes forced-input authority but preserves checkpoint consent.",
+            "oneOf": [
+              {
+                "format": "uint32",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_key": {
+            "description": "Ed25519 gameplay key with no wallet-spending authority.",
+            "minLength": 2,
+            "type": "string"
+          }
+        },
+        "required": [
+          "account",
+          "input_key",
+          "application_data",
+          "dnf_at_tick"
+        ],
+        "type": "object"
+      },
+      "GamePayoutClaimV1": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "Exact amount fixed at proof settlement or lobby expiry."
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "Exact amount still backed by the session's protected custody."
+          },
+          "slot": {
+            "description": "Original permanent roster slot that owns the claim.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "slot",
+          "amount",
+          "remaining"
+        ],
+        "type": "object"
+      },
+      "GamePayoutPolicyV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "no_payout",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "equal_winners_or_refund",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GamePhaseV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "lobby",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "playing",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "selecting_checkpoint",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "forced_commit",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "forced_reveal",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "awaiting_proof",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "settled",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "cancelled",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GameResourceReservationRecordV1": {
+        "additionalProperties": false,
+        "properties": {
+          "custody": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Derived non-signable custody identity; Core must recompute it."
+          },
+          "metadata_hash": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Complete metadata commitment frozen by native custody."
+          },
+          "nft_id": {
+            "description": "Exact NFT retained during admission.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "original_owner": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Authenticated owner at admission and sole permitted final recipient."
+          },
+          "policy": {
+            "$ref": "#/components/schemas/GameResourceReturnPolicyV1",
+            "description": "Exact wallet-approved temporary-return condition."
+          },
+          "released_at_height": {
+            "description": "Terminal return height; absent while retained, never a deadline unlock.",
+            "oneOf": [
+              {
+                "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reserved_at_height": {
+            "description": "Consensus height at which admission atomically reserved this resource.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "role_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Participant-local role identity."
+          },
+          "slot": {
+            "description": "Permanent participant slot.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "slot",
+          "nft_id",
+          "metadata_hash",
+          "role_id",
+          "policy",
+          "original_owner",
+          "custody",
+          "reserved_at_height",
+          "released_at_height"
+        ],
+        "type": "object"
+      },
+      "GameResourceReturnPolicyV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "return_to_original_owner_at_terminal",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GameSessionListResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GameSessionSummaryV1"
+            },
+            "maxItems": 32,
+            "type": "array"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "GameSessionRecordV1": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_definition": {
+            "description": "Numeric asset funding the optional entry stakes.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "checkpoint": {
+            "description": "Cumulative certified checkpoint; the native genesis checkpoint needs no signatures.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SignedGameCheckpointV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "custody": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Derived non-signing custody account, permanently protected from generic debits."
+          },
+          "deadline_height": {
+            "description": "Consensus height through which the current phase accepts evidence.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dispute_root": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Commitment to exact checkpoint, epoch, immutable anchors and all forced batches."
+          },
+          "epoch": {
+            "description": "Consensus-owned generation preventing replay of previous forced input batches.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "forced_batches": {
+            "description": "Complete immutable native forced progress.",
+            "items": {
+              "$ref": "#/components/schemas/GameForcedBatchV1"
+            },
+            "type": "array"
+          },
+          "input_commitments": {
+            "description": "Exact accepted commitments for the current forced batch, indexed by slot.",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Hash"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "input_reveals": {
+            "description": "Available matching opaque reveals for the current forced batch.",
+            "items": {
+              "oneOf": [
+                {
+                  "items": {
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "item_stakes": {
+            "description": "Explicit item stakes ordered by original slot; frozen into the starting roster commitment.",
+            "items": {
+              "$ref": "#/components/schemas/GameItemStakeV1"
+            },
+            "type": "array"
+          },
+          "liability": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "Exact unpaid stake pool or outstanding claim sum, matching the exclusive custody balance."
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/GameManifestV1",
+            "description": "Immutable application, execution profile, limits, access and payout policy."
+          },
+          "manifest_hash": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Network-bound canonical manifest commitment."
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId",
+            "description": "Canonical network id bound by the session or proof."
+          },
+          "next_tick": {
+            "description": "Next batch boundary for permissionless forced progress.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "participants": {
+            "description": "Immutable wallet/key/data roster with consensus-owned removal markers.",
+            "items": {
+              "$ref": "#/components/schemas/GameParticipantV1"
+            },
+            "type": "array"
+          },
+          "payout_claims": {
+            "description": "Immutable awards with bounded outstanding amounts; closed sessions retain custody until paid.",
+            "items": {
+              "$ref": "#/components/schemas/GamePayoutClaimV1"
+            },
+            "type": "array"
+          },
+          "payout_scale": {
+            "description": "Immutable payout quantum: asset scale, or the protocol maximum for unrestricted assets.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pending_certificate": {
+            "description": "Certified pending input frontier that cannot be discarded after disclosure.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GameCommitmentSetV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phase": {
+            "$ref": "#/components/schemas/GamePhaseV1",
+            "description": "Current native lifecycle phase."
+          },
+          "profile_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Immutable compiled execution-verifier profile identifier."
+          },
+          "resources": {
+            "description": "Explicit returnable equipment retained in permanent slot and role order.",
+            "items": {
+              "$ref": "#/components/schemas/GameResourceReservationRecordV1"
+            },
+            "type": "array"
+          },
+          "result": {
+            "description": "Opaque canonical application result, authenticated by the execution proof.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GameOutcomeV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "description": "Monotone native state revision used by clients and transition events.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "roster_hash": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Commitment to the original admitted roster before removal markers change."
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact immutable session identifier."
+          },
+          "stake": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "Exact equal stake per wallet; zero enables a session without custody transfers."
+          },
+          "terminal_at_height": {
+            "description": "Consensus height of the legal Settled or Cancelled transition.",
+            "oneOf": [
+              {
+                "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transcript_anchors": {
+            "description": "Canonical forced batches bound by the session or proof.",
+            "items": {
+              "$ref": "#/components/schemas/GameTranscriptAnchorV1"
+            },
+            "type": "array"
+          },
+          "verification_id": {
+            "description": "Compact first mathematical-verification receipt; it may predate settlement.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "description": "Canonical version bound by the session or proof.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "session_id",
+          "manifest",
+          "profile_id",
+          "manifest_hash",
+          "asset_definition",
+          "stake",
+          "payout_scale",
+          "custody",
+          "liability",
+          "payout_claims",
+          "item_stakes",
+          "resources",
+          "participants",
+          "roster_hash",
+          "phase",
+          "revision",
+          "epoch",
+          "deadline_height",
+          "checkpoint",
+          "pending_certificate",
+          "next_tick",
+          "input_commitments",
+          "input_reveals",
+          "transcript_anchors",
+          "forced_batches",
+          "dispute_root",
+          "verification_id",
+          "terminal_at_height",
+          "result"
+        ],
+        "type": "object"
+      },
+      "GameSessionSummaryV1": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_definition": {
+            "description": "Numeric asset funding the optional entry stakes.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "deadline_height": {
+            "description": "Consensus height through which the current phase accepts evidence.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "item_stakes": {
+            "description": "Explicit item stakes ordered by original slot; frozen into the starting roster commitment.",
+            "items": {
+              "$ref": "#/components/schemas/GameItemStakeV1"
+            },
+            "type": "array"
+          },
+          "liability": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "Exact unpaid stake pool or outstanding claim sum, matching the exclusive custody balance."
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/GameManifestV1",
+            "description": "Immutable application, execution profile, limits, access and payout policy."
+          },
+          "participants": {
+            "description": "Immutable wallet/key/data roster with consensus-owned removal markers.",
+            "items": {
+              "$ref": "#/components/schemas/GameParticipantV1"
+            },
+            "type": "array"
+          },
+          "payout_claims": {
+            "description": "Immutable awards with bounded outstanding amounts; closed sessions retain custody until paid.",
+            "items": {
+              "$ref": "#/components/schemas/GamePayoutClaimV1"
+            },
+            "type": "array"
+          },
+          "payout_scale": {
+            "description": "Immutable payout quantum: asset scale, or the protocol maximum for unrestricted assets.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/GamePhaseV1",
+            "description": "Current native lifecycle phase."
+          },
+          "resources": {
+            "description": "Explicit returnable equipment retained in permanent slot and role order.",
+            "items": {
+              "$ref": "#/components/schemas/GameResourceReservationRecordV1"
+            },
+            "type": "array"
+          },
+          "result": {
+            "description": "Opaque canonical application result, authenticated by the execution proof.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GameOutcomeV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "description": "Monotone native state revision used by clients and transition events.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact immutable session identifier."
+          },
+          "stake": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "Exact equal stake per wallet; zero enables a session without custody transfers."
+          },
+          "terminal_at_height": {
+            "oneOf": [
+              {
+                "description": "Canonical decimal block height emitted from the native unsigned height.",
+                "maxLength": 20,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verification_id": {
+            "description": "Compact first mathematical-verification receipt; it may predate settlement.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id",
+          "manifest",
+          "stake",
+          "payout_scale",
+          "liability",
+          "payout_claims",
+          "item_stakes",
+          "resources",
+          "verification_id",
+          "terminal_at_height",
+          "asset_definition",
+          "participants",
+          "phase",
+          "revision",
+          "deadline_height",
+          "result"
+        ],
+        "type": "object"
+      },
+      "GameSlotSignatureV1": {
+        "additionalProperties": false,
+        "properties": {
+          "signature": {
+            "$ref": "#/components/schemas/CanonicalSignature",
+            "description": "Canonical Ed25519 signature over the exact domain-separated body."
+          },
+          "slot": {
+            "description": "Permanent participant slot assigned at admission.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "slot",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "GameTranscriptAnchorV1": {
+        "additionalProperties": false,
+        "properties": {
+          "tick": {
+            "description": "Complete tick count at the immutable certified prefix.",
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transcript_root": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact cumulative input transcript commitment."
+          }
+        },
+        "required": [
+          "tick",
+          "transcript_root"
+        ],
+        "type": "object"
+      },
       "GoldilocksDigest384V1": {
         "description": "Six canonical little-endian Goldilocks field elements (48 bytes total).",
         "items": {
@@ -10627,7 +12015,7 @@
           },
           "duration_blocks": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": [
               "integer",
@@ -15845,7 +17233,7 @@
           },
           "duration_blocks": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": [
               "integer",
@@ -19155,6 +20543,9 @@
           "dataset_ref": {
             "type": "string"
           },
+          "model_name": {
+            "type": "string"
+          },
           "provenance_attestation_hash": {
             "$ref": "#/components/schemas/Hash"
           },
@@ -19176,6 +20567,7 @@
         },
         "required": [
           "service_name",
+          "model_name",
           "training_job_id",
           "weight_artifact_hash",
           "dataset_ref",
@@ -25065,6 +26457,76 @@
           }
         ]
       },
+      "NftOfferCapabilitiesV1": {
+        "additionalProperties": false,
+        "properties": {
+          "native_nft_market": {
+            "const": true,
+            "type": "boolean"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "protocol_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "qualified": {
+            "type": "boolean"
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "protocol_id",
+          "qualified",
+          "native_nft_market"
+        ],
+        "type": "object"
+      },
+      "NftOfferListResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NftSaleRecordV1"
+            },
+            "maxItems": 32,
+            "type": "array"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
       "NftQueryResponse": {
         "allOf": [
           {
@@ -25086,6 +26548,247 @@
             "type": "object"
           }
         ]
+      },
+      "NftSaleOfferV1": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at_height": {
+            "description": "Last consensus height at which a purchase is accepted.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "metadata_hash": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Content commitment preventing metadata substitution between listing and purchase."
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId",
+            "description": "Exact network binding."
+          },
+          "nft_id": {
+            "description": "NFT held by the offer's non-signable custody.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "offer_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "One-shot globally unique offer identity."
+          },
+          "payment_asset": {
+            "description": "Fungible payment denomination; XOR is an application choice.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "price": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "Positive exact payment, excluding transaction fees."
+          },
+          "reserved_buyer": {
+            "description": "Optional sole authorized purchaser.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalAccountId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seller": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Wallet that receives the exact payment."
+          }
+        },
+        "required": [
+          "network_id",
+          "offer_id",
+          "nft_id",
+          "seller",
+          "payment_asset",
+          "price",
+          "expires_at_height",
+          "reserved_buyer",
+          "metadata_hash"
+        ],
+        "type": "object"
+      },
+      "NftSaleRecordV1": {
+        "additionalProperties": false,
+        "properties": {
+          "closed_at_height": {
+            "description": "Height of the terminal decision, absent while open.",
+            "oneOf": [
+              {
+                "format": "uint64",
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at_height": {
+            "description": "Height that admitted the listing.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "custody": {
+            "$ref": "#/components/schemas/CanonicalAccountId",
+            "description": "Native reservation identity."
+          },
+          "offer": {
+            "$ref": "#/components/schemas/NftSaleOfferV1",
+            "description": "Immutable complete authorization terms."
+          },
+          "offer_hash": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Commitment to all terms in their native execution domain."
+          },
+          "status": {
+            "$ref": "#/components/schemas/NftSaleStatusV1",
+            "description": "Permanent lifecycle state."
+          },
+          "version": {
+            "description": "Version of the retained format.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "offer",
+          "offer_hash",
+          "custody",
+          "status",
+          "created_at_height",
+          "closed_at_height"
+        ],
+        "type": "object"
+      },
+      "NftSaleStatusV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "open",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "purchased",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/CanonicalAccountId"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "cancelled",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "OfflineAssetRegistrationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_definition_id": {
+            "description": "Canonical immutable asset-definition address emitted by AssetDefinitionId; aliases are separate identifiers.",
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "asset_incarnation_hex": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "committed_at_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "committed_block_hash_hex": {
+            "maxLength": 64,
+            "minLength": 64,
+            "not": {
+              "const": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "committed_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "scale": {
+            "format": "uint32",
+            "maximum": 28,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "asset_definition_id",
+          "asset_incarnation_hex",
+          "scale",
+          "committed_height",
+          "committed_block_hash_hex",
+          "committed_at_ms"
+        ],
+        "type": "object"
       },
       "OperatorWebAuthnAlgorithm": {
         "description": "Exact algorithm recorded for an enrolled operator WebAuthn credential.",
@@ -25389,7 +27092,7 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           }
@@ -25467,7 +27170,7 @@
             "oneOf": [
               {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -25484,7 +27187,7 @@
           },
           "content_length": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -25533,7 +27236,7 @@
           },
           "submitted_epoch": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -25635,7 +27338,7 @@
             "oneOf": [
               {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -25646,7 +27349,7 @@
           },
           "content_length": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -25655,7 +27358,7 @@
           },
           "retention_epoch": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -25669,7 +27372,7 @@
           },
           "submitted_epoch": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -25699,7 +27402,7 @@
           },
           "retention_epoch": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -25720,13 +27423,13 @@
         "properties": {
           "content_bytes": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "manifest_count": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           }
@@ -25766,7 +27469,7 @@
               },
               "value": {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -25786,7 +27489,7 @@
               },
               "value": {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -26269,6 +27972,30 @@
         ],
         "type": "object"
       },
+      "PrivacyAcceptedMediumDispositionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "disposition_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "finding_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "release_artifact_set_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "signature": {
+            "$ref": "#/components/schemas/CanonicalSignature"
+          }
+        },
+        "required": [
+          "finding_digest",
+          "disposition_digest",
+          "release_artifact_set_digest",
+          "signature"
+        ],
+        "type": "object"
+      },
       "PrivacyCapabilityReadinessV1": {
         "oneOf": [
           {
@@ -26402,6 +28129,23 @@
               },
               "reason": {
                 "const": "missing-production-qualification",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "detail"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "null"
+              },
+              "reason": {
+                "const": "invalid-production-qualification",
                 "type": "string"
               }
             },
@@ -26682,6 +28426,116 @@
         "required": [
           "current_limits",
           "pending_tightening"
+        ],
+        "type": "object"
+      },
+      "PrivacyDeploymentActivationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "activation_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "protocol_id": {
+            "$ref": "#/components/schemas/PrivacyProtocolIdV1"
+          }
+        },
+        "required": [
+          "protocol_id",
+          "activation_height"
+        ],
+        "type": "object"
+      },
+      "PrivacyDeploymentValidatorCanaryV1": {
+        "additionalProperties": false,
+        "properties": {
+          "canary_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "canary_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "converged_state_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "endpoint_version": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[!-~]+$",
+            "type": "string"
+          },
+          "post_restart_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pre_restart_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "restart_count": {
+            "const": 1,
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rollout_wave": {
+            "format": "uint8",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "validator": {
+            "description": "Canonical Norito JSON public-key multihash; native key parsing enforces its algorithm and payload.",
+            "pattern": "^(?:[0-9a-fA-F]{2})+$",
+            "type": "string"
+          },
+          "validator_index": {
+            "format": "uint16",
+            "maximum": 3,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "validator_index",
+          "validator",
+          "rollout_wave",
+          "restart_count",
+          "pre_restart_height",
+          "post_restart_height",
+          "canary_height",
+          "canary_digest",
+          "converged_state_digest",
+          "endpoint_version"
+        ],
+        "type": "object"
+      },
+      "PrivacyDeploymentValidatorSignatureV1": {
+        "additionalProperties": false,
+        "properties": {
+          "signature": {
+            "$ref": "#/components/schemas/CanonicalSignature"
+          },
+          "validator_index": {
+            "format": "uint16",
+            "maximum": 3,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "validator_index",
+          "signature"
         ],
         "type": "object"
       },
@@ -27598,6 +29452,17 @@
             ],
             "type": "array"
           },
+          "qualification": {
+            "description": "Explicitly null until complete native-validated release and deployment evidence is committed.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PrivacyExact12QualificationRecordV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "version": {
             "const": 1,
             "format": "uint32",
@@ -27608,6 +29473,7 @@
           "version",
           "committed_height",
           "consensus_policy",
+          "qualification",
           "protocols",
           "manifest_digest"
         ],
@@ -27716,6 +29582,243 @@
         "maxItems": 48,
         "minItems": 48,
         "type": "array"
+      },
+      "PrivacyExact12DeploymentQualificationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "activation_transaction_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "activations": {
+            "items": {
+              "$ref": "#/components/schemas/PrivacyDeploymentActivationV1"
+            },
+            "maxItems": 12,
+            "minItems": 12,
+            "type": "array"
+          },
+          "chain_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._:-]*[A-Za-z0-9])?$",
+            "type": "string"
+          },
+          "converged_state_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "convergence_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "endpoint_version": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[!-~]+$",
+            "type": "string"
+          },
+          "genesis_hash": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "qualification_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "release_manifest_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "validator_canaries": {
+            "items": {
+              "$ref": "#/components/schemas/PrivacyDeploymentValidatorCanaryV1"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "validator_roster_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "validator_signatures": {
+            "items": {
+              "$ref": "#/components/schemas/PrivacyDeploymentValidatorSignatureV1"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "version": {
+            "const": 1,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "chain_id",
+          "network_id",
+          "genesis_hash",
+          "release_manifest_digest",
+          "activation_transaction_digest",
+          "activations",
+          "validator_roster_digest",
+          "endpoint_version",
+          "convergence_height",
+          "converged_state_digest",
+          "validator_canaries",
+          "validator_signatures",
+          "qualification_digest"
+        ],
+        "type": "object"
+      },
+      "PrivacyExact12QualificationRecordV1": {
+        "additionalProperties": false,
+        "description": "Complete portable release and target-network deployment evidence. Native admission additionally verifies signatures, exact ordering, nonzero digests, all cross-record identities and committed state. Schema conformance alone grants no production qualification.",
+        "properties": {
+          "deployment_qualification": {
+            "$ref": "#/components/schemas/PrivacyExact12DeploymentQualificationV1"
+          },
+          "release_manifest": {
+            "$ref": "#/components/schemas/PrivacyExact12ReleaseManifestV1"
+          }
+        },
+        "required": [
+          "release_manifest",
+          "deployment_qualification"
+        ],
+        "type": "object"
+      },
+      "PrivacyExact12ReleaseManifestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "abi_hash": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "abi_version": {
+            "const": 1,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "audit_bundle_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "audits": {
+            "items": {
+              "$ref": "#/components/schemas/PrivacyReleaseAuditV1"
+            },
+            "maxItems": 5,
+            "minItems": 5,
+            "type": "array"
+          },
+          "catalog_commitment": {
+            "$ref": "#/components/schemas/PrivacyExact12CatalogCommitmentV1"
+          },
+          "catalog_id": {
+            "const": "iroha-privacy-exact12-v1",
+            "type": "string"
+          },
+          "executables": {
+            "items": {
+              "$ref": "#/components/schemas/PrivacyReleaseExecutableArtifactV1"
+            },
+            "minItems": 2,
+            "type": "array"
+          },
+          "hardware_results": {
+            "items": {
+              "$ref": "#/components/schemas/PrivacyReleaseHardwareResultV1"
+            },
+            "maxItems": 6,
+            "minItems": 6,
+            "type": "array"
+          },
+          "manifest_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "proof_artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/PrivacyReleaseProofArtifactV1"
+            },
+            "maxItems": 54,
+            "minItems": 54,
+            "type": "array"
+          },
+          "protocols": {
+            "items": {
+              "$ref": "#/components/schemas/PrivacyReleaseProtocolBindingV1"
+            },
+            "maxItems": 12,
+            "minItems": 12,
+            "type": "array"
+          },
+          "release_artifact_set_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "release_signatures": {
+            "items": {
+              "$ref": "#/components/schemas/PrivacyReleaseSignatureV1"
+            },
+            "maxItems": 6,
+            "minItems": 6,
+            "type": "array"
+          },
+          "sdk_packages": {
+            "items": {
+              "$ref": "#/components/schemas/PrivacyReleaseSdkPackageV1"
+            },
+            "maxItems": 10,
+            "minItems": 10,
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PrivacyReleaseSourceIdentityV1"
+          },
+          "stage_receipts": {
+            "items": {
+              "$ref": "#/components/schemas/PrivacyReleaseStageReceiptV1"
+            },
+            "maxItems": 48,
+            "minItems": 48,
+            "type": "array"
+          },
+          "syscall_list_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "version": {
+            "const": 1,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "catalog_id",
+          "catalog_commitment",
+          "source",
+          "abi_version",
+          "abi_hash",
+          "syscall_list_digest",
+          "executables",
+          "protocols",
+          "stage_receipts",
+          "proof_artifacts",
+          "sdk_packages",
+          "hardware_results",
+          "release_artifact_set_digest",
+          "audits",
+          "audit_bundle_digest",
+          "release_signatures",
+          "manifest_digest"
+        ],
+        "type": "object"
       },
       "PrivacyExecutionModeV1": {
         "additionalProperties": false,
@@ -28178,16 +30281,6 @@
               }
             ]
           },
-          "production_qualification": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/PrivacyProtocolProductionQualificationV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "proof_system_id": {
             "$ref": "#/components/schemas/PrivacyProofSystemIdV1"
           },
@@ -28215,8 +30308,7 @@
           "engine_manifest_digest",
           "lifecycle",
           "protocol_limits",
-          "pending_protocol_limits_tightening",
-          "production_qualification"
+          "pending_protocol_limits_tightening"
         ],
         "type": "object"
       },
@@ -28433,27 +30525,481 @@
         ],
         "type": "object"
       },
-      "PrivacyProtocolProductionQualificationV1": {
+      "PrivacyReleaseAuditClassV1": {
         "additionalProperties": false,
         "properties": {
-          "deployment_qualification_digest": {
+          "audit_class": {
+            "enum": [
+              "cryptographic",
+              "implementation_parser_side_channel",
+              "build_supply_chain",
+              "deployment_resource",
+              "sdk_boundary"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "audit_class",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseAuditV1": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted_medium_dispositions": {
+            "items": {
+              "$ref": "#/components/schemas/PrivacyAcceptedMediumDispositionV1"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "audit_class": {
+            "$ref": "#/components/schemas/PrivacyReleaseAuditClassV1"
+          },
+          "auditor": {
+            "description": "Canonical Norito JSON public-key multihash; native key parsing enforces its algorithm and payload.",
+            "pattern": "^(?:[0-9a-fA-F]{2})+$",
+            "type": "string"
+          },
+          "open_critical_findings": {
+            "const": 0,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "open_high_findings": {
+            "const": 0,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "release_artifact_set_digest": {
             "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
           },
-          "release_manifest_digest": {
+          "report_digest": {
             "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "signature": {
+            "$ref": "#/components/schemas/CanonicalSignature"
+          }
+        },
+        "required": [
+          "audit_class",
+          "report_digest",
+          "release_artifact_set_digest",
+          "open_critical_findings",
+          "open_high_findings",
+          "accepted_medium_dispositions",
+          "auditor",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseExecutableArtifactV1": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PrivacyReleaseExecutableKindV1"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[!-~]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "artifact_digest"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseExecutableKindV1": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "binary",
+              "container_image"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseHardwareBackendV1": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "enum": [
+              "scalar",
+              "avx2",
+              "avx512",
+              "neon",
+              "metal",
+              "cuda"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "backend",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseHardwareResultV1": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/PrivacyReleaseHardwareBackendV1"
+          },
+          "deterministic_output_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "result_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "runtime_self_test_passed": {
+            "const": true,
+            "type": "boolean"
+          },
+          "scalar_reference_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "tested_binary_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          }
+        },
+        "required": [
+          "backend",
+          "tested_binary_digest",
+          "deterministic_output_digest",
+          "scalar_reference_digest",
+          "result_digest",
+          "runtime_self_test_passed"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseProofArtifactV1": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "engine_manifest_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "parameter_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "protocol_id": {
+            "$ref": "#/components/schemas/PrivacyProtocolIdV1"
+          },
+          "security_claim_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/PrivacyReleaseStageV1"
+          },
+          "stage_artifact_ordinal": {
+            "format": "uint8",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_receipt_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "verifier_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          }
+        },
+        "required": [
+          "protocol_id",
+          "stage",
+          "stage_artifact_ordinal",
+          "stage_receipt_digest",
+          "security_claim_digest",
+          "parameter_digest",
+          "verifier_digest",
+          "engine_manifest_digest",
+          "artifact_digest"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseProtocolBindingV1": {
+        "additionalProperties": false,
+        "properties": {
+          "engine_id": {
+            "$ref": "#/components/schemas/PrivacyEngineIdV1"
+          },
+          "engine_manifest_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "parameter_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "parameter_id": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "proof_system_id": {
+            "$ref": "#/components/schemas/PrivacyProofSystemIdV1"
+          },
+          "protocol_id": {
+            "$ref": "#/components/schemas/PrivacyProtocolIdV1"
           },
           "security_claim": {
             "$ref": "#/components/schemas/PrivacySecurityClaimV1"
           },
           "security_claim_digest": {
             "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "statement_schema_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "verifier_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
           }
         },
         "required": [
+          "protocol_id",
+          "proof_system_id",
+          "engine_id",
+          "parameter_id",
+          "parameter_digest",
+          "verifier_digest",
+          "statement_schema_digest",
+          "engine_manifest_digest",
           "security_claim",
+          "security_claim_digest"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseSdkConsumerV1": {
+        "additionalProperties": false,
+        "description": "Ten required SDK and tooling consumers. java_source_kotlin covers Java-source consumers of the canonical Kotlin APIs on both JVM and Android, including native bindings and platform qualification.",
+        "properties": {
+          "consumer": {
+            "enum": [
+              "kotlin_jvm",
+              "kotlin_android",
+              "java_source_kotlin",
+              "swift_c_bridge",
+              "javascript_napi",
+              "python_pyo3",
+              "csharp",
+              "cli",
+              "openapi",
+              "genesis_tooling"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "consumer",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseSdkPackageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "consumer": {
+            "$ref": "#/components/schemas/PrivacyReleaseSdkConsumerV1"
+          },
+          "fixture_corpus_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "package_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "package_name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[!-~]+$",
+            "type": "string"
+          },
+          "package_version": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[!-~]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "consumer",
+          "package_name",
+          "package_version",
+          "package_digest",
+          "fixture_corpus_digest"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseSignatureRoleV1": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "enum": [
+              "release_engineering",
+              "cryptographic_review",
+              "implementation_security",
+              "build_supply_chain",
+              "deployment_resource",
+              "sdk_boundary"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "role",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseSignatureV1": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/PrivacyReleaseSignatureRoleV1"
+          },
+          "signature": {
+            "$ref": "#/components/schemas/CanonicalSignature"
+          },
+          "signer": {
+            "description": "Canonical Norito JSON public-key multihash; native key parsing enforces its algorithm and payload.",
+            "pattern": "^(?:[0-9a-fA-F]{2})+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "signer",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseSourceIdentityV1": {
+        "additionalProperties": false,
+        "properties": {
+          "cargo_lock_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "source_tree_clean": {
+            "const": true,
+            "type": "boolean"
+          },
+          "source_tree_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "toolchain_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "toolchain_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[!-~]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_tree_digest",
+          "source_tree_clean",
+          "toolchain_id",
+          "toolchain_digest",
+          "cargo_lock_digest"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseStageReceiptV1": {
+        "additionalProperties": false,
+        "properties": {
+          "engine_manifest_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "parameter_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "protocol_id": {
+            "$ref": "#/components/schemas/PrivacyProtocolIdV1"
+          },
+          "receipt_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "security_claim_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/PrivacyReleaseStageV1"
+          },
+          "stage_ordinal": {
+            "format": "uint16",
+            "maximum": 47,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verifier_digest": {
+            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          }
+        },
+        "required": [
+          "stage_ordinal",
+          "protocol_id",
+          "stage",
           "security_claim_digest",
-          "release_manifest_digest",
-          "deployment_qualification_digest"
+          "parameter_digest",
+          "verifier_digest",
+          "engine_manifest_digest",
+          "receipt_digest"
+        ],
+        "type": "object"
+      },
+      "PrivacyReleaseStageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "stage": {
+            "enum": [
+              "positive-canonical-end-to-end",
+              "public-statement-binding-mutation",
+              "proof-corruption-and-truncation",
+              "maximum-shape-resource"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "stage",
+          "value"
         ],
         "type": "object"
       },
@@ -31689,7 +34235,7 @@
           },
           "creation_time_ms": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": [
               "integer",
@@ -31735,7 +34281,7 @@
           "creation_time_ms": {
             "description": "Exact timestamp returned with the prepared payload.",
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -31793,7 +34339,7 @@
           },
           "creation_time_ms": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": [
               "integer",
@@ -31833,7 +34379,7 @@
           "creation_time_ms": {
             "description": "Exact timestamp returned with the prepared payload.",
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -31947,7 +34493,7 @@
           },
           "creation_time_ms": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -31959,13 +34505,13 @@
           },
           "range_end_height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
           "range_start_height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -32817,7 +35363,7 @@
           "max_anchor_interval_height": {
             "description": "Inclusive successor-checkpoint boundary in the backend's authenticated consensus-progress coordinate.",
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -33068,7 +35614,7 @@
           "checkpoint_height": {
             "description": "Backend-specific consensus-progress coordinate: finalized beacon slot for Ethereum, finalized block height for BSC and TRON, and finalized masterchain sequence number for TON.",
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           }
@@ -33429,7 +35975,7 @@
           },
           "from": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           }
@@ -33484,7 +36030,7 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -34180,7 +36726,7 @@
           },
           "checkpoint_height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -35755,6 +38301,27 @@
         "required": [
           "payload",
           "provenance"
+        ],
+        "type": "object"
+      },
+      "SignedGameCheckpointV1": {
+        "additionalProperties": false,
+        "properties": {
+          "checkpoint": {
+            "$ref": "#/components/schemas/GameCheckpointV1",
+            "description": "Cumulative certified checkpoint; the native genesis checkpoint needs no signatures."
+          },
+          "signatures": {
+            "description": "Every original participant signature in increasing slot order.",
+            "items": {
+              "$ref": "#/components/schemas/GameSlotSignatureV1"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "checkpoint",
+          "signatures"
         ],
         "type": "object"
       },
@@ -40484,12 +43051,6 @@
               }
             ]
           },
-          "reported_pending_mailbox_messages": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
           "role": {
             "$ref": "#/components/schemas/SoracloudRuntimeRevisionRole"
           },
@@ -40568,7 +43129,6 @@
           "local_replicas",
           "health_status",
           "load_factor_bps",
-          "reported_pending_mailbox_messages",
           "authoritative_pending_mailbox_messages",
           "rollout_handle",
           "config_generation",
@@ -40742,11 +43302,6 @@
                 "minimum": 0,
                 "type": "integer"
               },
-              "reported_pending_mailbox_messages": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
               "service_revisions": {
                 "format": "uint64",
                 "minimum": 0,
@@ -40763,7 +43318,6 @@
               "service_revisions",
               "apartments",
               "max_load_factor_bps",
-              "reported_pending_mailbox_messages",
               "authoritative_pending_mailbox_messages",
               "bundle_cache_misses",
               "artifact_cache_misses"
@@ -41143,13 +43697,13 @@
           },
           "policy_governance_grace_secs": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "policy_successor_grace_secs": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -41176,7 +43730,7 @@
             "oneOf": [
               {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -41201,7 +43755,7 @@
           },
           "ttl_expires_at_unix": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           }
@@ -41277,7 +43831,7 @@
             "oneOf": [
               {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -41365,7 +43919,7 @@
             "oneOf": [
               {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -41384,7 +43938,7 @@
             "oneOf": [
               {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -41501,7 +44055,7 @@
           },
           "total_count": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           }
@@ -41536,7 +44090,7 @@
             "properties": {
               "epoch": {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -41556,7 +44110,7 @@
             "properties": {
               "epoch": {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -41589,13 +44143,13 @@
           },
           "bound_epoch": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "cache_age_seconds": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -41621,7 +44175,7 @@
           },
           "expiry_epoch": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -41645,37 +44199,37 @@
           },
           "policy_governance_grace_secs": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "policy_hard_expiry_secs": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "policy_positive_ttl_secs": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "policy_refresh_window_secs": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "policy_rotation_max_age_secs": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "policy_successor_grace_secs": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -41688,19 +44242,19 @@
           },
           "proof_expires_at_unix": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "proof_expires_in_seconds": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
           "proof_generated_at_unix": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -41765,7 +44319,7 @@
             "oneOf": [
               {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -42618,7 +45172,7 @@
           },
           "chunk_offset": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -42666,13 +45220,13 @@
           },
           "leaf_offset": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "payload_len": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -42707,7 +45261,7 @@
           },
           "segment_offset": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           }
@@ -43025,7 +45579,7 @@
           },
           "committed_at_ms": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -43057,7 +45611,7 @@
           },
           "finalized_block_height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -43123,7 +45677,7 @@
           },
           "recorded_at_ms": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -43188,7 +45742,7 @@
           "expected_finalized_height": {
             "description": "Optional finalized height; when present it must be paired with expected_finalized_block_hash_hex.",
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -43246,7 +45800,7 @@
           "expected_finalized_height": {
             "description": "Required finalized height authorizing the manifest projection.",
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -43279,7 +45833,7 @@
           },
           "sample_seed": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -43332,7 +45886,7 @@
           "expected_finalized_height": {
             "description": "Optional finalized height; when present it must be paired with expected_finalized_block_hash_hex.",
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -43408,7 +45962,7 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           }
@@ -43462,7 +46016,7 @@
               },
               "revision": {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 2,
                 "type": "integer"
               }
@@ -43493,7 +46047,7 @@
           },
           "block_height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -43530,7 +46084,7 @@
           },
           "slice_gib": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           }
@@ -43562,13 +46116,13 @@
           },
           "deadline_at": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
           "issued_at": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -43628,7 +46182,7 @@
         "properties": {
           "assignment_revision": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -43642,7 +46196,7 @@
           },
           "completion_epoch": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -43703,7 +46257,7 @@
           },
           "total_count": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           }
@@ -43752,7 +46306,7 @@
         "properties": {
           "assignment_revision": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -43766,7 +46320,7 @@
           },
           "deadline_epoch": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -43777,7 +46331,7 @@
           },
           "issued_epoch": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -43847,7 +46401,7 @@
             "properties": {
               "epoch": {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -43867,7 +46421,7 @@
             "properties": {
               "epoch": {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -43887,7 +46441,7 @@
             "properties": {
               "epoch": {
                 "format": "uint64",
-                "maximum": 1.8446744073709552e+19,
+                "maximum": 18446744073709551615,
                 "minimum": 0,
                 "type": "integer"
               },
@@ -44600,7 +47154,7 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -47072,7 +49626,7 @@
           },
           "signed_power": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -47084,7 +49638,7 @@
           },
           "total_power": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -47180,13 +49734,13 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
           "view": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           }
@@ -47225,7 +49779,7 @@
           },
           "max_payload_size_bytes": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -47329,7 +49883,7 @@
           },
           "executed_block_wire_len": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -47427,7 +49981,7 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -47472,13 +50026,13 @@
         "properties": {
           "epoch": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
           "epoch_end_height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -47562,13 +50116,13 @@
           },
           "epoch": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "epoch_end_height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -47577,7 +50131,7 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -47677,13 +50231,13 @@
         "properties": {
           "epoch": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "epoch_end_height": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           },
@@ -47720,7 +50274,7 @@
         "properties": {
           "count": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -47826,7 +50380,7 @@
           },
           "generation": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -47842,7 +50396,7 @@
           },
           "no_progress_age_ms": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -48066,13 +50620,13 @@
         "properties": {
           "age_ms": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "generation": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -48136,7 +50690,7 @@
           },
           "oldest_age_ms": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -48145,7 +50699,7 @@
           },
           "service_debt": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           }
@@ -48323,7 +50877,7 @@
           },
           "signed_power": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -48335,7 +50889,7 @@
           },
           "total_power": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           }
@@ -48390,7 +50944,7 @@
           },
           "signed_power": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
@@ -48405,7 +50959,7 @@
           },
           "total_power": {
             "format": "uint64",
-            "maximum": 1.8446744073709552e+19,
+            "maximum": 18446744073709551615,
             "minimum": 1,
             "type": "integer"
           }
@@ -51549,7 +54103,7 @@
           "schemaVersion": 1,
           "stableRouteId": "diagnostic.cpu_profile"
         },
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/health": {
@@ -52239,7 +54793,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AccountFaucetPolicy"
+                  "$ref": "#/components/schemas/AccountFaucetAdvertisement"
                 }
               }
             },
@@ -52254,8 +54808,8 @@
               }
             }
           },
-          "403": {
-            "description": "The account faucet is disabled."
+          "503": {
+            "description": "The account faucet is disabled (account_faucet_disabled), or its configured policy is unavailable."
           }
         },
         "security": [
@@ -66310,6 +68864,155 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/games/capabilities": {
+      "get": {
+        "description": "Current native State projection. This response alone is not authenticated ledger finality or production cryptographic qualification.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameCapabilitiesV1"
+                }
+              }
+            },
+            "description": "Current native projection."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read native game and compiled verifier capabilities.",
+        "tags": [
+          "Applications"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "game.capabilities"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/games/sessions": {
+      "get": {
+        "description": "Current native State projection. This response alone is not authenticated ledger finality or production cryptographic qualification.",
+        "parameters": [
+          {
+            "description": "Exclusive session hash. Scan at most 128 state keys and return at most 32 matching public summaries.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          },
+          {
+            "in": "query",
+            "name": "application_id",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          },
+          {
+            "in": "query",
+            "name": "profile_id",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameSessionListResponseV1"
+                }
+              }
+            },
+            "description": "Current native projection."
+          },
+          "400": {
+            "description": "Invalid native selector or query."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "List public native game sessions.",
+        "tags": [
+          "Applications"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "game.sessions.list"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/games/sessions/{session_id}": {
+      "get": {
+        "description": "Current native State projection. This response alone is not authenticated ledger finality or production cryptographic qualification.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameSessionRecordV1"
+                }
+              }
+            },
+            "description": "Current native projection."
+          },
+          "400": {
+            "description": "Invalid native selector or query."
+          },
+          "404": {
+            "description": "The exact native record is absent; the response body is empty."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read one exact native game session.",
+        "tags": [
+          "Applications"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "game.sessions.get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/gov/ballots/plain": {
       "post": {
         "description": "Authenticate the exact-network request authority, then build deterministic non-ZK ballot draft instructions for local transaction signing. The route does not submit or mutate ledger state.",
@@ -70232,7 +72935,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.audit.read"
         },
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/camt056": {
@@ -70348,7 +73051,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.camt056.submit"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/colr012": {
@@ -70464,7 +73167,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.colr012.submit"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/messages/{msg_id}": {
@@ -70557,7 +73260,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.message.read"
         },
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/messages/{msg_id}/camt029": {
@@ -70659,7 +73362,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.message.camt029"
         },
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/messages/{msg_id}/pacs002": {
@@ -70761,7 +73464,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.message.pacs002"
         },
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/messages/{msg_id}/pacs004": {
@@ -70863,7 +73566,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.message.pacs004"
         },
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/messages/{msg_id}/sese024": {
@@ -70965,7 +73668,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.message.sese024"
         },
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/messages/{msg_id}/sese025": {
@@ -71067,7 +73770,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.message.sese025"
         },
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/pacs002": {
@@ -71183,7 +73886,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.pacs002.submit"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/pacs004": {
@@ -71299,7 +74002,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.pacs004.submit"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/pacs008": {
@@ -71415,7 +74118,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.pacs008.submit"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/pacs009": {
@@ -71531,7 +74234,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.pacs009.submit"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/sese023": {
@@ -71647,7 +74350,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.sese023.submit"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/sese024": {
@@ -71763,7 +74466,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.sese024.submit"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/iso20022/sese025": {
@@ -71879,7 +74582,7 @@
           "schemaVersion": 1,
           "stableRouteId": "iso20022.sese025.submit"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/kagemusha/operations/{operation_id}": {
@@ -79240,6 +81943,149 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/nft-offers": {
+      "get": {
+        "description": "Current native State projection. This response alone is not authenticated ledger finality or production cryptographic qualification.",
+        "parameters": [
+          {
+            "description": "Exclusive offer hash. Scan at most 128 state keys and return at most 32 matching open offers.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nft_id",
+            "required": false,
+            "schema": {
+              "description": "Canonical NFT identifier emitted by NftId, including its separate domain context.",
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NftOfferListResponseV1"
+                }
+              }
+            },
+            "description": "Current native projection."
+          },
+          "400": {
+            "description": "Invalid native selector or query."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "List open native NFT offers.",
+        "tags": [
+          "Applications"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "nft.offers.list"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/nft-offers/capabilities": {
+      "get": {
+        "description": "Current native State projection. This response alone is not authenticated ledger finality or production cryptographic qualification.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NftOfferCapabilitiesV1"
+                }
+              }
+            },
+            "description": "Current native projection."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read native NFT marketplace capabilities.",
+        "tags": [
+          "Applications"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "nft.offers.capabilities"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/nft-offers/{offer_id}": {
+      "get": {
+        "description": "Current native State projection. This response alone is not authenticated ledger finality or production cryptographic qualification.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "offer_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NftSaleRecordV1"
+                }
+              }
+            },
+            "description": "Current native projection."
+          },
+          "400": {
+            "description": "Invalid native selector or query."
+          },
+          "404": {
+            "description": "The exact native record is absent; the response body is empty."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read one native NFT offer.",
+        "tags": [
+          "Applications"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "nft.offers.get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/nfts": {
       "get": {
         "description": "List NFTs visible to the caller.",
@@ -80035,6 +82881,108 @@
           "stableRouteId": "application.notify_devices_post"
         },
         "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/offline/assets/{asset_definition_id}/registration": {
+      "get": {
+        "description": "One StateView binds the canonical immutable asset address, registration incarnation, exact scale and nonzero committed height/hash/time. This projection is not an ownership certificate or native enrollment capability. Optional canonical authentication applies dataspace visibility; an inaccessible or absent asset returns 404.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_definition_id",
+            "required": true,
+            "schema": {
+              "description": "Canonical immutable asset-definition address emitted by AssetDefinitionId; aliases are separate identifiers.",
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineAssetRegistrationV1"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The selector is not an exact canonical immutable asset-definition address.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The asset is absent or not visible to the caller.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Committed registration evidence is unavailable (offline_asset_registration_unavailable).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Read the current committed asset-registration incarnation.",
+        "tags": [
+          "Assets"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.offline_asset_registration_get"
+        },
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/operator/auth/credentials": {
@@ -81941,46 +84889,46 @@
               "x-iroha-transactions-accepted": {
                 "required": true,
                 "schema": {
-                  "type": "integer",
-                  "minimum": 1
+                  "minimum": 1,
+                  "type": "integer"
                 }
               }
             }
           },
           "207": {
-            "description": "Dispatched batch with per-entry outcomes; earlier acceptance remains durable.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
                   "items": {
-                    "type": "object",
                     "additionalProperties": false,
-                    "required": [
-                      "signed_transaction_hash",
-                      "status",
-                      "reject_code"
-                    ],
                     "properties": {
-                      "signed_transaction_hash": {
-                        "type": "string",
-                        "pattern": "^[A-Fa-f0-9]{64}$"
-                      },
-                      "status": {
-                        "type": "integer",
-                        "description": "202 or the single-submit error status."
-                      },
                       "reject_code": {
                         "type": [
                           "string",
                           "null"
                         ]
+                      },
+                      "signed_transaction_hash": {
+                        "pattern": "^[A-Fa-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "status": {
+                        "description": "202 or the single-submit error status.",
+                        "type": "integer"
                       }
-                    }
-                  }
+                    },
+                    "required": [
+                      "signed_transaction_hash",
+                      "status",
+                      "reject_code"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
                 }
               }
-            }
+            },
+            "description": "Dispatched batch with per-entry outcomes; earlier acceptance remains durable."
           },
           "400": {
             "description": "Full-batch preflight rejected before any new entry was dispatched."
@@ -82845,6 +85793,21 @@
               }
             },
             "description": "Bad request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Only code query_asset_not_found with details.query_asset_not_found equal to the exact requested AssetId denotes asset absence. Every selected dataspace route must report that same typed absence; unavailable routes remain errors. HTTP 404 alone does not establish absence. This response is not a cryptographic proof of ledger state."
           },
           "406": {
             "content": {
@@ -90831,6 +93794,67 @@
             "name": "X-Iroha-Witness",
             "required": false,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical unsigned decimal, without a sign or leading zero; bounded by the native alias-list limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "format": "uint32",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "x-iroha-canonical-unsigned-decimal-v1": {
+              "allow_leading_zero": false,
+              "allow_percent_encoding": false,
+              "allow_sign": false,
+              "allow_zero": false
+            }
+          },
+          {
+            "description": "Canonical unsigned decimal offset, without a sign or leading zero.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "x-iroha-canonical-unsigned-decimal-v1": {
+              "allow_leading_zero": false,
+              "allow_percent_encoding": false,
+              "allow_sign": false,
+              "allow_zero": true
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-z0-9._-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact nonzero canonical lowercase manifest digest.",
+            "in": "query",
+            "name": "manifest_digest",
+            "required": false,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
               "type": "string"
             }
           }
@@ -102476,7 +105500,7 @@
           "schemaVersion": 1,
           "stableRouteId": "sorafs.pdp.challenge"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sorafs/pdp/export": {
@@ -102570,7 +105594,7 @@
           "schemaVersion": 1,
           "stableRouteId": "sorafs.pdp.export"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sorafs/pdp/next": {
@@ -102664,7 +105688,7 @@
           "schemaVersion": 1,
           "stableRouteId": "sorafs.pdp.next"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sorafs/pdp/proof": {
@@ -102758,7 +105782,7 @@
           "schemaVersion": 1,
           "stableRouteId": "sorafs.pdp.proof"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sorafs/pdp/status": {
@@ -102852,7 +105876,7 @@
           "schemaVersion": 1,
           "stableRouteId": "sorafs.pdp.status"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sorafs/pin": {
@@ -104248,7 +107272,7 @@
           "schemaVersion": 1,
           "stableRouteId": "sorafs.proof_stream.build"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sorafs/providers": {
@@ -104538,7 +107562,7 @@
             "required": false,
             "schema": {
               "format": "uint64",
-              "maximum": 1.8446744073709552e+19,
+              "maximum": 18446744073709551615,
               "minimum": 0,
               "type": "integer"
             },
@@ -104966,7 +107990,7 @@
             "required": false,
             "schema": {
               "format": "uint64",
-              "maximum": 1.8446744073709552e+19,
+              "maximum": 18446744073709551615,
               "minimum": 0,
               "type": "integer"
             },
@@ -105348,7 +108372,7 @@
             "required": false,
             "schema": {
               "format": "uint64",
-              "maximum": 1.8446744073709552e+19,
+              "maximum": 18446744073709551615,
               "minimum": 0,
               "type": "integer"
             },
@@ -107803,7 +110827,7 @@
           "schemaVersion": 1,
           "stableRouteId": "sorafs.storage_token.issue"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sorafs/transparency/cycles": {
@@ -108361,7 +111385,7 @@
           "schemaVersion": 1,
           "stableRouteId": "soranet.privacy_event.ingest"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/soranet/privacy/share": {
@@ -108417,7 +111441,7 @@
           "schemaVersion": 1,
           "stableRouteId": "soranet.privacy_share.ingest"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/space-directory/manifests": {
@@ -110840,7 +113864,7 @@
           "schemaVersion": 1,
           "stableRouteId": "sumeragi.status.stream_sse"
         },
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/telemetry/live": {
@@ -111189,7 +114213,7 @@
           "schemaVersion": 1,
           "stableRouteId": "trigger.completion.list"
         },
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/validation-fee/hijiri/quote": {
@@ -112983,7 +116007,7 @@
           "schemaVersion": 1,
           "stableRouteId": "application.webhooks_get"
         },
-        "x-iroha-tool-effect": "read"
+        "x-iroha-tool-effect": "operator"
       },
       "post": {
         "description": "Create a webhook subscription.",
@@ -113037,7 +116061,7 @@
           "schemaVersion": 1,
           "stableRouteId": "application.webhooks_post"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/webhooks/{id}": {
@@ -113094,7 +116118,7 @@
           "schemaVersion": 1,
           "stableRouteId": "application.webhooks_by_id_delete"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/zk/attachments": {
@@ -115735,6 +118759,10 @@
     {
       "description": "Real-world asset listing and query helpers.",
       "name": "RWAs"
+    },
+    {
+      "description": "Native game sessions and exact-price NFT marketplace projections.",
+      "name": "Applications"
     }
   ]
 }

@@ -28586,6 +28586,7 @@ seiyaku DynamicTarget {
     }
     include!("block/rejected_live_batch_fee_tests.rs");
     include!("block/fee_admission_tests.rs");
+    include!("block/public_contract_creation_fee_tests.rs");
     include!("block/bootstrap_and_genesis_tests.rs");
     #[test]
     fn sumeragi_parameters_are_accessible() {

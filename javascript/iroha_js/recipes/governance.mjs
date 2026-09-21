@@ -12,6 +12,7 @@
  * to submit them to a Torii node (requires the account to hold the relevant permissions).
  */
 import { Buffer } from "node:buffer";
+import { stringifyStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
 import { NetworkId, ToriiClient } from "../src/index.js";
 import {
   buildProposeDeployContractInstruction,
@@ -207,7 +208,7 @@ async function logJsonResult(label, fetcher) {
   try {
     const payload = await fetcher();
     console.log(`  ${label}:`);
-    console.log(indent(JSON.stringify(payload, null, 2), 4));
+    console.log(indent(stringifyStrictLosslessIntegerJson(payload, `governance ${label}`), 4));
   } catch (error) {
     console.warn(`  ${label} failed:`, error?.message ?? error);
   }

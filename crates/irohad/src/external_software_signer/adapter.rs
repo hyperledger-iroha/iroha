@@ -238,7 +238,8 @@ impl ExternalSoftwareSignerNativeBackendsV1 {
             | SignerRoleV1::PopCredentials
             | SignerRoleV1::ReleaseManifest
             | SignerRoleV1::FinalPromotionProvenance
-            | SignerRoleV1::FinalPromotionAccountTransaction => {
+            | SignerRoleV1::FinalPromotionAccountTransaction
+            | SignerRoleV1::TopologyApproval => {
                 return Err(ExternalSoftwareSignerAdapterErrorV1::RoleMismatch);
             }
         };

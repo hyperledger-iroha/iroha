@@ -982,6 +982,23 @@ def test_candidate_proposal_round_contract_is_current(tmp_path: Path) -> None:
         ),
         (
             "AsyncCandidateEvidenceProposalRound",
+            "IF evidence = NoAsyncItem\n"
+            "  THEN defaultRound\n"
+            "  ELSE IF evidence \\in AsyncNetworkItems",
+            "IF evidence \\in AsyncNetworkItems",
+            "NoAsyncItem case before evaluating transport-owned carriers",
+        ),
+        (
+            "AsyncCandidateEvidenceProposalRound",
+            "IF evidence = NoAsyncItem\n"
+            "  THEN defaultRound",
+            "IF evidence = NoAsyncItem\n"
+            "  THEN AsyncCandidateRound(\n"
+            "         defaultRound.context, defaultRound.height, 0)",
+            "NoAsyncItem case before evaluating transport-owned carriers",
+        ),
+        (
+            "AsyncCandidateEvidenceProposalRound",
             "THEN AsyncCandidateRound(\n"
             "         evidence.context, evidence.height, evidence.view)",
             "THEN defaultRound",
@@ -2906,3 +2923,507 @@ def test_lexicographic_rank_contract_rejects_flattened_cell(
         symbol in error and "finite lexicographic rank nesting" in error
         for error in errors
     ), errors
+
+
+def test_candidate_causal_origin_type_contract_is_current(tmp_path: Path) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    copy_candidate_proposal_round_contract_sources(module, formal_dir)
+
+    assert module._async_candidate_causal_origin_type_contract_errors(formal_dir) == []
+
+
+_CAUSAL_ORIGIN_RECORD_DOMAINS = (
+    ("AsyncCandidateQcSemanticPayloadTyped", ("context", "height", "view", "phase", "subject")),
+    ("AsyncCandidateTcSemanticPayloadTyped", ("context", "height", "view", "highestPrepareQc")),
+    ("AsyncCandidateTimeoutVoteSemanticPayloadTyped", (
+        "context", "height", "view", "signer", "highestPrepareQc", "highRank", "highSubject",
+    )),
+    ("AsyncCandidateProposalSemanticPayloadTyped", (
+        "context", "height", "view", "subject", "proposer", "timeoutCertificate",
+        "highestPrepareQc", "justifyRank", "justifySubject",
+    )),
+    ("AsyncRouteNeutralCandidateEvidenceStructurallyTyped", ("kind", "payload")),
+    ("AsyncCandidateCausalOriginTyped", (
+        "target", "context", "height", "leader", "view", "subject", "phase", "owner",
+        "kind", "payload", "workKind", "item", "authority", "body", "manifest", "commitment",
+    )),
+)
+
+
+@pytest.mark.parametrize(
+    ("symbol", "field"),
+    ((symbol, field) for symbol, fields in _CAUSAL_ORIGIN_RECORD_DOMAINS for field in fields),
+)
+def test_candidate_causal_origin_type_rejects_record_domain_drift(
+    tmp_path: Path, symbol: str, field: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    copy_candidate_proposal_round_contract_sources(module, formal_dir)
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        _mutate_chain_operator(source, symbol, f'"{field}"', f'"unreviewed_{field}"'),
+        encoding="utf-8",
+    )
+
+    errors = module._async_candidate_causal_origin_type_contract_errors(formal_dir)
+    assert any(symbol in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("filename", "symbol", "old", "new"),
+    (
+        ("SumeragiV2AsyncNetwork.tla", "AsyncCandidateCausalOriginTyped",
+         "  /\\ origin.owner = origin.target\n", ""),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncCandidateCausalOriginTyped",
+         "  /\\ origin.leader = Leader(origin.context, origin.view)\n", ""),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncCandidateCausalOriginTyped",
+         "  /\\ origin.payload.workKind = origin.phase\n", ""),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncCandidateCausalOriginTyped",
+         "origin.payload.manifest \\in SubjectOrNone", "TRUE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncCandidateCausalOriginTyped",
+         "origin.height \\in Heights", "origin.height = origin.context.height"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncCandidateCausalOriginTyped",
+         "AsyncRouteNeutralCandidateItemStructurallyTyped(origin.payload.item)", "TRUE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncCandidateCausalOriginTyped",
+         "AsyncRouteNeutralCandidateEvidenceStructurallyTyped(origin.payload.authority)", "TRUE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncCandidatePrepareQcSemanticPayloadTyped",
+         "THEN TRUE", "THEN FALSE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncCandidatePrepareQcSemanticPayloadTyped",
+         "ELSE AsyncCandidateQcSemanticPayloadTyped(qc)",
+         'ELSE AsyncCandidateQcSemanticPayloadTyped(qc) /\\ qc.phase = "Prepare"'),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncCandidateTcOptionSemanticPayloadTyped",
+         "NoTimeoutCertificate", "NoPrepareQC"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncRouteNeutralCandidateItemStructurallyTyped",
+         "THEN TRUE", "THEN FALSE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncRouteNeutralCandidateEvidenceStructurallyTyped",
+         "              /\\ wire # NoAsyncItem\n", ""),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncRouteNeutralCandidateEvidenceStructurallyTyped",
+         "evidence.payload = NoAsyncItem", "TRUE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncRouteNeutralCandidateEvidenceStructurallyTyped",
+         "AsyncCandidateQcSemanticPayloadTyped(evidence.payload)", "evidence.payload \\in VoteRecordSet"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncRouteNeutralCandidateEvidenceStructurallyTyped",
+         "[] OTHER -> FALSE", "[] OTHER -> TRUE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncRouteNeutralCandidateEvidence",
+         "IF evidence = NoAsyncItem", "IF FALSE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncCandidateTcSemanticPayload",
+         "highestPrepareQc |->", "unreviewedPrepareQc |->"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncCandidateCausalOriginSet",
+         'kind: {"CausalOrigin"}', 'kind: {"UnreviewedOrigin"}'),
+        ("SumeragiV2Core.tla", "QcRecordSet",
+         "signers: SUBSET ValidatorIds", "signers: SUBSET ValidatorIds \\ {{}}"),
+        ("SumeragiV2Core.tla", "TcRecordSet",
+         "votes: SUBSET TimeoutVoteRecordSet", "votes: SUBSET TimeoutVoteRecordSet \\ {{}}"),
+        ("SumeragiV2Core.tla", "PrepareQcOptionSet",
+         "{NoPrepareQC} \\cup QcRecordSet", '{NoPrepareQC} \\cup {qc \\in QcRecordSet: qc.phase = "Prepare"}'),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncItemTyped",
+         'DOMAIN item = {"kind", "source", "envelope"}', 'DOMAIN item = {"kind", "source", "envelope", "extra"}'),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncPacketTyped",
+         "AsyncItemTyped(packet.item)", "TRUE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncTransportHistoryTypeInvariant",
+         "\\A item \\in asyncSentItems: AsyncItemTyped(item)", "\\A item \\in asyncSentItems: TRUE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncTransportHistoryTypeInvariant",
+         "\\A item \\in asyncRetainedControl:\n       /\\ AsyncItemTyped(item)", "\\A item \\in asyncRetainedControl:\n       /\\ TRUE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncTransportHistoryTypeInvariant",
+         "asyncActiveRequests \\subseteq asyncSentItems", "TRUE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncPacketContentTypeInvariant",
+         "\\A packet \\in asyncTransport: AsyncPacketTyped(packet)", "\\A packet \\in asyncTransport: TRUE"),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncSchedulerTypeInvariant",
+         "  /\\ AsyncTransportTypeInvariant\n", ""),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncTypeInvariant",
+         "  /\\ AsyncSchedulerTypeInvariant\n", ""),
+        ("SumeragiV2AsyncNetwork.tla", "NoAsyncItem",
+         'kind |-> "NoItem"', 'kind |-> "QC"'),
+        ("SumeragiV2AsyncNetwork.tla", "AsyncBodyEnvelope",
+         "recipient |-> recipient", "unreviewedRecipient |-> recipient"),
+        ("SumeragiV2AsyncNetwork.tla", "FiniteAsyncPublishableControlItems",
+         "ProposalOutbox(request)", "{request}"),
+        ("SumeragiV2AsyncNetwork.tla", "ProposalOutbox",
+         "AsyncNetworkItem(", "UnreviewedNetworkItem("),
+        ("SumeragiV2AsyncNetwork.tla", "VoteOutbox",
+         "AsyncNetworkItem(", "UnreviewedNetworkItem("),
+        ("SumeragiV2AsyncNetwork.tla", "QcOutbox",
+         "AsyncNetworkItem(", "UnreviewedNetworkItem("),
+        ("SumeragiV2AsyncNetwork.tla", "TimeoutOutbox",
+         "AsyncNetworkItem(", "UnreviewedNetworkItem("),
+    ),
+)
+def test_candidate_causal_origin_type_rejects_equivalence_premise_drift(
+    tmp_path: Path, filename: str, symbol: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    copy_candidate_proposal_round_contract_sources(module, formal_dir)
+    path = formal_dir / filename
+    source = path.read_text(encoding="utf-8")
+    path.write_text(_mutate_chain_operator(source, symbol, old, new), encoding="utf-8")
+
+    errors = module._async_candidate_causal_origin_type_contract_errors(formal_dir)
+    assert any(symbol in error for error in errors), errors
+
+
+def test_deferred_handoff_raw_type_contract_is_current(tmp_path: Path) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    copy_candidate_proposal_round_contract_sources(module, formal_dir)
+    assert module._async_deferred_handoff_type_contract_errors(formal_dir) == []
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (('AsyncCandidateProposalCarrierTyped', 'proposal.context \\in ContextRecords', 'TRUE'),
+ ('AsyncCandidateProposalCarrierTyped', 'proposal.height \\in Heights', 'TRUE'),
+ ('AsyncCandidateProposalCarrierTyped', 'proposal.view \\in Views', 'TRUE'),
+ ('AsyncCandidateProposalCarrierTyped', 'proposal.subject \\in Subjects', 'TRUE'),
+ ('AsyncCandidateProposalCarrierTyped', 'proposal.proposer \\in ValidatorIds', 'TRUE'),
+ ('AsyncCandidateProposalCarrierTyped', 'proposal.highestPrepareQc \\in PrepareQcOptionSet', 'TRUE'),
+ ('AsyncCandidateProposalCarrierTyped', 'proposal.justifyRank \\in Ranks', 'TRUE'),
+ ('AsyncCandidateProposalCarrierTyped', 'proposal.justifySubject \\in SubjectOrNone', 'TRUE'),
+ ('AsyncCandidateProposalCarrierTyped', '"context"', '"unreviewed_context"'),
+ ('AsyncCandidateProposalCarrierTyped', '"height"', '"unreviewed_height"'),
+ ('AsyncCandidateProposalCarrierTyped', '"view"', '"unreviewed_view"'),
+ ('AsyncCandidateProposalCarrierTyped', '"subject"', '"unreviewed_subject"'),
+ ('AsyncCandidateProposalCarrierTyped', '"proposer"', '"unreviewed_proposer"'),
+ ('AsyncCandidateProposalCarrierTyped', '"timeoutCertificate"', '"unreviewed_timeoutCertificate"'),
+ ('AsyncCandidateProposalCarrierTyped', '"highestPrepareQc"', '"unreviewed_highestPrepareQc"'),
+ ('AsyncCandidateProposalCarrierTyped', '"justifyRank"', '"unreviewed_justifyRank"'),
+ ('AsyncCandidateProposalCarrierTyped', '"justifySubject"', '"unreviewed_justifySubject"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', 'origin.target \\in ValidatorIds', 'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped', 'origin.context \\in ContextRecords', 'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped', 'origin.height \\in Heights', 'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped', 'origin.leader \\in ValidatorIds', 'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped', 'origin.view \\in Views', 'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped', 'origin.subject \\in SubjectOrNone', 'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped', 'origin.phase \\in AsyncWorkKinds', 'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped', 'origin.owner \\in ValidatorIds', 'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped', 'origin.payload.workKind \\in AsyncWorkKinds', 'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped', 'origin.payload.body \\in SubjectOrNone', 'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped', 'origin.payload.manifest \\in SubjectOrNone', 'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped', 'origin.payload.commitment \\in SubjectOrNone', 'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"target"', '"unreviewed_target"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"context"', '"unreviewed_context"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"height"', '"unreviewed_height"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"leader"', '"unreviewed_leader"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"view"', '"unreviewed_view"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"subject"', '"unreviewed_subject"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"phase"', '"unreviewed_phase"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"owner"', '"unreviewed_owner"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"kind"', '"unreviewed_kind"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"payload"', '"unreviewed_payload"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"CausalOrigin"', '"unreviewed_CausalOrigin"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"workKind"', '"unreviewed_workKind"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"item"', '"unreviewed_item"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"authority"', '"unreviewed_authority"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"body"', '"unreviewed_body"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"manifest"', '"unreviewed_manifest"'),
+ ('AsyncCandidateCausalOriginCarrierTyped', '"commitment"', '"unreviewed_commitment"'),
+ ('AsyncCandidateCarrierTyped', 'candidate.class \\in AsyncCommandClasses', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.kind \\in AsyncWorkKinds', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.node \\in ValidatorIds', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.height \\in Heights', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.view \\in Views', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.subject \\in SubjectOrNone', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.item \\in AsyncNetworkItems \\cup {NoAsyncItem}', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.consumerContext \\in ContextRecords', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.consumerView \\in Views', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.consumerGeneration \\in Generations', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.bodyIdentity \\in SubjectOrNone', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.manifestIdentity \\in SubjectOrNone', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.commitmentIdentity \\in SubjectOrNone', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.proposalRound \\in AsyncCandidateRoundSet', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'candidate.semanticPhase \\in AsyncCandidateSemanticPhases', 'TRUE'),
+ ('AsyncDeferredHandoffCarrierTyped', '"active"', '"unreviewed_active"'),
+ ('AsyncDeferredHandoffCarrierTyped', '"candidate"', '"unreviewed_candidate"'),
+ ('AsyncDeferredHandoffCarrierTyped', '"identity"', '"unreviewed_identity"'),
+ ('AsyncCandidateProposalCarrierTyped', 'THEN TRUE', 'THEN FALSE'),
+ ('AsyncCandidateProposalCarrierTyped',
+  'ELSE AsyncTcRecordTyped(proposal.timeoutCertificate)',
+  'ELSE TRUE'),
+ ('AsyncCandidateEvidenceCarrierTyped', 'evidence \\in AsyncNetworkItems', 'AsyncItemTyped(evidence)'),
+ ('AsyncCandidateEvidenceCarrierTyped', 'evidence = NoAsyncItem', 'FALSE'),
+ ('AsyncCandidateCausalOriginCarrierTyped',
+  'origin.kind = "CausalOrigin"',
+  'origin.kind = "CausalOrigin" /\\ origin.owner = origin.target'),
+ ('AsyncCandidateCausalOriginCarrierTyped',
+  'origin.leader \\in ValidatorIds',
+  'origin.leader = Leader(origin.context, origin.view)'),
+ ('AsyncCandidateCausalOriginCarrierTyped',
+  'origin.payload.workKind \\in AsyncWorkKinds',
+  'origin.payload.workKind = origin.phase'),
+ ('AsyncCandidateCausalOriginCarrierTyped',
+  'origin.height \\in Heights',
+  'origin.height = origin.context.height'),
+ ('AsyncCandidateCausalOriginCarrierTyped',
+  'AsyncRouteNeutralCandidateItemStructurallyTyped(origin.payload.item)',
+  'TRUE'),
+ ('AsyncCandidateCausalOriginCarrierTyped',
+  'AsyncRouteNeutralCandidateEvidenceStructurallyTyped(origin.payload.authority)',
+  'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'DOMAIN candidate = AsyncCandidateDomain', 'TRUE'),
+ ('AsyncCandidateCarrierTyped', 'AsyncCandidateEvidenceCarrierTyped(candidate.evidence)', 'TRUE'),
+ ('AsyncCandidateCarrierTyped',
+  'AsyncCandidateCausalOriginCarrierTyped(candidate.causalOrigin)',
+  'AsyncCandidateCausalOriginTyped(candidate.causalOrigin)'),
+ ('AsyncCandidateCarrierTyped',
+  'candidate.consumerView \\in Views',
+  'candidate.consumerView = candidate.view'),
+ ('AsyncDeferredHandoffCarrierTyped',
+  'IF handoff = NoAsyncDeferredHandoff',
+  'IF handoff.active = FALSE'),
+ ('AsyncDeferredHandoffCarrierTyped', 'THEN TRUE', 'THEN FALSE'),
+ ('AsyncDeferredHandoffCarrierTyped', 'handoff.active = TRUE', 'TRUE'),
+ ('AsyncDeferredHandoffCarrierTyped',
+  'AsyncCandidateCarrierTyped(handoff.candidate)',
+  'AsyncCandidateTyped(handoff.candidate)'),
+ ('AsyncDeferredHandoffCarrierTyped',
+  'handoff.identity = ExactAsyncCandidateIdentity(handoff.candidate)',
+  'TRUE'),
+ ('AsyncDeferredHandoffMapCarrierTyped', 'DOMAIN handoffs = ValidatorIds', 'TRUE'),
+ ('AsyncDeferredHandoffMapCarrierTyped', '\\A node \\in ValidatorIds', '\\E node \\in ValidatorIds'),
+ ('AsyncDeferredHandoffMapCarrierTyped', 'AsyncDeferredHandoffCarrierTyped(handoffs[node])', 'TRUE'),
+ ('AsyncDeferredTopologyTypeInvariant',
+  'AsyncDeferredHandoffMapCarrierTyped(asyncDeferredHandoffs)',
+  'TRUE'),
+ ('AsyncDeferredTypeInvariant',
+  '/\\ AsyncDeferredContentTypeInvariant',
+  '/\\ AsyncDeferredContentTypeInvariant /\\ AsyncDeferredHandoffOwnershipInvariant'),
+ ('AsyncCandidateSet', 'class: AsyncCommandClasses', 'class: {"Normal"}'),
+ ('AsyncCandidateDomain', '"evidence"', '"unreviewed_evidence"'),
+ ('AsyncDeferredHandoff',
+  'identity |-> ExactAsyncCandidateIdentity(candidate)',
+  'identity |-> candidate'),
+ ('AsyncDeferredHandoffSet', '{NoAsyncDeferredHandoff}', '{}'),
+ ('ExactAsyncCandidateIdentity',
+  'causalOrigin |-> candidate.causalOrigin',
+  'causalOrigin |-> candidate.item'),
+ ('AsyncTcRecordTyped', 'tc.votes \\subseteq TimeoutVoteRecordSet', 'TRUE'),
+ ('AsyncEvidenceSet', '\\cup TcRecordSet', '\\cup {}'),
+ ('AsyncTransportHistoryTypeInvariant', 'asyncActiveRequests \\subseteq asyncSentItems', 'TRUE'),
+ ('AsyncPacketContentTypeInvariant', 'AsyncPacketTyped(packet)', 'TRUE'),
+ ('AsyncTypeInvariant', '/\\ AsyncSchedulerTypeInvariant', '/\\ TRUE'),
+ ('AsyncCandidateEvidenceCarrierTyped', 'evidence \\in AsyncNetworkItems', 'FALSE'),
+ ('AsyncCandidateEvidenceCarrierTyped', 'AsyncCandidateProposalCarrierTyped(evidence)', 'FALSE'),
+ ('AsyncCandidateEvidenceCarrierTyped', 'evidence \\in VoteRecordSet', 'FALSE'),
+ ('AsyncCandidateEvidenceCarrierTyped', 'evidence \\in TimeoutVoteRecordSet', 'FALSE'),
+ ('AsyncCandidateEvidenceCarrierTyped', 'evidence \\in QcRecordSet', 'FALSE'),
+ ('AsyncCandidateEvidenceCarrierTyped', 'AsyncTcRecordTyped(evidence)', 'FALSE'),
+ ('AsyncCandidateEvidenceCarrierTyped', 'evidence \\in BodyRecordSet', 'FALSE')),
+)
+def test_deferred_handoff_raw_type_rejects_semantic_drift(
+    tmp_path: Path, symbol: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    copy_candidate_proposal_round_contract_sources(module, formal_dir)
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(_mutate_chain_operator(source, symbol, old, new), encoding="utf-8")
+    errors = module._async_deferred_handoff_type_contract_errors(formal_dir)
+    assert any(symbol in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (('AsyncCandidateDomain', '"class"', '"unreviewed_class"'),
+ ('AsyncCandidateDomain', '"kind"', '"unreviewed_kind"'),
+ ('AsyncCandidateDomain', '"node"', '"unreviewed_node"'),
+ ('AsyncCandidateDomain', '"height"', '"unreviewed_height"'),
+ ('AsyncCandidateDomain', '"view"', '"unreviewed_view"'),
+ ('AsyncCandidateDomain', '"subject"', '"unreviewed_subject"'),
+ ('AsyncCandidateDomain', '"item"', '"unreviewed_item"'),
+ ('AsyncCandidateDomain', '"consumerContext"', '"unreviewed_consumerContext"'),
+ ('AsyncCandidateDomain', '"consumerView"', '"unreviewed_consumerView"'),
+ ('AsyncCandidateDomain', '"consumerGeneration"', '"unreviewed_consumerGeneration"'),
+ ('AsyncCandidateDomain', '"evidence"', '"unreviewed_evidence"'),
+ ('AsyncCandidateDomain', '"bodyIdentity"', '"unreviewed_bodyIdentity"'),
+ ('AsyncCandidateDomain', '"manifestIdentity"', '"unreviewed_manifestIdentity"'),
+ ('AsyncCandidateDomain', '"commitmentIdentity"', '"unreviewed_commitmentIdentity"'),
+ ('AsyncCandidateDomain', '"proposalRound"', '"unreviewed_proposalRound"'),
+ ('AsyncCandidateDomain', '"semanticPhase"', '"unreviewed_semanticPhase"'),
+ ('AsyncCandidateDomain', '"causalOrigin"', '"unreviewed_causalOrigin"'),
+ ('ExactAsyncCandidateIdentity', 'consumer |->', 'unreviewed_consumer |->'),
+ ('ExactAsyncCandidateIdentity', 'payload |->', 'unreviewed_payload |->'),
+ ('ExactAsyncCandidateIdentity', 'evidence |->', 'unreviewed_evidence |->'),
+ ('ExactAsyncCandidateIdentity', 'causalOrigin |->', 'unreviewed_causalOrigin |->'),
+ ('ExactAsyncCandidateIdentity', 'work |->', 'unreviewed_work |->'),
+ ('ExactAsyncCandidateIdentity', 'body |->', 'unreviewed_body |->'),
+ ('ExactAsyncCandidateIdentity', 'manifest |->', 'unreviewed_manifest |->'),
+ ('ExactAsyncCandidateIdentity', 'commitment |->', 'unreviewed_commitment |->'),
+ ('ExactAsyncCandidateIdentity', 'semanticStatement |->', 'unreviewed_semanticStatement |->'),
+ ('AsyncConsumerEventTag', 'context |->', 'unreviewed_context |->'),
+ ('AsyncConsumerEventTag', 'height |->', 'unreviewed_height |->'),
+ ('AsyncConsumerEventTag', 'node |->', 'unreviewed_node |->'),
+ ('AsyncConsumerEventTag', 'view |->', 'unreviewed_view |->'),
+ ('AsyncConsumerEventTag', 'generation |->', 'unreviewed_generation |->'),
+ ('AsyncWorkIdentity', 'class |->', 'unreviewed_class |->'),
+ ('AsyncWorkIdentity', 'kind |->', 'unreviewed_kind |->'),
+ ('AsyncWorkIdentity', 'node |->', 'unreviewed_node |->'),
+ ('AsyncWorkIdentity', 'height |->', 'unreviewed_height |->'),
+ ('AsyncWorkIdentity', 'view |->', 'unreviewed_view |->'),
+ ('AsyncWorkIdentity', 'subject |->', 'unreviewed_subject |->'),
+ ('AsyncCandidateSemanticStatement', 'context |->', 'unreviewed_context |->'),
+ ('AsyncCandidateSemanticStatement', 'round |->', 'unreviewed_round |->'),
+ ('AsyncCandidateSemanticStatement', 'proposalRound |->', 'unreviewed_proposalRound |->'),
+ ('AsyncCandidateSemanticStatement', 'subject |->', 'unreviewed_subject |->'),
+ ('AsyncCandidateSemanticStatement', 'phase |->', 'unreviewed_phase |->'),
+ ('AsyncCandidateSemanticStatement', 'executionCommitment |->', 'unreviewed_executionCommitment |->'),
+ ('AsyncCandidateRound', 'context |->', 'unreviewed_context |->'),
+ ('AsyncCandidateRound', 'height |->', 'unreviewed_height |->'),
+ ('AsyncCandidateRound', 'view |->', 'unreviewed_view |->')),
+)
+def test_deferred_handoff_raw_type_rejects_every_domain_and_identity_field(
+    tmp_path: Path, symbol: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    copy_candidate_proposal_round_contract_sources(module, formal_dir)
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(_mutate_chain_operator(source, symbol, old, new), encoding="utf-8")
+    errors = module._async_deferred_handoff_type_contract_errors(formal_dir)
+    assert any(symbol in error for error in errors), errors
+
+
+def test_leader_wire_raw_carrier_contract_is_current(tmp_path: Path) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    shutil.copy2(module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla", formal_dir)
+    assert module._async_leader_wire_lifecycle_raw_type_contract_errors(formal_dir) == []
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'DOMAIN record =\n'
+  '       {"recipient", "item", "identity", "slot", "context",\n'
+  '        "height", "view", "subject", "phase", "causalOrigin",\n'
+  '        "admissionOrdinal", "physicalAdmissionOrdinal",\n'
+  '        "schedulerOrdinal", "departurePhysicalCut", "status",\n'
+  '        "ingressPredecessors"}',
+  'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', 'record.item \\in AsyncNetworkItems', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', 'record.item.kind \\in AsyncLeaderWireKinds', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', 'record.context \\in ContextRecords', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', 'record.admissionOrdinal \\in Nat', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', 'record.admissionOrdinal # 0', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', 'record.physicalAdmissionOrdinal \\in Nat', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', 'record.schedulerOrdinal \\in Nat', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', 'record.schedulerOrdinal # 0', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', 'record.departurePhysicalCut \\in Nat', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'record.status \\in AsyncLeaderWireLifecycleStatuses',
+  'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'record.ingressPredecessors\n       \\in [AsyncIngressSources -> 0..AsyncIngressCapacity]',
+  'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'record.recipient = record.item.envelope.recipient',
+  'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'record.identity =\n       AsyncLeaderWireLifecycleIdentityAt(record.item, record.context)',
+  'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'record.slot = AsyncLeaderWireLifecycleSlot(record.item)',
+  'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', 'record.height = DeliveryHeight(record.item)', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', 'record.view = DeliveryView(record.item)', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'record.subject = AsyncLeaderWireLifecycleSubject(record.item)',
+  'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', 'record.phase = record.item.kind', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'record.causalOrigin =\n       AsyncLeaderWireLifecycleCausalOriginAt(record.item, record.context)',
+  'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"recipient"', '"unreviewed_recipient"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"item"', '"unreviewed_item"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"identity"', '"unreviewed_identity"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"slot"', '"unreviewed_slot"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"context"', '"unreviewed_context"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"height"', '"unreviewed_height"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"view"', '"unreviewed_view"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"subject"', '"unreviewed_subject"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"phase"', '"unreviewed_phase"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"causalOrigin"', '"unreviewed_causalOrigin"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"admissionOrdinal"', '"unreviewed_admissionOrdinal"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  '"physicalAdmissionOrdinal"',
+  '"unreviewed_physicalAdmissionOrdinal"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"schedulerOrdinal"', '"unreviewed_schedulerOrdinal"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  '"departurePhysicalCut"',
+  '"unreviewed_departurePhysicalCut"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped', '"status"', '"unreviewed_status"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  '"ingressPredecessors"',
+  '"unreviewed_ingressPredecessors"'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'record.context \\in ContextRecords',
+  'record.context = context'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'record.admissionOrdinal \\in Nat',
+  'record.admissionOrdinal \\in 1..1000000'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'record.schedulerOrdinal \\in Nat',
+  'record.schedulerOrdinal \\in 1..1000000'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'record.physicalAdmissionOrdinal \\in Nat',
+  'record.physicalAdmissionOrdinal \\in Nat \\ {0}'),
+ ('AsyncLeaderWireLifecycleRecordCarrierTyped',
+  'record.departurePhysicalCut \\in Nat',
+  'record.departurePhysicalCut \\in Nat \\ {0}'),
+ ('AsyncLeaderWireLifecycleTyped', 'AsyncLeaderWireLifecycleRecordCarrierTyped(record)', 'TRUE'),
+ ('AsyncLeaderWireLifecycleTyped', 'record.context = context', 'TRUE'),
+ ('AsyncLeaderWireLifecycleTyped', 'record.height = height', 'TRUE'),
+ ('AsyncLeaderWireLifecycleTyped', 'record.slot \\in AsyncLeaderWireLifecycleSlotSet', 'TRUE'),
+ ('AsyncLeaderWireLifecycleTyped',
+  'record.admissionOrdinal\n       < AsyncNextLeaderWireLifecycleAdmissionOrdinal(',
+  'record.admissionOrdinal\n       <= AsyncNextLeaderWireLifecycleAdmissionOrdinal('),
+ ('AsyncLeaderWireLifecycleTyped',
+  'record.physicalAdmissionOrdinal\n                < record.departurePhysicalCut',
+  'record.physicalAdmissionOrdinal\n                <= record.departurePhysicalCut'),
+ ('AsyncLeaderWireLifecycleTypeInvariant',
+  '\\A record \\in asyncLeaderWireLifecycles:',
+  '\\E record \\in asyncLeaderWireLifecycles:'),
+ ('AsyncLeaderWireLifecycleTypeInvariant', 'AsyncLeaderWireLifecycleRecordCarrierTyped(record)', 'TRUE'),
+ ('AsyncLeaderWireLifecycleTypeInvariant', 'IsFiniteSet(asyncLeaderWireLifecycles)', 'TRUE'),
+ ('AsyncLeaderWireLifecycleTypeInvariant', 'AsyncLeaderWireLifecycleSharedOrdinalInvariant', 'TRUE'),
+ ('AsyncLeaderWireLifecycleTypeInvariant', 'AsyncLeaderWireLifecycleTyped(record)', 'TRUE'),
+ ('AsyncLeaderWireLifecycleRecordSet',
+  'admissionOrdinal \\in Nat \\ {0}',
+  'admissionOrdinal \\in 1..1000000'),
+ ('AsyncLeaderWireLifecycleRecordSet', 'schedulerOrdinal \\in Nat \\ {0}', 'schedulerOrdinal \\in Nat'),
+ ('AsyncLeaderWireLifecycleRecordSet',
+  'physicalAdmissionOrdinal \\in Nat',
+  'physicalAdmissionOrdinal \\in Nat \\ {0}'),
+ ('AsyncLeaderWireLifecycleRecordSet',
+  'departurePhysicalCut \\in Nat',
+  'departurePhysicalCut \\in Nat \\ {0}'),
+ ('AsyncLeaderWireLifecycleRecord',
+  'identity |-> AsyncLeaderWireLifecycleIdentityAt(item, leaderContext)',
+  'identity |-> item'),
+ ('AsyncLeaderWireLifecycleIdentityAt', 'context |-> leaderContext', 'context |-> context'),
+ ('AsyncLeaderWireLifecycleSlot',
+  'source |-> AsyncLeaderWireLifecyclePhysicalOwner(item)',
+  'source |-> item.source'),
+ ('AsyncLeaderWireLifecycleCausalOriginAt', 'ELSE DeliveryCandidate(item).causalOrigin', 'ELSE item')),
+)
+def test_leader_wire_raw_carrier_rejects_semantic_drift(
+    tmp_path: Path, symbol: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = (module.FORMAL_DIR / path.name).read_text(encoding="utf-8")
+    path.write_text(_mutate_chain_operator(source, symbol, old, new), encoding="utf-8")
+    errors = module._async_leader_wire_lifecycle_raw_type_contract_errors(formal_dir)
+    assert any(symbol in error for error in errors), errors

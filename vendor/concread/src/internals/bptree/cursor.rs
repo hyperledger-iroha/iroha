@@ -20,6 +20,16 @@ use std::ops::RangeBounds;
 
 use std::sync::OnceLock;
 
+#[path = "checkpoint.rs"]
+mod checkpoint;
+pub(crate) use checkpoint::{CheckpointBuffers, CursorCheckpoint};
+
+/// One shared bound for planning, cursor construction and private checkpoints.
+pub(crate) fn checked_next_generation(txid: u64) -> Option<u64> {
+    txid.checked_add(1)
+        .filter(|next| *next < (TXID_MASK >> TXID_SHF))
+}
+
 /// Original node funding and bookkeeping selected before cursor construction.
 /// Implementations must consume already admitted input, never obtain more pool
 /// capacity midway through an edit. Only Untracked exposes unrestricted mutation.
@@ -54,19 +64,19 @@ where
 }
 
 unsafe impl<
-        K: Clone + Ord + Debug + Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-        M: CursorMode<K, V>,
-    > Send for SuperBlock<K, V, M>
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: CursorMode<K, V>,
+> Send for SuperBlock<K, V, M>
 where
     M::Charge: Send + Sync,
 {
 }
 unsafe impl<
-        K: Clone + Ord + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-        M: CursorMode<K, V>,
-    > Sync for SuperBlock<K, V, M>
+    K: Clone + Ord + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: CursorMode<K, V>,
+> Sync for SuperBlock<K, V, M>
 where
     M::Charge: Send + Sync,
 {
@@ -92,6 +102,7 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>>
         mut new: CursorWrite<K, V, M>,
         prev: &CursorRead<K, V, M>,
     ) -> CursorRead<K, V, M> {
+        new.assert_operable();
         assert!(prev.last_seen.get().is_none());
         // The original writer retires this reader exactly once. Move the
         // existing buffer and its charge intact, without replacement or allocation.
@@ -181,19 +192,19 @@ where
 }
 
 unsafe impl<
-        K: Clone + Ord + Debug + Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-        M: CursorMode<K, V>,
-    > Send for CursorRead<K, V, M>
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: CursorMode<K, V>,
+> Send for CursorRead<K, V, M>
 where
     M::Charge: Send + Sync,
 {
 }
 unsafe impl<
-        K: Clone + Ord + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-        M: CursorMode<K, V>,
-    > Sync for CursorRead<K, V, M>
+    K: Clone + Ord + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: CursorMode<K, V>,
+> Sync for CursorRead<K, V, M>
 where
     M::Charge: Send + Sync,
 {
@@ -210,22 +221,25 @@ where
     last_seen: Option<M::Buffer>,
     first_seen: M::Buffer,
     funding: M,
+    // A borrowed admitted edit may unwind inside catch_unwind while its physical
+    // writer stays held. Such a cursor must never become readable/publishable.
+    edit_failed: bool,
 }
 
 unsafe impl<
-        K: Clone + Ord + Debug + Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-        M: CursorMode<K, V> + Send,
-    > Send for CursorWrite<K, V, M>
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: CursorMode<K, V> + Send,
+> Send for CursorWrite<K, V, M>
 where
     M::Charge: Send + Sync,
 {
 }
 unsafe impl<
-        K: Clone + Ord + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-        M: CursorMode<K, V> + Send + Sync,
-    > Sync for CursorWrite<K, V, M>
+    K: Clone + Ord + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: CursorMode<K, V> + Send + Sync,
+> Sync for CursorWrite<K, V, M>
 where
     M::Charge: Send + Sync,
 {
@@ -348,8 +362,8 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone, C = Untracked> 
 
 impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M> {
     pub(crate) fn with_input(sblock: &SuperBlock<K, V, M>, input: M::Input) -> Self {
-        let txid = sblock.txid + 1;
-        assert!(txid < (TXID_MASK >> TXID_SHF));
+        let txid = checked_next_generation(sblock.txid)
+            .expect("B+tree writer generation exceeds its representable limit");
         // println!("starting wr txid -> {:?}", txid);
         let length = sblock.size;
         let root = sblock.root;
@@ -362,7 +376,27 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M>
             last_seen: Some(last_seen),
             first_seen,
             funding,
+            edit_failed: false,
         }
+    }
+
+    pub(crate) fn checkpoint(&mut self) -> Option<CursorCheckpoint<'_, K, V, M>>
+    where
+        M: MapMode,
+    {
+        CursorCheckpoint::new(self, None)
+    }
+
+    pub(crate) fn assert_operable(&self) {
+        assert!(
+            !self.edit_failed,
+            "admitted edit unwound; abort the original cursor"
+        );
+    }
+
+    pub(crate) fn begin_admitted_edit(&mut self) {
+        self.assert_operable();
+        self.edit_failed = true;
     }
 
     /// Refuse exhausted bookkeeping before cloning, splitting or changing nodes.
@@ -485,20 +519,72 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M>
 impl<K: Clone + Ord + Debug, V: Clone, P: NodeCloning<K, V>>
     CursorWrite<K, V, crate::bptree::Prepaid<P>>
 {
+    /// Existing original bookkeeping counts, inspected before further admission.
+    pub(crate) fn admitted_tracking(&self) -> [(usize, usize); 2] {
+        let retired = self.last_seen.as_ref().expect("original retirement buffer");
+        [
+            (self.first_seen.as_slice().len(), self.first_seen.capacity()),
+            (retired.as_slice().len(), retired.capacity()),
+        ]
+    }
+
+    /// Install one prepaid edit without replacing the cursor or any tree owner.
+    pub(crate) fn resume_admitted_funding(
+        &mut self,
+        provider: P,
+        first: Option<super::tracking::FixedTrackingBuffer<*mut Node<K, V, P::Charge>, P::Charge>>,
+        last: Option<super::tracking::FixedTrackingBuffer<*mut Node<K, V, P::Charge>, P::Charge>>,
+        mut saved: Option<&mut CheckpointBuffers<K, V, crate::bptree::Prepaid<P>>>,
+    ) {
+        assert!(self.funding.0.is_none(), "previous edit must be sealed");
+        self.funding.0 = Some(provider);
+        if let Some(mut replacement) = first {
+            for &node in self.first_seen.as_slice() {
+                replacement.push(node);
+            }
+            // Install valid bookkeeping before an arbitrary old charge can
+            // unwind, so cursor abort still sees the original node owners.
+            let old = mem::replace(&mut self.first_seen, replacement);
+            if let Some(saved) = saved.as_mut() {
+                saved.retain_first(old);
+            } else {
+                drop(old);
+            }
+        }
+        if let Some(mut replacement) = last {
+            let retired = self.last_seen.as_mut().expect("original retirement buffer");
+            for &node in retired.as_slice() {
+                replacement.push(node);
+            }
+            let old = mem::replace(retired, replacement);
+            if let Some(saved) = saved.as_mut() {
+                saved.retain_last(old);
+            } else {
+                drop(old);
+            }
+        }
+    }
+
     /// Seal the one closed edit, returning only unused original admission.
     /// Allocated node/payload/buffer/shell charges remain in their own storage.
     pub(crate) fn finish_admitted_funding(&mut self) {
         drop(self.funding.0.take().expect("original completed provider"));
+        self.edit_failed = false;
     }
 }
 
 impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
     pub(crate) fn insert(&mut self, k: K, v: V) -> Option<V> {
-        self.try_insert(k, v)
-            .unwrap_or_else(|_| unreachable!("untracked tracking can grow"))
+        self.begin_admitted_edit();
+        let previous = self
+            .try_insert(k, v)
+            .unwrap_or_else(|_| unreachable!("untracked tracking can grow"));
+        self.edit_failed = false;
+        previous
     }
 
     pub(crate) fn clear(&mut self) {
+        self.begin_admitted_edit();
         // Reset the values in this tree.
         // We need to mark everything as disposable, and create a new root!
         self.last_seen
@@ -514,9 +600,11 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         self.first_seen.push(nroot);
         mem::swap(&mut self.root, &mut nroot);
         self.length = 0;
+        self.edit_failed = false;
     }
 
     pub(crate) fn remove(&mut self, k: &K) -> Option<V> {
+        self.begin_admitted_edit();
         let r = match clone_and_remove(
             self.root,
             self.txid,
@@ -568,6 +656,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         if r.is_some() {
             self.length -= 1;
         }
+        self.edit_failed = false;
         r
     }
 
@@ -589,6 +678,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
     }
 
     pub(crate) fn get_mut_ref(&mut self, k: &K) -> Option<&mut V> {
+        self.begin_admitted_edit();
         match path_clone(
             self.root,
             self.txid,
@@ -602,11 +692,17 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
             }
             CRCloneState::NoClone => {}
         };
-        // Now get the ref.
-        path_get_mut_ref(self.root, k)
+        // Resolve the borrowed slot while edits are still marked failed, so a
+        // caught key-comparison panic cannot leave this cursor publishable.
+        let value = path_get_mut_ref(self.root, k).map(|value| value as *mut V);
+        self.edit_failed = false;
+        // SAFETY: this path is private to the current generation. The returned
+        // reference is tied to the exclusive cursor borrow and cannot escape it.
+        value.map(|value| unsafe { &mut *value })
     }
 
     pub(crate) fn split_off_lt(&mut self, k: &K) {
+        self.assert_operable();
         /*
         // Remove all the values less than from the top of the tree.
         loop {
@@ -700,6 +796,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         T: Ord + ?Sized,
         R: RangeBounds<T>,
     {
+        self.assert_operable();
         RangeMutIter::new(self, range)
     }
 }
@@ -780,18 +877,22 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorReadOps<K, V, 
     for CursorWrite<K, V, M>
 {
     fn get_root_ref(&self) -> &Node<K, V, M::Charge> {
+        self.assert_operable();
         unsafe { &*(self.root) }
     }
 
     fn get_root(&self) -> *mut Node<K, V, M::Charge> {
+        self.assert_operable();
         self.root
     }
 
     fn len(&self) -> usize {
+        self.assert_operable();
         self.length
     }
 
     fn get_txid(&self) -> u64 {
+        self.assert_operable();
         self.txid
     }
 }

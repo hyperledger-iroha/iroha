@@ -10,6 +10,10 @@ use crate::sumeragi::v2_body_store::{
     ValidatedBodyReceipt,
 };
 use iroha_data_model::block::{SignedBlock, consensus_v2 as wire};
+use mv::allocation::{
+    AllocationBudget, AllocationCharge, AllocationRefusal, InsufficientReservation,
+};
+use std::alloc::Layout;
 
 mod sealed {
     pub trait Owner {}
@@ -110,6 +114,10 @@ pub(in crate::sumeragi) mod test_support {
                     .count(),
             )
         }
+        pub(crate) fn descriptor_allocation_bytes_for_test(&self) -> usize {
+            self.candidates.capacity() * std::mem::size_of::<Candidate<P::Owner>>()
+                + self.markers.capacity() * std::mem::size_of::<Marker>()
+        }
     }
 }
 
@@ -160,6 +168,12 @@ pub(crate) enum CarrierCustodyError {
     /// Host allocation failed before any new candidate execution.
     #[error("cannot reserve retained carrier descriptors: {0}")]
     Allocation(#[from] std::collections::TryReserveError),
+    /// The exact descriptor layouts could not be admitted before allocation.
+    #[error("retained carrier descriptor byte admission: {0}")]
+    DescriptorAdmission(#[from] AllocationRefusal),
+    /// Original prepaid credits did not cover their requested allocation split.
+    #[error("retained carrier descriptor reservation: {0}")]
+    DescriptorReservation(#[from] InsufficientReservation),
     /// Selection requires a confirmed exact receipt, never a pending write.
     #[error("retained carrier has no matching confirmed validation receipt")]
     Unconfirmed,
@@ -178,24 +192,57 @@ struct Marker {
     confirmed: Option<ValidatedBodyReceipt>,
 }
 
-/// Descriptor-bounded service storage. Payload capacity remains inside each owner.
+/// Descriptor storage admitted by count and exact requested allocation bytes.
+/// Nested candidate payload capacity remains inside each original owner.
 pub(crate) struct RetainedBodyValidationService<P: CarrierValidator> {
     candidates: Vec<Candidate<P::Owner>>,
     markers: Vec<Marker>,
     identity: V2BodyStoreInstanceIdentity,
     limit: usize,
+    // Neither vector escapes this owner. Charges drop only after both vectors
+    // and every retained candidate have actually been destroyed.
+    _descriptor_admission: [AllocationCharge; 2],
     // Field drop order keeps the original service and its resource policy alive
     // until every retained payload and descriptor allocation has been released.
     validator: P,
 }
 
 impl<P: CarrierValidator> RetainedBodyValidationService<P> {
+    fn descriptor_layouts(limit: usize) -> Result<[Layout; 2], AllocationRefusal> {
+        Ok([
+            Layout::array::<Candidate<P::Owner>>(limit)
+                .map_err(|_| AllocationRefusal::DemandOverflow)?,
+            Layout::array::<Marker>(limit).map_err(|_| AllocationRefusal::DemandOverflow)?,
+        ])
+    }
+
+    /// Plan both actual vector allocations without allocating or executing.
+    /// This funds inline owner storage, not its separately retained payloads.
+    pub(crate) fn descriptor_bytes(limit: usize) -> Result<usize, AllocationRefusal> {
+        Self::descriptor_layouts(limit)?
+            .into_iter()
+            .try_fold(0, |total: usize, layout| {
+                total
+                    .checked_add(layout.size())
+                    .ok_or(AllocationRefusal::DemandOverflow)
+            })
+    }
+
     /// Only BodyStore supplies the original instance identity and its bound.
+    /// The explicit shared pool admits both vectors before either is allocated.
     pub(crate) fn new(
         validator: P,
         identity: V2BodyStoreInstanceIdentity,
         limit: usize,
+        budget: &AllocationBudget,
     ) -> Result<Self, CarrierCustodyError> {
+        let layouts = Self::descriptor_layouts(limit)?;
+        let mut reservation = budget.try_reserve_layouts(layouts)?;
+        let descriptor_admission = [
+            reservation.try_split(layouts[0])?,
+            reservation.try_split(layouts[1])?,
+        ];
+        drop(reservation);
         let mut candidates = Vec::new();
         candidates.try_reserve_exact(limit)?;
         let mut markers = Vec::new();
@@ -206,6 +253,7 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
             candidates,
             markers,
             limit,
+            _descriptor_admission: descriptor_admission,
         })
     }
 

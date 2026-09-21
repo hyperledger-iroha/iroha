@@ -223,4 +223,5 @@ mod tests;
 mod prepared_comparator_continuation_v1;
 pub(in super::super::super) use prepared_comparator_continuation_v1::{
     RnsNativeComparatorContinuationV1, RnsNativeSmallSignedCommitmentsV1,
+    RnsNativeStoredPlaneReplayV1,
 };

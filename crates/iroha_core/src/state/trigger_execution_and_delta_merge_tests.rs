@@ -276,7 +276,10 @@ fn result_bearing_time_trigger_block(
     let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
         signer.public_key().clone(),
     )]);
-    let valid = ValidBlock::new_dummy_and_modify_header(signer.private_key(), update_header);
+    let valid = ValidBlock::new_dummy_and_modify_header(signer.private_key(), |header| {
+        header.prev_block_hash = state.latest_block_hash_fast();
+        update_header(header);
+    });
     let mut signed: SignedBlock = valid.into();
     if signed.header().is_genesis() {
         let snapshot = state.block(signed.header()).axt_policy_snapshot();
@@ -307,6 +310,30 @@ fn result_bearing_time_trigger_block(
         .unpack(|_| {})
         .expect("commit the result-bearing time-trigger fixture block")
 }
+#[test]
+fn apply_fixture_block_reports_predecessor_metadata_failure() {
+    let state = State::new(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    // Actual output replay can succeed while metadata correctly refuses a
+    // height-two carrier whose original State has no height-one predecessor.
+    let source = result_bearing_time_trigger_block(&state, |header| {
+        header.set_height(NonZeroU64::new(2).unwrap());
+    });
+    let mut block = state.block(source.as_ref().header());
+    let error = block
+        .apply_fixture_block(&source, Vec::new(), None)
+        .expect_err("fixture metadata refusal must not become an empty successful event list");
+    assert!(
+        error.contains("proposal does not extend its exact State predecessor"),
+        "unexpected metadata refusal: {error}"
+    );
+    assert!(block.block_hashes.is_empty());
+    assert_eq!(state.committed_height(), 0);
+}
+
 #[test]
 fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() {
     use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
@@ -1556,7 +1583,7 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
     );
     stx.world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event)));
     let steps = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect("disabled trigger should be skipped");
@@ -1649,7 +1676,7 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
     );
     stx.world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event)));
     let steps = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect("disabled data triggers should be skipped");
@@ -1744,7 +1771,7 @@ fn depleted_data_trigger_is_pruned_before_event_scan_without_mutating_state() {
     );
     stx.world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event)));
     let steps = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect("depleted trigger should be pruned without error");
@@ -1813,6 +1840,11 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
+    state
+        .lane_manifests
+        .read()
+        .ensure_lane_ready(LaneId::SINGLE)
+        .expect("the existing test State owns its active default Network route");
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -1873,19 +1905,42 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
         stx.apply();
     }
     state_block.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
-    let mut state_block = state.block(header);
-    {
-        let mut stx = state_block.transaction();
-        Mint::asset_quantity(1_u32, asset_id.clone())
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-        let steps = stx
-            .execute_data_triggers_dfs(&ALICE_ID)
-            .expect("data trigger should run under its registered authority");
-        assert_eq!(steps.len(), 1, "expected one data trigger execution");
-        stx.apply();
-    }
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
+    let signed = signed_callback_boundary_source(
+        &state,
+        header,
+        vec![Mint::asset_quantity(1_u32, asset_id.clone()).into()],
+    );
+    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+    builder.push_transaction(signed);
+    let source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    crate::sumeragi::witness::start_block();
+    let mut state_block = state.block(source.header());
+    state_block
+        .reserve_ordinary_execution_outputs(&source)
+        .expect("reserve actual signed Mint source output");
+    state_block
+        .execute_ordinary_output_plan(&source, None)
+        .expect("execute and fit actual Network callback before State apply");
+    let outputs = state_block.retained_execution_outputs_for_test().unwrap();
+    let [iroha_data_model::block::execution_output::ExecutionOutputV1::Network(output)] = outputs
+    else {
+        panic!("exactly one real Network source, with no internal actions");
+    };
+    let steps = output
+        .result
+        .as_ref()
+        .expect("data trigger should run under its registered authority");
+    assert_eq!(steps.len(), 1, "expected one data trigger execution");
+    assert_eq!(steps[0].id, trigger_id);
+    assert_eq!(output.completions.len(), 1);
+    assert_eq!(output.completions[0].trigger_id, trigger_id);
+    assert_eq!(output.completions[0].callback_index, 0);
+    assert_eq!(
+        output.completions[0].outcome,
+        iroha_data_model::events::trigger_completed::TriggerCompletedOutcome::Success
+    );
     state_block.commit_world_overlay_for_testing().unwrap();
     let flag_value = state
         .view()
@@ -1951,18 +2006,29 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
         "contract entry should be removed for test setup"
     );
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
-    let mut state_block = state.block(header);
-    let mut stx = state_block.transaction();
     let alpha_domain: DomainId = DomainId::try_new("alpha", "universal").unwrap();
     let beta_domain: DomainId = DomainId::try_new("beta", "universal").unwrap();
+    let callback_source = signed_callback_boundary_source(
+        &state,
+        header,
+        vec![
+            Register::domain(Domain::new(alpha_domain.clone())).into(),
+            Register::domain(Domain::new(beta_domain.clone())).into(),
+        ],
+    );
+    let mut state_block = state.block(header);
+    let mut stx = state_block.transaction();
+    stx.current_entrypoint_index = Some(0);
+    stx.tx_call_hash = Some(Hash::from(callback_source.hash_as_entrypoint()));
+    stx.current_tx_hash = Some(callback_source.hash());
     let event_a = data_pre::DomainEvent::Created(Domain::new(alpha_domain).build(&ALICE_ID));
     let event_b = data_pre::DomainEvent::Created(Domain::new(beta_domain).build(&ALICE_ID));
     stx.world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event_a)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event_a)));
     stx.world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event_b)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event_b)));
     let err = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect_err("missing bytecode should reject data-trigger execution");

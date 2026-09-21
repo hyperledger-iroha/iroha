@@ -1,4 +1,4 @@
-//! Actual linear-cell shell reclamation, prepaid MV credits and reader custody.
+//! Actual linear-cell root/shell reclamation, prepaid MV credits and reader custody.
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -13,11 +13,13 @@ use std::{
 };
 
 use concread::internals::lincowcell::{
-    LinCowCell, LinCowCellCapable, OwnedWriteError, WriterAdmission, WriterCharges, WriterLayouts,
+    InitialCharges, InitialLayouts, LinCowCell, LinCowCellCapable, OwnedWriteError,
+    WriterAdmission, WriterCharges, WriterLayouts,
 };
 use mv::allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
 
 static SERIAL: Mutex<()> = Mutex::new(());
+const ROOT_ID: usize = 63;
 static RECORDS: [Record; 64] = [const { Record::new() }; 64];
 static CREATED_WRITERS: AtomicUsize = AtomicUsize::new(0);
 static PANIC_CREATE: AtomicBool = AtomicBool::new(false);
@@ -28,6 +30,7 @@ struct Record {
     pointer: AtomicUsize,
     size: AtomicUsize,
     align: AtomicUsize,
+    reclaiming: AtomicBool,
     freed: AtomicBool,
     payload_drops: AtomicUsize,
     charge_drops: AtomicUsize,
@@ -39,6 +42,7 @@ impl Record {
             pointer: AtomicUsize::new(0),
             size: AtomicUsize::new(0),
             align: AtomicUsize::new(0),
+            reclaiming: AtomicBool::new(false),
             freed: AtomicBool::new(false),
             payload_drops: AtomicUsize::new(0),
             charge_drops: AtomicUsize::new(0),
@@ -88,12 +92,20 @@ unsafe impl GlobalAlloc for ObservedAllocator {
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        // Observe successful physical deallocation, not entry into payload Drop.
+        // Claim the exact live allocation before freeing it. Another thread may
+        // reuse its address after System.dealloc but before we publish the witness.
+        let original = RECORDS.iter().find(|record| {
+            record.pointer.load(SeqCst) == pointer as usize
+                && record.size.load(SeqCst) == layout.size()
+                && record.align.load(SeqCst) == layout.align()
+                && record
+                    .reclaiming
+                    .compare_exchange(false, true, SeqCst, SeqCst)
+                    .is_ok()
+        });
         unsafe { System.dealloc(pointer, layout) };
-        for record in &RECORDS {
-            if record.pointer.load(SeqCst) == pointer as usize {
-                record.freed.store(true, SeqCst);
-            }
+        if let Some(record) = original {
+            record.freed.store(true, SeqCst);
         }
     }
 }
@@ -106,6 +118,7 @@ fn reset() {
         record.pointer.store(0, SeqCst);
         record.size.store(0, SeqCst);
         record.align.store(0, SeqCst);
+        record.reclaiming.store(false, SeqCst);
         record.freed.store(false, SeqCst);
         record.payload_drops.store(0, SeqCst);
         record.charge_drops.store(0, SeqCst);
@@ -187,6 +200,7 @@ impl LinCowCellCapable<Reader, Writer> for Data {
     type WriterInput = usize;
 
     fn create_reader(&self) -> Reader {
+        assert_ne!(RECORDS[ROOT_ID].pointer.load(SeqCst), 0);
         assert_ne!(RECORDS[0].pointer.load(SeqCst), 0);
         Reader {
             id: 0,
@@ -219,15 +233,44 @@ impl LinCowCellCapable<Reader, Writer> for Data {
 
 type CellOwner = LinCowCell<Data, Reader, Writer, Charge>;
 
+fn initial_charges(budget: &AllocationBudget, layouts: InitialLayouts) -> InitialCharges<Charge> {
+    let mut prepaid = budget
+        .try_reserve_layouts([layouts.root, layouts.reader])
+        .unwrap();
+    EXPECTED.with(|pending| {
+        pending.set([
+            Some(Expected {
+                id: ROOT_ID,
+                layout: layouts.root,
+            }),
+            Some(Expected {
+                id: 0,
+                layout: layouts.reader,
+            }),
+        ]);
+    });
+    InitialCharges {
+        root: Charge {
+            id: ROOT_ID,
+            credit: prepaid.try_split(layouts.root).unwrap(),
+        },
+        reader: Charge {
+            id: 0,
+            credit: prepaid.try_split(layouts.reader).unwrap(),
+        },
+    }
+}
+
+fn initial_bytes() -> usize {
+    let layouts = CellOwner::initial_allocation_layouts();
+    layouts.root.size() + layouts.reader.size()
+}
+
 fn cell(budget: &AllocationBudget) -> CellOwner {
-    let layout = CellOwner::reader_allocation_layout();
-    let mut prepaid = budget.try_reserve(layout).unwrap();
-    let charge = Charge {
-        id: 0,
-        credit: prepaid.try_split(layout).unwrap(),
-    };
-    EXPECTED.with(|pending| pending.set([Some(Expected { id: 0, layout }), None]));
-    CellOwner::new_charged(Data { value: 7 }, charge)
+    CellOwner::new_charged(
+        Data { value: 7 },
+        initial_charges(budget, CellOwner::initial_allocation_layouts()),
+    )
 }
 
 fn charges(
@@ -276,7 +319,7 @@ fn complete_prepaid_shell_refusal_and_busy_do_not_construct_or_allocate() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     reset();
-    let initial = CellOwner::reader_allocation_layout().size();
+    let initial = initial_bytes();
     let budget = AllocationBudget::new(initial);
     let owner = cell(&budget);
     without_allocations(|| {
@@ -356,10 +399,7 @@ fn original_shells_survive_detach_busy_abort_and_retained_reader_chain() {
     without_allocations(|| drop(oldest));
     refunded(0, 1);
     refunded(2, 1);
-    assert_eq!(
-        budget.reserved_bytes(),
-        CellOwner::reader_allocation_layout().size()
-    );
+    assert_eq!(budget.reserved_bytes(), initial_bytes());
     without_allocations(|| drop(owner));
     refunded(6, 1);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -373,6 +413,7 @@ fn changed_detached_writer_keeps_original_charges_after_source_cell_drop() {
     reset();
     let budget = AllocationBudget::new(1 << 20);
     let owner = cell(&budget);
+    let original_root = RECORDS[ROOT_ID].pointer.load(SeqCst);
     let writer = owner
         .write_charged(|data, layouts| charges(&budget, data, layouts, 1))
         .unwrap();
@@ -391,7 +432,8 @@ fn changed_detached_writer_keeps_original_charges_after_source_cell_drop() {
     assert_eq!(budget.reserved_bytes(), reserved);
     without_allocations(|| drop(owner));
     assert_eq!(budget.reserved_bytes(), reserved);
-    for id in [0, 1, 2, 4] {
+    assert_eq!(RECORDS[ROOT_ID].pointer.load(SeqCst), original_root);
+    for id in [0, 1, 2, 4, ROOT_ID] {
         assert!(!RECORDS[id].freed.load(SeqCst));
         assert_eq!(RECORDS[id].charge_drops.load(SeqCst), 0);
     }
@@ -400,6 +442,7 @@ fn changed_detached_writer_keeps_original_charges_after_source_cell_drop() {
     refunded(2, 0);
     refunded(0, 1);
     refunded(4, 1);
+    refunded(ROOT_ID, 0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -423,10 +466,7 @@ fn construction_unwind_frees_both_empty_shells_and_preserves_original_reader() {
     assert_eq!(old.value, 7);
     refunded(1, 0);
     refunded(2, 0);
-    assert_eq!(
-        budget.reserved_bytes(),
-        CellOwner::reader_allocation_layout().size()
-    );
+    assert_eq!(budget.reserved_bytes(), initial_bytes());
     drop(old);
     drop(owner);
     refunded(0, 1);
@@ -513,7 +553,11 @@ fn last_concurrent_readers_refund_once_and_wake_reentrant_retry_after_free() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     reset();
     let layouts = CellOwner::writer_allocation_layouts();
-    let budget = AllocationBudget::new(3 * layouts.reader.size() + layouts.cursor.size());
+    let budget = AllocationBudget::new(
+        CellOwner::initial_allocation_layouts().root.size()
+            + 3 * layouts.reader.size()
+            + layouts.cursor.size(),
+    );
     let owner = Arc::new(cell(&budget));
     let oldest_a = owner.read();
     let oldest_b = owner.read();
@@ -562,7 +606,7 @@ fn last_concurrent_readers_refund_once_and_wake_reentrant_retry_after_free() {
     assert!(!wake.poisoned.load(SeqCst));
     refunded(0, 1);
     refunded(2, 1);
-    assert_eq!(budget.reserved_bytes(), layouts.reader.size());
+    assert_eq!(budget.reserved_bytes(), initial_bytes());
     let retry = owner
         .try_write_charged(|data, layouts| charges(&budget, data, layouts, 5))
         .unwrap()
@@ -586,7 +630,11 @@ fn abort_and_construction_unwind_unlock_before_refund_reenters_writer() {
     for unwind in [false, true] {
         reset();
         let layouts = CellOwner::writer_allocation_layouts();
-        let budget = AllocationBudget::new(2 * layouts.reader.size() + layouts.cursor.size());
+        let budget = AllocationBudget::new(
+            CellOwner::initial_allocation_layouts().root.size()
+                + 2 * layouts.reader.size()
+                + layouts.cursor.size(),
+        );
         let owner = Arc::new(cell(&budget));
         let wake = Arc::new(Reenter {
             owner: Arc::clone(&owner),
@@ -647,7 +695,11 @@ fn scoped_old_reader_refund_frees_original_storage_before_unlock_notification() 
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     reset();
     let layouts = CellOwner::writer_allocation_layouts();
-    let budget = AllocationBudget::new(3 * layouts.reader.size() + layouts.cursor.size());
+    let budget = AllocationBudget::new(
+        CellOwner::initial_allocation_layouts().root.size()
+            + 3 * layouts.reader.size()
+            + layouts.cursor.size(),
+    );
     let owner = Arc::new(cell(&budget));
     let oldest = owner.read();
     let mut writer = owner
@@ -685,13 +737,15 @@ fn scoped_old_reader_refund_frees_original_storage_before_unlock_notification() 
             refunded(0, 1);
             assert_eq!(
                 budget.reserved_bytes(),
-                2 * layouts.reader.size() + layouts.cursor.size()
+                CellOwner::initial_allocation_layouts().root.size()
+                    + 2 * layouts.reader.size()
+                    + layouts.cursor.size()
             );
             assert_eq!(wake.wakes.load(SeqCst), 0);
             drop(held);
             refunded(3, 1);
             refunded(4, 0);
-            assert_eq!(budget.reserved_bytes(), layouts.reader.size());
+            assert_eq!(budget.reserved_bytes(), initial_bytes());
             assert_eq!(wake.wakes.load(SeqCst), 0);
         });
     });
@@ -760,15 +814,9 @@ impl LinCowCellCapable<Reader, InputWriter> for InputData {
 type InputCell = LinCowCell<InputData, Reader, InputWriter, Charge>;
 
 fn input_cell(budget: &AllocationBudget) -> InputCell {
-    let layout = InputCell::reader_allocation_layout();
-    let mut prepaid = budget.try_reserve(layout).unwrap();
-    EXPECTED.with(|pending| pending.set([Some(Expected { id: 0, layout }), None]));
     InputCell::new_charged(
         InputData(Data { value: 7 }),
-        Charge {
-            id: 0,
-            credit: prepaid.try_split(layout).unwrap(),
-        },
+        initial_charges(budget, InputCell::initial_allocation_layouts()),
     )
 }
 
@@ -933,7 +981,10 @@ fn admitted_input_abort_and_constructor_panic_refund_after_original_scope_unlock
         reset();
         let layouts = InputCell::writer_allocation_layouts();
         let budget = AllocationBudget::new(
-            2 * layouts.reader.size() + layouts.cursor.size() + Layout::new::<Reader>().size(),
+            InputCell::initial_allocation_layouts().root.size()
+                + 2 * layouts.reader.size()
+                + layouts.cursor.size()
+                + Layout::new::<Reader>().size(),
         );
         let owner = Arc::new(input_cell(&budget));
         let wake = Arc::new(Retry {
@@ -980,7 +1031,10 @@ fn admitted_input_abort_and_constructor_panic_refund_after_original_scope_unlock
         refunded(1, usize::from(!panic_create));
         refunded(2, 0);
         refunded(3, 1);
-        assert_eq!(budget.reserved_bytes(), layouts.reader.size());
+        assert_eq!(
+            budget.reserved_bytes(),
+            InputCell::initial_allocation_layouts().root.size() + layouts.reader.size()
+        );
         drop(wait);
         drop(waker);
         drop(wake);
@@ -988,4 +1042,126 @@ fn admitted_input_abort_and_constructor_panic_refund_after_original_scope_unlock
         refunded(0, 1);
         assert_eq!(budget.reserved_bytes(), 0);
     }
+}
+
+struct RootData {
+    panic_create: bool,
+    panic_drop: bool,
+}
+
+impl LinCowCellCapable<u64, u64> for RootData {
+    type WriterInput = ();
+
+    fn create_reader(&self) -> u64 {
+        assert_ne!(RECORDS[ROOT_ID].pointer.load(SeqCst), 0);
+        assert_ne!(RECORDS[0].pointer.load(SeqCst), 0);
+        assert!(!self.panic_create, "initial reader panic");
+        17
+    }
+
+    fn create_writer(&self, (): Self::WriterInput) -> u64 {
+        17
+    }
+
+    fn pre_commit(&mut self, value: u64, _previous: &u64) -> u64 {
+        value
+    }
+}
+
+impl Drop for RootData {
+    fn drop(&mut self) {
+        RECORDS[ROOT_ID].payload_drops.fetch_add(1, SeqCst);
+        assert!(!self.panic_drop, "root payload drop panic");
+    }
+}
+
+type RootCell = LinCowCell<RootData, u64, u64, Charge>;
+
+#[test]
+fn root_constructor_and_final_drop_destroy_data_before_refund_callbacks() {
+    struct Retry {
+        budget: AllocationBudget,
+        wakes: AtomicUsize,
+        observed_live_payload: AtomicBool,
+    }
+    impl Wake for Retry {
+        fn wake(self: Arc<Self>) {
+            if RECORDS[ROOT_ID].payload_drops.load(SeqCst) != 1 {
+                self.observed_live_payload.store(true, SeqCst);
+            }
+            // Reenter the original pool from its synchronous refund callback.
+            // Both construction and normal teardown must have released capacity.
+            drop(self.budget.try_reserve(Layout::new::<u8>()).unwrap());
+            self.wakes.fetch_add(1, SeqCst);
+        }
+    }
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for panic_create in [false, true] {
+        reset();
+        let layouts = RootCell::initial_allocation_layouts();
+        let budget = AllocationBudget::new(layouts.root.size() + layouts.reader.size());
+        let charges = initial_charges(&budget, layouts);
+        // The waiter and its callback are independent test control-plane
+        // allocations. Arm the exact root/reader observation only at their
+        // constructor, since these two layouts can also match that scaffolding.
+        let expected = EXPECTED.with(|pending| pending.replace([None; 2]));
+        let AllocationRefusal::Capacity { release, .. } =
+            budget.try_reserve(Layout::new::<u8>()).unwrap_err()
+        else {
+            panic!("both initial control blocks must occupy the exact budget");
+        };
+        let retry = Arc::new(Retry {
+            budget: budget.clone(),
+            wakes: AtomicUsize::new(0),
+            observed_live_payload: AtomicBool::new(false),
+        });
+        let waker = Waker::from(Arc::clone(&retry));
+        let mut context = Context::from_waker(&waker);
+        let mut wait = Box::pin(release.wait_for_release());
+        assert!(wait.as_mut().poll(&mut context).is_pending());
+        EXPECTED.with(|pending| pending.set(expected));
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let owner = RootCell::new_charged(
+                RootData {
+                    panic_create,
+                    panic_drop: false,
+                },
+                charges,
+            );
+            assert_eq!(*owner.read(), 17);
+            without_allocations(|| drop(owner));
+        }));
+        assert_eq!(result.is_err(), panic_create);
+        assert!(wait.as_mut().poll(&mut context).is_ready());
+        assert_eq!(retry.wakes.load(SeqCst), 1);
+        assert!(!retry.observed_live_payload.load(SeqCst));
+        refunded(ROOT_ID, 1);
+        refunded(0, 0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn root_payload_unwind_frees_original_block_without_refunding_unfinished_payload() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    reset();
+    let layouts = RootCell::initial_allocation_layouts();
+    let budget = AllocationBudget::new(layouts.root.size() + layouts.reader.size());
+    let owner = RootCell::new_charged(
+        RootData {
+            panic_create: false,
+            panic_drop: true,
+        },
+        initial_charges(&budget, layouts),
+    );
+    assert!(catch_unwind(AssertUnwindSafe(|| drop(owner))).is_err());
+    assert!(RECORDS[ROOT_ID].freed.load(SeqCst));
+    assert_eq!(RECORDS[ROOT_ID].payload_drops.load(SeqCst), 1);
+    assert_eq!(RECORDS[ROOT_ID].charge_drops.load(SeqCst), 0);
+    refunded(0, 0);
+    assert_eq!(budget.reserved_bytes(), layouts.root.size());
 }

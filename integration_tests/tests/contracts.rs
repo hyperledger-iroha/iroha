@@ -23,7 +23,7 @@ use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias},
     governance::CanEnactGovernance,
-    smart_contract::CanRegisterSmartContractCode,
+    smart_contract::CanManageSmartContractCode,
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -495,7 +495,7 @@ fn contract_probe_genesis_registration(artifact: &[u8]) -> Result<Vec<Instructio
         .manifest
         .try_signed(registrar_key)
         .map_err(|error| eyre!("sign genesis contract probe manifest: {error}"))?;
-    let permission: Permission = CanRegisterSmartContractCode.into();
+    let permission: Permission = CanManageSmartContractCode.into();
     Ok(vec![
         Grant::account_permission(permission, registrar).into(),
         RegisterSmartContractBytes {
@@ -653,7 +653,7 @@ fn contract_v1_genesis_registration_preserves_artifact_and_registrar() {
     let verified = ivm::verify_contract_artifact(&artifact).expect("verify probe artifact");
     let registrar_key = &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     let registrar = AccountId::new(registrar_key.public_key().clone());
-    let permission: Permission = CanRegisterSmartContractCode.into();
+    let permission: Permission = CanManageSmartContractCode.into();
     let expected: Vec<InstructionBox> = vec![
         Grant::account_permission(permission, registrar).into(),
         RegisterSmartContractBytes {
@@ -2950,7 +2950,7 @@ fn assert_submission_error_contains(error: &eyre::Report, expected: &str, stage:
 
 #[tokio::test]
 async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> Result<()> {
-    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let register_permission: Permission = CanManageSmartContractCode.into();
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -3282,8 +3282,8 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
-    // Grant CanRegisterSmartContractCode to Alice in genesis so she can deploy contracts.
-    let permission: Permission = CanRegisterSmartContractCode.into();
+    // Grant CanManageSmartContractCode to Alice in genesis so she can deploy contracts.
+    let permission: Permission = CanManageSmartContractCode.into();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         // Keep pipeline timings short to ensure the deploy transaction is flushed promptly.
@@ -3426,7 +3426,7 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
 }
 #[tokio::test]
 async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> Result<()> {
-    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let register_permission: Permission = CanManageSmartContractCode.into();
     let alice_enact_permission: Permission = CanEnactGovernance.into();
     let bob_enact_permission: Permission = CanEnactGovernance.into();
     let builder = NetworkBuilder::new()
@@ -3613,7 +3613,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         })
         .map(AccountId::new)
         .collect::<Vec<_>>();
-    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let register_permission: Permission = CanManageSmartContractCode.into();
     let manage_alias_permission: Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
     }
@@ -4114,7 +4114,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
     registered_in_genesis: bool,
     context: &'static str,
 ) -> Result<()> {
-    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let register_permission: Permission = CanManageSmartContractCode.into();
     let enact_permission: Permission = CanEnactGovernance.into();
     let mut builder = NetworkBuilder::new()
         .with_peers(4)

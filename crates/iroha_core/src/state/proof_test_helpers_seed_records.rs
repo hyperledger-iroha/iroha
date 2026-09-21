@@ -881,8 +881,17 @@ state_test! { sync data_trigger_revalidates_the_captured_incarnation_and_event
     let_row! { block2 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(2).unwrap());
     }) };
+    let callback_source = signed_callback_boundary_source(&state, block2.as_ref().header(), vec![
+        Mint::asset_quantity(1_u32, asset_id.clone()).into(),
+        Mint::asset_quantity(1_u32, asset_id.clone()).into(),
+    ]);
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction();
+    // The same signed two-instruction source owns both direct drains. This
+    // boundary fixture inspects its disposable overlay and never applies it.
+    stx.current_entrypoint_index = Some(0);
+    stx.tx_call_hash = Some(Hash::from(callback_source.hash_as_entrypoint()));
+    stx.current_tx_hash = Some(callback_source.hash());
     Mint::asset_quantity(1_u32, asset_id.clone())
         .execute(&ALICE_ID, &mut stx)
         .unwrap();

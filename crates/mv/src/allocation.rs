@@ -22,6 +22,13 @@ use std::{
 
 use crate::{ReleaseNotification, ReleaseWait};
 
+/// Original-budget owners around the existing charged map engine.
+pub mod map;
+
+mod byte_buffer;
+
+pub use byte_buffer::{ChargedByteBuffer, ChargedByteBufferError};
+
 thread_local! {
     // Scope records live on this thread's stack; registration allocates nothing.
     static REFUND_SCOPES: Cell<*const RefundScope> = const { Cell::new(ptr::null()) };
@@ -106,6 +113,12 @@ pub struct AllocationBudget {
 }
 
 impl AllocationBudget {
+    // Equality of actual retained pool owners, never a caller-supplied digest
+    // or the address of a movable AllocationBudget handle.
+    fn same_pool(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.pool, &other.pool)
+    }
+
     /// Construct a pool with an explicit finite requested-byte limit.
     pub fn new(limit_bytes: usize) -> Self {
         Self {
@@ -302,6 +315,28 @@ impl AllocationReservation {
     /// Return prepaid bytes not yet moved into an allocation charge.
     pub fn remaining_bytes(&self) -> usize {
         self.remaining
+    }
+
+    /// Partition existing prepaid bytes into another owner of the same pool.
+    ///
+    /// This allocates no payload or control storage and obtains no new pool
+    /// credit. Use checked sums of concrete planned layouts to prepay sibling
+    /// operations once, then partition their providers before executing either.
+    /// A partition is still unused admission, not a fabricated aggregate
+    /// allocation charge; each actual allocation must split its own layout.
+    /// Refusal leaves the complete original reservation unchanged.
+    pub fn try_partition_bytes(&mut self, bytes: usize) -> Result<Self, InsufficientReservation> {
+        if bytes > self.remaining {
+            return Err(InsufficientReservation {
+                requested_bytes: bytes,
+                remaining_bytes: self.remaining,
+            });
+        }
+        self.remaining -= bytes;
+        Ok(Self {
+            pool: Arc::clone(&self.pool),
+            remaining: bytes,
+        })
     }
 
     /// Move one exact layout's credits into an independent allocation owner.

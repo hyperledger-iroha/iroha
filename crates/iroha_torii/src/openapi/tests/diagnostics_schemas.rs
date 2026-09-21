@@ -209,6 +209,8 @@ fn npos_schema_excludes_retired_process_local_and_vrf_surfaces() {
         "vrf_committed_no_reveal_total",
         "vrf_no_participation_total",
         "vrf_late_reveals_total",
+        "vrf_commit_deadline_offset",
+        "vrf_reveal_deadline_offset",
     ];
     let npos = schemas
         .get("SumeragiNposDiagnostics")
@@ -228,8 +230,6 @@ fn npos_schema_excludes_retired_process_local_and_vrf_surfaces() {
             "epoch_seed",
             "prf_height",
             "prf_view",
-            "vrf_commit_deadline_offset",
-            "vrf_reveal_deadline_offset",
         ])
     );
     for field in retired {
@@ -791,14 +791,29 @@ fn operator_webauthn_openapi_is_closed_bounded_and_capacity_aware() {
             .unwrap_or_else(|| panic!("{path} session parameter"));
         assert_eq!(session["in"], Value::from("header"));
         assert_eq!(session["required"], Value::from(true));
-        assert_eq!(session["schema"]["minLength"], Value::from(1_u64));
+        assert_eq!(session["schema"]["minLength"], Value::from(43_u64));
         assert_eq!(session["schema"]["maxLength"], Value::from(43_u64));
     }
     let deletion = &paths["/v1/operator/auth/credentials/{credential_id}"]["delete"];
     let parameters = deletion["parameters"]
         .as_array()
         .expect("credential deletion path parameters");
-    assert_eq!(parameters.len(), 2);
+    assert_eq!(parameters.len(), 6);
+    assert_eq!(
+        operation_header_requirements(deletion.as_object().expect("credential deletion operation"))
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        [
+            "X-Iroha-Operator-Public-Key",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "X-Iroha-Operator-Nonce",
+            "X-Iroha-Operator-Signature",
+            "X-Iroha-Operator-Session",
+        ]
+        .into_iter()
+        .map(|name| (name.to_owned(), true))
+        .collect()
+    );
     let credential_id = parameters
         .iter()
         .find(|parameter| parameter["name"].as_str() == Some("credential_id"))
@@ -863,7 +878,7 @@ fn finality_attestation_tip_progress_openapi_matches_native_bindings() {
             "missing progress distinction: {distinction}"
         );
     }
-    let content = response_content(operation, "409", path);
+    let content = response_content(operation, "409");
     assert_eq!(
         content.keys().map(String::as_str).collect::<BTreeSet<_>>(),
         BTreeSet::from(["application/json", "application/x-norito"])
@@ -979,7 +994,7 @@ fn finality_attestation_tip_progress_openapi_matches_native_bindings() {
         Value::Bool(false)
     );
     for status in ["409", "503", "500"] {
-        let content = response_content(operation, status, path);
+        let content = response_content(operation, status);
         for media in ["application/json", "application/x-norito"] {
             assert_eq!(content[media]["schema"], schema_ref("ErrorEnvelope"));
         }

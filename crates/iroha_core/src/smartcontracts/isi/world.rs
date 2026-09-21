@@ -37,6 +37,9 @@ pub mod isi {
             digest::{Update as BlakeUpdate, VariableOutput as BlakeVariableOutput},
         },
     };
+    use iroha_data_model::governance::conviction::{
+        PlainConvictionPolicyV1, validate_conviction_update_v1,
+    };
     use iroha_executor_data_model::permission::{
         account::{
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
@@ -70,7 +73,7 @@ pub mod isi {
         peer::CanManageLaneRelayEmergency,
         sccp::CanProposeSccpRouteGovernance,
         settlement::CanExecuteSettlement,
-        smart_contract::CanRegisterSmartContractCode,
+        smart_contract::CanManageSmartContractCode,
         trigger::CanRegisterGlobalDataTrigger,
     };
     use iroha_model_base::domain::DomainId;
@@ -1282,11 +1285,22 @@ pub mod isi {
         }
         Ok(false)
     }
+    fn ensure_contract_artifact_creation_authority(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        // Transaction admission independently enforces signed fees before any artifact effect.
+        state_transaction
+            .world
+            .account(authority)
+            .map(|_| ())
+            .map_err(Error::from)
+    }
     fn ensure_contract_artifact_authority(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let required: Permission = CanRegisterSmartContractCode.into();
+        let required: Permission = CanManageSmartContractCode.into();
         if !has_exact_permission(&state_transaction.world, authority, &required) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("not permitted: {}", required.name()).into(),
@@ -2033,12 +2047,9 @@ pub mod isi {
         referendum_id: &str,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if minimum_bond.is_zero() {
-            if custody.escrowed {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "governance lock custody claims escrow for a zero-minimum ballot".into(),
-                ));
-            }
+        if minimum_bond.is_zero() && !custody.escrowed {
+            // The unopened ZK path has its own custody protocol. PLAIN always supplies
+            // escrowed custody, including when its frozen minimum is zero.
             return Ok(());
         }
         if !custody.escrowed {
@@ -2211,6 +2222,7 @@ pub mod isi {
             .amount
             .try_mul_decimal(&Numeric::new(u32::from(bps), 4))
             .map_err(|_| Error::from(MathError::Overflow))?;
+        validate_plain_custody_quantity(referendum_id, &slash_amount, state_transaction)?;
         if slash_amount.is_zero() {
             return Ok(None);
         }
@@ -2377,6 +2389,7 @@ pub mod isi {
         rec: &mut crate::state::GovernanceLockRecord,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        validate_plain_custody_quantity(request.referendum_id, &request.amount, state_transaction)?;
         let custody =
             retained_governance_lock_custody(request.referendum_id, rec, state_transaction)?;
         if !custody.escrowed {
@@ -2504,6 +2517,7 @@ pub mod isi {
                 ),
             ));
         }
+        validate_plain_custody_quantity(referendum_id, &amount, state_transaction)?;
         let custody = retained_governance_lock_custody(referendum_id, &rec, state_transaction)?;
         let next_amount = rec
             .amount
@@ -2513,6 +2527,30 @@ pub mod isi {
             .slashed
             .try_sub(&amount)
             .map_err(|_| Error::from(MathError::Overflow))?;
+        let referendum = state_transaction
+            .world
+            .governance_referenda
+            .get(referendum_id)
+            .ok_or_else(|| {
+                invalid_smart_contract_parameter("governance lock has no owning referendum")
+            })?;
+        if referendum.mode == crate::state::GovernanceReferendumMode::Plain {
+            let policy = referendum
+                .plain_policy()
+                .map_err(invalid_smart_contract_parameter)?;
+            let weight = plain_ballot_weight(&next_amount, rec.duration_blocks, policy)?;
+            // A slash may have freed aggregate headroom that later ballots consumed. Check
+            // the restored position before moving custody, even when the immutable decision
+            // is already closed; never recompute or replace that retained decision.
+            ensure_plain_tally_replacement_capacity_v1(
+                referendum_id,
+                owner,
+                rec.direction,
+                weight,
+                policy,
+                state_transaction,
+            )?;
+        }
         if !custody.escrowed {
             return Err(InstructionExecutionError::InvariantViolation(
                 "governance lock has no escrowed balance to restitute".into(),
@@ -2596,6 +2634,30 @@ pub mod isi {
             .record_governance_bond_event("lock_restituted");
         Ok(amount)
     }
+    fn validate_plain_custody_quantity(
+        referendum_id: &str,
+        amount: &Quantity,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let referendum = state_transaction
+            .world
+            .governance_referenda
+            .get(referendum_id)
+            .ok_or_else(|| {
+                invalid_smart_contract_parameter("governance lock has no owning referendum")
+            })?;
+        referendum
+            .validate_context()
+            .map_err(invalid_smart_contract_parameter)?;
+        if referendum.mode == crate::state::GovernanceReferendumMode::Plain {
+            referendum
+                .plain_policy()
+                .map_err(invalid_smart_contract_parameter)?
+                .units(amount)
+                .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
+        }
+        Ok(())
+    }
     fn retained_governance_lock_custody(
         referendum_id: &str,
         rec: &crate::state::GovernanceLockRecord,
@@ -2606,6 +2668,24 @@ pub mod isi {
                 "typed Parliament proposals cannot own public referendum locks".into(),
             )
             .into());
+        }
+        let referendum = state_transaction
+            .world
+            .governance_referenda
+            .get(referendum_id)
+            .ok_or_else(|| {
+                invalid_smart_contract_parameter("governance lock has no owning referendum")
+            })?;
+        referendum
+            .validate_context()
+            .map_err(invalid_smart_contract_parameter)?;
+        if referendum.mode == crate::state::GovernanceReferendumMode::Plain {
+            rec.validate_plain_context(
+                referendum
+                    .plain_policy()
+                    .map_err(invalid_smart_contract_parameter)?,
+            )
+            .map_err(invalid_smart_contract_parameter)?;
         }
         Ok(rec.custody.clone())
     }
@@ -4197,7 +4277,7 @@ pub mod isi {
                     .world
                     .governance_referenda
                     .get(&rid)
-                    .copied()
+                    .cloned()
                 else {
                     state_transaction.world.emit_events(Some(
                         iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -4569,7 +4649,7 @@ pub mod isi {
                     .world
                     .governance_referenda
                     .get(&rid)
-                    .copied()
+                    .cloned()
                 else {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "referendum not found".into(),
@@ -4820,6 +4900,7 @@ pub mod isi {
     fn ensure_plain_ballot_preconditions(
         ballot: &gov::CastPlainBallot,
         authority: &AccountId,
+        policy: &PlainConvictionPolicyV1,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         if ballot.owner != *authority {
@@ -4859,9 +4940,7 @@ pub mod isi {
             ));
         }
         ensure_citizen_for_ballot(authority, &ballot.referendum_id, state_transaction)?;
-        if !state_transaction.gov.min_bond_amount.is_zero()
-            && ballot.amount < state_transaction.gov.min_bond_amount
-        {
+        if ballot.amount < policy.minimum_bond {
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
@@ -4874,7 +4953,9 @@ pub mod isi {
                 "bond amount below minimum".into(),
             ));
         }
-        quantity_to_voting_units(&ballot.amount)?;
+        policy
+            .units(&ballot.amount)
+            .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
         if !state_transaction.gov.plain_voting_enabled {
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -4888,7 +4969,7 @@ pub mod isi {
                 "plain voting mode disabled by policy".into(),
             ));
         }
-        if ballot.duration_blocks < state_transaction.gov.conviction_step_blocks {
+        if ballot.duration_blocks < policy.conviction_step_blocks {
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
@@ -4913,7 +4994,7 @@ pub mod isi {
             .world
             .governance_referenda
             .get(&rid)
-            .copied()
+            .cloned()
         else {
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -4971,7 +5052,7 @@ pub mod isi {
             state_transaction
                 .world
                 .governance_referenda
-                .insert(ballot.referendum_id.clone(), rr);
+                .insert(ballot.referendum_id.clone(), rr.clone());
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::ReferendumOpened(
                     iroha_data_model::events::data::governance::GovernanceReferendumOpened {
@@ -4986,7 +5067,7 @@ pub mod isi {
     }
     fn ensure_plain_ballot_lock_covers_window(
         ballot: &gov::CastPlainBallot,
-        referendum: crate::state::GovernanceReferendumRecord,
+        referendum: &crate::state::GovernanceReferendumRecord,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let expiry_height = state_transaction
@@ -5014,6 +5095,7 @@ pub mod isi {
         ballot: &gov::CastPlainBallot,
         authority: &AccountId,
         weight: u128,
+        policy: &PlainConvictionPolicyV1,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let rid = ballot.referendum_id.clone();
@@ -5024,8 +5106,12 @@ pub mod isi {
             .cloned()
             .unwrap_or_default();
         let now_h = state_transaction._curr_block.height().get();
-        let new_expiry = now_h.saturating_add(ballot.duration_blocks);
+        let new_expiry = now_h
+            .checked_add(ballot.duration_blocks)
+            .ok_or_else(|| Error::from(MathError::Overflow))?;
         if let Some(prev) = locks.locks.get(authority) {
+            prev.validate_plain_context(policy)
+                .map_err(invalid_smart_contract_parameter)?;
             if prev.direction != ballot.direction {
                 return reject_governance_ballot_with_penalty(
                     &rid,
@@ -5055,29 +5141,37 @@ pub mod isi {
                     "re-vote requires prior restitution of the existing slash".into(),
                 ));
             }
-            if ballot.amount < prev.amount || new_expiry < prev.expiry_height {
+            if let Err(error) = validate_conviction_update_v1(
+                &prev.amount,
+                prev.duration_blocks,
+                prev.expiry_height,
+                &ballot.amount,
+                ballot.duration_blocks,
+                new_expiry,
+            ) {
                 state_transaction.world.emit_events(Some(
                     iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                         iroha_data_model::events::data::governance::GovernanceBallotRejected {
                             referendum_id: rid.clone(),
-                            reason: "re-vote cannot reduce existing lock (amount/expiry)".into(),
+                            reason: error.to_string(),
                         },
                     ),
                 ));
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "re-vote cannot reduce existing lock".into(),
+                    error.to_string().into(),
                 ));
             }
         }
-        let custody = locks.locks.get(authority).map_or_else(
-            || governance_lock_custody(&state_transaction.gov),
-            |record| record.custody.clone(),
-        );
-        let minimum_bond = state_transaction.gov.min_bond_amount.clone();
+        let custody = crate::state::GovernanceLockCustody {
+            escrowed: true,
+            asset_definition_id: policy.asset_definition_id.clone(),
+            bond_escrow_account: policy.bond_escrow_account.clone(),
+            slash_receiver_account: policy.slash_receiver_account.clone(),
+        };
         lock_voting_bond(
             &ballot.amount,
             locks.locks.get(authority).map(|rec| &rec.amount),
-            &minimum_bond,
+            &policy.minimum_bond,
             &custody,
             authority,
             &ballot.referendum_id,
@@ -5159,25 +5253,42 @@ pub mod isi {
                 &self.referendum_id,
                 state_transaction,
             )?;
-            ensure_plain_ballot_preconditions(&self, authority, state_transaction)?;
+            if !state_transaction.gov.plain_voting_enabled {
+                return Err(invalid_smart_contract_parameter(
+                    "plain voting mode disabled by policy",
+                ));
+            }
+            if self.direction > 2 {
+                return Err(invalid_smart_contract_parameter(
+                    "plain governance ballot direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)",
+                ));
+            }
+            let policy = state_transaction
+                .world
+                .governance_referenda
+                .get(&self.referendum_id)
+                .ok_or_else(|| invalid_smart_contract_parameter("referendum not found"))?
+                .plain_policy()
+                .map_err(invalid_smart_contract_parameter)?
+                .clone();
+            // A scale change does not reinterpret retained bonds: their exact Quantity values
+            // and frozen scale still define units. The live asset spec independently governs
+            // whether an additional real transfer remains admissible.
+            ensure_plain_ballot_preconditions(&self, authority, &policy, state_transaction)?;
             // Validate all economic arithmetic before opening the referendum,
             // sweeping locks, moving the bond, or emitting acceptance events.
-            let weight = plain_ballot_weight(
-                &self.amount,
-                self.duration_blocks,
-                state_transaction.gov.conviction_step_blocks,
-                state_transaction.gov.max_conviction,
-            )?;
+            let weight = plain_ballot_weight(&self.amount, self.duration_blocks, &policy)?;
             ensure_plain_tally_replacement_capacity_v1(
                 &self.referendum_id,
                 authority,
                 self.direction,
                 weight,
+                &policy,
                 state_transaction,
             )?;
             let referendum = ensure_plain_referendum_open(&self, state_transaction)?;
-            ensure_plain_ballot_lock_covers_window(&self, referendum, state_transaction)?;
-            apply_plain_ballot_lock(&self, authority, weight, state_transaction)?;
+            ensure_plain_ballot_lock_covers_window(&self, &referendum, state_transaction)?;
+            apply_plain_ballot_lock(&self, authority, weight, &policy, state_transaction)?;
             Ok(())
         }
     }
@@ -7861,7 +7972,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_artifact_authority(authority, state_transaction)?;
+            ensure_contract_artifact_creation_authority(authority, state_transaction)?;
             register_verified_contract_code_bytes(
                 authority,
                 *self.code_hash(),
@@ -7876,7 +7987,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_artifact_authority(authority, state_transaction)?;
+            ensure_contract_artifact_creation_authority(authority, state_transaction)?;
             let cap_bytes = contract_code_cap_bytes(state_transaction);
             let total_size = *self.total_size();
             let chunk_count = *self.chunk_count();
@@ -8001,7 +8112,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_artifact_authority(authority, state_transaction)?;
+            ensure_contract_artifact_creation_authority(authority, state_transaction)?;
             let cap_bytes = contract_code_cap_bytes(state_transaction);
             let total_size = *self.total_size();
             let chunk_count = *self.chunk_count();
@@ -10445,47 +10556,15 @@ pub mod isi {
             Ok(())
         }
     }
-    /// Convert a plain-governance bond to the fixed integer domain used by quadratic tallying.
-    ///
-    /// # Errors
-    ///
-    /// Rejects fractional quantities and values wider than the consensus tally's `u128` domain.
-    pub(crate) fn quantity_to_voting_units(amount: &Quantity) -> Result<u128, Error> {
-        if amount.scale() != 0 {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "plain governance ballot amount must be an exact integer".into(),
-                ),
-            ));
-        }
-        amount.as_numeric().try_mantissa_u128().ok_or_else(|| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                "plain governance ballot amount exceeds the quadratic tally domain".into(),
-            ))
-            .into()
-        })
-    }
-    /// Compute the exact quadratic-vote weight in the consensus tally domain.
-    ///
-    /// The conviction factor is evaluated in `u128` before it is capped so a
-    /// `u64::MAX` duration cannot wrap at `1 + duration / step`.
+    /// Compute public conviction weight using the referendum's frozen asset units and policy.
     pub(crate) fn plain_ballot_weight(
         amount: &Quantity,
         duration_blocks: u64,
-        conviction_step_blocks: u64,
-        max_conviction: u64,
+        policy: &PlainConvictionPolicyV1,
     ) -> Result<u128, Error> {
-        if conviction_step_blocks == 0 || max_conviction == 0 {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "plain-governance conviction parameters must be non-zero".into(),
-            )
-            .into());
-        }
-        let base = integer_sqrt_u128(quantity_to_voting_units(amount)?);
-        let factor = (u128::from(duration_blocks / conviction_step_blocks) + 1)
-            .min(u128::from(max_conviction));
-        base.checked_mul(factor)
-            .ok_or_else(|| Error::from(MathError::Overflow))
+        policy
+            .weight(amount, duration_blocks)
+            .map_err(|error| invalid_smart_contract_parameter(error.to_string()))
     }
     /// Maximum retained ballots in one first-release standalone PLAIN referendum.
     pub(crate) const MAX_STANDALONE_PLAIN_BALLOTS_V1: usize = 1_000;
@@ -10534,9 +10613,11 @@ pub mod isi {
         locks: &crate::state::GovernanceLocksForReferendum,
         excluded_owner: Option<&AccountId>,
         minimum_expiry_height: Option<u64>,
-        conviction_step_blocks: u64,
-        max_conviction: u64,
+        policy: &PlainConvictionPolicyV1,
     ) -> Result<[u128; 3], Error> {
+        policy
+            .validate()
+            .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
         ensure_plain_ballot_corpus_size_v1(locks.locks.len())?;
         let mut tally = [0_u128; 3];
         for (owner, record) in &locks.locks {
@@ -10547,12 +10628,15 @@ pub mod isi {
                 )
                 .into());
             }
-            let weight = plain_ballot_weight(
-                &record.amount,
-                record.duration_blocks,
-                conviction_step_blocks,
-                max_conviction,
-            )?;
+            record
+                .validate_plain_context(policy)
+                .map_err(invalid_smart_contract_parameter)?;
+            if owner != &record.owner {
+                return Err(invalid_smart_contract_parameter(
+                    "plain lock owner does not match its corpus key",
+                ));
+            }
+            let weight = plain_ballot_weight(&record.amount, record.duration_blocks, policy)?;
             if excluded_owner.is_some_and(|excluded| excluded == owner)
                 || minimum_expiry_height.is_some_and(|minimum| record.expiry_height < minimum)
             {
@@ -10568,6 +10652,7 @@ pub mod isi {
         authority: &AccountId,
         direction: u8,
         weight: u128,
+        policy: &PlainConvictionPolicyV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let mut tally = state_transaction
@@ -10581,13 +10666,7 @@ pub mod isi {
                     .checked_add(usize::from(!locks.locks.contains_key(authority)))
                     .ok_or_else(|| Error::from(MathError::Overflow))?;
                 ensure_plain_ballot_corpus_size_v1(next_ballot_count)?;
-                plain_governance_tally_v1(
-                    locks,
-                    Some(authority),
-                    None,
-                    state_transaction.gov.conviction_step_blocks,
-                    state_transaction.gov.max_conviction,
-                )
+                plain_governance_tally_v1(locks, Some(authority), None, policy)
             })?;
         add_plain_tally_weight_v1(&mut tally, direction, weight)?;
         checked_plain_tally_turnout_v1(tally)?;
@@ -10645,19 +10724,7 @@ pub mod isi {
             },
         )
     }
-    fn integer_sqrt_u128(n: u128) -> u128 {
-        if n == 0 {
-            return 0;
-        }
-        // Newton's method
-        let mut x0 = n;
-        let mut x1 = u128::midpoint(x0, n / x0);
-        while x1 < x0 {
-            x0 = x1;
-            x1 = u128::midpoint(x0, n / x0);
-        }
-        x0
-    }
+
     fn require_runtime_upgrade_permission(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
@@ -16504,6 +16571,8 @@ pub mod isi {
                         h_end: end,
                         status: crate::state::GovernanceReferendumStatus::Proposed,
                         mode: crate::state::GovernanceReferendumMode::Zk,
+                        plain_context: iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+                                            plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
                     },
                 );
             }
@@ -16833,7 +16902,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_artifact_authority(authority, state_transaction)?;
+            ensure_contract_artifact_creation_authority(authority, state_transaction)?;
             let manifest = self.manifest().clone();
             let Some(key @ Hash { .. }) = manifest.code_hash else {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -16866,16 +16935,17 @@ pub mod isi {
                 &manifest,
             )?;
             if let Some(existing) = state_transaction.world.contract_manifests.get(&key) {
-                if existing == &manifest {
+                // Identical artifact content is shareable across independently signed deployments.
+                // Keep the first immutable provenance rather than replacing it with a later signer.
+                if existing.signature_payload() == manifest.signature_payload() {
                     return Ok(());
                 }
                 return Err(InstructionExecutionError::InvariantViolation(
                     "different contract manifest already stored for this code_hash".into(),
                 ));
             }
-            // A code hash has one immutable manifest. In particular, a later submitter cannot
-            // re-sign the same bytecode with a broader entrypoint/trigger surface and change the
-            // behavior of an already reviewed active instance.
+            // A code hash has one immutable manifest and first-publisher provenance. Later valid
+            // signatures over the same content reuse it; they cannot broaden its public surface.
             state_transaction
                 .world
                 .contract_manifests
@@ -25939,7 +26009,7 @@ pub mod isi {
             account: &AccountId,
         ) {
             let permission: Permission =
-                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                     .into();
             Grant::account_permission(permission, account.clone())
                 .execute(account, state_transaction)
@@ -27195,6 +27265,8 @@ pub mod isi {
                     h_end: 2,
                     status: crate::state::GovernanceReferendumStatus::Proposed,
                     mode: crate::state::GovernanceReferendumMode::Plain,
+                    plain_context: crate::query::standalone_plain_test_fixture::context(&state_transaction.gov, 0),
+                                    plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
                 },
             );
             assert_alias_rejected!(&lowercase);
@@ -27230,6 +27302,8 @@ pub mod isi {
                     h_end: 2,
                     status: crate::state::GovernanceReferendumStatus::Proposed,
                     mode: crate::state::GovernanceReferendumMode::Plain,
+                    plain_context: crate::query::standalone_plain_test_fixture::context(&state_transaction.gov, 0),
+                                    plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
                 },
             );
             assert_alias_rejected!(&upper_prefixed);
@@ -27439,11 +27513,13 @@ pub mod isi {
                 h_end: 4,
                 status: crate::state::GovernanceReferendumStatus::Open,
                 mode: crate::state::GovernanceReferendumMode::Zk,
+                plain_context: iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+                            plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
             };
             state_transaction
                 .world
                 .governance_referenda
-                .insert(referendum_id.clone(), referendum);
+                .insert(referendum_id.clone(), referendum.clone());
             state_transaction.world.take_external_events();
 
             let error = gov::CastZkBallot {
@@ -27511,11 +27587,13 @@ pub mod isi {
                 h_end: u64::MAX,
                 status: crate::state::GovernanceReferendumStatus::Open,
                 mode: crate::state::GovernanceReferendumMode::Zk,
+                plain_context: iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+                            plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
             };
             state_transaction
                 .world
                 .governance_referenda
-                .insert(referendum_id.clone(), referendum);
+                .insert(referendum_id.clone(), referendum.clone());
             state_transaction.world.take_external_events();
 
             let error = gov::CastZkBallot {
@@ -27586,6 +27664,8 @@ pub mod isi {
                     h_end: u64::MAX,
                     status: crate::state::GovernanceReferendumStatus::Proposed,
                     mode: crate::state::GovernanceReferendumMode::Zk,
+                    plain_context: iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+                                    plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
                 },
             );
 
@@ -27651,6 +27731,8 @@ pub mod isi {
                     h_end: u64::MAX,
                     status: crate::state::GovernanceReferendumStatus::Open,
                     mode: crate::state::GovernanceReferendumMode::Zk,
+                    plain_context: iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+                                    plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
                 },
             );
 
@@ -27777,9 +27859,14 @@ pub mod isi {
 
             let amount = Quantity::from(100_u64);
             for (step, maximum) in [(0, 1), (1, 0)] {
-                let error = super::plain_ballot_weight(&amount, 100, step, maximum)
+                let mut governance = iroha_config::parameters::actual::Governance::default();
+                governance.conviction_step_blocks = step;
+                governance.max_conviction = maximum;
+                let iroha_data_model::governance::conviction::PlainVotingContextV1::Conviction(policy) =
+                    crate::query::standalone_plain_test_fixture::context(&governance, 0) else { unreachable!() };
+                let error = super::plain_ballot_weight(&amount, 100, &policy)
                     .expect_err("zero conviction parameters must reject");
-                assert_contains!(format!("{error:?}"), "conviction parameters must be non-zero");
+                assert_contains!(format!("{error:?}"), "invalid frozen conviction policy");
             }
         });
         world_test!(plain_ballot_rejects_invalid_direction_before_state_mutation {
@@ -27835,6 +27922,8 @@ pub mod isi {
                     h_end: 1,
                     status: crate::state::GovernanceReferendumStatus::Closed,
                     mode: crate::state::GovernanceReferendumMode::Zk,
+                    plain_context: iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+                                    plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
                 },
             );
             let election = crate::state::ElectionState {
@@ -30346,51 +30435,6 @@ seiyaku GovernanceLifecycle {
                     .is_none()
             );
         });
-        world_test!(contract_manifest_is_immutable_for_registered_code_hash {
-            blank_test_state_transaction!(state, block, stx);
-            bootstrap_alice_account(&mut stx);
-            let signer_one = checked_keypair_with_algorithm(Algorithm::Ed25519);
-            let signer_two = checked_keypair_with_algorithm(Algorithm::Ed25519);
-            let members = vec![
-                MultisigMember::new(signer_one.public_key().clone(), 1)
-                    .expect("first manifest signer"),
-                MultisigMember::new(signer_two.public_key().clone(), 1)
-                    .expect("second manifest signer"),
-            ];
-            let authority = AccountId::new_multisig(
-                MultisigPolicy::new(1, members).expect("manifest registrar multisig policy"),
-            );
-            Register::account(Account::new(authority.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "register manifest authority");
-            grant_contract_lifecycle_authority(&mut stx, &authority);
-            let (artifact, unsigned_manifest) = minimal_contract_artifact();
-            let code_hash = unsigned_manifest.code_hash.expect("manifest code hash");
-            stx.world.contract_code.insert(code_hash, artifact);
-            let first_manifest = unsigned_manifest
-                .clone()
-                .try_signed(&signer_one)
-                .expect("first signed manifest");
-            smart_contract_code::RegisterSmartContractCode {
-                manifest: first_manifest.clone(),
-            }
-            .expect_execute(&authority, &mut stx, "first manifest registration");
-            smart_contract_code::RegisterSmartContractCode {
-                manifest: first_manifest.clone(),
-            }
-            .expect_execute(&authority, &mut stx, "identical manifest registration is idempotent");
-            let differently_signed_manifest = unsigned_manifest
-                .try_signed(&signer_two)
-                .expect("second signed manifest");
-            let err = smart_contract_code::RegisterSmartContractCode {
-                manifest: differently_signed_manifest,
-            }
-            .expect_execute_err(&authority, &mut stx, "same code hash cannot acquire a different manifest");
-            assert_contains!(format!("{err:?}"), "different contract manifest already stored for this code_hash", "unexpected manifest replacement error: {err:?}",);
-            assert_eq!(
-                stx.world.contract_manifests.get(&code_hash),
-                Some(&first_manifest),
-            );
-        });
         world_test!(ensure_manifest_signature_rejects_malformed_ed25519_signature_r {
             let (_artifact, manifest) = minimal_contract_artifact();
             let key_pair = checked_keypair_with_algorithm(Algorithm::Ed25519);
@@ -32054,7 +32098,7 @@ seiyaku GovernanceLifecycle {
             receipt_markers: BTreeSet<[u8; 32]>,
             transfer_transcripts: usize,
             custody_transfer_controls: Option<AssetTransferControlStoreV1>,
-            events: Vec<Arc<DataEvent>>,
+            events: Vec<iroha_data_model::events::SharedDataEvent>,
         }
         fn sccp_inbound_mutation_snapshot(
             stx: &StateTransaction<'_, '_>,
@@ -40698,338 +40742,7 @@ seiyaku GovernanceLifecycle {
             }
             endorsement
         }
-        world_test!(contract_binding_mutations_require_runtime_lifecycle_authority {
-            blank_test_state_transaction!(state, block, stx);
-            Register::account(Account::new(ALICE_ID.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "seed authority");
-            let attacker = AccountId::new(checked_keypair().public_key().clone());
-            Register::account(Account::new(attacker.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "seed unprivileged attacker");
-            let protected = iroha_data_model::parameter::custom::CustomParameter::new(
-                iroha_data_model::parameter::custom::CustomParameterId(
-                    "gov_protected_namespaces".parse().expect("parameter id"),
-                ),
-                Json::new(vec!["dataspace:1".to_owned()]),
-            );
-            stx.world
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(protected));
-            let (program, manifest) = minimal_contract_artifact();
-            let code_hash = manifest.code_hash.expect("manifest code hash");
-            let register_bytes = scode::RegisterSmartContractBytes {
-                code_hash,
-                code: program,
-            };
-            let error = register_bytes
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "raw bytecode registration requires runtime lifecycle authority");
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
-            assert!(stx.world.contract_code.get(&code_hash).is_none());
-            Grant::account_permission(
-                Permission::new(
-                    "CanRegisterSmartContractCode".to_owned(),
-                    Json::from(norito::json!({ "scope": "wrong" })),
-                ),
-                attacker.clone(),
-            )
-            .expect_execute(&attacker, &mut stx, "store adversarial same-name permission payload");
-            let error = register_bytes
-                .clone()
-                .execute(&attacker, &mut stx)
-                .expect_err(
-                    "a malformed same-name permission must not authorize bytecode mutation",
-                );
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
-            assert!(
-                stx.world.contract_code.get(&code_hash).is_none(),
-                "malformed same-name permission must apply no bytecode mutation"
-            );
-            let upload_hash = Hash::new(b"unprivileged pending upload");
-            let upload = scode::UploadSmartContractCodeChunk {
-                code_hash: upload_hash,
-                total_size: 3,
-                chunk_index: 0,
-                chunk_count: 1,
-                chunk: vec![1, 2, 3],
-            };
-            let error = upload
-                .expect_execute_err(&attacker, &mut stx, "chunk upload requires exact runtime lifecycle authority");
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
-            let attacker_upload_key =
-                SmartContractCodeUploadKey::new(attacker.clone(), upload_hash);
-            assert!(
-                stx.world
-                    .contract_code_uploads
-                    .get(&attacker_upload_key)
-                    .is_none(),
-                "rejected chunk upload must not create a descriptor"
-            );
-            assert!(
-                stx.world
-                    .contract_code_upload_chunks
-                    .iter()
-                    .all(|(key, _)| &key.upload != &attacker_upload_key),
-                "rejected chunk upload must not stage bytes"
-            );
-            let error = scode::FinalizeSmartContractCodeUpload {
-                code_hash: upload_hash,
-                total_size: 3,
-                chunk_count: 1,
-            }
-            .expect_execute_err(&attacker, &mut stx, "upload finalization requires exact runtime lifecycle authority");
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
-            assert!(
-                stx.world
-                    .contract_code_uploads
-                    .get(&attacker_upload_key)
-                    .is_none(),
-                "rejected finalization must not create staging"
-            );
-            stx.world.contract_code_uploads.insert(
-                attacker_upload_key.clone(),
-                SmartContractCodeUploadDescriptor {
-                    total_size: 3,
-                    chunk_count: 1,
-                },
-            );
-            stx.world.contract_code_upload_chunks.insert(
-                SmartContractCodeUploadChunkKey::new(attacker_upload_key.clone(), 0),
-                vec![1, 2, 3],
-            );
-            scode::CancelSmartContractCodeUpload {
-                code_hash: upload_hash,
-            }
-            .expect_execute(&attacker, &mut stx, "the upload owner may clean up staging without deploy permission");
-            assert!(
-                stx.world
-                    .contract_code_uploads
-                    .get(&attacker_upload_key)
-                    .is_none()
-            );
-            assert!(
-                stx.world
-                    .contract_code_upload_chunks
-                    .iter()
-                    .all(|(key, _)| &key.upload != &attacker_upload_key)
-            );
-            grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
-            register_bytes
-                .clone()
-                .expect_execute(&ALICE_ID, &mut stx, "authorized bytecode registration");
-            let remove_bytes = scode::RemoveSmartContractBytes {
-                code_hash,
-                reason: Some("permission regression fixture".to_owned()),
-            };
-            let error = remove_bytes
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "raw bytecode removal requires runtime lifecycle authority");
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
-            assert!(stx.world.contract_code.get(&code_hash).is_some());
-            remove_bytes
-                .expect_execute(&ALICE_ID, &mut stx, "authorized bytecode removal");
-            assert!(stx.world.contract_code.get(&code_hash).is_none());
-            register_bytes
-                .expect_execute(&ALICE_ID, &mut stx, "authorized bytecode re-registration");
-            let register_manifest = scode::RegisterSmartContractCode {
-                manifest: manifest.signed(&ALICE_KEYPAIR),
-            };
-            let error = register_manifest
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "raw manifest registration requires runtime lifecycle authority");
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
-            assert!(stx.world.contract_manifests.get(&code_hash).is_none());
-            register_manifest
-                .expect_execute(&ALICE_ID, &mut stx, "authorized manifest registration");
-            let contract_address = ContractAddress::derive(
-                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                    .parse()
-                    .expect("canonical test network id"),
-                &ALICE_ID,
-                0,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("contract address");
-            let contract_subject = contract_address.subject_id();
-            Register::account(Account::new(contract_subject.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "seed contract subject");
-            stx.world.contract_subject_bindings.insert(
-                contract_address.clone(),
-                crate::smartcontracts::code::ContractSubjectBinding::new_direct(
-                    &contract_address,
-                    ALICE_ID.clone(),
-                ),
-            );
-            stx.world
-                .contract_subject_addresses
-                .insert(contract_subject.clone(), contract_address.clone());
-            let activate = scode::ActivateContractInstance {
-                contract_address: contract_address.clone(),
-                expected_revision: 1,
-                code_hash,
-            };
-            let removed_subject = stx
-                .world
-                .accounts
-                .remove(contract_subject.clone())
-                .expect("remove contract subject for corruption regression");
-            let missing_subject_activation = activate
-                .clone()
-                .expect_execute_err(&ALICE_ID, &mut stx, "activation must reject a missing contract subject");
-            assert_contains!(
-                missing_subject_activation.to_string(),
-                &format!(
-                    "contract subject account `{contract_subject}` for `{contract_address}` does not exist"
-                )
-            );
-            assert!(
-                stx.world
-                    .contract_instances
-                    .get(&contract_address)
-                    .is_none(),
-                "missing-subject activation rejection must not mutate the instance registry"
-            );
-            stx.world
-                .accounts
-                .insert(contract_subject.clone(), removed_subject);
-            let error = activate
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not pre-bind another account's address");
-            assert_contains!(format!("{error:?}"), "current account owner");
-            assert!(
-                stx.world
-                    .contract_instances
-                    .get(&contract_address)
-                    .is_none(),
-                "rejected first binding must not mutate the instance registry"
-            );
-            activate
-                .clone()
-                .expect_execute(&ALICE_ID, &mut stx, "runtime lifecycle authority may activate verified code");
-            assert_eq!(
-                stx.world.contract_instances.get(&contract_address),
-                Some(&code_hash)
-            );
-            assert_eq!(
-                stx.world
-                    .contract_subject_bindings
-                    .get(&contract_address)
-                    .expect("active lifecycle")
-                    .lifecycle
-                    .active_code_hash,
-                Some(code_hash)
-            );
-            assert!(
-                stx.world.account(&contract_subject).is_ok(),
-                "contract subject account remains available",
-            );
-            let deactivate = scode::DeactivateContractInstance {
-                contract_address: contract_address.clone(),
-                expected_revision: 2,
-                reason: Some("adversarial ABA attempt".to_owned()),
-            };
-            let lifecycle_before_missing_subject = stx
-                .world
-                .contract_subject_bindings
-                .get(&contract_address)
-                .expect("active lifecycle")
-                .lifecycle
-                .clone();
-            let removed_subject = stx
-                .world
-                .accounts
-                .remove(contract_subject.clone())
-                .expect("remove active contract subject for corruption regression");
-            let missing_subject_deactivation = deactivate
-                .clone()
-                .expect_execute_err(&ALICE_ID, &mut stx, "deactivation must reject a missing contract subject");
-            assert_contains!(
-                missing_subject_deactivation.to_string(),
-                &format!(
-                    "contract subject account `{contract_subject}` for `{contract_address}` does not exist"
-                )
-            );
-            assert_eq!(
-                stx.world.contract_instances.get(&contract_address),
-                Some(&code_hash),
-                "missing-subject deactivation rejection must preserve the active instance"
-            );
-            assert_eq!(
-                stx.world
-                    .contract_subject_bindings
-                    .get(&contract_address)
-                    .expect("retained lifecycle")
-                    .lifecycle,
-                lifecycle_before_missing_subject,
-                "missing-subject deactivation rejection must preserve lifecycle state"
-            );
-            stx.world
-                .accounts
-                .insert(contract_subject.clone(), removed_subject);
-            let error = deactivate
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not begin an ABA rebind");
-            assert_contains!(format!("{error:?}"), "current account owner");
-            assert_eq!(
-                stx.world.contract_instances.get(&contract_address),
-                Some(&code_hash),
-                "rejected deactivation must preserve the live binding"
-            );
-            let active_activate = scode::ActivateContractInstance {
-                contract_address: contract_address.clone(),
-                expected_revision: 2,
-                code_hash,
-            };
-            let error = active_activate
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "even an idempotent binding request requires lifecycle authority");
-            assert_contains!(format!("{error:?}"), "current account owner");
-            deactivate
-                .expect_execute(&ALICE_ID, &mut stx, "runtime lifecycle authority may deactivate an instance");
-            assert!(
-                stx.world
-                    .contract_instances
-                    .get(&contract_address)
-                    .is_none()
-            );
-            let deactivated_lifecycle = &stx
-                .world
-                .contract_subject_bindings
-                .get(&contract_address)
-                .expect("retained inactive lifecycle")
-                .lifecycle;
-            assert!(deactivated_lifecycle.active_code_hash.is_none());
-            assert_eq!(deactivated_lifecycle.revision, 3);
-            let reactivate = scode::ActivateContractInstance {
-                contract_address: contract_address.clone(),
-                expected_revision: 3,
-                code_hash,
-            };
-            let error = reactivate
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not complete an ABA rebind");
-            assert_contains!(format!("{error:?}"), "current account owner");
-            assert!(
-                stx.world
-                    .contract_instances
-                    .get(&contract_address)
-                    .is_none()
-            );
-            reactivate
-                .expect_execute(&ALICE_ID, &mut stx, "runtime lifecycle authority may reactivate verified code");
-            assert_eq!(
-                stx.world.contract_instances.get(&contract_address),
-                Some(&code_hash)
-            );
-            let reactivated_lifecycle = &stx
-                .world
-                .contract_subject_bindings
-                .get(&contract_address)
-                .expect("reactivated lifecycle")
-                .lifecycle;
-            assert_eq!(reactivated_lifecycle.active_code_hash, Some(code_hash));
-            assert_eq!(reactivated_lifecycle.revision, 4);
-        });
+        include!("world_public_artifact_tests.rs");
         world_test!(native_upload_finalization_enforces_live_cycle_ceiling_and_retains_staging {
             blank_test_state_transaction!(state, block, stx);
             Register::account(Account::new(ALICE_ID.clone()))
@@ -41113,7 +40826,7 @@ seiyaku GovernanceLifecycle {
             }
             .expect_execute(&ALICE_ID, &mut stx, "register verified manifest");
             let artifact_permission: Permission =
-                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                     .into();
             assert!(
                 stx.world
@@ -41128,9 +40841,10 @@ seiyaku GovernanceLifecycle {
             .expect_execute_err(
                 &ALICE_ID,
                 &mut stx,
-                "revoked artifact capability must still deny bytecode registration",
+                "invalid artifact must remain rejected for an ordinary registered developer",
             );
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
+            assert!(matches!(error, InstructionExecutionError::InvalidParameter(_)));
+            assert!(stx.world.contract_code.get(&unregistered_hash).is_none());
             stx.apply();
             let mut stx = block.transaction();
             let network_id = *stx.network_id();

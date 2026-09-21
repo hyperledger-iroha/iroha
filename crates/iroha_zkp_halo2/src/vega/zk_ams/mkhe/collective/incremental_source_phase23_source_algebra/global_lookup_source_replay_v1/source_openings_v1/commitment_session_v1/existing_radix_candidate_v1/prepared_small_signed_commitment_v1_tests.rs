@@ -58,7 +58,7 @@ pub(super) fn continuation_fixture_before_v1(
     owner
 }
 
-fn seed_signed_before_v1(
+pub(super) fn seed_signed_before_v1(
     owner: &mut RnsNativeSmallSignedCommitmentsV1<core::convert::Infallible>,
     until: u16,
 ) {
@@ -184,7 +184,8 @@ fn signed_stage_rejects_incomplete_prior_owner_wrong_start_and_occupied_slot() {
 }
 
 #[test]
-fn actual_first_last_signed_and_negative_points_preserve_original_openings_and_derived_sum() {
+fn actual_first_last_signed_and_negative_points_preserve_original_openings_and_derived_sum_and_prepared_opening_tail()
+ {
     let _guard = prepared_commitment_test_guard_v1();
     let previous = continuation_fixture_before_v1(7_224);
     let live = previous.live.as_ref().unwrap();
@@ -217,9 +218,11 @@ fn actual_first_last_signed_and_negative_points_preserve_original_openings_and_d
         owner.require_position_v1(ordinal).unwrap();
         assert!(owner.require_position_v1(ordinal + 1).is_err());
         let fixture = TestPreparedSmallSignedV1::for_ordinal_v1(ordinal);
-        owner = owner
+        let (next_owner, tail) = owner
             .commit_prepared_v1(&fixture.statement_v1(ordinal))
             .unwrap();
+        owner = next_owner;
+        let tail = tail.into_chunk_v1(ordinal).unwrap();
         let live = owner.live.as_ref().unwrap();
         let rho = live.blindings.as_slice()[usize::from(ordinal - 7_224)];
         let session = live
@@ -235,6 +238,9 @@ fn actual_first_last_signed_and_negative_points_preserve_original_openings_and_d
             .as_ref()
             .unwrap();
         assert_eq!(ticket.coordinate, coordinate);
+        assert_eq!(&tail.as_slice_v1()[..32], &rho.to_be_bytes());
+        assert_eq!(&tail.as_slice_v1()[32..65], &ticket.point_wire);
+        assert!(tail.as_slice_v1()[65..].iter().all(|byte| *byte == 0));
         assert_eq!(
             ticket.point_wire,
             TestPreparedSmallSignedV1::expected_v1(ordinal, rho)

@@ -53,7 +53,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     let mut block = state.block(header);
     let mut state_tx = block.transaction();
     let deployment_permission: iroha_data_model::permission::Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     crate::smartcontracts::Execute::execute(
         iroha_data_model::isi::Grant::account_permission(deployment_permission, deployer.clone()),
         &deployer,

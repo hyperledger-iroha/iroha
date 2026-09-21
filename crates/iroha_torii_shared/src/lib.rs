@@ -1,7 +1,7 @@
 //! Constant values used in Torii that might be re-used by client libraries as well.
 use iroha_data_model::{
     account::{AccountAlias, AccountId, OpaqueAccountId},
-    asset::AssetDefinitionId,
+    asset::{AssetDefinitionId, AssetId},
     nexus::{FeeDebitSource, FeeSponsorProgramId, UniversalAccountId},
     prelude::Quantity,
     query::CommittedTransaction,
@@ -11,6 +11,8 @@ use iroha_model_base::topology::DataSpaceId;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Public account-bootstrap network and signing policy.
 pub mod account_capabilities;
+/// Public faucet identity and exact issuance policy.
+pub mod account_faucet_policy;
 /// Typed account-alias absence selectors and planning error codes.
 pub mod aliases;
 /// Typed non-success observations for challenge-bound bridge finality.
@@ -210,7 +212,7 @@ impl FeeQuoteResponse {
                 "fee quote changed the draft payer, sponsor revision, or gas bound".to_owned(),
             );
         }
-        self.validate_semantics(payload)
+        self.validate_for_authority(payload.authority())
     }
 
     /// Validate this quote against a payload containing the exact quoted intent.
@@ -223,10 +225,20 @@ impl FeeQuoteResponse {
         if &self.intent != payload.fee_payment_intent() {
             return Err("fee quote intent differs from the signed payload".to_owned());
         }
-        self.validate_semantics(payload)
+        self.validate_for_authority(payload.authority())
     }
 
-    fn validate_semantics(&self, payload: &TransactionPayload) -> Result<(), String> {
+    /// Validate standalone quoted fee terms for one exact transaction authority.
+    ///
+    /// This checks component maxima, payer identity, sponsor revision and capacity consistency.
+    /// Signing still requires the draft or signed-payload validator to bind the executable intent.
+    ///
+    /// # Errors
+    /// Returns an error for a malformed quote or an inconsistent payer or capacity.
+    pub fn validate_for_authority(
+        &self,
+        authority: &iroha_data_model::account::AccountId,
+    ) -> Result<(), String> {
         self.intent
             .validate()
             .map_err(|error| format!("invalid fee quote intent: {error}"))?;
@@ -255,7 +267,7 @@ impl FeeQuoteResponse {
                     FeeQuoteDecision::Accepted {
                         debit_source: FeeDebitSource::Account(account),
                         program_revision: None,
-                    } if account == payload.authority() => {}
+                    } if account == authority => {}
                     _ => {
                         return Err(
                             "authority-paid fee quote has an inconsistent admission decision"
@@ -526,6 +538,8 @@ pub mod uri {
     pub const GOV_CONTRACT_GET: &str = "/v1/gov/contracts/{contract_address}";
     /// Accounts: public bootstrap network identity and explicit signing default.
     pub const ACCOUNTS_CAPABILITIES: &str = "/v1/accounts/capabilities";
+    /// Accounts: public operator-configured faucet issuer and exact issuance policy.
+    pub const ACCOUNTS_FAUCET_POLICY: &str = "/v1/accounts/faucet/policy";
     /// Node: capabilities advert (runtime ABI version, etc.)
     pub const NODE_CAPABILITIES: &str = "/v1/node/capabilities";
     /// Node: latest persisted query projection checkpoint descriptor
@@ -744,6 +758,13 @@ pub struct ErrorDetails {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub sns_registration_not_found: Option<sns::SnsRegistrationNotFoundV1>,
+    /// Exact missing asset selector for `query_asset_not_found` HTTP 404.
+    ///
+    /// This reports a completed authoritative lookup, not a cryptographic proof.
+    /// Clients must check the status, error code, and requested asset identity together.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub query_asset_not_found: Option<AssetId>,
 }
 impl ErrorDetails {
     /// Return whether this details payload carries any structured fields.
@@ -771,6 +792,7 @@ impl ErrorDetails {
             && self.account_alias_not_found.is_none()
             && self.account_aliases_by_account_not_found.is_none()
             && self.sns_registration_not_found.is_none()
+            && self.query_asset_not_found.is_none()
     }
 }
 /// Stable public network profile metadata used by clients and Torii helpers.
@@ -1314,7 +1336,7 @@ mod tests {
         NetworkId,
         account::{AccountAlias, AccountAliasDomain, AccountId},
         alias_setup::AccountAliasName,
-        asset::AssetDefinitionId,
+        asset::{AssetDefinitionId, AssetId},
         block::BlockHeader,
         nexus::{FeeDebitSource, FeeSponsorProgramId},
         prelude::Quantity,
@@ -1467,6 +1489,26 @@ mod tests {
         assert!(
             quote.validate_for_signed_payload(payload).is_err(),
             "signed-payload validator accepted {case}"
+        );
+    }
+    #[test]
+    fn fee_quote_standalone_authority_validation_matches_payload_semantics() {
+        let (payload, quote) = authority_fee_quote_fixture();
+        quote
+            .validate_for_authority(payload.authority())
+            .expect("matching authority quote");
+        let foreign = AccountId::new(checked_test_keypair(0x36).public_key().clone());
+        assert!(quote.validate_for_authority(&foreign).is_err());
+        let (payload, quote, _, _) = sponsored_fee_quote_fixture();
+        quote
+            .validate_for_authority(payload.authority())
+            .expect("matching sponsor quote");
+        let mut malformed = quote;
+        malformed.capacities.clear();
+        assert!(
+            malformed
+                .validate_for_authority(payload.authority())
+                .is_err()
         );
     }
     #[test]
@@ -2197,6 +2239,66 @@ mod tests {
         assert_eq!(fee.observation_height, Some(42));
     }
     #[test]
+    fn error_envelope_roundtrip_preserves_exact_asset_absence() {
+        let account = AccountId::new(checked_test_keypair(0x38).public_key().clone());
+        let asset = AssetId::new(fee_quote_test_asset("missing"), account);
+        let envelope =
+            ErrorEnvelope::new("query_asset_not_found", "The requested asset is absent.")
+                .with_details(ErrorDetails {
+                    query_asset_not_found: Some(asset.clone()),
+                    ..Default::default()
+                });
+        let native = norito::to_bytes(&envelope).expect("encode asset absence envelope");
+        let json = norito::json::to_vec(&envelope).expect("encode asset absence JSON");
+        for decoded in [
+            norito::decode_canonical_with_limits::<ErrorEnvelope>(
+                &native,
+                norito::canonical_decode_limits(native.len()),
+            )
+            .expect("decode canonical asset absence envelope"),
+            norito::json::from_slice::<ErrorEnvelope>(&json).expect("decode asset absence JSON"),
+        ] {
+            assert_eq!(decoded.code(), "query_asset_not_found");
+            let details = decoded.details.expect("required exact asset selector");
+            assert!(!details.is_empty());
+            assert_eq!(details.query_asset_not_found, Some(asset.clone()));
+        }
+        let value = norito::json::from_slice::<norito::json::Value>(&json)
+            .expect("inspect declared absence JSON schema");
+        let details = value
+            .get("details")
+            .and_then(norito::json::Value::as_object)
+            .expect("details object");
+        assert_eq!(details.len(), 1);
+        assert_eq!(
+            details.get("query_asset_not_found"),
+            Some(&norito::json::to_value(&asset).expect("typed AssetId JSON")),
+        );
+        let mut trailing = native;
+        trailing.push(0);
+        assert!(
+            norito::decode_canonical_with_limits::<ErrorEnvelope>(
+                &trailing,
+                norito::canonical_decode_limits(trailing.len()),
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn error_envelope_asset_absence_json_rejects_untyped_and_duplicate_selectors() {
+        for selector in ["{}", "[]", "0", "true", "\"not-an-asset\""] {
+            let json = format!(
+                r#"{{"code":"query_asset_not_found","message":"absent","details":{{"query_asset_not_found":{selector}}}}}"#
+            );
+            assert!(
+                norito::json::from_str::<ErrorEnvelope>(&json).is_err(),
+                "{json}"
+            );
+        }
+        let json = r#"{"code":"query_asset_not_found","message":"absent","details":{"query_asset_not_found":null,"query_asset_not_found":null}}"#;
+        assert!(norito::json::from_str::<ErrorEnvelope>(json).is_err());
+    }
+    #[test]
     fn error_envelope_json_rejects_unknown_members_and_duplicates() {
         let decoded: ErrorEnvelope = norito::json::from_str(
             r#"{"code":"bad_request","message":"invalid","details":{"field":"amount"}}"#,
@@ -2284,6 +2386,12 @@ mod tests {
         ));
         assert!(!details.is_empty());
         details.sns_registration_not_found = None;
+        assert!(details.is_empty());
+        let account = AccountId::new(checked_test_keypair(0x39).public_key().clone());
+        details.query_asset_not_found =
+            Some(AssetId::new(fee_quote_test_asset("missing"), account));
+        assert!(!details.is_empty());
+        details.query_asset_not_found = None;
         assert!(details.is_empty());
     }
     #[test]

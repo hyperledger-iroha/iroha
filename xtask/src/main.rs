@@ -176,7 +176,7 @@ enum CommandKind {
     ComputeFixtures {
         options: compute::ComputeFixtureOptions,
     },
-    ZkVoteTallyBundle {
+    ZkDevVoteFixture {
         output: PathBuf,
         verify: bool,
         print_hashes: bool,
@@ -1093,13 +1093,13 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
                 verify_address_vectors(&path)?;
             }
         },
-        CommandKind::ZkVoteTallyBundle {
+        CommandKind::ZkDevVoteFixture {
             output,
             verify,
             print_hashes,
             summary_target,
             attestation_target,
-        } => generate_vote_tally_bundle(
+        } => generate_dev_vote_fixture(
             output,
             verify,
             print_hashes,
@@ -1546,19 +1546,14 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             }
         }
         CommandKind::NexusLaneMaintenance { options } => {
+            let json_stdout = options.json_output == Path::new("-");
             let report = nexus_lane_maintenance::run(options)?;
-            if let Some(action) = report.compacted.last() {
+            if !json_stdout {
                 println!(
-                    "archived {} retired segment(s); last move: {} -> {}",
-                    report.compacted.len(),
-                    action.from,
-                    action.to
-                );
-            } else {
-                println!(
-                    "surveyed {} lane(s); retired segments: {}",
-                    report.active.len(),
-                    report.retired.len()
+                    "surveyed {} configured lane(s), {} storage instance(s), {} unrecognized entry/entries; no retirement authority inferred",
+                    report.configured_lanes.len(),
+                    report.observed_instances.len(),
+                    report.unrecognized_entries.len()
                 );
             }
         }
@@ -2569,7 +2564,7 @@ where
             let target = target.unwrap_or(JsonTarget::File(default_address_vectors_path()?));
             Ok(CommandKind::AddressVectors { target, verify })
         }
-        "zk-vote-tally-bundle" => {
+        "zk-dev-vote-fixture" => {
             let mut output = None;
             let mut verify = false;
             let mut print_hashes = false;
@@ -2609,12 +2604,12 @@ where
                         }
                     }
                     flag => {
-                        return Err(format!("unknown flag for zk-vote-tally-bundle: {flag}").into());
+                        return Err(format!("unknown flag for zk-dev-vote-fixture: {flag}").into());
                     }
                 }
             }
-            let output = output.unwrap_or_else(default_vote_tally_path);
-            Ok(CommandKind::ZkVoteTallyBundle {
+            let output = output.unwrap_or_else(default_dev_vote_fixture_path);
+            Ok(CommandKind::ZkDevVoteFixture {
                 output,
                 verify,
                 print_hashes,
@@ -5292,7 +5287,6 @@ where
         "nexus-lane-maintenance" => {
             let mut config: Option<PathBuf> = None;
             let mut json_out: Option<PathBuf> = None;
-            let mut compact_retired = false;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -5306,9 +5300,12 @@ where
                         let Some(path) = pending.next() else {
                             return Err("expected path after --json-out".into());
                         };
-                        json_out = Some(normalize_path(Path::new(&path))?);
+                        json_out = Some(if path == "-" {
+                            PathBuf::from("-")
+                        } else {
+                            normalize_path(Path::new(&path))?
+                        });
                     }
-                    "--compact-retired" => compact_retired = true,
                     flag => {
                         return Err(
                             format!("unknown flag for nexus-lane-maintenance: {flag}").into()
@@ -5326,7 +5323,6 @@ where
             let options = nexus_lane_maintenance::LaneMaintenanceOptions {
                 config_path: config,
                 json_output,
-                compact_retired,
             };
             Ok(CommandKind::NexusLaneMaintenance { options })
         }
@@ -11632,6 +11628,43 @@ mod acceleration_state_tests {
         }
     }
     #[test]
+    fn parse_nexus_lane_maintenance_rejects_retired_compaction() {
+        let args = [
+            "xtask",
+            "nexus-lane-maintenance",
+            "--config",
+            "peer.toml",
+            "--compact-retired",
+        ];
+        let error = match parse_command(args.into_iter().map(String::from)) {
+            Ok(_) => panic!("config-only archival is not a supported maintenance operation"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            "unknown flag for nexus-lane-maintenance: --compact-retired"
+        );
+    }
+
+    #[test]
+    fn parse_nexus_lane_maintenance_preserves_stdout_target() {
+        let args = [
+            "xtask",
+            "nexus-lane-maintenance",
+            "--config",
+            "peer.toml",
+            "--json-out",
+            "-",
+        ];
+        let command = parse_command(args.into_iter().map(String::from)).expect("inventory command");
+        let CommandKind::NexusLaneMaintenance { options } = command else {
+            panic!("expected lane maintenance inventory");
+        };
+        assert_eq!(options.json_output, Path::new("-"));
+        assert!(options.config_path.ends_with("peer.toml"));
+    }
+
+    #[test]
     fn parse_sorafs_gateway_attest_verify_command() {
         let args = [
             "xtask",
@@ -13898,7 +13931,7 @@ async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Optio
     }
     None
 }
-fn generate_vote_tally_bundle(
+fn generate_dev_vote_fixture(
     output: PathBuf,
     verify: bool,
     print_hashes: bool,
@@ -13917,7 +13950,7 @@ fn generate_vote_tally_bundle(
             let baseline_path = output.join(name);
             if !baseline_path.exists() {
                 return Err(format!(
-                    "expected fixture {} to exist; run `cargo xtask zk-vote-tally-bundle --out {} --print-hashes` first to materialize the baseline artifacts",
+                    "expected fixture {} to exist; run `cargo xtask zk-dev-vote-fixture --out {} --print-hashes` first to materialize the baseline artifacts",
                     baseline_path.display(),
                     output.display()
                 )
@@ -13927,7 +13960,10 @@ fn generate_vote_tally_bundle(
         let temp = TempDir::new()?;
         let _summary = write_bundle(temp.path())?;
         compare_bundle_dirs(temp.path(), &output)?;
-        println!("vote tally bundle matches fixtures at {}", output.display());
+        println!(
+            "development-only membership bundle matches fixtures at {}",
+            output.display()
+        );
         if print_hashes {
             print_bundle_hashes(&output)?;
         }
@@ -14320,8 +14356,8 @@ fn default_nexus_lane_commitment_dir() -> PathBuf {
 fn default_address_vectors_path() -> Result<PathBuf, Box<dyn Error>> {
     normalize_path(Path::new("fixtures/account/address_vectors.json"))
 }
-fn default_vote_tally_path() -> PathBuf {
-    workspace_root().join("fixtures/zk/vote_tally")
+fn default_dev_vote_fixture_path() -> PathBuf {
+    workspace_root().join("fixtures/zk/dev_vote_membership")
 }
 fn default_mochi_bundle_path() -> PathBuf {
     workspace_root().join("target/mochi-bundle")

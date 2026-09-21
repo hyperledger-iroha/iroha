@@ -163,6 +163,7 @@ from .orderbook_submission import (
 )
 from .parliament_api import ParliamentApiV1Mixin
 from .private_settlement_client import create_atomic_private_settlement_client_mixin
+from .governance_tally import GovernanceTally
 from .runtime_governance_auth import RuntimeGovernanceAuthMixin
 from .sccp import (
     SccpCapabilities,
@@ -730,7 +731,7 @@ __all__ = [
     "GovernanceLockRecord",
     "GovernanceLocksOverview",
     "GovernanceReferendumStatus",
-    "GovernanceTallySummary",
+    "GovernanceTally",
     "GovernanceUnlockStats",
     "TransactionInstruction",
     "GovernanceProposalDraft",
@@ -3151,16 +3152,6 @@ class GovernanceReferendumStatus:
 
     found: bool
     referendum: Optional[Dict[str, Any]]
-
-
-@dataclass(frozen=True)
-class GovernanceTallySummary:
-    """Quadratic tally summary for a referendum."""
-
-    referendum_id: str
-    approve: int
-    reject: int
-    abstain: int
 
 
 @dataclass(frozen=True)
@@ -10831,29 +10822,19 @@ class ToriiClient(
 
     def get_governance_tally(
         self, referendum_id: str, *, canonical_auth: ToriiCanonicalRequestAuth
-    ) -> GovernanceTallySummary:
-        """Return the quadratic tally summary for a referendum."""
+    ) -> Optional[GovernanceTally]:
+        """Return the exact tally and evaluated block, or ``None`` when absent."""
 
         referendum_id = self._require_governance_selector_v1(
             referendum_id,
             context="governance tally referendum_id",
         )
-        payload = self._account_json_request(
-            "GET",
-            f"/v1/gov/tally/{quote(referendum_id, safe='')}",
-            canonical_auth=canonical_auth,
-            context="governance tally",
+        payload = self._governance_tally_payload(
+            referendum_id, canonical_auth=canonical_auth
         )
-        rid = str(payload.get("referendum_id") or referendum_id)
-        approve = self._coerce_int(payload.get("approve"), "tally.approve")
-        reject = self._coerce_int(payload.get("reject"), "tally.reject")
-        abstain = self._coerce_int(payload.get("abstain"), "tally.abstain")
-        return GovernanceTallySummary(
-            referendum_id=rid,
-            approve=approve,
-            reject=reject,
-            abstain=abstain,
-        )
+        if payload is None:
+            return None
+        return GovernanceTally.from_payload(payload)
 
     def get_governance_unlock_stats(
         self, *, canonical_auth: ToriiCanonicalRequestAuth

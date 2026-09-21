@@ -60,15 +60,15 @@ All lane types must declare:
 
 ## Lane Configuration Geometry (`LaneConfig`)
 
-`LaneConfig` is the runtime geometry derived from the validated lane catalog. It does **not** replace governance manifests; instead it provides deterministic storage identifiers and telemetry hints for every configured lane.
+`LaneConfig` is runtime geometry derived from the validated lane catalog. It supplies logical key prefixes and display/cache labels; authenticated network, incarnation and activation context remain necessary to identify physical consensus storage.
 
 ```text
 LaneConfigEntry {
     lane_id: LaneId,           // stable identifier
     alias: String,             // human-readable alias
-    slug: String,              // sanitised alias for file/metric keys
-    kura_segment: String,      // Kura segment directory: lane_{id:03}_{slug}
-    merge_segment: String,     // Merge-ledger segment: lane_{id:03}_merge
+    slug: String,              // sanitised display/cache/metric label
+    kura_segment: String,      // retained tiered/cache label, not a Kura locator
+    merge_segment: String,     // display label, not a canonical merge locator
     key_prefix: [u8; 4],       // Big-endian LaneId prefix for WSV key spaces
     shard_id: ShardId,         // WSV/Kura shard binding (defaults to lane_id)
     visibility: LaneVisibility,// public vs restricted lanes
@@ -92,9 +92,9 @@ LaneConfigEntry {
 - Scheduler overrides and settlement buffers are typed catalog fields. Scheduler values are
   positive `u64` values; a settlement buffer binds an exact canonical universal account, asset
   definition, and positive XOR quantity. Raw scheduler and settlement-buffer metadata is rejected.
-- Kura segment names are deterministic across hosts; auditors can cross-check segment directories and manifests without bespoke tooling.
-- Merge segments (`lane_{id:03}_merge`) hold the latest merge-hint roots and global state commitments for that lane.
-- When governance renames a lane alias, nodes automatically relabel the corresponding `blocks/lane_{id:03}_{slug}` directories (and tiered snapshots) so auditors always see the canonical slug without manual cleanup. If the target Kura segment already exists, the config/lifecycle transition fails before catalog or tiered-state changes are committed.
+- Core derives deterministic physical Kura paths from the complete `LaneStorageIdentity`; a path or config label by itself is not authenticated active or historical authority.
+- Per-instance merge files are currently empty geometry scaffolds. Canonical merge data has a separate stable storage owner.
+- A lane alias rename does not relabel its exact Kura instance. Tiered/cache label changes are separate from authenticated consensus-storage identity.
 
 ## World-State Partitioning
 
@@ -107,20 +107,20 @@ LaneConfigEntry {
   store entries grouped by lane prefix, keeping range scans deterministic.
   This is a logical subdivision within the owning dataspace and does not imply
   a distinct validator/server set.
-- Merge-ledger metadata mirrors the same layout: each lane writes merge-hint roots and reduced global state roots to `lane_{id:03}_merge`, allowing targeted retention or eviction when a lane retires.
+- Canonical merge-ledger metadata binds its actual lane/dataspace sources under the stable canonical merge owner. Empty per-instance geometry scaffolds are not settlement history or retirement evidence.
 - Cross-lane indexes (account aliases, asset registries, governance manifests) store explicit `(LaneId, DataSpaceId)` pairs. These indexes live in shared column families but use the lane prefix and explicit dataspace ids to keep lookups deterministic.
 - The merge workflow combines public data with private commitments using `(lane_id, dataspace_id, height, state_root, settlement_root, proof_root)` tuples derived from merge-ledger entries.
 
 ## Kura & WSV Partitioning
 
 - **Kura segments**
-  - `lane_{id:03}_{slug}` — primary block segment for the lane (blocks, indexes, receipts).
-  - `lane_{id:03}_merge` — merge-ledger segment recording reduced state roots and settlement artefacts.
+  - `blocks/instances/<storage-key>` — exact lane-instance artifact namespace.
+  - `merge_ledger/instances/<storage-key>.log` — currently required empty geometry scaffold; canonical merge history is separate.
   - Global segments (consensus evidence, telemetry caches) remain shared because they are lane-neutral; their keys do not include lane prefixes.
-- Runtime watches lane catalog updates: newly added lanes have their block and merge-ledger directories provisioned automatically under `kura/blocks/` and `kura/merge_ledger/`, while retired lanes are archived under `kura/retired/{blocks,merge_ledger}/lane_{id:03}_*`.
+- Core geometry transitions bind `(network, lane, dataspace, incarnation, activation height)` and retain their durable reference/retirement history before moving objects. Config-only absence grants no archive permission. Authenticated geometry archives use `retired/lane_geometry/<transition-id>`; orchestration and resource/recovery qualification remain explicit release requirements.
 - Tiered-state snapshots mirror the same lifecycle; each lane writes under `<cold_root>/lanes/lane_{id:03}_{slug}` where `<cold_root>` is `cold_store_root` (or `da_store_root` when `cold_store_root` is unset), and retirements migrate the directory tree to `<cold_root>/retired/lanes/`.
 - **Key prefixes** — the 4-byte prefix computed from `LaneId` is always prepended to MV encoded keys. No host-specific hashing is used, so ordering is identical across nodes.
-- **Block log layout** — block data, index, hashes, and the durable count marker (`blocks.count.norito`) are nested under `kura/blocks/lane_{id:03}_{slug}/`. Merge-ledger journals reuse the same slug (`kura/merge/lane_{id:03}_{slug}.log`), keeping per-lane recovery flows isolated.
+- **Lane storage layout** — `iroha_core::kura::LaneStorageIdentity` owns exact instance locators. Its domain-separated digest includes all five identity components; aliases never determine paths. Canonical block and merge publication retain their separate stable storage owners.
 - **Retention policy** — public lanes retain full block bodies;
   commitment-only lanes may compact older bodies only after the checkpoint,
   finality, commit manifest, and every required Native application
@@ -129,7 +129,7 @@ LaneConfigEntry {
   root; a hash-only legacy marker is not authoritative by itself. Confidential
   lanes keep ciphertext journals in dedicated segments to avoid blocking other
   workloads.
-- **Tooling** — `cargo xtask nexus-lane-maintenance --config <path> [--compact-retired]` inspects `<store>/blocks` and `<store>/merge_ledger` using the derived `LaneConfig`, reports active vs retired segments, and archives retired directories/logs under `<store>/retired/...` to keep evidence deterministic. Maintenance utilities (`kagami`, CLI admin commands) should reuse the slugged namespace when exposing metrics, Prometheus labels, or archiving Kura segments.
+- **Tooling** — `cargo xtask nexus-lane-maintenance --config <path> [--json-out <path|->]` reports configured labels separately from read-only observations beneath `<store>/blocks/instances` and `<store>/merge_ledger/instances`. An observed opaque storage key does not establish a lane identity or active/retired status. Core owns exact storage identity `(network, lane, dataspace, incarnation, activation height)` and authenticated retirement/archive transitions; aliases and slugs are display metadata. Config-only compaction and its CLI flag are removed. Authoritative maintenance orchestration remains open until it retains Core's actual finalized geometry, drain/reference evidence and physical publication authority; this filesystem inventory is not that evidence.
 
 ## Storage Budgets
 

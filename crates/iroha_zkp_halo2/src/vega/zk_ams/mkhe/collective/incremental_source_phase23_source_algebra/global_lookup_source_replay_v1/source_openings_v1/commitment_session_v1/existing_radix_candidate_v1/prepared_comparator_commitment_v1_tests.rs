@@ -42,7 +42,8 @@ fn both_top_roles_use_exact_shared_inventory_and_stop_before_delta() {
 }
 
 #[test]
-fn original_session_samples_and_retains_same_rho_for_actual_sparse_top_values() {
+fn original_session_samples_and_retains_same_rho_for_actual_sparse_top_values_and_prepared_opening_tail()
+ {
     let _guard = crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::prepared_commitment_test_guard_v1();
     let fixture = TestPreparedComparatorV1::new_v1();
     // Existing full-shape patterned inventory fixture is not live source proof.
@@ -93,7 +94,9 @@ fn original_session_samples_and_retains_same_rho_for_actual_sparse_top_values() 
         .as_mut()
         .unwrap()
         .proof_session_context_digest[31] ^= 1;
-    owner = owner.commit_prepared_v1(&fixture.statement_v1(0)).unwrap();
+    let (next_owner, tail) = owner.commit_prepared_v1(&fixture.statement_v1(0)).unwrap();
+    owner = next_owner;
+    let tail = tail.into_chunk_v1(0).unwrap();
     let live = owner.live.as_ref().unwrap();
     assert_eq!(live.next_plane, 1);
     assert_eq!(live.blindings.len(), 1);
@@ -106,6 +109,9 @@ fn original_session_samples_and_retains_same_rho_for_actual_sparse_top_values() 
     assert_eq!(session.next_global_ordinal, 12_041);
     let ticket = session.inventory.slots[12_040].as_ref().unwrap();
     assert_eq!(ticket.coordinate, top_coordinate_v1(0).unwrap());
+    assert_eq!(&tail.as_slice_v1()[..32], &rho.to_be_bytes());
+    assert_eq!(&tail.as_slice_v1()[32..65], &ticket.point_wire);
+    assert!(tail.as_slice_v1()[65..].iter().all(|byte| *byte == 0));
     assert_eq!(
         ticket.point_wire,
         TestPreparedComparatorV1::expected_v1(rho)
@@ -124,7 +130,7 @@ fn original_session_samples_and_retains_same_rho_for_actual_sparse_top_values() 
 }
 
 #[test]
-fn last_sum_top_adoption_uses_actual_msm_then_stops_at_delta() {
+fn last_sum_top_adoption_uses_actual_msm_then_stops_at_delta_and_prepared_opening_tail() {
     let _guard = crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::prepared_commitment_test_guard_v1();
     let fixture = TestPreparedComparatorV1::for_ordinal_v1(687);
     let previous = super::super::tests::complete_patterned_candidate_v1();
@@ -160,9 +166,11 @@ fn last_sum_top_adoption_uses_actual_msm_then_stops_at_delta() {
         validate_top_progress_v1(live).unwrap();
     }
     owner.require_position_v1(687).unwrap();
-    owner = owner
+    let (next_owner, tail) = owner
         .commit_prepared_v1(&fixture.statement_v1(687))
         .unwrap();
+    owner = next_owner;
+    let tail = tail.into_chunk_v1(687).unwrap();
     let live = owner.live.as_ref().unwrap();
     assert_eq!(live.next_plane, 688);
     assert_eq!(live.blindings.len(), 688);
@@ -174,6 +182,9 @@ fn last_sum_top_adoption_uses_actual_msm_then_stops_at_delta() {
     let session = live.session.live.as_ref().unwrap();
     let ticket = session.inventory.slots[12_727].as_ref().unwrap();
     assert_eq!(ticket.coordinate, top_coordinate_v1(687).unwrap());
+    assert_eq!(&tail.as_slice_v1()[..32], &rho.to_be_bytes());
+    assert_eq!(&tail.as_slice_v1()[32..65], &ticket.point_wire);
+    assert!(tail.as_slice_v1()[65..].iter().all(|byte| *byte == 0));
     assert_eq!(
         ticket.coordinate.purpose,
         GlobalLookupCommitmentPurposeV1::ComparatorSumTop

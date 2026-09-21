@@ -882,7 +882,7 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
     let other = fresh(0x72);
     let bootstrap = |authority: &AccountId| -> Vec<InstructionBox> {
         let permission: Permission =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                 .into();
         vec![
             Register::account(Account::new(authority.clone())).into(),

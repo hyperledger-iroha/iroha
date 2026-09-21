@@ -3,11 +3,12 @@
 use super::localnet_npos::npos_override_transactions;
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
+use iroha::query::QueryError;
 use iroha::{
     blocking::Client,
     crypto::Hash,
     data_model::{
-        Level, NetworkId, ValidationFail,
+        Level, NetworkId,
         account::{Account, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::{BlockHeader, consensus_v2::SumeragiV2Status},
@@ -23,15 +24,17 @@ use iroha::{
             LaneConfig as ModelLaneConfig, LaneVisibility, ManifestEffect, ManifestEntry,
             ManifestVersion, UniversalAccountId,
         },
-        prelude::{FindAssetById, Quantity},
+        prelude::{FindAssetById, Identifiable, Quantity},
         transaction::{SignedTransaction, TransactionSubmissionReceipt},
     },
-    query::QueryError,
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
 use iroha_crypto::{Algorithm, KeyPair, Signature};
-use iroha_data_model::query::error::{FindError, QueryExecutionFail};
+use iroha_data_model::{
+    ValidationFail,
+    query::error::{FindError, QueryExecutionFail},
+};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
@@ -542,11 +545,12 @@ fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
         .client()
         .query_single(FindAssetById::new(asset_id.clone()))
     {
-        Ok(asset) => Ok(asset.value().clone()),
-        Err(QueryError::Validation(ValidationFail::QueryFailed(
-            QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
-        ))) => Ok(Quantity::zero()),
-        Err(err) => Err(eyre!(err)),
+        Ok(asset) if asset.id() == asset_id => Ok(asset.value().clone()),
+        Ok(_) => Err(eyre!("exact asset query returned a different asset")),
+        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+            FindError::Asset(missing),
+        )))) if missing.as_ref() == asset_id => Ok(Quantity::zero()),
+        Err(error) => Err(eyre!(error)),
     }
 }
 fn routed_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {

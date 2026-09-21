@@ -13,7 +13,7 @@
     "execution_height": 1,
     "instruction_count": 24,
     "rollout_plan_path": "configs/soranexus/taira/privacy_rollout_plan_v1.json",
-    "rollout_plan_sha256": "41343a63f1fb3bf4cd550e697f316b8e50fe18e06d6daffba48605e228ddda74"
+    "rollout_plan_sha256": "1bd32f52a73c4e4785fa7cea53104734f5940e0cfe0cb0a26f01cac7b5720d5c"
   },
   "privacy_catalog": {
     "matrix_version": 1,

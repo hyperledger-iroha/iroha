@@ -4,9 +4,12 @@
 //! signing request fields. Every signature uses the shared purpose-specific canonical contract.
 //! The complete receipt is durably staged before authoritative completion and stays internal until
 //! both journal identity and fresh completed custody are rechecked. Recovery never signs again.
-//! TODO: Wire this producer into the canonical runtime/CLI contract and real signer/finalized
-//! state adapters before retiring all remaining software service paths. This is not deployment
-//! qualification, and its injected test providers cannot qualify production custody.
+//! The private ceremony owner derives every ordered message from one reviewed subject, original
+//! verified custody, exact intent/reservation and verified signature prefix. It grants no native
+//! authority and cannot activate the role-13 external software adapter.
+//! TODO: Wire this producer into the canonical runtime/CLI contract and authenticated software
+//! signer/finalized state adapters before retiring role-local raw-key signing sites. This is not
+//! deployment qualification, and injected test providers cannot qualify production custody.
 
 use super::journal::{SignerReceiptJournalErrorV1, SignerReceiptJournalV1, SignerReceiptPurposeV1};
 use super::*;
@@ -25,6 +28,9 @@ use sorafs_manifest::signer::{
     },
 };
 use zeroize::Zeroize as _;
+
+pub(super) mod ceremony;
+use ceremony::{ReleaseManifestCeremonyV1, ReleaseManifestMessageV1};
 
 /// Secret-free failures of exact release signing and durable recovery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,50 +148,29 @@ impl SignerReleaseManifestServiceV1 {
             previous_audit: self.previous_audit,
         };
         let mut operation = self.coordinator.begin(intent)?;
-        if SignerOperationCustodyV1::from_verified(&operation.custody) != request.original_custody {
-            return Err(SignerOperationErrorV1::CustodyChanged.into());
-        }
-        let mut signatures = WorkingSignatures(Vec::with_capacity(4));
-        signatures.push(
-            &mut operation,
-            SignerKeyOperationPurposeV1::RolePayload,
+        let ceremony = ReleaseManifestCeremonyV1::new(
+            &self.coordinator.binding,
+            &self.expected,
             manifest,
+            &custody,
+            &operation.check(),
         )?;
-        let audit = signer_release_manifest_audit_v1(
-            &request,
-            &intent,
-            operation.reservation,
-            &signatures.0[0].signature,
-        )?;
-        signatures.push(
-            &mut operation,
-            SignerKeyOperationPurposeV1::AuditRecord,
-            &audit.signing_message(),
-        )?;
-        let provenance = SignerOperationProvenanceV1 {
-            original_custody: request.original_custody,
-            signing_anchor: operation.custody.current_anchor(),
-            intent_digest: operation.intent_digest,
-            reservation: operation.reservation,
-            audit,
-        };
-        signatures.push(
-            &mut operation,
-            SignerKeyOperationPurposeV1::Provenance,
-            &provenance.signing_message()?,
-        )?;
-        let commitment = SignerOperationCommitmentV1 {
-            audit,
-            response_digest: signer_release_manifest_response_digest_v1(
-                &request,
-                &provenance,
-                &signatures.0,
-            )?,
-        };
-        signatures.push(
-            &mut operation,
-            SignerKeyOperationPurposeV1::Response,
-            &commitment.response_signing_message(),
+        let mut signatures = WorkingSignatures(Vec::with_capacity(4));
+        let mut signing_anchor = None;
+        for purpose in required_purposes(SignerOperationActionV1::Sign) {
+            // Preserve the original provenance capture point: after the audit signature's
+            // post-provider observation and before the provenance key operation.
+            if *purpose == SignerKeyOperationPurposeV1::Provenance {
+                signing_anchor = Some(operation.custody.current_anchor());
+            }
+            let message =
+                ceremony.message(&operation.check(), *purpose, &signatures.0, signing_anchor)?;
+            signatures.push(&mut operation, message)?;
+        }
+        let (provenance, commitment) = ceremony.completion(
+            &operation.check(),
+            &signatures.0,
+            signing_anchor.ok_or(SignerReceiptErrorV1::InvalidReceipt)?,
         )?;
         let candidate = PendingReceipt(SignerReleaseManifestReceiptV1 {
             magic: SIGNER_RELEASE_MANIFEST_RECEIPT_MAGIC_V1,
@@ -330,13 +315,27 @@ impl WorkingSignatures {
     fn push(
         &mut self,
         operation: &mut SignerOperationV1<'_>,
-        purpose: SignerKeyOperationPurposeV1,
-        message: &[u8],
-    ) -> Result<(), SignerOperationErrorV1> {
-        let signature = operation.sign(purpose, message)?;
+        message: ReleaseManifestMessageV1<'_, '_>,
+    ) -> Result<(), SignerReleaseManifestErrorV1> {
+        message.validate_operation(&operation.check())?;
+        if usize::from(message.ordinal()) != self.0.len() + 1
+            || self.0.len() != operation.signatures.len()
+            || self
+                .0
+                .iter()
+                .zip(&operation.signatures)
+                .any(|(recorded, staged)| {
+                    recorded.purpose != staged.purpose
+                        || recorded.message_digest != staged.message_digest
+                        || recorded.signature.as_slice() != staged.signature.as_slice()
+                })
+        {
+            return Err(SignerOperationErrorV1::InvalidOperation.into());
+        }
+        let signature = operation.sign(message.purpose(), message.bytes())?;
         self.0.push(SignerOperationSignatureV1 {
-            purpose,
-            message_digest: signer_operation_message_digest_v1(message),
+            purpose: message.purpose(),
+            message_digest: signer_operation_message_digest_v1(message.bytes()),
             signature: signature.to_vec(),
         });
         Ok(())

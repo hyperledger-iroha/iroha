@@ -11,7 +11,7 @@ use iroha::{
     client::Client,
     crypto::HashOf,
     data_model::{
-        Level, ValidationFail,
+        Level,
         account::{Account, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         da::commitment::DaProofPolicyBundle,
@@ -45,7 +45,6 @@ use iroha_data_model::{
     query::{
         CommittedTxFilters,
         dsl::CompoundPredicate,
-        error::QueryExecutionFail,
         parameters::{FetchSize, Pagination},
         transaction::prelude::FindTransactions,
     },
@@ -1078,19 +1077,18 @@ async fn fetch_proof_record_payload(
 fn query_proof_record_via_signed_query(
     observer: &Client,
     proof_id: &ProofId,
-) -> Result<Option<ProofRecord>> {
+) -> Result<ProofRecord> {
     let mut builder = observer.to_builder();
     builder.torii_request_timeout = builder.torii_request_timeout.min(PROOF_FETCH_HTTP_TIMEOUT);
     let client = builder.build()?;
-    match client.query_single(FindProofRecordById {
+    let record = client.query_single(FindProofRecordById {
         id: proof_id.clone(),
-    }) {
-        Ok(record) => Ok(Some(record)),
-        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {
-            Ok(None)
-        }
-        Err(err) => Err(eyre!(err)),
-    }
+    })?;
+    ensure!(
+        &record.id == proof_id,
+        "exact proof query returned a different proof"
+    );
+    Ok(record)
 }
 async fn wait_for_proof_record_status(
     observer: &Client,
@@ -1130,11 +1128,10 @@ async fn wait_for_proof_record_status(
             })
             .await
             {
-                Ok(Some(record)) => format!(
+                Ok(record) => format!(
                     "; signed query observed status {:?} for {}",
                     record.status, record.id
                 ),
-                Ok(None) => "; signed query also did not find the proof record".to_owned(),
                 Err(err) => format!("; signed query error: {err}"),
             };
             return Err(eyre!(

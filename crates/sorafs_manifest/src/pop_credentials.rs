@@ -1286,17 +1286,35 @@ pub fn pop_membership_verifier_material_v1()
 -> Result<PopMembershipVerifierMaterialV1, PopCredentialValidationError> {
     zk::verifier_material_v1()
 }
+/// Independently prepared challenge and relying-party binding for a PoP presentation.
+///
+/// Verification compares every coordinate with the proof's committed statement.
+/// Callers must retain their own expected values rather than deriving them from
+/// an untrusted proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PopMembershipPresentationV1<'a> {
+    /// Verifier's fresh challenge commitment.
+    pub challenge_digest: [u8; 32],
+    /// Exact relying-party context for this presentation.
+    pub verifier_context: &'a str,
+    /// Commitment to the authoritative action and its recipient.
+    pub presentation_binding_digest: [u8; 32],
+}
+
 /// Create a privacy-preserving PoP membership proof for a verifier challenge.
 pub fn prove_pop_membership_v1(
     credential: &PopCredentialV1,
     commitment_root: &PopCommitmentRootV1,
     revocations: &PopRevocationListV1,
     witness: &PopMembershipWitnessV1,
-    challenge_digest: [u8; 32],
-    verifier_context: &str,
-    presentation_binding_digest: [u8; 32],
+    presentation: PopMembershipPresentationV1<'_>,
     now_epoch: u64,
 ) -> Result<PopMembershipProofV1, PopCredentialValidationError> {
+    let PopMembershipPresentationV1 {
+        challenge_digest,
+        verifier_context,
+        presentation_binding_digest,
+    } = presentation;
     validate_digest("challenge digest", challenge_digest)?;
     validate_verifier_context(verifier_context)?;
     validate_digest("presentation binding digest", presentation_binding_digest)?;
@@ -1321,17 +1339,21 @@ pub fn prove_pop_membership_v1(
         commitment_root.root_digest,
         revocations.revocation_root,
         revocations.list_version,
-        challenge_digest,
-        verifier_context,
-        presentation_binding_digest,
+        PopMembershipPresentationV1 {
+            challenge_digest,
+            verifier_context,
+            presentation_binding_digest,
+        },
     )?;
     verify_pop_membership_proof_v1(
         &proof,
         commitment_root,
         revocations,
-        challenge_digest,
-        verifier_context,
-        presentation_binding_digest,
+        PopMembershipPresentationV1 {
+            challenge_digest,
+            verifier_context,
+            presentation_binding_digest,
+        },
         now_epoch,
         &[],
     )?;
@@ -1342,12 +1364,15 @@ pub fn verify_pop_membership_proof_v1(
     proof: &PopMembershipProofV1,
     commitment_root: &PopCommitmentRootV1,
     revocations: &PopRevocationListV1,
-    expected_challenge_digest: [u8; 32],
-    expected_verifier_context: &str,
-    expected_presentation_binding_digest: [u8; 32],
+    presentation: PopMembershipPresentationV1<'_>,
     now_epoch: u64,
     seen_nullifiers: &[[u8; 32]],
 ) -> Result<(), PopCredentialValidationError> {
+    let PopMembershipPresentationV1 {
+        challenge_digest: expected_challenge_digest,
+        verifier_context: expected_verifier_context,
+        presentation_binding_digest: expected_presentation_binding_digest,
+    } = presentation;
     if seen_nullifiers.len() > POP_MEMBERSHIP_SEEN_NULLIFIERS_MAX_V1 {
         return Err(PopCredentialValidationError::ReplayCacheLimitExceeded);
     }
@@ -2024,9 +2049,11 @@ mod tests {
             &root,
             &revocations,
             &witness,
-            digest(0x43),
-            "jury-case-1",
-            digest(0x44),
+            PopMembershipPresentationV1 {
+                challenge_digest: digest(0x43),
+                verifier_context: "jury-case-1",
+                presentation_binding_digest: digest(0x44),
+            },
             500,
         )
         .expect("membership proof");
@@ -2344,9 +2371,11 @@ mod tests {
             &fixture.proof,
             &bundle.commitment_root,
             &bundle.revocation_list,
-            digest(0x43),
-            "jury-case-1",
-            digest(0x44),
+            PopMembershipPresentationV1 {
+                challenge_digest: digest(0x43),
+                verifier_context: "jury-case-1",
+                presentation_binding_digest: digest(0x44),
+            },
             500,
             &[],
         )
@@ -2394,9 +2423,11 @@ mod tests {
             &fixture.proof,
             &fixture.root,
             &fixture.revocations,
-            digest(0x43),
-            "jury-case-1",
-            digest(0x44),
+            PopMembershipPresentationV1 {
+                challenge_digest: digest(0x43),
+                verifier_context: "jury-case-1",
+                presentation_binding_digest: digest(0x44),
+            },
             500,
             &[],
         )
@@ -2427,9 +2458,11 @@ mod tests {
                 &fixture.proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                other_binding,
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: other_binding
+                },
                 500,
                 &[],
             )
@@ -2444,9 +2477,11 @@ mod tests {
                     &retargeted,
                     &fixture.root,
                     &fixture.revocations,
-                    digest(0x43),
-                    "jury-case-1",
-                    other_binding,
+                    PopMembershipPresentationV1 {
+                        challenge_digest: digest(0x43),
+                        verifier_context: "jury-case-1",
+                        presentation_binding_digest: other_binding
+                    },
                     500,
                     &[],
                 ),
@@ -2536,9 +2571,11 @@ mod tests {
                 credential_path: fixture.credential_path.clone(),
                 revocation_path: fixture.revocation_path.clone(),
             },
-            digest(0x43),
-            "jury-case-1",
-            other_binding,
+            PopMembershipPresentationV1 {
+                challenge_digest: digest(0x43),
+                verifier_context: "jury-case-1",
+                presentation_binding_digest: other_binding,
+            },
             500,
         )
         .expect("holder can prove the same credential for a different explicit recipient");
@@ -2555,9 +2592,11 @@ mod tests {
                 &proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                other_binding,
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: other_binding
+                },
                 500,
                 &[fixture.proof.nullifier],
             )
@@ -2572,9 +2611,11 @@ mod tests {
             &fixture.proof,
             &fixture.root,
             &fixture.revocations,
-            digest(0x43),
-            "jury-case-1",
-            digest(0x44),
+            PopMembershipPresentationV1 {
+                challenge_digest: digest(0x43),
+                verifier_context: "jury-case-1",
+                presentation_binding_digest: digest(0x44),
+            },
             1_000,
             &[],
         )
@@ -2602,9 +2643,11 @@ mod tests {
             &fixture.root,
             &revocations,
             &witness_from(fixture),
-            digest(0x43),
-            "jury-case-1",
-            digest(0x44),
+            PopMembershipPresentationV1 {
+                challenge_digest: digest(0x43),
+                verifier_context: "jury-case-1",
+                presentation_binding_digest: digest(0x44),
+            },
             500,
         )
         .expect_err("revoked witness");
@@ -2628,9 +2671,11 @@ mod tests {
                 &proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             )
@@ -2644,9 +2689,11 @@ mod tests {
                 &proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             )
@@ -2660,9 +2707,11 @@ mod tests {
                 &proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             ),
@@ -2675,9 +2724,11 @@ mod tests {
                 &proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             )
@@ -2693,9 +2744,11 @@ mod tests {
                 &fixture.proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x44),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x44),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             )
@@ -2707,9 +2760,11 @@ mod tests {
                 &fixture.proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-2",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-2",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             )
@@ -2727,9 +2782,11 @@ mod tests {
                 &proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             ),
@@ -2741,9 +2798,11 @@ mod tests {
                 &proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             ),
@@ -2758,9 +2817,11 @@ mod tests {
                 &fixture.proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[fixture.proof.nullifier],
             )
@@ -2774,9 +2835,11 @@ mod tests {
                 &proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             ),
@@ -2799,9 +2862,11 @@ mod tests {
                 &proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             )
@@ -2821,9 +2886,11 @@ mod tests {
                 &proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             ),
@@ -2836,9 +2903,11 @@ mod tests {
                 &proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             ),
@@ -2860,9 +2929,11 @@ mod tests {
                     &proof,
                     &fixture.root,
                     &fixture.revocations,
-                    digest(0x43),
-                    "jury-case-1",
-                    digest(0x44),
+                    PopMembershipPresentationV1 {
+                        challenge_digest: digest(0x43),
+                        verifier_context: "jury-case-1",
+                        presentation_binding_digest: digest(0x44)
+                    },
                     500,
                     &[],
                 )
@@ -2889,9 +2960,11 @@ mod tests {
                 &fixture.root,
                 &fixture.revocations,
                 &witness,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
             )
             .expect_err("wrong holder secret"),
@@ -2911,9 +2984,11 @@ mod tests {
                 &fixture.root,
                 &fixture.revocations,
                 &witness,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
             )
             .expect_err("tampered revocation path"),
@@ -2951,9 +3026,11 @@ mod tests {
                 &fixture.proof,
                 &fixture.root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &seen,
             )
@@ -2977,9 +3054,11 @@ mod tests {
                 &fixture.proof,
                 &root,
                 &fixture.revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             )
@@ -2992,9 +3071,11 @@ mod tests {
                 &fixture.proof,
                 &fixture.root,
                 &revocations,
-                digest(0x43),
-                "jury-case-1",
-                digest(0x44),
+                PopMembershipPresentationV1 {
+                    challenge_digest: digest(0x43),
+                    verifier_context: "jury-case-1",
+                    presentation_binding_digest: digest(0x44)
+                },
                 500,
                 &[],
             )
@@ -3010,9 +3091,11 @@ mod tests {
             &proof,
             &fixture.root,
             &fixture.revocations,
-            digest(0x43),
-            "jury-case-1",
-            digest(0x44),
+            PopMembershipPresentationV1 {
+                challenge_digest: digest(0x43),
+                verifier_context: "jury-case-1",
+                presentation_binding_digest: digest(0x44),
+            },
             500,
             &[],
         )

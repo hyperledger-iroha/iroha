@@ -1437,8 +1437,7 @@ fn sample_soracloud_fhe_reserved_binding_air_rejection_proof_box(
         &public_inputs,
     )
     .expect("derive Soracloud FHE binding AIR public digest");
-    let air_circuit_id = crate::zk::normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
-        .expect("normalize reserved Soracloud FHE binding AIR circuit id");
+    let air_circuit_id = format!("{backend}:{circuit_id}");
     let envelope_bytes = crate::zk_stark::prove_stark_fri_reserved_air_envelope_bytes(
         params,
         crate::zk::STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1.to_owned(),
@@ -2526,8 +2525,7 @@ fn sample_full_bootstrap_execution_generic_binding_air_proof_box(
         &public_inputs,
     )
     .expect("derive full-bootstrap execution generic AIR public digest");
-    let air_circuit_id = crate::zk::normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
-        .expect("normalize full-bootstrap execution generic AIR circuit id");
+    let air_circuit_id = format!("{backend}:{circuit_id}");
     let fixture_air_circuit_id = format!("{air_circuit_id}:generic-binding-fixture");
     let envelope_bytes = crate::zk_stark::prove_stark_fri_air_envelope_bytes(
         params,
@@ -4140,6 +4138,32 @@ fn soracloud_fhe_binding_air_reconstructs_its_typed_composition_root() {
         statement_hash,
     )
     .expect("binding preflight must authenticate its own typed composition root");
+
+    for alias in [
+        envelope.circuit_id.clone(),
+        format!("{FHE_INPUT_ADMISSION_BACKEND}/{}", envelope.circuit_id),
+        format!(" {} ", air.circuit_id),
+    ] {
+        let mut altered = proof.clone();
+        mutate_fhe_native_stark_envelope(&mut altered.proof, |native| {
+            native
+                .proof
+                .air
+                .as_mut()
+                .expect("binding-AIR section")
+                .circuit_id = alias;
+        });
+        let altered_envelope = bootstrap_key_proof_attachment_envelope(&altered.proof)
+            .expect("decode altered AIR identity");
+        let err = validate_soracloud_fhe_stark_native_air_binding(
+            label,
+            FHE_INPUT_ADMISSION_BACKEND,
+            &altered_envelope,
+            statement_hash,
+        )
+        .expect_err("typed preflight must reject an alias of its exact AIR identity");
+        assert_invalid_parameter_contains(err, "native AIR circuit id mismatch");
+    }
 
     let mut substituted = proof.clone();
     mutate_fhe_native_stark_envelope(&mut substituted.proof, |native| {

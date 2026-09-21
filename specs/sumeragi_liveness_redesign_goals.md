@@ -1,6 +1,8 @@
 # Sumeragi liveness redesign goals
 
-Work location: `/Users/takemiyamakoto/dev/iroha`, branch `optimizations`. All ongoing source edits and validation use this checkout; temporary source checkouts are retired from this workflow.
+Current integration location: `/Users/takemiyamakoto/devstuff/iroha`, branch
+`codex/complete-privacy-sorafs-multilane`. The original redesign began on
+`optimizations`; ongoing source integration and validation use this checkout.
 
 Set: 2026-09-16. Overall goal: **Active**. Implementation and qualification are
 open. Starting source: `b2e4c86cc2586038ea16e94de3d7aefe94ea4040`.
@@ -1522,14 +1524,38 @@ and deallocation. The [charged cursor/retirement boundary](../docs/history/2026-
 now threads the provider and concrete charge through that same engine, retains
 original fixed buffers through real reader release, and refuses deficient
 bookkeeping before mutation. Shared traversal and clone probes use immutable
-references. Public maps remain explicitly untracked until the closed edit, nested
-payload policy and complete initial/undo ownership are connected. These are still
-required before production activation.
+references. Production MV maps remain explicitly untracked until concrete model
+payload policies and complete initial/undo ownership are connected. These are
+still required before production activation.
 
 The [explicit payload-cloning boundary](../docs/history/2026-09-20/prepaid-payload-cloning.md)
 requires each node payload copy to use the original provider's policy. Node
 credits alone cannot authorize ordinary Clone; complete operation demand and
 concrete MV payload owners remain required before production funded edits.
+The [closed insertion boundary](../docs/history/2026-09-20/closed-admitted-insertion.md)
+now threads a sealed prepaid mode through the existing public map owners and
+plans complete insertion storage/copy demand under the original lock before one
+reservation. It returns only a completed detached successor and releases unused
+admission before handoff. The [retained edit extension](../docs/history/2026-09-20/retained-admitted-edits.md)
+admits subsequent edits against that same original cursor and funds its exact
+initial root allocation. Refusal preserves private work; publication remains
+atomic. Native mutex/runtime storage, real model payloads, MV undo/transaction
+storage and configured aggregate policy remain required before production cutover.
+The [borrowed checkpoint](../docs/history/2026-09-20/borrowed-map-checkpoints.md)
+now preserves an already funded parent root and its original tracking buffers
+through nested child edits. Abort needs no rollback allocation or admission;
+caught mutation/cleanup panic makes the original cursor unpublishable. The
+[native Storage undo owner](../docs/history/2026-09-20/native-storage-undo.md)
+replaces the block-undo standard map with that same tree engine, preserving both
+original generations through snapshots and publication retry. The live
+[Storage transaction checkpoints](../docs/history/2026-09-20/storage-transaction-checkpoints.md)
+now retain both original parent roots and borrow transaction preimages directly.
+Abort restores both trees without allocation, cloning or inverse edits; caught
+preimage-clone and owned query-key destruction panic cannot apply partial work.
+The next Storage step must jointly admit current edits, first block preimages and
+ordered touch metadata, propagate generation refusal through State admission,
+and carry concrete payload policies into configured production funding.
+L1–L6 and four/seven-validator qualification stay open.
 
 
 The retained-journal owner now consumes its actual `ValidBlock` through the existing

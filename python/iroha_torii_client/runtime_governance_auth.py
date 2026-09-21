@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
+from urllib.parse import quote
+
+from .governance_tally import read_tally_response, require_tally_selector
 
 _RUNTIME_GOVERNANCE_JSON_MAX_BYTES = 16 * 1024 * 1024
 
@@ -22,6 +25,22 @@ class RuntimeGovernanceAuthMixin:
     _request: Callable[..., Any]
     _require_canonical_auth: Callable[..., Any]
     _require_exact_i105_account_id: Callable[..., str]
+
+    def _governance_tally_payload(
+        self, referendum_id: str, *, canonical_auth: Any
+    ) -> Optional[Mapping[str, Any]]:
+        """Use one signed, streamed tally request for both public Python clients."""
+
+        selector = require_tally_selector(referendum_id, "referendum_id")
+        response = self._account_request(
+            "GET",
+            f"/v1/gov/tally/{quote(selector, safe='')}",
+            canonical_auth=canonical_auth,
+            headers={"Accept": "application/json", "Accept-Encoding": "identity"},
+            stream=True,
+            context="governance tally",
+        )
+        return read_tally_response(response, selector)
 
     def _account_request(
         self,

@@ -138,7 +138,7 @@ fn zk_roots_get_respects_cap_and_max() {
             asset_def_id.clone(),
             "zcoin".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         ))
         .into(),
         Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
@@ -165,8 +165,12 @@ fn zk_roots_get_respects_cap_and_max() {
             .push_commitment(commitment, nonzero!(4_usize))
             .expect("seed bounded confidential root history");
     }
-    stx.world.zk_assets.remove(asset_def_id.clone());
-    stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
+    stx.world
+        .zk_assets_mut_for_testing()
+        .remove(asset_def_id.clone());
+    stx.world
+        .zk_assets_mut_for_testing()
+        .insert(asset_def_id.clone(), zk_state);
     let zk_snapshot = stx
         .world
         .zk_assets()

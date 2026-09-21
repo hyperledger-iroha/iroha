@@ -206,7 +206,8 @@ public sealed class SccpReplayV1Tests
 
         var compactEd25519 = new byte[33];
         compactEd25519[0] = 0;
-        compactEd25519.AsSpan(1).Fill(0x33);
+        using var keyPair = Ed25519KeyPair.FromSeed(Repeated(0x33, 32));
+        keyPair.PublicKey.CopyTo(compactEd25519, 1);
         _ = SccpReplayPrincipalV1.SoraAccount(
             EncodeMultisigAccountId(compactEd25519));
 

@@ -839,7 +839,7 @@ impl StreamTokenStateObserverClientV1 for SignedObserver {
                     operation_id: stored.receipt.request.operation_id,
                     signing_payload_digest: stored.receipt.request.signing_payload_digest,
                     signing_payload_size: stored.receipt.request.signing_payload_size,
-                    completed_operation: stored.completion,
+                    completed_operation: Box::new(stored.completion),
                 }
             }
         };

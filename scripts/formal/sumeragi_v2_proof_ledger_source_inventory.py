@@ -133,6 +133,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'block/tx_order_validation_revalidation_test.rs',
         'block/rejected_live_batch_fee_tests.rs',
         'block/fee_admission_tests.rs',
+        'block/public_contract_creation_fee_tests.rs',
         'block/bootstrap_and_genesis_tests.rs',
     ),
     'crates/iroha_config/src/parameters/actual.rs': (
@@ -328,6 +329,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'plan_journal_replay_tests.rs',
     ),
     'crates/iroha_core/src/smartcontracts/ivm/host.rs': (
+        'host/contract_state_namespace.rs',
         'host/axt_persistent_budget_tests.rs',
         'host/axt_unanchored_admission_tests.rs',
         'host/core_codec_and_contract_tests.rs',

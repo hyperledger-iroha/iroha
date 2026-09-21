@@ -493,10 +493,7 @@ fn stream_token_server_dispatch_routes_sign_recovery_and_observer_to_separate_ba
             expected: &SignerStreamTokenExpectedV1,
             body: &sorafs_manifest::StreamTokenBodyV1,
         ) -> Result<StreamTokenSignerReceiptV1, StreamTokenSignerCallErrorV1> {
-            assert_eq!(
-                expected,
-                &stream_token_signer_test_support::expected(body)
-            );
+            assert_eq!(expected, &stream_token_signer_test_support::expected(body));
             self.signs.fetch_add(1, Ordering::SeqCst);
             let bytes =
                 stream_token_signer_test_support::receipt(&body.signing_payload_bytes().unwrap())
@@ -513,10 +510,7 @@ fn stream_token_server_dispatch_routes_sign_recovery_and_observer_to_separate_ba
             expected: &SignerStreamTokenExpectedV1,
             body: &sorafs_manifest::StreamTokenBodyV1,
         ) -> Result<StreamTokenSignerReceiptV1, StreamTokenSignerCallErrorV1> {
-            assert_eq!(
-                expected,
-                &stream_token_signer_test_support::expected(body)
-            );
+            assert_eq!(expected, &stream_token_signer_test_support::expected(body));
             self.recoveries.fetch_add(1, Ordering::SeqCst);
             let original = self.original.lock().unwrap();
             let (operation, bytes) = original
@@ -559,7 +553,8 @@ fn stream_token_server_dispatch_routes_sign_recovery_and_observer_to_separate_ba
     let binding = token_signer_binding();
     for backends in [
         RuntimeProviderBrokerBackendsV1::new(),
-        RuntimeProviderBrokerBackendsV1::new().with_stream_token_signer_client(signer_backend.clone()),
+        RuntimeProviderBrokerBackendsV1::new()
+            .with_stream_token_signer_client(signer_backend.clone()),
         RuntimeProviderBrokerBackendsV1::new().with_stream_token_state_observer(observer.clone()),
     ] {
         assert!(
@@ -668,7 +663,7 @@ fn completed_observer_reply_preserves_only_raw_exact_phase_evidence() {
         operation_id: expected.operation_id(),
         signing_payload_digest: expected.signing_payload_digest(),
         signing_payload_size: expected.signing_payload_size(),
-        completed_operation: SignerCompletedOperationV1 {
+        completed_operation: Box::new(SignerCompletedOperationV1 {
             operation_id: expected.operation_id(),
             intent_digest: receipt.intent.digest().unwrap(),
             original_custody: receipt.request.original_custody,
@@ -681,7 +676,7 @@ fn completed_observer_reply_preserves_only_raw_exact_phase_evidence() {
                 block_hash: [0xae; 32],
                 operation_state_digest: [0xaf; 32],
             },
-        },
+        }),
     };
     let bytes = observation.encode_canonical().unwrap();
     let reply = StreamTokenObserverReplyV1::completed(bytes.clone()).unwrap();

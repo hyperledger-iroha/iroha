@@ -4,6 +4,11 @@
 //! policies, reserve funding, orders, matching and settlement use signed native instructions.
 //! Provider delivery, owner-governance transitions, partial fills and expiry remain separate tests.
 
+use iroha::query::QueryError;
+use iroha_data_model::{
+    ValidationFail,
+    query::error::{FindError, QueryExecutionFail},
+};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -13,7 +18,6 @@ use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
-    client::QueryError,
     crypto::{Algorithm, HashOf, KeyPair, Signature},
     data_model::{
         escrow::{AssetEscrowRecord, AssetEscrowStatus},
@@ -28,10 +32,7 @@ use iroha::{
             },
         },
         prelude::*,
-        query::{
-            error::{FindError, QueryExecutionFail},
-            escrow::prelude::FindAssetEscrowById,
-        },
+        query::escrow::prelude::FindAssetEscrowById,
         sorafs::{
             capacity::ProviderId,
             orderbook::{
@@ -191,14 +192,16 @@ fn asset_balance(
     definition: &AssetDefinitionId,
     account: &AccountId,
 ) -> Result<Quantity> {
-    match client.client().query_single(FindAssetById::new(AssetId::of(
-        definition.clone(),
-        account.clone(),
-    ))) {
-        Ok(asset) => Ok(asset.value().clone()),
+    let asset_id = AssetId::of(definition.clone(), account.clone());
+    match client
+        .client()
+        .query_single(FindAssetById::new(asset_id.clone()))
+    {
+        Ok(asset) if asset.id() == &asset_id => Ok(asset.value().clone()),
+        Ok(_) => Err(eyre!("exact asset query returned a different asset")),
         Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
-            FindError::Asset(_),
-        )))) => Ok(Quantity::zero()),
+            FindError::Asset(missing),
+        )))) if missing.as_ref() == &asset_id => Ok(Quantity::zero()),
         Err(error) => Err(eyre!(error)),
     }
 }

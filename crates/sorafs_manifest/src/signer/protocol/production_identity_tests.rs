@@ -1,7 +1,7 @@
 //! Every textual purpose uses the same bounded identity grammar without changing exact bytes.
 use super::*;
 
-fn textual_purposes(identity: &str) -> [(SignerRoleV1, SignerPurposeBindingV1); 5] {
+fn textual_purposes(identity: &str) -> [(SignerRoleV1, SignerPurposeBindingV1); 6] {
     use SignerPurposeBindingV1 as Purpose;
     use SignerRoleV1 as Role;
     [
@@ -20,6 +20,12 @@ fn textual_purposes(identity: &str) -> [(SignerRoleV1, SignerPurposeBindingV1); 
         (
             Role::FinalPromotionAccountTransaction,
             Purpose::FinalPromotionAccountTransaction {
+                deployment_id: identity.into(),
+            },
+        ),
+        (
+            Role::TopologyApproval,
+            Purpose::TopologyApproval {
                 deployment_id: identity.into(),
             },
         ),

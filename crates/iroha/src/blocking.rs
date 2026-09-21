@@ -3,7 +3,9 @@
 // TODO: Move the remaining synchronous read/query operations out
 // of `client::Client`, then expose their canonical forms only through this facade.
 
+pub mod account_bootstrap;
 pub mod configuration;
+pub mod funding;
 pub mod musubi;
 pub mod status;
 pub mod streams;

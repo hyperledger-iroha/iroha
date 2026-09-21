@@ -3519,6 +3519,8 @@ fn submit_fastpq_witness_job(
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod validation_custody;
 
+pub(crate) mod carrier_queue_retirement;
+
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
     state: Arc<State>,
@@ -3536,6 +3538,15 @@ pub(crate) struct V2ApplyService {
     #[cfg(test)]
     test_failures: tests::FailureInjection,
 }
+impl V2ApplyService {
+    /// Borrow this service's original State/Queue pair for synchronous publication.
+    pub(crate) fn carrier_queue_source(
+        &self,
+    ) -> carrier_queue_retirement::OriginalCarrierQueue<'_> {
+        carrier_queue_retirement::OriginalCarrierQueue::new(&self.state, &self.queue)
+    }
+}
+
 /// Origin-specific authority retained by one lifecycle Decision Apply task.
 enum LifecycleDecisionApplyTaskLineageV1 {
     Live { tag: EventTag },

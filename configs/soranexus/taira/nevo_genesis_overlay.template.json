@@ -390,7 +390,7 @@
         "Permission": {
           "destination": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
           "object": {
-            "name": "CanRegisterSmartContractCode",
+            "name": "CanManageSmartContractCode",
             "payload": null
           }
         }

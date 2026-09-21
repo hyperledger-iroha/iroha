@@ -3915,6 +3915,7 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
     ledger_path = formal_dir / BINDINGS_FILENAME
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
     relative_paths = {
+        REVIEWED_RUST_SOURCE_HELPER_RELATIVE,
         FORMAL_RELATIVE / BINDINGS_FILENAME,
         PROOF_COVERAGE_RELATIVE,
         CLOSURE_LEDGER_RELATIVE,
@@ -3928,6 +3929,9 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
         Path("scripts/tests/sumeragi_v2_tlc_artifacts_test.py"),
         *FORMAL_WORKFLOW_RELATIVES,
         Path("scripts/formal/check_sumeragi_v2_multilane_models.py"),
+        Path("scripts/formal/sumeragi_v2_multilane_kura_native_contract.py"),
+        Path("scripts/formal/sumeragi_v2_multilane_state_merge_contract.py"),
+        Path("scripts/formal/sumeragi_v2_multilane_inflight_contract.py"),
         Path("scripts/formal/sumeragi_v2_multilane_inflight_validation.py"),
         Path("pytests/scripts/sumeragi_v2_inflight_binding_inventory_test.py"),
         Path("scripts/formal/sumeragi_v2_multilane_cli.py"),
@@ -3989,7 +3993,7 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
         relative_paths.add(Path(check["path"]))
 
     digest = hashlib.sha256()
-    relative_paths = _expanded_source_manifest_paths(relative_paths)
+    relative_paths = _expanded_source_manifest_paths(relative_paths, root=root)
     for relative in sorted(relative_paths, key=lambda path: path.as_posix()):
         payload = (root / relative).read_bytes()
         encoded_path = relative.as_posix().encode("utf-8")

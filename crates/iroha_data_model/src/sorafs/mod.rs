@@ -255,3 +255,6 @@ pub mod final_promotion_authority;
 
 /// Independent deployment-scoped custody of the final-promotion transaction account.
 pub mod final_promotion_account_custody;
+
+/// Bounded topology transition validation; native execution authority remains Core-owned.
+pub mod topology_authority;

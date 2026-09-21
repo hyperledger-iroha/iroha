@@ -2,19 +2,22 @@
 //! End-to-end coverage for the canonical threshold escrow Kotodama sample.
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox;
+use iroha::query::QueryError;
 use iroha::{
     blocking::Client,
-    client::QueryError,
     data_model::{
-        ValidationFail,
         account::Account,
         asset::{AssetDefinition, AssetId},
         prelude::*,
     },
 };
-use iroha_data_model::query::error::{FindError, QueryExecutionFail};
+use iroha_data_model::query::dsl::IntoPredicate as _;
+use iroha_data_model::{
+    ValidationFail,
+    query::error::{FindError, QueryExecutionFail},
+};
 use iroha_executor_data_model::permission::{
-    asset::CanTransferAsset, smart_contract::CanRegisterSmartContractCode,
+    asset::CanTransferAsset, smart_contract::CanManageSmartContractCode,
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -381,12 +384,16 @@ async fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Quant
     let client = client.clone();
     let asset_id = asset_id.clone();
     read_on_dedicated_thread(move || {
-        match client.client().query_single(FindAssetById::new(asset_id)) {
-            Ok(asset) => Ok(Some(asset.value().clone())),
-            Err(QueryError::Validation(ValidationFail::QueryFailed(
-                QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
-            ))) => Ok(None),
-            Err(err) => Err(eyre!(err)),
+        match client
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))
+        {
+            Ok(asset) if asset.id() == &asset_id => Ok(Some(asset.value().clone())),
+            Ok(_) => Err(eyre!("exact asset query returned a different asset")),
+            Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                FindError::Asset(missing),
+            )))) if missing.as_ref() == &asset_id => Ok(None),
+            Err(error) => Err(eyre!(error)),
         }
     })
     .await
@@ -396,15 +403,15 @@ async fn account_exists(client: &Client, account_id: &AccountId) -> Result<bool>
     let client = client.clone();
     let account_id = account_id.clone();
     read_on_dedicated_thread(move || {
-        match client
+        let found = client
             .client()
-            .query_single(FindAccountById::new(account_id))
-        {
-            Ok(_) => Ok(true),
-            Err(QueryError::Validation(ValidationFail::QueryFailed(
-                QueryExecutionFail::Find(FindError::Account(_)) | QueryExecutionFail::NotFound,
-            ))) => Ok(false),
-            Err(err) => Err(eyre!(err)),
+            .query(FindAccounts)
+            .filter_with(|item| item.equals("id", account_id.clone()).into_predicate())
+            .execute_single_opt()?;
+        match found {
+            Some(account) if account.id() == &account_id => Ok(true),
+            Some(_) => Err(eyre!("exact account query returned a different account")),
+            None => Ok(false),
         }
     })
     .await
@@ -417,16 +424,20 @@ async fn asset_definition_exists(
     let client = client.clone();
     let asset_definition_id = asset_definition_id.clone();
     read_on_dedicated_thread(move || {
-        match client
+        let found = client
             .client()
-            .query_single(FindAssetDefinitionById::new(asset_definition_id))
-        {
-            Ok(_) => Ok(true),
-            Err(QueryError::Validation(ValidationFail::QueryFailed(
-                QueryExecutionFail::Find(FindError::AssetDefinition(_))
-                | QueryExecutionFail::NotFound,
-            ))) => Ok(false),
-            Err(err) => Err(eyre!(err)),
+            .query(FindAssetsDefinitions)
+            .filter_with(|item| {
+                item.equals("id", asset_definition_id.clone())
+                    .into_predicate()
+            })
+            .execute_single_opt()?;
+        match found {
+            Some(definition) if definition.id() == &asset_definition_id => Ok(true),
+            Some(_) => Err(eyre!(
+                "exact definition query returned a different asset definition"
+            )),
+            None => Ok(false),
         }
     })
     .await
@@ -511,7 +522,7 @@ fn threshold_state_paths() -> [&'static str; 9] {
 }
 #[tokio::test]
 async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
-    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let register_permission: Permission = CanManageSmartContractCode.into();
     let admin_permission = Permission::new("Admin".to_owned(), Json::new(()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -805,7 +816,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
 }
 #[tokio::test]
 async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
-    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let register_permission: Permission = CanManageSmartContractCode.into();
     let admin_permission = Permission::new("Admin".to_owned(), Json::new(()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)

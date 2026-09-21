@@ -37,8 +37,8 @@ path = "tests/integration.rs"
 
 [features]
 default = []
-dev-tools = []
-vote-tally = ["dep:halo2_proofs"]
+dev-tools = ["iroha_torii/test-fixtures"]
+dev-vote-fixture = ["dep:halo2_proofs", "iroha_core/zk-halo2-ipa"]
 
 [dependencies]
 iroha_model_base = { workspace = true }

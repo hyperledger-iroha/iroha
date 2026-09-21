@@ -1,6 +1,6 @@
 use iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk;
 fn contract_deployment_permission() -> Permission {
-    executor_permission::smart_contract::CanRegisterSmartContractCode.into()
+    executor_permission::smart_contract::CanManageSmartContractCode.into()
 }
 fn bundled_default_user_provided_executor() -> super::Executor {
     let raw_executor = data_model_executor::Executor::new(IvmBytecode::from_compiled(
@@ -33,7 +33,7 @@ fn contract_deployment_bootstrap_instructions(
     ]
 }
 #[test]
-fn contract_registrar_manager_sponsors_registration_and_meters_every_instruction() {
+fn contract_code_management_manager_sponsors_registration_and_meters_every_instruction() {
     for executor in [
         super::Executor::Initial,
         bundled_default_user_provided_executor(),
@@ -45,7 +45,7 @@ fn contract_registrar_manager_sponsors_registration_and_meters_every_instruction
         world.account_permissions.insert(
             manager.clone(),
             BTreeSet::from([
-                executor_permission::smart_contract::CanManageSmartContractCodeRegistrars.into(),
+                executor_permission::smart_contract::CanGrantSmartContractCodeManagement.into(),
             ]),
         );
         let state = State::new_for_testing(
@@ -74,7 +74,9 @@ fn contract_registrar_manager_sponsors_registration_and_meters_every_instruction
                 transaction,
                 &mut IvmCache::new(),
             )
-            .expect("an admitted registrar manager may register and authorize a builder");
+            .expect(
+                "an admitted code-management grant authority may register and authorize a builder",
+            );
         assert_eq!(state_transaction.last_tx_gas_used, expected_gas);
         assert!(
             authority_has_permission(
@@ -117,7 +119,7 @@ fn contract_registrar_manager_sponsors_registration_and_meters_every_instruction
     }
 }
 #[test]
-fn contract_registrar_management_uses_exact_effective_role_and_borrowed_gate() {
+fn contract_code_management_management_uses_exact_effective_role_and_borrowed_gate() {
     for executor in [
         super::Executor::Initial,
         bundled_default_user_provided_executor(),
@@ -133,9 +135,11 @@ fn contract_registrar_management_uses_exact_effective_role_and_borrowed_gate() {
                 ],
                 [],
             );
-            let role_id: RoleId = "contract_registrar_managers".parse().expect("role id");
+            let role_id: RoleId = "contract_code_management_managers"
+                .parse()
+                .expect("role id");
             let manager_permission: Permission =
-                executor_permission::smart_contract::CanManageSmartContractCodeRegistrars.into();
+                executor_permission::smart_contract::CanGrantSmartContractCodeManagement.into();
             let role = Role::new(role_id.clone(), manager.clone())
                 .add_permission(manager_permission.clone())
                 .build(&manager);
@@ -185,7 +189,7 @@ fn contract_registrar_management_uses_exact_effective_role_and_borrowed_gate() {
                         &revoke,
                         None,
                     )
-                    .expect("manager may revoke a registrar");
+                    .expect("manager may revoke a code manager");
                 assert!(
                     !authority_has_permission(
                         &state_transaction.world,
@@ -212,7 +216,7 @@ fn contract_registrar_management_uses_exact_effective_role_and_borrowed_gate() {
                     .execute_instruction(&mut state_transaction, &manager, instruction)
                     .expect_err("manager roots cannot be propagated or removed after genesis");
                 assert!(
-                    matches!(error, ValidationFail::NotPermitted(message) if message.contains("CanManageSmartContractCodeRegistrars") && message.contains("genesis"))
+                    matches!(error, ValidationFail::NotPermitted(message) if message.contains("CanGrantSmartContractCodeManagement") && message.contains("genesis"))
                 );
             }
             for permission in [contract_deployment_permission(), manager_permission] {
@@ -226,7 +230,7 @@ fn contract_registrar_management_uses_exact_effective_role_and_borrowed_gate() {
                         &grant,
                         None,
                     )
-                    .expect_err("non-unit registrar capabilities always reject");
+                    .expect_err("non-unit code-management capabilities always reject");
                 assert!(
                     matches!(error, ValidationFail::NotPermitted(message) if message.contains("Invalid permission payload"))
                 );
@@ -302,7 +306,7 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
             .world
             .account_permissions_iter(&authority)
             .expect("pre-existing account permissions")
-            .any(|permission| permission.name() == "CanRegisterSmartContractCode")
+            .any(|permission| permission.name() == "CanManageSmartContractCode")
     );
     assert!(
         block
@@ -339,7 +343,7 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
         &authority,
         Account::new(authority.clone()),
         Permission::new(
-            "CanRegisterSmartContractCode".to_owned(),
+            "CanManageSmartContractCode".to_owned(),
             Json::from(norito::json!({ "scope": "malformed" })),
         ),
         contract_upload_instruction(code_hash, 0),
@@ -388,7 +392,7 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
         };
         let error_debug = format!("{error:?}");
         assert!(
-            error_debug.contains("CanRegisterSmartContractCode"),
+            error_debug.contains("CanManageSmartContractCode"),
             "unexpected {label} rejection: {error_debug}"
         );
         let (runtime_stats_after, _) = loaded_executor.runtime_pool_snapshot();
@@ -442,8 +446,8 @@ fn user_provided_borrowed_overlay_rejects_deployment_permission_before_runtime_d
         .expect_err("borrowed overlay permission mutation must be consensus-gated");
     assert!(
         matches!(&error, ValidationFail::NotPermitted(message) if
-        message.contains("CanRegisterSmartContractCode")
-            && message.contains("CanManageSmartContractCodeRegistrars")),
+        message.contains("CanManageSmartContractCode")
+            && message.contains("CanGrantSmartContractCodeManagement")),
         "unexpected bootstrap rejection: {error:?}"
     );
     let (runtime_stats_after, _) = loaded_executor.runtime_pool_snapshot();
@@ -453,7 +457,7 @@ fn user_provided_borrowed_overlay_rejects_deployment_permission_before_runtime_d
             .world
             .account_permissions_iter(&authority)
             .expect("account permissions")
-            .any(|permission| permission.name() == "CanRegisterSmartContractCode")
+            .any(|permission| permission.name() == "CanManageSmartContractCode")
     );
 }
 #[test]
@@ -511,7 +515,7 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
             .world
             .account_permissions_iter(&authority)
             .expect("existing account permissions")
-            .any(|permission| permission.name() == "CanRegisterSmartContractCode")
+            .any(|permission| permission.name() == "CanManageSmartContractCode")
     );
     assert!(
         state_transaction
@@ -541,7 +545,7 @@ fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payl
         "permission parity must be exercised outside genesis"
     );
     let malformed = Permission::new(
-        "CanRegisterSmartContractCode".to_owned(),
+        "CanManageSmartContractCode".to_owned(),
         Json::from(norito::json!({ "scope": "not-canonical" })),
     );
     let role_id: RoleId = "deployment_bootstrap_role".parse().expect("role id");
@@ -562,9 +566,9 @@ fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payl
     ] {
         let error = super::Executor::Initial
             .execute_instruction(&mut state_transaction, &authority, instruction)
-            .expect_err("deployment permission mutation requires registrar management");
+            .expect_err("deployment permission mutation requires code-management grant authority");
         assert!(matches!(error, ValidationFail::NotPermitted(message) if
-            message.contains("CanRegisterSmartContractCode")));
+            message.contains("CanManageSmartContractCode")));
     }
     let stored: BTreeSet<_> = state_transaction
         .world

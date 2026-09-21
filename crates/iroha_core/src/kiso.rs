@@ -1361,6 +1361,8 @@ mod tests {
                     iroha_config::parameters::defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES,
                 max_payload_bytes:
                     iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES,
+                max_read_buffer_bytes:
+                    iroha_config::parameters::defaults::snapshot::MAX_READ_BUFFER_BYTES,
                 resources: Default::default(),
                 verification_public_key: None,
                 signing_private_key: None,

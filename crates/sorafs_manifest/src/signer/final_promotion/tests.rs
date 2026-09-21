@@ -421,7 +421,7 @@ fn prepared_statement_cannot_move_to_another_complete_custody_binding() {
 fn request_audit_and_response_cannot_change_actions_order_or_domain() {
     let f = receipt_fixture();
     for mutation in 0..5 {
-        let mut intent = f.receipt.intent.clone();
+        let mut intent = f.receipt.intent;
         let mut signature = f.receipt.signatures[0].signature.clone();
         match mutation {
             0 => intent.action = SignerOperationActionV1::Status,

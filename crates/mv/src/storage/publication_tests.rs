@@ -1,6 +1,7 @@
 //! Exact detached map installation, including refusal, replacement and retained readers.
 
 use super::*;
+use std::collections::BTreeMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -48,8 +49,8 @@ fn values(storage: &Storage<u64, u64>) -> Vec<(u64, u64)> {
 fn assert_same(actual: &Storage<u64, u64>, expected: &Storage<u64, u64>) {
     assert_eq!(values(actual), values(expected));
     assert_eq!(
-        actual.snapshot().revert_map(),
-        expected.snapshot().revert_map()
+        actual.snapshot().revert_map().iter().collect::<Vec<_>>(),
+        expected.snapshot().revert_map().iter().collect::<Vec<_>>()
     );
 }
 
@@ -143,7 +144,15 @@ fn untouched_noop_and_absent_touches_publish_exact_undo_transitions() {
         };
         prepare(detach(candidate), &target).publish();
         assert_eq!(values(&target), [(1, 11)]);
-        assert_eq!(target.snapshot().revert_map(), &expected);
+        assert_eq!(
+            target
+                .snapshot()
+                .revert_map()
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<BTreeMap<_, _>>(),
+            expected
+        );
         assert!(!observer.matches_current(&target));
     }
 }
@@ -155,6 +164,7 @@ fn busy_writers_return_same_journal_and_release_partial_acquisition() {
     candidate.insert(1, 12);
     let mut journal = detach(candidate);
     let original = journal.blocks.get(&1).unwrap() as *const _;
+    let original_undo = journal.revert.get(&1).unwrap().as_ref().unwrap() as *const _;
     for which in 0..2 {
         let undo = (which == 0).then(|| target.revert.write());
         let current = (which == 1).then(|| target.blocks.write());
@@ -164,6 +174,10 @@ fn busy_writers_return_same_journal_and_release_partial_acquisition() {
             .unwrap();
         assert!(matches!(error, PublicationPreparationError::Busy(_)));
         assert_eq!(returned.blocks.get(&1).unwrap() as *const _, original);
+        assert_eq!(
+            returned.revert.get(&1).unwrap().as_ref().unwrap() as *const _,
+            original_undo
+        );
         drop(current);
         drop(undo);
         assert!(target.revert.try_write().is_some());
@@ -383,4 +397,46 @@ fn changed_raw_map_generation_refuses_original_owner_before_any_installation() {
     assert!(target.snapshot().revert_map().is_empty());
     assert!(target.revert.try_write().is_some());
     assert!(target.blocks.try_write().is_some());
+}
+
+#[test]
+fn changed_raw_undo_generation_refuses_original_pair_even_after_value_aba() {
+    for restore_same_values in [false, true] {
+        let target: Storage<u64, u64> = [(1, 10), (2, 20)].into_iter().collect();
+        let mut candidate = target.block();
+        candidate.insert(1, 11);
+        let journal = detach(candidate);
+        let current = journal.blocks.get(&1).unwrap() as *const _;
+        let undo = journal.revert.get(&1).unwrap().as_ref().unwrap() as *const _;
+        let (journal, error) = journal
+            .try_prepare_publication(&target, |original, target| {
+                // Bypass only the outer pair identity: the original native undo
+                // root/base must independently reject this changed generation.
+                let mut writer = target.revert.write();
+                writer.insert(7, Some(70));
+                if restore_same_values {
+                    writer.remove(&7);
+                }
+                writer.commit();
+                assert!(original.matches_current(target));
+                Ok::<_, ()>(())
+            })
+            .err()
+            .expect("original undo generation changed");
+        assert_eq!(error, PublicationPreparationError::Changed);
+        assert_eq!(journal.blocks.get(&1).unwrap() as *const _, current);
+        assert_eq!(
+            journal.revert.get(&1).unwrap().as_ref().unwrap() as *const _,
+            undo
+        );
+        assert_eq!(journal.blocks.get(&1), Some(&11));
+        assert_eq!(journal.revert.get(&1), Some(&Some(10)));
+        assert_eq!(values(&target), [(1, 10), (2, 20)]);
+        assert_eq!(
+            target.snapshot().revert_map().get(&7),
+            (!restore_same_values).then_some(&Some(70))
+        );
+        assert!(target.revert.try_write().is_some());
+        assert!(target.blocks.try_write().is_some());
+    }
 }

@@ -2,9 +2,11 @@
 //!
 //! Signed values and their negative magnitudes use natural source order. Each
 //! matching commitment is admitted by the original session before any value
-//! chunk escapes. This does not construct a stored opening tail or a proof.
+//! chunk escapes. The original admitted tail follows all 32 values; emitting it
+//! alone does not construct an authenticated stored snapshot or a proof. The
+//! consuming store method joins the actual source-owned ordered writer.
 use super::prepared_comparator_plane_v1::{
-    PreparedRadixValuesV1, validate_materialized_context_v1,
+    PreparedPlaneOpeningV1, PreparedRadixValuesV1, validate_materialized_context_v1,
 };
 use super::*;
 use crate::vega::{
@@ -71,6 +73,25 @@ fn small_signed_plane_coordinate_v1(
 }
 
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> Phase23RadixWitnessMaterializedV2<R, K, P> {
+    /// Retain exact source/packing openings after every value and tail emission.
+    /// This creates neither native40 source authority nor a same-opening proof.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn prepare_source_packing_openings_v1(
+        mut self,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        if self.next_comparator_plane != SMALL_SIGNED_AFTER_PLANE_V1 {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        validate_materialized_context_v1(&self)?;
+        self.evidence
+            .as_mut()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?
+            .prepare_source_packing_openings_v1(
+                self.record.replay_record_digest,
+                self.record.source_receipt_digest,
+            )?;
+        Ok(self)
+    }
+
     /// Consume the source and prepare its next signed or negative-magnitude plane.
     /// The exact completed beta/m stage is required before the first source read.
     pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn prepare_next_small_signed_plane_v1(
@@ -94,14 +115,17 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> Phase23RadixWitnessMater
             replay_record_digest: self.record.replay_record_digest,
             source_receipt_digest: self.record.source_receipt_digest,
         };
-        self.evidence
+        let tail = self
+            .evidence
             .as_mut()
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?
             .commit_prepared_small_signed_v1(&statement)?;
+        let opening =
+            PreparedPlaneOpeningV1::from_committed_v1(values, tail, self.next_comparator_plane)?;
         Ok(PreparedSmallSignedPlaneV1 {
             live: Some(PreparedSmallSignedPlaneLiveV1 {
                 source: self,
-                values,
+                opening,
             }),
         })
     }
@@ -160,7 +184,7 @@ fn expand_small_signed_values_v1(
 
 struct PreparedSmallSignedPlaneLiveV1<R, K, P> {
     source: Phase23RadixWitnessMaterializedV2<R, K, P>,
-    values: PreparedRadixValuesV1,
+    opening: PreparedPlaneOpeningV1,
 }
 
 /// Prepared values retaining the only original source, session and snapshots.
@@ -181,12 +205,46 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> PreparedSmallSignedPlane
             .live
             .take()
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-        let chunk = live.values.emit_next_v1(expected_chunk)?;
+        let chunk = live.opening.emit_next_value_chunk_v1(expected_chunk)?;
         self.live = Some(live);
         Ok(chunk)
     }
 
-    /// Return the original source only after all 32 ordered chunks were emitted.
+    /// Emit the original admitted tail only after all 32 ordered value chunks.
+    /// Every error consumes the sole original source, values and retained masks.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn emit_opening_tail_v1(
+        &mut self,
+    ) -> Result<ConfidentialSpoolChunkV1, ZkAmsMkheErrorV1> {
+        let mut live = self
+            .live
+            .take()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        let tail = live.opening.emit_tail_v1()?;
+        self.live = Some(live);
+        Ok(tail)
+    }
+
+    /// Consume the actual prepared opening into its source-owned ordered writer.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn store_v1(
+        mut self,
+    ) -> Result<Phase23RadixWitnessMaterializedV2<R, K, P>, ZkAmsMkheErrorV1> {
+        let mut live = self
+            .live
+            .take()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        let ordinal = live.source.next_comparator_plane;
+        let writer = live
+            .source
+            .ordered_writer
+            .as_mut()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        live.opening.store_v1(writer, ordinal)?;
+        self.live = Some(live);
+        self.finish_v1()
+    }
+
+    /// Return the original source only after all 33 canonical slots were emitted.
+    /// Emission does not assert ordered storage, authenticated reopen or a proof.
     pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn finish_v1(
         mut self,
     ) -> Result<Phase23RadixWitnessMaterializedV2<R, K, P>, ZkAmsMkheErrorV1> {
@@ -194,8 +252,13 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> PreparedSmallSignedPlane
             .live
             .take()
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-        live.values.finish_v1()?;
+        live.opening.finish_v1()?;
         let mut source = live.source;
+        if let Some(writer) = source.ordered_writer.as_ref() {
+            writer
+                .require_next_slot_v1((u64::from(source.next_comparator_plane) + 1) * 33)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        }
         small_signed_plane_coordinate_v1(source.next_comparator_plane)?;
         source.next_comparator_plane = source
             .next_comparator_plane
@@ -254,8 +317,8 @@ impl PreparedSmallSignedStatementV1<'_> {
     }
 }
 
-// TODO: join the consuming value chunks and original retained mask to the
-// canonical stored-opening writer. Preparation alone is not a complete plane.
+// TODO: join the consuming 33-slot sequence to the canonical ordered writer.
+// Emission alone does not establish stored snapshot or opening-proof authority.
 #[cfg(test)]
 #[path = "prepared_small_signed_plane_v1_tests.rs"]
 mod tests;

@@ -6230,6 +6230,9 @@ fn canonical_error_response(
         {
             details.sns_registration_not_found = None;
         }
+        if parts.status != StatusCode::NOT_FOUND || envelope.code != "query_asset_not_found" {
+            details.query_asset_not_found = None;
+        }
         if parts.status != StatusCode::NOT_FOUND
             || envelope.code != iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE
         {
@@ -10270,9 +10273,27 @@ async fn handler_accounts_onboarding_readiness(
 #[axum::debug_handler]
 async fn handler_accounts_faucet_policy(
     State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    uri: axum::http::Uri,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
-    routing::handle_v1_accounts_faucet_policy(app.clone()).await
+    if uri.query().is_some() || !body.is_empty() {
+        return Err(Error::AppQueryValidation {
+            code: "account_faucet_policy_request_unsupported",
+            message: "Faucet policy discovery accepts no query parameters or body.".to_owned(),
+        });
+    }
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/accounts/faucet/policy",
+    )
+    .await?;
+    routing::handle_v1_accounts_faucet_policy(app).await
 }
+
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_accounts_faucet_puzzle(
@@ -22179,7 +22200,7 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
     // materialized; each local route decodes exactly one D-bounded request.
     drop(verified_query);
     let mut first_output: Option<iroha_data_model::query::SingularQueryOutputBox> = None;
-    let mut skipped = SkippedRoutedQueryErrors::default();
+    let mut skipped = SingularRoutedQueryErrors::default();
     let mut diagnostics = ToriiFanoutDiagnostics::default();
     for route in routes {
         diagnostics.record_attempt();
@@ -22195,14 +22216,19 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
         } else {
             None
         };
-        let outcome = execute_torii_signed_query_route_scan_for_route(
-            app,
-            Arc::clone(&query_bytes),
-            request,
-            route,
-            envelope,
-            fanout_reservation.clone(),
-            proxy_memory.clone(),
+        // Local route failures use the same canonical Norito corridor as proxied route scans,
+        // independently of the public response format selected by the caller.
+        let outcome = utils::with_current_response_format(
+            ResponseFormat::Norito,
+            execute_torii_signed_query_route_scan_for_route(
+                app,
+                Arc::clone(&query_bytes),
+                request,
+                route,
+                envelope,
+                fanout_reservation.clone(),
+                proxy_memory.clone(),
+            ),
         )
         .await;
         match outcome {
@@ -22224,7 +22250,17 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
             }
             Err(response) if should_skip_singleton_routed_query_route_error(&response) => {
                 diagnostics.record_skipped_response(&response);
-                skipped.record_and_drop(response);
+                if let Err(response) = skipped
+                    .record_and_drop(
+                        response,
+                        &verified_request_frame,
+                        envelope,
+                        app.signed_query_admission.body_read_timeout(),
+                    )
+                    .await
+                {
+                    return with_torii_fanout_headers(response, diagnostics);
+                }
             }
             Err(response) => {
                 diagnostics.record_skipped_response(&response);
@@ -22233,7 +22269,10 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
         }
     }
     let Some(first_output) = first_output else {
-        return with_torii_fanout_headers(skipped.into_response(), diagnostics);
+        return with_torii_fanout_headers(
+            skipped.into_response(&verified_request_frame, envelope, format),
+            diagnostics,
+        );
     };
     drop(verified_request_frame);
     drop(query_bytes);
@@ -45035,8 +45074,8 @@ impl Torii {
             ACCOUNTS_ONBOARD_POST => onboarding_post(handler_accounts_onboard);
             ACCOUNTS_ONBOARDING_READINESS_GET => onboarding_get(handler_accounts_onboarding_readiness);
             ACCOUNTS_ONBOARDING_CURRENT_STATE_POST => limited_public_post(account_onboarding_state::handler_account_onboarding_current_state, EXACT_ALIAS_READ_MAX_BODY_BYTES);
-            ACCOUNTS_FAUCET_POLICY_GET => public_get(handler_accounts_faucet_policy);
             ACCOUNTS_FAUCET_PUZZLE_GET => public_get(handler_accounts_faucet_puzzle);
+            ACCOUNTS_FAUCET_POLICY_GET => limited_public_get(handler_accounts_faucet_policy, 0);
             ACCOUNTS_FAUCET_PREPARE_POST => protocol_handshake_post(handler_accounts_faucet_prepare);
             ACCOUNTS_FAUCET_POST => protocol_handshake_post(handler_accounts_faucet);
             ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => canonical_signature_get(handler_account_aliases);
@@ -50651,6 +50690,19 @@ fn public_validation_fail_envelope(
             "Torii could not complete the request.",
         );
     }
+    if status == StatusCode::NOT_FOUND
+        && let iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Find(
+                iroha_data_model::query::error::FindError::Asset(asset_id),
+            ),
+        ) = fail
+    {
+        return ErrorEnvelope::new("query_asset_not_found", validation_fail_message(fail))
+            .with_details(ErrorDetails {
+                query_asset_not_found: Some(asset_id.as_ref().clone()),
+                ..Default::default()
+            });
+    }
     ErrorEnvelope::new("query_validation_failed", validation_fail_message(fail))
 }
 impl IntoResponse for Error {
@@ -50672,10 +50724,9 @@ impl IntoResponse for Error {
                     iroha_data_model::ValidationFail::AxtReject(ctx) => Some(ctx.clone()),
                     _ => None,
                 };
-                let mut details = ErrorDetails {
-                    reject_code: kagemusha_reason.clone(),
-                    ..Default::default()
-                };
+                let mut envelope = public_validation_fail_envelope(&err, status);
+                let mut details = envelope.details.take().unwrap_or_default();
+                details.reject_code = kagemusha_reason.clone();
                 details.axt = axt.as_ref().map(|ctx| AxtErrorDetails {
                     code: Some(ctx.reason.code().to_owned()),
                     reason: Some(ctx.reason.label().to_owned()),
@@ -50685,7 +50736,6 @@ impl IntoResponse for Error {
                     active_handle_era: ctx.active_handle_era,
                     next_handle_counter: ctx.next_handle_counter,
                 });
-                let mut envelope = public_validation_fail_envelope(&err, status);
                 if !details.is_empty() {
                     envelope = envelope.with_details(details);
                 }

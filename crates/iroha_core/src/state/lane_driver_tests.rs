@@ -537,3 +537,137 @@ state_test! { sync native_driver_taken_unfinished_closed_body_keeps_original_out
     assert!(guard.restart_required(), "dropping the taken unfinished body still fences original output");
     driver.shutdown().join().unwrap();
 }
+
+fn native_driver_recovery_exchange_for_test(
+    fixture: &NativeProcessFixture,
+) -> (
+    crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyRequest,
+    crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyResponse,
+    crate::sumeragi::v2_transport::OutstandingCertifiedBodyRequests,
+) {
+    use crate::sumeragi::{v2_chunks, v2_transport};
+    use iroha_data_model::block::consensus_v2 as wire;
+    let finality = fixture
+        .state
+        .kura
+        .v2_finality_artifact(fixture.block.header().height().get())
+        .unwrap()
+        .unwrap();
+    let keys = native_preparation_global_keys(&finality.height_context);
+    let key = &keys[0];
+    let peer = PeerId::new(key.public_key().clone());
+    let mut request = wire::CertifiedBodyRequest {
+        round: finality.commit_qc.proposal_round,
+        subject: finality.subject,
+        certificate: finality.commit_qc.clone(),
+        requester: peer.clone(),
+        signature: Vec::new(),
+    };
+    request.signature = Signature::new(key.private_key(), &request.signature_preimage())
+        .payload()
+        .to_vec();
+    let request = v2_transport::authenticate_certified_body_request_with_validator_pops(
+        &finality.height_context,
+        &finality.validator_set_pops,
+        request,
+        &peer,
+    )
+    .unwrap();
+    let body = fixture
+        .block
+        .canonical_resultless_proposal()
+        .encode_wire()
+        .unwrap();
+    let (manifest, _) = v2_chunks::encode_payload(
+        &finality.height_context,
+        request.request().round,
+        finality.subject,
+        &body,
+    )
+    .unwrap()
+    .into_parts();
+    let mut response = wire::CertifiedBodyResponse {
+        request_hash: request.request_hash(),
+        manifest,
+        body,
+        responder: peer.clone(),
+        signature: Vec::new(),
+    };
+    response.signature = Signature::new(key.private_key(), &response.signature_preimage())
+        .payload()
+        .to_vec();
+    let mut outstanding = v2_transport::OutstandingCertifiedBodyRequests::new(1).unwrap();
+    outstanding.register(request.clone()).unwrap();
+    let response = outstanding
+        .authenticate_response(&finality.height_context, response, &peer)
+        .unwrap();
+    (request, response, outstanding)
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_driver_source_recovery_rejoins_original_owner_after_foreign_refusal
+    use crate::sumeragi::{output_guard::ConsensusOutputGuard,
+        v2_core::Effect, v2_lane_driver::NativeLaneDriver};
+    use std::time::Instant;
+    let now = Instant::now();
+    let fixture = native_process_fixture(false, now);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let id = lane.instance_id();
+    let leader = lane.reducer_context().roster().iter()
+        .position(|member| member.id() == lane.reducer_context().leader(0)).unwrap();
+    let (request, response, outstanding) = native_driver_recovery_exchange_for_test(&fixture);
+    let foreign = native_process_fixture(false, now);
+    let (foreign_request, foreign_response, foreign_outstanding) = native_driver_recovery_exchange_for_test(&foreign);
+    let foreign_observed = foreign.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let foreign_id = foreign_observed.contexts()[0].instance_id();
+    assert_ne!(foreign_id, id);
+    fixture.state.kura.evict_first_admission_body_for_testing(
+        NonZeroUsize::new(fixture.block.header().height().get() as usize).unwrap(),
+        fixture.block.hash()).unwrap();
+    let guard = ConsensusOutputGuard::isolated();
+    let mut driver = NativeLaneDriver::new(Arc::clone(&fixture.state), Arc::clone(&guard),
+        native_process_key(&fixture, lane, leader), native_driver_limits_for_test()).unwrap();
+    let until = Instant::now() + Duration::from_secs(15);
+    loop {
+        driver.poll(&observed, now).unwrap();
+        if driver.process().instance(id).is_some_and(|owner| owner.source_recovery_requirement().is_some()) {break;}
+        assert!(Instant::now() < until, "real source-recovery job must complete");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let original = driver.process().instance(id).unwrap();
+    let original_address = std::ptr::from_ref(original);
+    let required = original.source_recovery_requirement().unwrap().clone();
+    let records = original.native_records().len();
+    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
+    assert_eq!(required.carrier_hash(), fixture.block.hash());
+    for (target, asked, received) in [
+        (foreign_id, &request, &response),
+        (id, &foreign_request, &foreign_response),
+        (id, &request, &foreign_response),
+    ] {
+        assert!(driver.complete_source_recovery(target, asked, received).is_err());
+        let owner = driver.process().instance(id).unwrap();
+        assert_eq!(std::ptr::from_ref(owner), original_address);
+        assert_eq!(owner.source_recovery_requirement().unwrap().carrier_hash(), required.carrier_hash());
+        assert_eq!(owner.source_recovery_requirement().unwrap().priority(), required.priority());
+        assert_eq!(owner.native_records().len(), records);
+        assert!(!guard.restart_required(), "wrong source is retryable, not lost custody");
+    }
+    driver.complete_source_recovery(id, &request, &response).unwrap();
+    let owner = driver.process().instance(id).unwrap();
+    assert_eq!(std::ptr::from_ref(owner), original_address);
+    assert!(owner.source_recovery_requirement().is_none());
+    assert_eq!(owner.native_records().len(), records);
+    assert!(owner.durable_decision_certificate().is_none());
+    assert!(!owner.held_effects().any(|effect| matches!(effect,
+        Effect::StoreBody {..} | Effect::ValidateBody {..} | Effect::Apply {..})),
+        "historical resultless recovery cannot manufacture native Ready or Apply");
+    assert!(driver.complete_source_recovery(id, &request, &response).is_err(),
+        "completed recovery cannot create another source owner");
+    assert_eq!(outstanding.len(), 1, "the global transport still owns its exact request");
+    assert_eq!(foreign_outstanding.len(), 1);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap(), before);
+    assert!(!guard.restart_required());
+    driver.shutdown().join().unwrap();
+}

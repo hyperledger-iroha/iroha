@@ -3557,9 +3557,11 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
             &proof,
             &pinned.root,
             &pinned.revocations,
-            challenge,
-            &verifier_context,
-            presentation_binding,
+            sorafs_manifest::pop_credentials::PopMembershipPresentationV1 {
+                challenge_digest: challenge,
+                verifier_context: &verifier_context,
+                presentation_binding_digest: presentation_binding,
+            },
             now_epoch,
             &[],
         )

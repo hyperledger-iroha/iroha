@@ -16,6 +16,56 @@ import taira_retained_release as owner
 import taira_disk_capacity as capacity
 
 
+class LiveReferenceDiagnosticTests(unittest.TestCase):
+    def observe(self, result):
+        import taira_retry
+        with patch.object(taira_retry, "_retire_live_references", return_value=result) as scanner:
+            try:
+                return owner.no_live_references(["/selected/public/source"], [7],
+                    file_identities=[{"path": "/selected/public/source/file", "identity": [1, 2]}])
+            finally:
+                scanner.assert_called_once_with(["/selected/public/source"], own_fds=[7],
+                    file_identities=[{"path": "/selected/public/source/file", "identity": [1, 2]}])
+
+    def test_live_reference_still_refuses_and_retains_exact_actor_kind_and_path(self):
+        row = {"pid": 123, "kind": "maps", "target_root": "/selected/public/source/file"}
+        with self.assertRaises(owner.RetainedReleaseError) as caught:
+            self.observe({"passed": False, "references": [row]})
+        detail = owner.decode(str(caught.exception).split(": ", 1)[1].encode())
+        self.assertEqual(detail, {"reference_count": 1, "omitted_references": 0,
+            "references": [{**row, "target_root_truncated": False,
+                             "target_root_sha256": owner.sha(row["target_root"].encode())}]})
+
+    def test_report_is_bounded_even_for_many_long_escaped_selected_paths(self):
+        path = "/selected/" + "\n" * 4096
+        rows = [{"pid": index + 1, "kind": "mount_alias", "target_root": path} for index in range(256)]
+        with self.assertRaises(owner.RetainedReleaseError) as caught:
+            self.observe({"passed": False, "references": rows})
+        raw = str(caught.exception)
+        self.assertLess(len(raw.encode()), 16 * 1024)
+        self.assertNotIn("\n", raw)
+        detail = owner.decode(raw.split(": ", 1)[1].encode())
+        self.assertEqual(detail["reference_count"], 256)
+        self.assertEqual(detail["omitted_references"], 248)
+        self.assertEqual(len(detail["references"]), 8)
+        for row in detail["references"]:
+            self.assertEqual(row["target_root"], path[:256])
+            self.assertTrue(row["target_root_truncated"])
+            self.assertEqual(row["target_root_sha256"], owner.sha(path.encode()))
+
+    def test_unrelated_process_metadata_never_enters_error(self):
+        result = {"passed": False, "references": [{"pid": 123, "kind": "fd",
+            "target_root": "/selected/public/source/file", "argv": "SECRET_MARKER"}],
+            "environment": "SECRET_MARKER", "unrelated_path": "SECRET_MARKER"}
+        with self.assertRaises(owner.RetainedReleaseError) as caught:
+            self.observe(result)
+        self.assertNotIn("SECRET_MARKER", str(caught.exception))
+
+    def test_success_returns_original_census_without_changing_refusal_policy(self):
+        result = {"passed": True, "references": [], "processes_examined": 157}
+        self.assertIs(self.observe(result), result)
+
+
 class RetainedReleaseTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix=".taira-retained-test-", dir=Path.home())

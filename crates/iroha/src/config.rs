@@ -15,6 +15,7 @@ use iroha_service_model::soranet::RolloutPhase;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::{path::Path, time::Duration};
 use url::Url;
+mod private_key_file;
 mod user;
 use crate::secrecy::SecretString;
 pub use user::{

@@ -13,6 +13,11 @@ use crate::vega::{
 
 #[path = "global_lookup_statement_v1/vector_arithmetic_plane_openings_v1.rs"]
 mod vector_arithmetic_plane_openings_v1;
+pub(in crate::vega::zk_ams::mkhe) use vector_arithmetic_plane_openings_v1::{
+    OrderedPlaneSpoolSnapshotV1, OrderedPlaneSpoolWriterV1, OrderedSnapshotErrorV1,
+    OrderedStorageSessionBudgetV1, QMaskSFileMemoryV1, QMaskSFilePlanV1, QMaskSFileV1,
+    SealedQMaskSFileV1, WrittenQMaskSBlockFileV1, materialized_plane_context_digest_v1,
+};
 
 const VERSION_V1: u8 = 1;
 const GROUPS_V1: u32 = 43 * 8;

@@ -868,7 +868,7 @@ fn install_canonical_post_enactment_validation_fee_state(
     let mut state_transaction = block.transaction();
 
     let register_permission: iroha_data_model::permission::Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(register_permission, authority.clone())
         .execute(authority, &mut state_transaction)
         .expect("grant payout-contract registration authority");

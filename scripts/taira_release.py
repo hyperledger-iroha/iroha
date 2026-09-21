@@ -596,8 +596,10 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
             return source
         try:
             frozen_snapshot(source, entries, target_dir)
-        except PrepareError:
+        except (PrepareError, FileNotFoundError, NotADirectoryError):
             require(state is not None, "unexpected unrecorded source capture")
+            # Added paths and file/directory replacements need not exist in the
+            # previous tree. Other I/O failures still retain their diagnostic.
             # Preserve timestamps only from a complete, unchanged previous tree.
             previous_entries = commit_entries(root, state["commit"])
             frozen_snapshot(source, previous_entries, target_dir)

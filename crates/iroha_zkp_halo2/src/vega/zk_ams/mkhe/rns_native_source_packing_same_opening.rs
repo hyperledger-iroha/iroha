@@ -1207,6 +1207,59 @@ fn identity_aware_point_bytes_v1(
     Ok(encoded)
 }
 
+/// The exact public commitment projection, without source replay or proof authority.
+/// This is also implemented by the original retained opening owner so its
+/// derived masks bind the identical point-root encoder used by the verifier.
+pub(super) trait RnsNativeSourcePackingCommitmentViewV1 {
+    fn packing_difference_low_v1(
+        &self,
+        group: usize,
+        digit: usize,
+    ) -> Result<Point, RnsNativeSourcePackingSameOpeningErrorV1>;
+    fn packing_difference_top_v1(
+        &self,
+        group: usize,
+    ) -> Result<Point, RnsNativeSourcePackingSameOpeningErrorV1>;
+    fn packing_signed_v1(
+        &self,
+        record: usize,
+        role: RnsNativeSignedSourceRoleV1,
+        plane: usize,
+    ) -> Result<Point, RnsNativeSourcePackingSameOpeningErrorV1>;
+}
+
+impl<P: RnsNativeSourcePackingAggregateReplayV1> RnsNativeSourcePackingCommitmentViewV1 for P {
+    fn packing_difference_low_v1(
+        &self,
+        group: usize,
+        digit: usize,
+    ) -> Result<Point, RnsNativeSourcePackingSameOpeningErrorV1> {
+        self.difference_low_commitment_v1(group, digit)
+    }
+    fn packing_difference_top_v1(
+        &self,
+        group: usize,
+    ) -> Result<Point, RnsNativeSourcePackingSameOpeningErrorV1> {
+        self.difference_top_commitment_v1(group)
+    }
+    fn packing_signed_v1(
+        &self,
+        record: usize,
+        role: RnsNativeSignedSourceRoleV1,
+        plane: usize,
+    ) -> Result<Point, RnsNativeSourcePackingSameOpeningErrorV1> {
+        self.signed_commitment_v1(record, role, plane)
+    }
+}
+
+/// Hash actual points through the sole verifier encoder without retaining a
+/// second point vector or adding a transcript frame.
+pub(super) fn source_packing_point_root_v1<P: RnsNativeSourcePackingCommitmentViewV1>(
+    source: &P,
+) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeSourcePackingSameOpeningErrorV1> {
+    visit_packing_commitments_v1(source, |_| {})
+}
+
 fn collect_commitments_v1<P: RnsNativeSourcePackingAggregateReplayV1>(
     source: &P,
 ) -> Result<CommitmentSetV1, RnsNativeSourcePackingSameOpeningErrorV1> {
@@ -1214,6 +1267,17 @@ fn collect_commitments_v1<P: RnsNativeSourcePackingAggregateReplayV1>(
     owners
         .try_reserve_exact(OWNERS_V1)
         .map_err(|_| RnsNativeSourcePackingSameOpeningErrorV1::ResourceExhausted)?;
+    let point_root = visit_packing_commitments_v1(source, |point| owners.push(point))?;
+    if owners.len() != OWNERS_V1 {
+        return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry);
+    }
+    Ok(CommitmentSetV1 { owners, point_root })
+}
+
+fn visit_packing_commitments_v1<P: RnsNativeSourcePackingCommitmentViewV1>(
+    source: &P,
+    mut emit: impl FnMut(Point),
+) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeSourcePackingSameOpeningErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(POINT_ROOT_DOMAIN_V1);
     hash.update(&[VERSION_V1]);
@@ -1230,19 +1294,19 @@ fn collect_commitments_v1<P: RnsNativeSourcePackingAggregateReplayV1>(
         let mut reconstructed = Point::identity();
         let mut weight = Scalar::one();
         for digit in 0..RADIX_LOW_DIGITS_V1 {
-            let point = source.difference_low_commitment_v1(group, digit)?;
+            let point = source.packing_difference_low_v1(group, digit)?;
             hash.update(&[1, digit as u8]);
             hash.update(&non_identity_point_bytes_v1(&point)?);
             reconstructed += point.mul_scalar(weight);
             weight *= radix;
         }
-        let top = source.difference_top_commitment_v1(group)?;
+        let top = source.packing_difference_top_v1(group)?;
         hash.update(&[2, RADIX_LOW_DIGITS_V1 as u8]);
         hash.update(&non_identity_point_bytes_v1(&top)?);
         reconstructed += top.mul_scalar(weight);
         hash.update(&[3]);
         hash.update(&identity_aware_point_bytes_v1(&reconstructed)?);
-        owners.push(reconstructed);
+        emit(reconstructed);
     }
 
     for record in 0..RECORDS_V1 {
@@ -1262,22 +1326,19 @@ fn collect_commitments_v1<P: RnsNativeSourcePackingAggregateReplayV1>(
                 {
                     return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry);
                 }
-                let point = source.signed_commitment_v1(record, role, plane)?;
+                let point = source.packing_signed_v1(record, role, plane)?;
                 hash.update(&(ordinal as u16).to_be_bytes());
                 hash.update(&[1, record as u8, role as u8, plane as u8]);
                 hash.update(&non_identity_point_bytes_v1(&point)?);
-                owners.push(point);
+                emit(point);
             }
         }
-    }
-    if owners.len() != OWNERS_V1 {
-        return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry);
     }
     let point_root = hash.finalize();
     if point_root == [0; DIGEST_BYTES_V1] {
         return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidIntegrity);
     }
-    Ok(CommitmentSetV1 { owners, point_root })
+    Ok(point_root)
 }
 
 fn pre_challenge_binding_digest_v1(

@@ -88,22 +88,24 @@ The manifest deliberately emits `status=locally-qualified`,
 `attestation_scope=local-execution-receipt`,
 `externally_authenticated=false`, and `promotion_eligible=false`. These files
 are unsigned local execution receipts, not standalone proof. The final checker
-requires `signing_provider=authenticated_external_signer` provenance with exact
-`signing_backend=hardware` and `signer_qualification=hardware-key-qualified`,
+requires `signing_provider=authenticated_external_signer` provenance,
 authenticated by the purpose-specific
 [final-promotion receipt V1](final_promotion_receipt_v1.md). The signed statement
 binds cosign/OIDC provenance and the exact SHA-256 of
 `negative-promotion-archive.json`, the archive inventory, this negative-archive
 runner, and the Python runtime environment.
 Hashing the executable alone does not bind its dynamic libraries or operating
-system.
+system. Authenticated software providers and optional hardware providers share
+the same authorization contract; an HSM is not required. V1 carries no backend
+or hardware/software qualification claims and does not attest key origin or
+exportability.
 
 The fail-closed final conjunction is
 `scripts/check_sorafs_production_promotion_bundle.py`. It is read-only and
 accepts the two aggregate files, their deterministic replay manifest, the
 negative-archive directory, one externally signed promotion-provenance statement,
 the exact cosign JSON bundle named by that statement, an explicit clock, and
-independent signer and deployment trust. Its required hardware evidence inputs
+independent signer and deployment trust. Its required signer evidence inputs
 are five paths (native verifier, signer policy, custody trust, signed completed
 state observation, and operation receipt), three independently reviewed SHA-256
 pins (verifier, policy, and trust), and chain/network/deployment identifiers.
@@ -113,13 +115,11 @@ six exact receipt files, rejects extra archive members, and requires the
 positive replay and negative baseline to share the same ordered 22-input digest
 and the same aggregate, replay, and replay-manifest hashes.
 
-The external statement uses the sole 26-root-field schema
+The external statement uses the sole 24-root-field schema
 `sorafs.production_readiness.production_promotion_provenance.v1`, closed over
 chain/network/deployment context, `status=verified`,
 `attestation_scope=production-promotion-bundle`,
-`signing_provider=authenticated_external_signer`,
-`signing_backend=hardware`,
-`signer_qualification=hardware-key-qualified`, a fresh explicit timestamp,
+`signing_provider=authenticated_external_signer`, a fresh explicit timestamp,
 the exact negative-manifest SHA-256, the six full ordered manifest receipt
 rows, baseline input count and digest, runner/checker/toolchain hashes, the
 closed Python-runtime object, and the four positive hashes (both aggregates,
@@ -130,47 +130,47 @@ signer authenticates these claims. The checker also verifies the exact non-circu
 cosign subject through an independently pinned local verifier and trusted root;
 signed status or identity text alone cannot satisfy the cryptographic boundary.
 
-Its `authentication` object has a closed hardware Ed25519 shape:
-`kind`, `algorithm`, `backend`, distinct
+Its `authentication` object has a closed external Ed25519 shape:
+`kind`, `algorithm`, distinct
 `service_id` and `administrator_id`, positive key and policy revisions,
 non-zero policy SHA-256, public-key fingerprint, and signature. Every value is
 matched to independent command-line trust. The signature covers the ASCII
 canonical JSON object with only `authentication.signature_hex` removed,
 prefixed by the domain
 `iroha:sorafs:production-readiness:production-promotion-provenance:v1\0`.
-Unknown fields, stale or future provenance, software/local/test signer metadata,
-failed cosign/OIDC status, receipt reordering, digest substitution, or a bad
-signature blocks promotion. Declaring `hardware` does not establish custody:
-the native verifier must independently authenticate the role-14 receipt,
-hardware attestation, current custody and exact original completed operation.
+Unknown fields, including backend or qualification claims, stale or future
+provenance, ineligible signer authorization, failed cosign/OIDC status, receipt
+reordering, digest substitution, or a bad signature blocks promotion. The native
+verifier must independently authenticate the role-14 receipt, signer
+authorization, current finalized custody and exact original completed operation.
 
 The Python adapter snapshots the pinned verifier executable, supplies exact
 private inputs to `iroha app sorafs toolkit final-promotion-receipt`, and checks
-its complete 26-field `final_promotion_signer_receipt` result. The statement
+its complete 25-field `final_promotion_signer_receipt` result. The statement
 signature alone, caller-supplied verifier JSON, a foundational-purpose receipt,
 or a changed policy/trust/context cannot satisfy that boundary.
 
-TODO: Integrate independently verified hardware custody and completed-operation
+TODO: Integrate independently verified signer custody and completed-operation
 proofs for all four inner contracts: foundational, topology, resilience and
-lane inventory. Their current aggregate/replay schemas still carry software
-qualifications and digest summaries. `validate_inner_hardware_approval_chain`
+lane inventory. Their current aggregate/replay schemas still carry signatures
+and digest summaries. `validate_inner_approval_chain`
 therefore blocks production unconditionally. A valid outer receipt cannot
 upgrade those contracts, create the 17 lane qualifications or establish production
-soak. Configured hardware/state authority and
+soak. Configured signer/state authority and
 the production signing command also remain open as recorded in the receipt spec.
 
 The [cosign contract](final_promotion_receipt_v1.md#exact-cosign-subject-and-local-verification)
 uses the same unsigned body with only the bundle hash absent, under its own
-subject domain. The final hardware statement binds the resulting bundle hash.
+subject domain. The final signed statement binds the resulting bundle hash.
 One canonical Sigstore v0.3 leaf-certificate/message-signature profile requires
 Rekor 2 inclusion proof and signed RFC3161 timestamps; old formats, DSSE and key
 profiles are rejected. The exact captured bytes go to pinned cosign v3.1.3 with
 local trust, independent identity/issuer and mandatory signed-timestamp verification.
 Its real public upstream crypto tests establish local cryptographic delegation.
 TODO: Qualify the production signing workflow and actual signed SoraFS subject;
-these public fixtures do not create deployment or hardware evidence.
+these public fixtures do not create deployment, custody or completed-operation evidence.
 
-The complete final-checker invocation now includes the hardware evidence and
+The complete final-checker invocation now includes the signer evidence and
 context arguments below. This is an interface example; it currently returns a
 blocked result even when the outer receipt verifies:
 
@@ -210,7 +210,7 @@ python3 scripts/check_sorafs_production_promotion_bundle.py \
 
 The current inner-contract block yields exit code 1 and a schema-closed summary
 with `status=blocked`, `externally_authenticated=false`,
-`promotion_eligible=false`, and `signer_qualification=null`. Missing required
+`promotion_eligible=false`. Missing required
 arguments or another preflight failure returns exit code 2. No current outer
 receipt or locally qualified negative archive can produce promotion eligibility.
 

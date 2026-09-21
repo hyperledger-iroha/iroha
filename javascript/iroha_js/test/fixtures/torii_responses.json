@@ -33,25 +33,26 @@
       }
     },
     "referendumMissing": {
-      "found": false,
-      "referendum": null
+      "found": false
     },
     "locks": {
       "found": true,
       "referendum_id": "ref-1",
       "locks": {
-        "34mSYmhpgCPNxWQs5cVbkLKGozajDgsRT6UneZ6ZUUsDauwCPqJMJz5zmsCPzxpLNUvnWzMkx": {
-          "owner": "34mSYmhpgCPNxWQs5cVbkLKGozajDgsRT6UneZ6ZUUsDauwCPqJMJz5zmsCPzxpLNUvnWzMkx",
-          "amount": "10",
-          "slashed": "0",
-          "expiry_height": 55,
-          "direction": 1,
-          "duration_blocks": 5,
-          "custody": {
-            "escrowed": true,
-            "asset_definition_id": "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
-            "bond_escrow_account": "bond-escrow-account",
-            "slash_receiver_account": "slash-receiver-account"
+        "locks": {
+          "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D": {
+            "owner": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+            "amount": "18446744073709551616.25",
+            "slashed": "0.25",
+            "expiry_height": 55,
+            "direction": 0,
+            "duration_blocks": 5,
+            "custody": {
+              "escrowed": true,
+              "asset_definition_id": "4xmB7KmeLcoWBY9fXWrqoNoG8sD6",
+              "bond_escrow_account": "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
+              "slash_receiver_account": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+            }
           }
         }
       }
@@ -64,9 +65,11 @@
     },
     "tally": {
       "referendum_id": "ref-1",
-      "approve": "7",
+      "evaluated_block_height": 42,
+      "evaluated_block_hash": "1212121212121212121212121212121212121212121212121212121212121212",
+      "approve": 7,
       "reject": 3,
-      "abstain": "1"
+      "abstain": 1
     },
     "draftResponse": {
       "ok": true,

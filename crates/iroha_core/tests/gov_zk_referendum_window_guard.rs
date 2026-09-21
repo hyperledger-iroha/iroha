@@ -76,6 +76,10 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
             h_end: 6,
             status,
             mode: GovernanceReferendumMode::Zk,
+            plain_context:
+                iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+            plain_result:
+                iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
         });
         if let Some(record) = referendum {
             tx.world
@@ -95,7 +99,7 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
             "case {id} at height {height}",
         );
         assert_eq!(
-            tx.world.governance_referenda().get(&id.to_owned()).copied(),
+            tx.world.governance_referenda().get(&id.to_owned()).cloned(),
             referendum,
             "rejected ballot must not change referendum status",
         );

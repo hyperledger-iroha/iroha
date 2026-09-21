@@ -1100,6 +1100,133 @@ class TairaPrepareTests(unittest.TestCase):
             self.assertEqual(release.capture_source(self.root, source, self.target, "a" * 40, entries), source)
             release.frozen_snapshot(source, entries, self.target)
 
+    def test_capture_refreshes_real_commit_tree_add_remove_rename_and_path_kinds(self):
+        commit, files = self.controller_fixture()
+        unchanged = next(iter(release.BUILD_SOURCES))
+        stamp = 1_600_000_000_123_456_789
+        warm = self.target / "warm-artifact"
+        warm.write_bytes(b"preserve compiler cache")
+        with release.source_lane(self.root, self.target) as (source, _):
+            def capture(revision):
+                # Real Git objects/tree selection; the independent signature
+                # decision uses the existing explicit fixture boundary.
+                with self.fixture_signature(revision), \
+                     patch.object(release, "verify_controller_module_origins"):
+                    release.verify_signed_source(self.root, revision, self.args.expected_signer)
+                entries = release.commit_entries(self.root, revision)
+                self.assertEqual(release.capture_source(
+                    self.root, source, self.target, revision, entries), source)
+                release.frozen_snapshot(source, entries, self.target)
+                self.assertEqual(release.read_record(source.parent / "source-state.json"),
+                                 {"commit": revision})
+                self.assertEqual(list(source.parent.glob("source.retained-*")), [])
+                self.assertEqual(list(source.parent.glob("source.pending-*")), [])
+                self.assertEqual(warm.read_bytes(), b"preserve compiler cache")
+            capture(commit)
+            os.utime(source / unchanged, ns=(stamp, stamp))
+            for operation in ("add", "remove", "rename", "file-to-directory", "directory-to-file"):
+                with self.subTest(operation=operation):
+                    if operation == "add":
+                        added = self.root / "new-directory/added.rs"
+                        added.parent.mkdir(mode=0o700)
+                        added.write_bytes(b"new signed tree input")
+                        self.fixture_git("add", "--", "new-directory/added.rs")
+                    elif operation == "remove":
+                        self.fixture_git("rm", "--", "new-directory/added.rs")
+                    elif operation == "rename":
+                        self.fixture_git("mv", "--", "source.rs", "renamed.rs")
+                    elif operation == "file-to-directory":
+                        self.fixture_git("rm", "--", "renamed.rs")
+                        (self.root / "renamed.rs").mkdir(mode=0o700)
+                        (self.root / "renamed.rs/child.rs").write_bytes(b"nested replacement")
+                        self.fixture_git("add", "--", "renamed.rs/child.rs")
+                    else:
+                        self.fixture_git("rm", "--", "renamed.rs/child.rs")
+                        if (self.root / "renamed.rs").exists():
+                            (self.root / "renamed.rs").rmdir()
+                        (self.root / "renamed.rs").write_bytes(b"file replacement")
+                        self.fixture_git("add", "--", "renamed.rs")
+                    capture(self.commit_controller_fixture(operation))
+                    self.assertEqual((source / unchanged).stat().st_mtime_ns, stamp)
+                    self.assertEqual((source / unchanged).read_bytes(), files[unchanged])
+            self.assertEqual((source / "renamed.rs").read_bytes(), b"file replacement")
+            self.assertFalse((source / "source.rs").exists())
+            self.assertFalse((source / "new-directory").exists())
+
+    def test_new_tree_refresh_refuses_corrupted_previous_capture_before_mutation(self):
+        commit, files = self.controller_fixture()
+        before = release.commit_entries(self.root, commit)
+        (self.root / "added.rs").write_bytes(b"new committed input")
+        self.fixture_git("add", "--", "added.rs")
+        successor = self.commit_controller_fixture("added source")
+        after = release.commit_entries(self.root, successor)
+        with release.source_lane(self.root, self.target) as (source, _):
+            release.capture_source(self.root, source, self.target, commit, before)
+            original_inode = source.stat().st_ino
+            captured = source / "source.rs"
+            for corruption in ("missing", "bytes", "extra", "output-binding"):
+                with self.subTest(corruption=corruption):
+                    source.chmod(0o700)
+                    if corruption == "missing":
+                        captured.unlink()
+                    elif corruption == "bytes":
+                        captured.chmod(0o600)
+                        captured.write_bytes(b"untrusted replacement")
+                        captured.chmod(0o400)
+                    elif corruption == "extra":
+                        (source / "unknown-input").write_bytes(b"must not retire")
+                    else:
+                        (source / "target").unlink()
+                        (source / "target").symlink_to(self.root, target_is_directory=True)
+                    source.chmod(0o500)
+                    with patch.object(release, "create_fresh_directory") as create, \
+                         patch.object(release.os, "rename") as rename:
+                        with self.assertRaises((release.PrepareError, FileNotFoundError)):
+                            release.capture_source(self.root, source, self.target, successor, after)
+                        create.assert_not_called()
+                        rename.assert_not_called()
+                    self.assertEqual(source.stat().st_ino, original_inode)
+                    self.assertEqual(release.read_record(source.parent / "source-state.json"),
+                                     {"commit": commit})
+                    source.chmod(0o700)
+                    if corruption in ("missing", "bytes"):
+                        if captured.exists():
+                            captured.chmod(0o600)
+                        captured.write_bytes(files["source.rs"])
+                        captured.chmod(0o400)
+                    elif corruption == "extra":
+                        self.assertEqual((source / "unknown-input").read_bytes(), b"must not retire")
+                        (source / "unknown-input").unlink()
+                    else:
+                        (source / "target").unlink()
+                        (source / "target").symlink_to(self.target, target_is_directory=True)
+                    source.chmod(0o500)
+                    release.frozen_snapshot(source, before, self.target)
+
+    def test_capture_probe_preserves_nonstructural_io_errors_and_same_commit_missing_input(self):
+        entries = self.source_entries({"source.rs": ("100644", b"source")})
+        with release.source_lane(self.root, self.target) as (source, _):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            for error in (PermissionError("read denied"), OSError(5, "input/output error")):
+                with self.subTest(error=type(error).__name__), \
+                     patch.object(release, "frozen_snapshot", side_effect=error), \
+                     patch.object(release, "commit_entries") as previous, \
+                     patch.object(release, "create_fresh_directory") as create:
+                    with self.assertRaises(type(error)) as failure:
+                        release.capture_source(self.root, source, self.target, "b" * 40, entries)
+                    self.assertIs(failure.exception, error)
+                    previous.assert_not_called()
+                    create.assert_not_called()
+            source.chmod(0o700)
+            (source / "source.rs").unlink()
+            source.chmod(0o500)
+            with patch.object(release, "commit_entries") as previous, \
+                 patch.object(release, "create_fresh_directory") as create:
+                with self.assertRaises(FileNotFoundError):
+                    release.capture_source(self.root, source, self.target, "a" * 40, entries)
+                previous.assert_not_called()
+                create.assert_not_called()
+
     def test_watched_subtrees_preserve_times_and_changed_ancestors_invalidate(self):
         first = {'vendor/pq/src/lib.rs': ('100644', b'unchanged'),
                  'vendor/pq/cfiles/c.c': ('100644', b'unchanged C'),

@@ -27,6 +27,13 @@ const GALOIS_KEY_SCHEDULE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-galois-
 const ROTATION_CERTIFICATE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-rotation-certificate";
 const RELEASE_PACKING_CERTIFICATE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.t256-release-packing-certificate";
+// Exact full BGV profile recorded by the existing packing KAT constants.
+// Changing the schedule/profile identity must not relabel those observations.
+// This pin establishes identity only; it is not independent release evidence.
+const RELEASE_PACKING_EVIDENCE_PROFILE_DIGEST_V1: [u8; 32] = [
+    0xbf, 0xdc, 0x09, 0xd7, 0x9c, 0xa7, 0x11, 0xcd, 0x02, 0xaa, 0x1a, 0x79, 0xbf, 0xf5, 0x5d, 0x6c,
+    0x1b, 0xea, 0x4e, 0xb5, 0x87, 0x1c, 0x58, 0xb4, 0x12, 0xcd, 0x40, 0x3f, 0x89, 0x8b, 0x08, 0x2c,
+];
 /// Maximum number of logical values admitted by one governed packed vector.
 pub const ZK_AMS_T256_MAX_LOGICAL_VALUES_V1: u32 = 1_048_576;
 /// Exact number of unique Galois exponents in the minimal binary rotation schedule.
@@ -875,7 +882,7 @@ pub struct ZkAmsT256ReleasePackingCertificateV1 {
 pub fn zk_ams_t256_release_packing_certificate_v1()
 -> Result<ZkAmsT256ReleasePackingCertificateV1, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
-    profile.validate()?;
+    let evidence_profile_digest = release_packing_evidence_profile_digest_v1(&profile)?;
     let layout = zk_ams_t256_packing_layout_v1(
         u32::try_from(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
@@ -889,7 +896,7 @@ pub fn zk_ams_t256_release_packing_certificate_v1()
     let subfield_conjugation_exponent = zk_ams_t256_packed_subfield_conjugation_exponent_v1()?;
     let mut certificate = ZkAmsT256ReleasePackingCertificateV1 {
         version: PACKING_VERSION_V1,
-        profile_digest: profile.digest()?,
+        profile_digest: evidence_profile_digest,
         ring_degree: u32::try_from(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
         slot_count: u32::try_from(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1)
@@ -898,7 +905,7 @@ pub fn zk_ams_t256_release_packing_certificate_v1()
         root_digest,
         subfield_conjugation_exponent,
         subfield_relation_digest: packed_subfield_relation_digest(
-            profile.digest()?,
+            evidence_profile_digest,
             root_digest,
             subfield_conjugation_exponent,
         )?,
@@ -1837,11 +1844,22 @@ fn release_packing_certificate_digest(
     frame.extend_from_slice(&certificate.negative_kat_digest);
     keccak256(&frame)
 }
+// Keep the immutable evidence identity separate from candidate profile construction.
+// In particular, regenerating a Galois schedule is not a packing KAT execution.
+fn release_packing_evidence_profile_digest_v1(
+    profile: &BgvProfile,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let profile_digest = profile.digest()?;
+    if profile_digest != RELEASE_PACKING_EVIDENCE_PROFILE_DIGEST_V1 {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    Ok(profile_digest)
+}
 fn validate_release_packing_certificate(
     certificate: ZkAmsT256ReleasePackingCertificateV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
-    profile.validate()?;
+    let evidence_profile_digest = release_packing_evidence_profile_digest_v1(&profile)?;
     let slot_count = u32::try_from(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
     let layout = zk_ams_t256_packing_layout_v1(slot_count)?;
@@ -1853,7 +1871,7 @@ fn validate_release_packing_certificate(
     let root_digest = release_root_identity_digest(root, &root_exponent)?;
     let subfield_conjugation_exponent = zk_ams_t256_packed_subfield_conjugation_exponent_v1()?;
     if certificate.version != PACKING_VERSION_V1
-        || certificate.profile_digest != profile.digest()?
+        || certificate.profile_digest != evidence_profile_digest
         || certificate.ring_degree
             != u32::try_from(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1)
                 .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
@@ -1863,7 +1881,7 @@ fn validate_release_packing_certificate(
         || certificate.subfield_conjugation_exponent != subfield_conjugation_exponent
         || certificate.subfield_relation_digest
             != packed_subfield_relation_digest(
-                profile.digest()?,
+                evidence_profile_digest,
                 root_digest,
                 subfield_conjugation_exponent,
             )?
@@ -2848,6 +2866,47 @@ pub(super) mod tests {
             permute_zk_ams_t256_slots_v1(partial, identity, &padded).unwrap(),
             padded
         );
+    }
+    #[test]
+    fn release_packing_evidence_accepts_only_its_recorded_profile() {
+        let profile = release_profile_v1();
+        let digest = release_packing_evidence_profile_digest_v1(&profile)
+            .expect("the existing packing evidence records this exact profile");
+        assert_eq!(digest, RELEASE_PACKING_EVIDENCE_PROFILE_DIGEST_V1);
+        let certificate = zk_ams_t256_release_packing_certificate_v1().unwrap();
+        assert_eq!(certificate.profile_digest, digest);
+        validate_release_packing_certificate(certificate).unwrap();
+    }
+    #[test]
+    fn release_packing_evidence_rejects_changed_profile_without_relabeling() {
+        let baseline = release_profile_v1();
+        let mut changed_id = baseline.clone();
+        changed_id.profile_id[0] ^= 1;
+        let mut changed_distribution = baseline.clone();
+        changed_distribution.error_eta = 3;
+        let mut changed_resource_policy = baseline.clone();
+        changed_resource_policy.max_work_units += 1;
+        let mut changed_modulus_chain = baseline.clone();
+        changed_modulus_chain.moduli =
+            &super::super::rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1;
+        changed_modulus_chain.negacyclic_roots =
+            &super::super::rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1;
+        changed_modulus_chain.gadget_digits = changed_modulus_chain.moduli.len();
+        for changed in [
+            changed_id,
+            changed_distribution,
+            changed_resource_policy,
+            changed_modulus_chain,
+        ] {
+            changed
+                .validate()
+                .expect("the changed candidate is well formed");
+            assert_ne!(changed.digest().unwrap(), baseline.digest().unwrap());
+            assert_eq!(
+                release_packing_evidence_profile_digest_v1(&changed),
+                Err(ZkAmsMkheErrorV1::InvalidProfile)
+            );
+        }
     }
     #[test]
     fn release_packing_certificate_binds_every_kat_axis() {

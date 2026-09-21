@@ -5,9 +5,10 @@
 //! Block hashes likewise move into an owned journal and release their read guard.
 //! World/runtime journals and tiered snapshots follow one resource admission.
 //! Archive plans retain original logical reservations and filesystem owners.
-//! The private terminal consumer joins exact QC/Kura/Native custody and refuses
-//! outstanding namespace/participant obligations. TODO: complete those geometry
-//! and durability owners plus aggregate resource admission before live cutover.
+//! The private terminal consumer joins exact QC/Kura/Native custody, retains the
+//! original Queue for namespace retirement, and refuses retired participant
+//! manifests. TODO: complete aggregate resource admission and carry these original
+//! owners through live Validate/cache/Apply before retiring the old writer.
 
 use super::super::*;
 use super::{PreparedCarrier, execution_prefix::ValidatedExecutionPrefix};
@@ -195,6 +196,17 @@ pub(crate) struct CarrierJournalInputs<'owner, 'state> {
     /// This covers its inline storage; nested owners still require their own
     /// accounting within the complete original candidate admission.
     pub(crate) retained_effects_layout: std::alloc::Layout,
+}
+
+impl CarrierJournalInputs<'_, '_> {
+    /// Exact World wrapper demand available to the aggregate capture admission.
+    /// It matches the preexecution plan without reading or cloning State values.
+    /// This does not fund nested values or the other original carrier owners.
+    pub(crate) fn world_journal_shell_bytes(
+        &self,
+    ) -> Result<usize, mv::allocation::AllocationRefusal> {
+        PreparedCarrier::world_journal_shell_bytes()
+    }
 }
 
 /// Original journals after candidate execution, deterministic tails and capture.
@@ -613,3 +625,6 @@ impl<Admission, Block, Components> PreparedCarrierJournals<Admission, Block, Com
 #[cfg(test)]
 #[path = "journals_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use decision_binding::publish_governance_fixture;

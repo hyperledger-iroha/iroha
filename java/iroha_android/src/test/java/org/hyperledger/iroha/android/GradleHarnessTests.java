@@ -96,8 +96,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.sorafs.SorafsReferenceValidatorsTests",
         "org.hyperledger.iroha.android.sorafs.SorafsRegisterPinManifestBuilderTests",
         "org.hyperledger.iroha.android.sorafs.SorafsReplicationInstructionBuilderTests",
-        "org.hyperledger.iroha.android.sccp.SccpV1Tests",
-        "org.hyperledger.iroha.android.client.SccpClientExactTests",
         "org.hyperledger.iroha.android.telemetry.AndroidNetworkContextProviderTests",
         "org.hyperledger.iroha.android.telemetry.AuthorityHashTest",
         "org.hyperledger.iroha.android.telemetry.ChaosScenarioLoggerTests",

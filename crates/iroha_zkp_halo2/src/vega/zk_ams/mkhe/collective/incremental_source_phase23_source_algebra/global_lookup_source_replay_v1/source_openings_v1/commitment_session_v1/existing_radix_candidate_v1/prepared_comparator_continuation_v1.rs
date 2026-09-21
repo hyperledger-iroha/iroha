@@ -141,7 +141,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1> RnsNativeComparatorContinuatio
     pub(in super::super::super::super) fn commit_prepared_v1(
         mut self,
         statement: &PreparedComparatorStatementV1<'_>,
-    ) -> Result<Self, ZkAmsMkheErrorV1> {
+    ) -> Result<(Self, PreparedPlaneOpeningTailV1), ZkAmsMkheErrorV1> {
         // Any validation, entropy, MSM or adoption failure consumes all prior
         // openings. No point, scalar, replacement session or ordinal is supplied.
         let mut live = self
@@ -178,8 +178,21 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1> RnsNativeComparatorContinuatio
         session.next_purpose = next.purpose;
         session.next_purpose_ordinal = next.purpose_ordinal;
         validate_continuation_progress_v1(&live)?;
+        let tail = PreparedPlaneOpeningTailV1::from_admitted_v1(
+            live.difference
+                .top
+                .session
+                .live
+                .as_ref()
+                .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?,
+            coordinate,
+            live.blindings
+                .as_slice()
+                .last()
+                .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?,
+        )?;
         self.live = Some(live);
-        Ok(self)
+        Ok((self, tail))
     }
 }
 
@@ -254,7 +267,9 @@ fn require_continuation_position_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>
 
 #[path = "prepared_small_signed_commitment_v1.rs"]
 mod prepared_small_signed_commitment_v1;
-pub(in super::super::super::super) use prepared_small_signed_commitment_v1::RnsNativeSmallSignedCommitmentsV1;
+pub(in super::super::super::super) use prepared_small_signed_commitment_v1::{
+    RnsNativeSmallSignedCommitmentsV1, RnsNativeStoredPlaneReplayV1,
+};
 
 // TODO: join actual value chunks to the retained-opening tail writer. The
 // signed child continues this owner without minting composite proof authority.

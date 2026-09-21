@@ -22,6 +22,9 @@ pub mod signer_check_test_fixture;
 pub(crate) mod signer_custody_history;
 /// Same-State durable block and revision-4 finality verification for signer consumers.
 pub mod signer_finality;
+/// Explicit funded public-ballot setup; never production admission or finalized evidence.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub mod standalone_plain_test_fixture;
 pub mod snapshot;
 pub mod store;
 /// Same-State historical native StreamToken custody control reader.

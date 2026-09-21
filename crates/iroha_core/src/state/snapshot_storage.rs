@@ -42,12 +42,12 @@ fn blob(value: &impl Encode) -> SnapshotNoritoBlob {
 }
 
 fn serialize_maps<'a, K: mv::Key + Encode, V: mv::Value + Encode>(
-    revert: &BTreeMap<K, Option<V>>,
+    revert: impl Iterator<Item = (&'a K, &'a Option<V>)>,
     current: impl Iterator<Item = (&'a K, &'a V)>,
     out: &mut String,
 ) {
     out.push_str("{\"revert\":[");
-    for (index, (key, value)) in revert.iter().enumerate() {
+    for (index, (key, value)) in revert.enumerate() {
         if index != 0 {
             out.push(',');
         }
@@ -77,7 +77,7 @@ pub(crate) fn serialize<K: mv::Key + Encode, V: mv::Value + Encode>(
     out: &mut String,
 ) {
     let snapshot = store.snapshot();
-    serialize_maps(snapshot.revert_map(), snapshot.current().iter(), out);
+    serialize_maps(snapshot.revert_map().iter(), snapshot.current().iter(), out);
 }
 
 /// Encode the exact staged post-commit maps without losing their original undo.
@@ -85,7 +85,7 @@ pub(crate) fn serialize_block<K: mv::Key + Encode, V: mv::Value + Encode>(
     store: &mv::storage::Block<'_, K, V>,
     out: &mut String,
 ) {
-    serialize_maps(store.revert_map(), store.iter(), out);
+    serialize_maps(store.revert_map().iter(), store.iter(), out);
 }
 
 pub(super) fn decode_blob<T: DecodeAll + Encode>(

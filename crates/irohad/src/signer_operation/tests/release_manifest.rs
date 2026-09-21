@@ -1,4 +1,6 @@
-//! Real private-journal staging with simulated opaque hardware and authoritative completion.
+//! Real private-journal staging with simulated authenticated providers and completion authority.
+
+mod canonical_messages;
 
 use super::super::{
     journal::{SignerReceiptJournalV1, SignerReceiptPurposeV1},

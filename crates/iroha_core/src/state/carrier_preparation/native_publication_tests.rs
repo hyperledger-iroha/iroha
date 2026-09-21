@@ -210,7 +210,7 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
             original_effects
         );
         decision
-            .try_prepare_physical(state, |_, _| {
+            .try_prepare_physical(state, None, |_, _| {
                 Ok::<_, Infallible>(Reservation(Arc::clone(&installation_released)))
             })
             .unwrap_or_else(|(_, error)| panic!("actual Native physical acquisition: {error:?}"))
@@ -568,7 +568,7 @@ fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>) {
         before
     );
     let physical = decided
-        .try_prepare_physical(&state, |_, _| Ok::<_, Infallible>(()))
+        .try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(()))
         .unwrap_or_else(|(_, error)| panic!("exact physical acquisition: {error:?}"));
     let published = physical
         .publish()
@@ -771,7 +771,7 @@ fn publish_unrelated_native_terminal_fixture(
         .unwrap();
     let physical = decided
         .attach_checkpoint(checkpoint)
-        .try_prepare_physical(&state, |_, _| Ok::<_, Infallible>(()))
+        .try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(()))
         .unwrap_or_else(|(_, error)| panic!("actual unrelated physical owner: {error:?}"));
     Box::new(
         physical
@@ -980,7 +980,7 @@ fn assert_native_terminal_publication(
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let physical = decided
         .attach_checkpoint(checkpoint)
-        .try_prepare_physical(&state, |_, _| Ok::<_, Infallible>(()))
+        .try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(()))
         .unwrap_or_else(|(_, error)| panic!("actual original physical publication: {error:?}"));
     let published = physical
         .publish()

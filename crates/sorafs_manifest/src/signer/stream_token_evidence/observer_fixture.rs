@@ -116,7 +116,7 @@ impl Evidence {
                 operation_id: receipt.expected.operation_id(),
                 signing_payload_digest: receipt.expected.signing_payload_digest(),
                 signing_payload_size: receipt.expected.signing_payload_size(),
-                completed_operation: receipt.completion,
+                completed_operation: Box::new(receipt.completion),
             }
         };
         let state = SignerStreamTokenStateObservationV1 {

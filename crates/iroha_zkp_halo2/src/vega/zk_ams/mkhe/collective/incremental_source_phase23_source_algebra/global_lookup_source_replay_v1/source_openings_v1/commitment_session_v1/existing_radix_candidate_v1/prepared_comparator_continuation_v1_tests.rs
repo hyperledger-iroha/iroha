@@ -138,7 +138,7 @@ fn continuation_refuses_incomplete_delta_wrong_logical_start_and_occupied_slot()
 }
 
 #[test]
-fn actual_first_beta_retains_original_prior_openings_and_sampled_rho() {
+fn actual_first_beta_retains_original_prior_openings_and_sampled_rho_and_prepared_opening_tail() {
     let _guard = prepared_commitment_test_guard_v1();
     let fixture = TestPreparedComparatorV1::for_ordinal_v1(688);
     let delta = complete_difference_fixture_v1();
@@ -159,9 +159,11 @@ fn actual_first_beta_retains_original_prior_openings_and_sampled_rho() {
     let owner = RnsNativeComparatorContinuationV1::begin_v1(delta).unwrap();
     owner.require_position_v1(688).unwrap();
     assert!(owner.require_position_v1(689).is_err());
-    let owner = owner
+    let (next_owner, tail) = owner
         .commit_prepared_v1(&fixture.statement_v1(688))
         .unwrap();
+    let owner = next_owner;
+    let tail = tail.into_chunk_v1(688).unwrap();
     owner.require_position_v1(689).unwrap();
     owner
         .validate_completed_source_prefix_v1([0x53; 32], [0x32; 32], point_root, [0x52; 32])
@@ -204,6 +206,9 @@ fn actual_first_beta_retains_original_prior_openings_and_sampled_rho() {
         .as_ref()
         .unwrap();
     assert_eq!(ticket.coordinate, continuation_coordinate_v1(688).unwrap());
+    assert_eq!(&tail.as_slice_v1()[..32], &rho.to_be_bytes());
+    assert_eq!(&tail.as_slice_v1()[32..65], &ticket.point_wire);
+    assert!(tail.as_slice_v1()[65..].iter().all(|byte| *byte == 0));
     assert_eq!(
         ticket.point_wire,
         TestPreparedComparatorV1::expected_v1(rho)
@@ -224,7 +229,7 @@ fn actual_first_beta_retains_original_prior_openings_and_sampled_rho() {
 }
 
 #[test]
-fn actual_beta_m_boundary_and_final_m_stop_before_signed_values() {
+fn actual_beta_m_boundary_and_final_m_stop_before_signed_values_and_prepared_opening_tail() {
     let _guard = prepared_commitment_test_guard_v1();
     let mut owner =
         RnsNativeComparatorContinuationV1::begin_v1(complete_difference_fixture_v1()).unwrap();
@@ -232,9 +237,11 @@ fn actual_beta_m_boundary_and_final_m_stop_before_signed_values() {
         seed_continuation_before_v1(&mut owner, ordinal);
         owner.require_position_v1(ordinal).unwrap();
         let fixture = TestPreparedComparatorV1::for_ordinal_v1(ordinal);
-        owner = owner
+        let (next_owner, tail) = owner
             .commit_prepared_v1(&fixture.statement_v1(ordinal))
             .unwrap();
+        owner = next_owner;
+        let tail = tail.into_chunk_v1(ordinal).unwrap();
         let live = owner.live.as_ref().unwrap();
         let rho = live.blindings.as_slice()[usize::from(ordinal - 688)];
         let coordinate = continuation_coordinate_v1(ordinal).unwrap();
@@ -250,6 +257,9 @@ fn actual_beta_m_boundary_and_final_m_stop_before_signed_values() {
             .as_ref()
             .unwrap();
         assert_eq!(ticket.coordinate, coordinate);
+        assert_eq!(&tail.as_slice_v1()[..32], &rho.to_be_bytes());
+        assert_eq!(&tail.as_slice_v1()[32..65], &ticket.point_wire);
+        assert!(tail.as_slice_v1()[65..].iter().all(|byte| *byte == 0));
         assert_eq!(
             ticket.point_wire,
             TestPreparedComparatorV1::expected_v1(rho)

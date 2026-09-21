@@ -18,6 +18,10 @@ State projection. Storage entries are ordered by key; cell and map records keep
 exact before/after values without making another value copy or change list.
 Applied children retain the first block preimage, while dropped children leave
 no block delta. A replacement block starts after reverting the discarded tip.
+A caught direct Storage block-edit panic makes that owner unusable for value
+reads, further edits, capture or publication. Both current and undo cursor states
+are checked before either publishes, including a failure retained by an aborted
+child checkpoint. Abandon the failed block; it cannot supply a partial successor.
 
 These APIs report touches, including no-op mutation and absent-to-absent removal.
 Consumers must compare their canonical value projections before committing a
@@ -84,14 +88,30 @@ and wake retries after their physical guards are released. Other threads and
 pools keep notifying normally. Notification also preserves the remaining
 original waiters when one callback unwinds, without suppressing its panic.
 
-Writer admission now carries explicit move-only constructor input alongside both
-shell charges. The B+tree's original padded node allocations can retain typed
-charges through clone/split/unwind and actual free, with the untracked map using
-the same implementation. The same cursor now carries fixed charged tracking buffers through retirement
-and checks their complete structural insertion bound before mutation. Closed map
-admission still requires complete payload demand planning, concrete MV payload
-policies and initial/undo ownership. Node payload copies now require an explicit
-funding-provider policy; node credits alone cannot authorize ordinary Clone.
+Writer admission carries original move-only input alongside exact shell charges.
+The existing B+tree wrappers also expose `Prepaid<P>` for closed insertions:
+under the original writer lock, it plans node/buffer/shell layouts and an explicit
+nested payload bound, reserves once, then returns its completed detached owner.
+Unused admission returns before handoff; actual allocation charges remain until
+physical free. Further admitted edits retain that same private cursor and
+publication shell, replacing exhausted bookkeeping only after complete admission.
+Refusal returns the original owner and input; intermediate edits stay private.
+Initial root and reader blocks retain their exact charges through reclamation.
+Exclusive checkpoints borrow current and saved-root values in either map mode.
+Abort restores the original parent root without allocating; prepaid mode also
+restores its exact tracking buffers, including at full capacity. Nested apply
+keeps edits private; only the original writer can publish. A caught edit or
+cleanup panic forbids further use of that cursor. Prepaid mutation remains closed.
+Real MV budget regressions exercise this public boundary. Production Storage
+uses the same B+tree engine for current and block-undo data, retaining both
+original generations through snapshots and publication retries. Ordinary block
+opening no longer deep-clones prior undo values before clearing them. Transactions
+retain both parent checkpoints and borrow their original preimages; abort restores
+both roots without inverse edits, allocation or cloning. Apply resolves both
+checkpoints only after checking failures and dropping transaction touch keys.
+These maps remain Untracked pending native lock/runtime, joint current/undo/touch
+admission, generation-refusal propagation, concrete model payload policies and
+configured aggregate integration.
 
 TODO: compose these component publications with exact aggregate State predecessor
 ownership, membership, hash history, archive/resource reservations and finality.

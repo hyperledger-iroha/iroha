@@ -59,7 +59,115 @@ mod allocated {
     use crate::internals::bptree::node::allocation_tests::{
         all_refunded, prepaid, record, without_allocations, Charge,
     };
+    use std::cell::Cell;
     use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    #[test]
+    fn vec_pop_and_truncate_preserve_original_allocation_without_allocating() {
+        let mut buffer = Vec::with_capacity(3);
+        let original = buffer.as_ptr();
+        let capacity = buffer.capacity();
+        without_allocations(|| {
+            assert_eq!(TrackingBuffer::pop(&mut buffer), None);
+            TrackingBuffer::truncate(&mut buffer, usize::MAX);
+            for value in [Aligned(11), Aligned(22), Aligned(33)] {
+                TrackingBuffer::push(&mut buffer, value);
+            }
+            TrackingBuffer::truncate(&mut buffer, usize::MAX);
+            assert_eq!(TrackingBuffer::pop(&mut buffer), Some(Aligned(33)));
+            assert_eq!(
+                TrackingBuffer::as_slice(&buffer),
+                &[Aligned(11), Aligned(22)]
+            );
+            TrackingBuffer::truncate(&mut buffer, 2);
+            TrackingBuffer::truncate(&mut buffer, 1);
+            assert_eq!(TrackingBuffer::pop(&mut buffer), Some(Aligned(11)));
+            assert_eq!(TrackingBuffer::pop(&mut buffer), None);
+            TrackingBuffer::push(&mut buffer, Aligned(44));
+            TrackingBuffer::truncate(&mut buffer, 0);
+            assert!(TrackingBuffer::as_slice(&buffer).is_empty());
+            assert_eq!(buffer.as_ptr(), original);
+            assert_eq!(buffer.capacity(), capacity);
+            drop(buffer);
+        });
+    }
+
+    #[test]
+    fn fixed_pop_and_truncate_preserve_exact_aligned_allocation_and_charge() {
+        let mut funding = prepaid();
+        type Buffer = FixedTrackingBuffer<Aligned, Charge>;
+        let layout = Buffer::allocation_layout(3).unwrap();
+        let charge = funding.take_allocation_charge(layout);
+        let mut buffer = Buffer::try_new(3, charge).unwrap_or_else(|_| panic!("valid layout"));
+        let original = buffer.as_ptr();
+        assert_eq!(record(0).pointer, original as usize);
+        assert_eq!(record(0).layout, layout);
+        assert_eq!(original as usize % layout.align(), 0);
+        without_allocations(|| {
+            assert_eq!(buffer.pop(), None);
+            buffer.truncate(usize::MAX);
+            assert_eq!(buffer.remaining_capacity(), Some(3));
+            for value in [Aligned(11), Aligned(22), Aligned(33)] {
+                buffer.push(value);
+            }
+            assert_eq!(buffer.remaining_capacity(), Some(0));
+            buffer.truncate(usize::MAX);
+            assert_eq!(buffer.pop(), Some(Aligned(33)));
+            assert_eq!(buffer.as_slice(), &[Aligned(11), Aligned(22)]);
+            assert_eq!(buffer.remaining_capacity(), Some(1));
+            buffer.truncate(2);
+            buffer.truncate(1);
+            assert_eq!(buffer.as_slice(), &[Aligned(11)]);
+            buffer.push(Aligned(44));
+            assert_eq!(buffer.pop(), Some(Aligned(44)));
+            assert_eq!(buffer.pop(), Some(Aligned(11)));
+            assert_eq!(buffer.pop(), None);
+            buffer.push(Aligned(55));
+            buffer.truncate(0);
+            assert!(buffer.as_slice().is_empty());
+            assert_eq!(buffer.remaining_capacity(), Some(3));
+            assert_eq!(buffer.as_ptr(), original);
+            assert_eq!(buffer.capacity(), 3);
+            assert!(!record(0).freed && !record(0).refunded);
+            drop(buffer);
+        });
+        assert_eq!(funding.next, 1);
+        all_refunded(&funding);
+    }
+
+    #[test]
+    fn popped_entry_is_absent_when_its_retirement_callback_unwinds() {
+        let targets = [const { Cell::new(0) }; 3];
+        let mut funding = prepaid();
+        type Buffer<'a> = FixedTrackingBuffer<&'a Cell<usize>, Charge>;
+        let charge = funding.take_allocation_charge(Buffer::allocation_layout(3).unwrap());
+        let mut buffer = Buffer::try_new(3, charge).unwrap_or_else(|_| panic!("valid layout"));
+        for target in &targets {
+            buffer.push(target);
+        }
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            let target = buffer.pop().expect("original last entry");
+            assert_eq!(buffer.as_slice().len(), 2);
+            assert!(std::ptr::eq(target, &targets[2]));
+            target.set(target.get() + 1);
+            panic!("retirement callback panic");
+        }))
+        .unwrap_err();
+        assert_eq!(
+            panic.downcast_ref::<&str>(),
+            Some(&"retirement callback panic")
+        );
+        without_allocations(|| {
+            while let Some(target) = buffer.pop() {
+                target.set(target.get() + 1);
+            }
+            assert!(buffer.as_slice().is_empty());
+            assert_eq!(targets.each_ref().map(Cell::get), [1, 1, 1]);
+            assert!(!record(0).freed && !record(0).refunded);
+            drop(buffer);
+        });
+        all_refunded(&funding);
+    }
 
     #[test]
     fn moves_and_clear_preserve_original_system_allocation_and_charge() {
@@ -155,6 +263,10 @@ mod allocated {
         assert!(catch_unwind(AssertUnwindSafe(|| buffer.push(Aligned(1)))).is_err());
         assert!(buffer.as_slice().is_empty());
         without_allocations(|| {
+            assert_eq!(buffer.pop(), None);
+            buffer.truncate(usize::MAX);
+            buffer.truncate(0);
+            assert_eq!(buffer.capacity(), 0);
             buffer.clear();
             drop(buffer);
         });
@@ -176,6 +288,13 @@ mod allocated {
             }
             assert_eq!(buffer.capacity(), 3);
             assert_eq!(buffer.as_slice(), &[(), (), ()]);
+            buffer.truncate(usize::MAX);
+            assert_eq!(buffer.pop(), Some(()));
+            assert_eq!(buffer.as_slice(), &[(), ()]);
+            buffer.truncate(1);
+            assert_eq!(buffer.pop(), Some(()));
+            assert_eq!(buffer.pop(), None);
+            assert_eq!(buffer.remaining_capacity(), Some(3));
             buffer.clear();
             assert!(buffer.as_slice().is_empty());
             buffer.push(());

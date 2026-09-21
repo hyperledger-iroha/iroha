@@ -58,6 +58,11 @@ macro_rules! schema_types {
             iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1,
             iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1,
             iroha_data_model::fastpq::FastpqSourceExecutionEntryV1,
+            // Torii qualification is an opaque response owner and needs an explicit public root.
+            iroha_data_model::privacy::PrivacyExact12QualificationRecordV1,
+            // Frozen public conviction context and immutable closed result are query/snapshot values.
+            iroha_data_model::governance::conviction::PlainVotingContextV1,
+            iroha_data_model::governance::conviction::PlainVotingResultV1,
             // Never referenced, but present in type signature. Like `PhantomData<X>`
             MerkleTree<SignedTransaction>,
             // Default permissions
@@ -92,8 +97,8 @@ macro_rules! schema_types {
             iroha_executor_data_model::permission::trigger::CanModifyTrigger,
             iroha_executor_data_model::permission::trigger::CanModifyTriggerMetadata,
             iroha_executor_data_model::permission::executor::CanUpgradeExecutor,
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode,
-            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCodeRegistrars,
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode,
+            iroha_executor_data_model::permission::smart_contract::CanGrantSmartContractCodeManagement,
             // Native bounded smart-contract artifact upload protocol
             iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk,
             iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
@@ -206,6 +211,7 @@ mod tests {
     mod final_promotion;
     mod final_promotion_account_custody;
     mod stream_token_custody;
+    mod privacy_qualification;
     fn generate_test_map() -> BTreeMap<core::any::TypeId, String> {
         let mut map = BTreeMap::new();
         macro_rules! insert_into_test_map {
@@ -498,6 +504,40 @@ mod tests {
         <Vec<PublicKey>>::update_schema_map(&mut schemas);
         <BTreeSet<SignedTransaction>>::update_schema_map(&mut schemas);
     }
+    #[test]
+    fn public_conviction_context_and_result_have_complete_schema_entries() {
+        use iroha_data_model::governance::conviction::{
+            PlainConvictionPolicyV1, PlainVotingContextV1, PlainVotingDecisionV1,
+            PlainVotingResultV1,
+        };
+        let schemas = super::build_schemas();
+        assert!(schemas.contains_key::<PlainVotingContextV1>());
+        assert!(schemas.contains_key::<PlainVotingResultV1>());
+        assert!(schemas.contains_key::<PlainVotingDecisionV1>());
+        let Some(Metadata::Struct(policy)) = schemas.get::<PlainConvictionPolicyV1>() else {
+            panic!("frozen public conviction policy is absent from the canonical schema");
+        };
+        assert_eq!(
+            policy
+                .declarations
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "asset_definition_id",
+                "asset_scale",
+                "conviction_step_blocks",
+                "max_conviction",
+                "approval_threshold_numerator",
+                "approval_threshold_denominator",
+                "minimum_turnout",
+                "minimum_bond",
+                "bond_escrow_account",
+                "slash_receiver_account",
+            ]
+        );
+    }
+
     #[test]
     fn fastpq_types_have_schema_entries() {
         use iroha_data_model::fastpq::{

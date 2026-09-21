@@ -2,7 +2,7 @@
 use super::*;
 use iroha_model_base::metadata::Metadata;
 use sorafs_manifest::pin_registry::verify_alias_proof_bundle_untrusted_signers;
-use std::{fs, path::Path, time::Duration};
+use std::{fs, time::Duration};
 use tempfile::tempdir;
 #[test]
 fn normalize_tls_host_guards_whitespace() {

@@ -440,7 +440,20 @@ def authority_locks(deployment):
 def no_live_references(paths, own_fds=(), *, file_identities=()):
     import taira_retry as retry
     result = retry._retire_live_references(paths, file_identities=file_identities, own_fds=own_fds)
-    need(result["passed"], "selected public binary has a live process, inode, or mount reference")
+    if not result["passed"]:
+        # Persist selected-public-path evidence in the existing bounded stderr.
+        # Never include process argv, environment, or unrelated mapped paths.
+        rows = result["references"]
+        details = []
+        for row in rows[:8]:
+            path = row["target_root"]
+            details.append({"pid": row["pid"], "kind": row["kind"], "target_root": path[:256],
+                            "target_root_truncated": len(path) > 256,
+                            "target_root_sha256": sha(path.encode())})
+        report = {"reference_count": len(rows), "omitted_references": max(0, len(rows) - 8),
+                  "references": details}
+        need(False, "selected public payload has a live process, inode, or mount reference: "
+             + canonical(report).decode().rstrip("\n"))
     return result
 
 

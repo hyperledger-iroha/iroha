@@ -48,6 +48,9 @@ class ClassFile:
     major: int
     source_file: str | None
     methods: tuple[Method, ...]
+    super_name: str | None = None
+    interfaces: tuple[str, ...] = ()
+    lambda_metafactory: bool = False
 
 
 def _modified_utf8(raw: bytes) -> str:
@@ -159,7 +162,7 @@ def parse_class(data: bytes) -> ClassFile:
         found = {}
         for _ in range(integer(2)):
             name = utf8(integer(2))
-            if name in found and name in ("Code", "SourceFile"):
+            if name in found and name in ("Code", "SourceFile", "BootstrapMethods"):
                 raise ClassFileError(f"duplicate {name} attribute")
             found[name] = take(integer(4))
         return found
@@ -168,8 +171,18 @@ def parse_class(data: bytes) -> ClassFile:
     name = utf8(int.from_bytes(entry(integer(2), 7), "big"))
     if not name or any(c in name for c in ".[;\0") or any(not p for p in name.split("/")):
         raise ClassFileError("invalid class name")
-    integer(2)  # superclass
-    take(integer(2) * 2)  # interfaces
+    superclass_index = integer(2)
+    super_name = (
+        utf8(int.from_bytes(entry(superclass_index, 7), "big"))
+        if superclass_index else None
+    )
+    interfaces = tuple(
+        utf8(int.from_bytes(entry(integer(2), 7), "big"))
+        for _ in range(integer(2))
+    )
+    for parent_name in ((super_name,) if super_name is not None else ()) + interfaces:
+        if not parent_name or any(c in parent_name for c in ".[;\0") or any(not part for part in parent_name.split("/")):
+            raise ClassFileError("invalid parent class name")
     for _ in range(integer(2)):
         take(6)  # fields: access, name, descriptor
         attributes()
@@ -196,4 +209,35 @@ def parse_class(data: bytes) -> ClassFile:
         source_file = utf8(int.from_bytes(source, "big"))
     if position != len(data):
         raise ClassFileError("trailing class file bytes")
-    return ClassFile(name, major, source_file, tuple(methods))
+    lambda_metafactory = False
+    bootstrap = attrs.get("BootstrapMethods")
+    if bootstrap is not None:
+        offset = 0
+
+        def bootstrap_u2() -> int:
+            nonlocal offset
+            if offset + 2 > len(bootstrap):
+                raise ClassFileError("truncated BootstrapMethods attribute")
+            value = int.from_bytes(bootstrap[offset:offset + 2], "big")
+            offset += 2
+            return value
+
+        for _ in range(bootstrap_u2()):
+            handle = entry(bootstrap_u2(), 15)
+            if handle[0] == 6:  # REF_invokeStatic: the two standard lambda bootstraps.
+                reference = int.from_bytes(handle[1:], "big")
+                if not 0 < reference < count or pool[reference] is None or pool[reference][0] not in (10, 11):
+                    raise ClassFileError("invalid static bootstrap method reference")
+                target = pool[reference][1]
+                owner = utf8(int.from_bytes(entry(int.from_bytes(target[:2], "big"), 7), "big"))
+                signature = entry(int.from_bytes(target[2:], "big"), 12)
+                method = utf8(int.from_bytes(signature[:2], "big"))
+                if owner == "java/lang/invoke/LambdaMetafactory" and method in ("metafactory", "altMetafactory"):
+                    lambda_metafactory = True
+            for _ in range(bootstrap_u2()):
+                argument = bootstrap_u2()
+                if not 0 < argument < count or pool[argument] is None:
+                    raise ClassFileError("invalid bootstrap argument reference")
+        if offset != len(bootstrap):
+            raise ClassFileError("trailing BootstrapMethods attribute data")
+    return ClassFile(name, major, source_file, tuple(methods), super_name, interfaces, lambda_metafactory)

@@ -8,7 +8,7 @@ use iroha::{
     blocking::Client,
     crypto::HashOf,
     data_model::{
-        Level, NetworkId, ValidationFail,
+        Level, NetworkId,
         account::{Account, AccountId},
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::consensus::{
@@ -37,7 +37,7 @@ use iroha::{
         merge::{LaneDrainCertificateV1, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
         nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneVisibility},
         permission::Permission,
-        prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId, Quantity},
+        prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId, Identifiable, Quantity},
         query::block::prelude::FindBlocks,
         transaction::{SignedTransaction, TransactionEntrypoint},
     },
@@ -59,11 +59,14 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey};
 use iroha_data_model::{
+    ValidationFail,
+    query::error::{FindError, QueryExecutionFail},
+};
+use iroha_data_model::{
     prelude::QueryBuilderExt,
     query::{
         CommittedTxFilters,
         dsl::CompoundPredicate,
-        error::{FindError, QueryExecutionFail},
         parameters::{FetchSize, Pagination},
         transaction::prelude::FindTransactions,
     },
@@ -861,11 +864,12 @@ fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
         .client()
         .query_single(FindAssetById::new(asset_id.clone()))
     {
-        Ok(asset) => Ok(asset.value().clone()),
-        Err(QueryError::Validation(ValidationFail::QueryFailed(
-            QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
-        ))) => Ok(Quantity::zero()),
-        Err(err) => Err(eyre!(err)),
+        Ok(asset) if asset.id() == asset_id => Ok(asset.value().clone()),
+        Ok(_) => Err(eyre!("exact asset query returned a different asset")),
+        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+            FindError::Asset(missing),
+        )))) if missing.as_ref() == asset_id => Ok(Quantity::zero()),
+        Err(error) => Err(eyre!(error)),
     }
 }
 fn asset_balance_variants(client: &Client, asset_id: &AssetId) -> Result<Vec<Quantity>> {

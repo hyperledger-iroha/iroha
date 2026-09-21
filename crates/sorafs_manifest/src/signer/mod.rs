@@ -16,3 +16,4 @@ pub mod release_evidence;
 pub mod state_observation;
 pub mod stream_token;
 pub mod stream_token_evidence;
+pub mod topology;

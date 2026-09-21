@@ -151,6 +151,8 @@ state_test! { sync native_fastpq_common_inventory_retains_due_start_and_actual_p
             world.governance_referenda.insert("native-source-due-start".into(), GovernanceReferendumRecord {
                 h_start: 7, h_end: 9, status: GovernanceReferendumStatus::Proposed,
                 mode: GovernanceReferendumMode::default(),
+                plain_context: iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+                            plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
             });
         });
     let state = &fixture.native.state;

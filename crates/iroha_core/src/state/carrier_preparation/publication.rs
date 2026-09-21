@@ -1,9 +1,10 @@
 //! Consume the actual decided component owners within one State visibility cut.
 //!
 //! Namespace transitions consume their original retryable storage owners before
-//! State visibility. Retirement/replacement and old participant evidence still
-//! need their real Queue/storage owners. TODO: join these and complete production
-//! capacity before changing the live Validate/Apply handoff.
+//! State visibility while retaining the original Queue retirement cut. Native
+//! Decisions use their original source, Kura custody and World application markers;
+//! retired participant manifests remain refused. TODO: complete production resource
+//! admission and retire the old writer with the live Validate/Apply cutover.
 
 use super::super::super::{PreparedCarrierJournals, RetainedCarrierEffects};
 use super::*;
@@ -21,6 +22,9 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPublicationError
     /// Retirement/replacement still needs the original service Queue custody.
     #[error("lane retirement requires the original service Queue custody")]
     QueueRetirementRequired,
+    /// The retained original Queue latched a recovery fault before visibility.
+    #[error("original Queue retirement custody is unavailable: {0:?}")]
+    QueueRetirement(CarrierQueueRetirementError),
     /// The retained geometry storage attempt must retry or recover before visibility.
     #[error("retained geometry storage must complete before publication: {0}")]
     GeometryStorage(#[source] crate::state::LaneLifecycleError),
@@ -202,7 +206,15 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         ),
     > {
         let journals = &self.decision.journals;
-        let error = if journals.effects.replay_prevalidation {
+        let error = if let Some(error) = journals
+            .components
+            ._fences
+            ._queue
+            .as_ref()
+            .and_then(|queue| queue.ensure_available().err())
+        {
+            Some(CarrierPublicationError::QueueRetirement(error))
+        } else if journals.effects.replay_prevalidation {
             Some(CarrierPublicationError::Prevalidation)
         } else if !journals
             .source_prefix
@@ -217,7 +229,11 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             || journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()
         {
             Some(CarrierPublicationError::Geometry)
-        } else if journals.geometry.requires_queue_custody() {
+        } else if !journals.geometry.has_queue_custody(
+            self.target,
+            journals.effects.header,
+            journals.components._fences._queue.as_ref(),
+        ) {
             Some(CarrierPublicationError::QueueRetirementRequired)
         } else if !journals.native_amx_manifest.entries().is_empty() {
             Some(CarrierPublicationError::ParticipantDurability)
@@ -241,6 +257,24 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
                 ));
             }
         };
+
+        // Storage completion may take time while an independent writer latches
+        // a sticky Queue recovery fault. Preserve the completed geometry owner
+        // but refuse State visibility if that happened during this attempt.
+        if let Some(error) = self
+            .decision
+            .journals
+            .components
+            ._fences
+            ._queue
+            .as_ref()
+            .and_then(|queue| queue.ensure_available().err())
+        {
+            return Err((
+                self.abort(),
+                CarrierPublicationError::QueueRetirement(error),
+            ));
+        }
 
         // Reservations are declared before decomposition so even unwind drops
         // component writers/fences before returning their retained capacity.

@@ -57,7 +57,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
     pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn commit_prepared_small_signed_v1(
         &mut self,
         statement: &PreparedSmallSignedStatementV1<'_>,
-    ) -> Result<(), ZkAmsMkheErrorV1> {
+    ) -> Result<PreparedPlaneOpeningTailV1, ZkAmsMkheErrorV1> {
         validate_replay_evidence_v1(self)?;
         statement
             .validate_origin_v1(self.record.record_digest, self.record.source_receipt_digest)?;

@@ -565,7 +565,7 @@ fn validated_chain_and_key_types_cannot_be_bypassed_by_well_framed_wire_bytes() 
     let record: SignerCustodyRecordV1 = norito::decode_canonical(&bytes).expect("record");
     let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let payload = record.encode();
-    let chain_bytes = fixture.statement.binding.chain_id.as_str().as_bytes();
+    let chain_bytes = fixture.statement.binding.chain_id.as_bytes();
     let chain_offset = payload
         .windows(chain_bytes.len())
         .position(|window| window == chain_bytes)

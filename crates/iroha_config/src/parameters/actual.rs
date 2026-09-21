@@ -105,7 +105,10 @@ pub use sorafs_reputation::{
 };
 use thiserror::Error;
 use url::Url;
-pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy, SnapshotResourcePolicy};
+pub use user::{DevTelemetry, Logger, SnapshotBootstrapPolicy, SnapshotResourcePolicy};
+// Snapshot is the same validated representation at both configuration layers;
+// its explicit max_read_buffer_bytes reaches startup without another default.
+pub use user::Snapshot;
 type Result<T, E> = core::result::Result<T, Report<E>>;
 macro_rules! impl_default {
     ($(#[$attr:meta])* $type:ty => $body:block) => {

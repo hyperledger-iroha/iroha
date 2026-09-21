@@ -163,6 +163,50 @@ impl Clone for Counted {
 }
 
 #[test]
+fn ordinary_block_opening_does_not_clone_old_undo_and_retained_reader_keeps_it() {
+    let clones = Arc::new(AtomicUsize::new(0));
+    let make = |value| Counted {
+        value,
+        clones: Arc::clone(&clones),
+    };
+    let storage: Storage<u64, Counted> = (0..128).map(|key| (key, make(key as u32))).collect();
+    let mut tip = storage.block();
+    tip.insert(1, make(1001));
+    tip.remove(126);
+    tip.commit();
+    let old = storage.snapshot();
+    let original = old.revert_map().get(&1).unwrap().as_ref().unwrap() as *const _;
+    clones.store(0, AtomicOrdering::SeqCst);
+
+    let ordinary = storage.block();
+    assert_eq!(clones.load(AtomicOrdering::SeqCst), 0);
+    assert!(ordinary.revert_map().is_empty());
+    assert_eq!(old.revert_map().get(&1).unwrap().as_ref().unwrap().value, 1);
+    assert_eq!(
+        old.revert_map().get(&126).unwrap().as_ref().unwrap().value,
+        126
+    );
+    assert_eq!(
+        old.revert_map().get(&1).unwrap().as_ref().unwrap() as *const _,
+        original
+    );
+    ordinary.commit();
+
+    assert_eq!(clones.load(AtomicOrdering::SeqCst), 0);
+    assert!(storage.snapshot().revert_map().is_empty());
+    assert_eq!(storage.view().get(&1).unwrap().value, 1001);
+    assert!(storage.view().get(&126).is_none());
+    assert_eq!(
+        old.revert_map().get(&1).unwrap().as_ref().unwrap() as *const _,
+        original
+    );
+    assert_eq!(
+        old.revert_map().get(&126).unwrap().as_ref().unwrap().value,
+        126
+    );
+}
+
+#[test]
 fn inspection_and_projection_do_not_clone_source_values() {
     let clones = Arc::new(AtomicUsize::new(0));
     let make = |value| Counted {

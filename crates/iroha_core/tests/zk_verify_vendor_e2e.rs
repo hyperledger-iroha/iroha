@@ -4,23 +4,24 @@
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 //! End-to-end gating path: ZK verify (mocked) -> vendor bridge -> `CoreHost` gating.
 //!
-//! This test avoids IPA math by forcing the verification flag on `CoreHost`
-//! via test-only helpers. It demonstrates the expected gating behavior when
-//! a contract enqueues a ZK ISI via the vendor bridge after a prior verify.
+//! A real development IPA proof remains inadmissible even if a test-only helper
+//! forces the prior-verification latch. Initial executor authority and the direct
+//! relation-role consumer are checked separately; the latter is an instruction
+//! unit boundary, not a successful production host handoff.
 use iroha_core::smartcontracts::Execute;
 use iroha_core::{
-    kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::host::CoreHost, state::State,
+    kura::Kura,
+    query::store::LiveQueryStore,
+    smartcontracts::ivm::host::CoreHost,
+    state::{State, WorldReadOnly},
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::Account,
     asset::AssetDefinition,
     domain::Domain,
-    isi::{
-        smart_contract_code::{
-            ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
-        },
-        verifying_keys,
+    isi::smart_contract_code::{
+        ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
     },
     permission::Permission,
     prelude::*,
@@ -28,11 +29,12 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanManageParliament, CanSubmitGovernanceBallot,
 };
-use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+use iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use ivm::{IVM, PointerType, host::IVMHost, syscalls as ivm_sys};
+use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use std::sync::Arc;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -78,7 +80,7 @@ fn derive_ballot_nullifier(
 }
 #[test]
 #[allow(clippy::too_many_lines)]
-fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
+fn forced_vendor_latch_cannot_admit_development_ballot() {
     // Minimal state
     let authority: AccountId = ALICE_ID.clone();
     let domain_id: iroha_model_base::domain::DomainId =
@@ -89,6 +91,7 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
+    state.gov.citizenship_bond_amount = 0_u64.into();
     state.zk.halo2.enabled = true;
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
@@ -96,7 +99,7 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     // Authority and host
     let mut vm = IVM::new(10_000_000);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
-    let ballot_bundle = super::zk_testkit::vote_merkle8_bundle();
+    let ballot_bundle = super::zk_testkit::dev_vote_merkle8_bundle();
     let vk_commitment = ballot_bundle.vk_record.commitment;
     let vk_id = ballot_bundle.vk_id.clone();
     let vk_record = ballot_bundle.vk_record.clone();
@@ -120,7 +123,7 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     Grant::account_permission(contract_call_permission, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant vendor-bridge contract permission");
-    let lifecycle_permission: Permission = CanRegisterSmartContractCode.into();
+    let lifecycle_permission: Permission = CanManageSmartContractCode.into();
     Grant::account_permission(lifecycle_permission, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant contract lifecycle permission");
@@ -129,7 +132,7 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
             r#"
 seiyaku VendorBridgeGate {
     kotoage fn execute(bytes instruction) authorize("CanUseVendorBridgeTest") {
-        ledger::governance::submit_ballot(instruction);
+        ledger::governance::submit_ballot(value: instruction);
     }
 }
 "#,
@@ -187,16 +190,13 @@ seiyaku VendorBridgeGate {
         "execute",
     )
     .expect("bind admitted vendor-bridge contract");
-    verifying_keys::RegisterVerifyingKey {
-        id: vk_id.clone(),
-        record: vk_record,
-    }
-    .execute(&authority, &mut stx)
-    .expect("register vk");
+    // Corrupt retained state, never a successfully registered production key.
+    stx.world
+        .verifying_keys_mut_for_testing()
+        .insert(vk_id.clone(), vk_record);
     let commit_bytes = ballot_bundle.commit_bytes();
     let root_bytes = ballot_bundle.root_bytes();
-    // Seed the already-created election so this fixture remains focused on the
-    // vendor-bridge verification latch.
+    // Seed an invalid retained election to test the vendor latch boundary.
     stx.world.elections_mut().insert(
         "election1".to_owned(),
         iroha_core::state::ElectionState {
@@ -215,7 +215,7 @@ seiyaku VendorBridgeGate {
             domain_tag: "zkvote".to_owned(),
         },
     );
-    // Build a Norito-encoded SubmitBallot instruction (valid payload)
+    // Build a well-formed SubmitBallot carrying an unqualified development relation.
     let nullifier =
         derive_ballot_nullifier("zkvote", &state.network_id, "election1", &commit_bytes);
     let sb = iroha_data_model::isi::zk::SubmitBallot {
@@ -231,7 +231,7 @@ seiyaku VendorBridgeGate {
         ),
         nullifier,
     };
-    let sb_bytes = norito::to_bytes(&InstructionBox::from(sb))
+    let sb_bytes = norito::to_bytes(&InstructionBox::from(sb.clone()))
         .expect("encode SubmitBallot instruction box to Norito");
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &sb_bytes);
     let mut cursor = 0;
@@ -254,20 +254,50 @@ seiyaku VendorBridgeGate {
     // Seed ballot verification latch with the expected envelope hash to simulate
     // a prior successful `ZK_VOTE_VERIFY_BALLOT`.
     host.__test_seed_ballot_latch(env_hash);
-    // Re-enqueue SubmitBallot via the vendor bridge and expect success.
+    // A synthetic prior-verification latch cannot authorize the retired circuit.
     vm.set_register(10, ptr);
     host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
         .expect("requeue ballot through the vendor bridge");
-    let applied = host
+    let error = host
         .apply_queued(&mut stx, &authority)
-        .expect("apply queued after simulated verify");
-    assert_eq!(applied.len(), 1, "expected exactly one queued instruction");
-    let instr: &dyn iroha_data_model::isi::Instruction = &*applied[0];
+        .expect_err("forced latch must not bypass production circuit admission");
+    // The host has consumed the exact one-shot verification latch, but its
+    // contract context does not grant Initial executor admission to this ISI.
+    // Retain that real barrier; do not allowlist a directly signed ballot.
+    match error {
+        iroha_data_model::ValidationFail::NotPermitted(message) => assert_eq!(
+            message,
+            format!(
+                "Initial executor does not admit unclassified native instruction `{}`",
+                InstructionBox::from(sb.clone()).id()
+            ),
+        ),
+        other => panic!("unexpected forced-latch rejection: {other:?}"),
+    }
+    vm.set_register(10, ptr);
+    host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
+        .expect("requeue the original envelope without another verification");
+    let error = host
+        .apply_queued(&mut stx, &authority)
+        .expect_err("failed executor admission cannot replenish the consumed latch");
+    match error {
+        iroha_data_model::ValidationFail::NotPermitted(message) => assert_eq!(
+            message,
+            "missing ZK_VOTE_VERIFY_BALLOT prior to SubmitBallot",
+        ),
+        other => panic!("unexpected consumed-latch rejection: {other:?}"),
+    }
+    // Exercise the retained relation-role assertion at its actual instruction
+    // consumer. This direct unit call is not a production authority route.
+    let error = sb
+        .execute(&contract_address.subject_id(), &mut stx)
+        .expect_err("development relation must fail the dedicated ballot circuit role");
     assert!(
-        instr
-            .as_any()
-            .downcast_ref::<iroha_data_model::isi::zk::SubmitBallot>()
-            .is_some(),
-        "queued instruction should be SubmitBallot"
+        format!("{error:?}").contains("ballot verifying key circuit mismatch"),
+        "unexpected direct ballot relation rejection: {error:?}"
     );
+    let election = stx.world.elections().get("election1").unwrap();
+    assert!(election.ballot_nullifiers.is_empty());
+    assert!(election.ciphertexts.is_empty());
+    assert!(stx.world.governance_locks().get("election1").is_none());
 }

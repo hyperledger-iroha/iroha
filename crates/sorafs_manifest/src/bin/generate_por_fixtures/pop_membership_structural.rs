@@ -35,7 +35,9 @@ fn pop_structural_membership_proof() -> sorafs_manifest::PopMembershipProofV1 {
     }
 }
 
-fn pop_membership_structural_fixtures() -> Result<Vec<(String, Vec<u8>)>, Box<dyn Error>> {
+type PopStructuralFixture = (String, Vec<u8>);
+
+fn pop_membership_structural_fixtures() -> Result<Vec<PopStructuralFixture>, Box<dyn Error>> {
     use sorafs_manifest::{PopMembershipProofV1, PopValidationPayloadKindV1};
     // This intentionally incomplete field order is confined to fixture generation.
     // Its frame advertises the actual current schema, so the decoder must detect

@@ -348,10 +348,9 @@ fn authenticate_observation(
         completed_operation,
         ..
     } = &body.subject
+        && completed_operation.completed_at_unix_ms > body.observed_at_unix_ms
     {
-        if completed_operation.completed_at_unix_ms > body.observed_at_unix_ms {
-            return Err(SignerStreamTokenEvidenceErrorV1::InvalidState);
-        }
+        return Err(SignerStreamTokenEvidenceErrorV1::InvalidState);
     }
     state
         .validate_finality(trust, &attempt.request.minimum_anchor)

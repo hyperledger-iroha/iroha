@@ -316,13 +316,17 @@ where
     V: Clone,
 {
     iter: RangeIter<'n, K, V, C>,
+    remaining: usize,
 }
 
 impl<K: Clone + Ord + Debug, V: Clone, C> Iter<'_, K, V, C> {
     pub(crate) fn new(root: *mut Node<K, V, C>, length: usize) -> Self {
         let bounds: (Bound<K>, Bound<K>) = (Bound::Unbounded, Bound::Unbounded);
         let iter = RangeIter::new(root, bounds, length);
-        Iter { iter }
+        Iter {
+            iter,
+            remaining: length,
+        }
     }
 }
 
@@ -331,25 +335,35 @@ impl<'n, K: Clone + Ord + Debug, V: Clone, C: 'n> Iterator for Iter<'n, K, V, C>
 
     /// Yield the next key value reference, or `None` if exhausted.
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
+        let next = self.iter.next();
+        self.remaining = if next.is_some() {
+            self.remaining - 1
+        } else {
+            0
+        };
+        next
     }
 
     /// Provide a hint as to the number of items this iterator will yield.
     fn size_hint(&self) -> (usize, Option<usize>) {
-        match self.iter.size_hint() {
-            // Transpose the x through as a lower bound.
-            (_, Some(x)) => (x, Some(x)),
-            (_, None) => (0, None),
-        }
+        (self.remaining, Some(self.remaining))
     }
 }
 
 impl<K: Clone + Ord + Debug, V: Clone, C> DoubleEndedIterator for Iter<'_, K, V, C> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter.next_back()
+        let next = self.iter.next_back();
+        self.remaining = if next.is_some() {
+            self.remaining - 1
+        } else {
+            0
+        };
+        next
     }
 }
+
+impl<K: Clone + Ord + Debug, V: Clone, C> ExactSizeIterator for Iter<'_, K, V, C> {}
 
 /// Iterator over references to Keys stored in the map.
 pub struct KeyIter<'n, K, V, C = Untracked>
@@ -709,6 +723,34 @@ mod tests {
     use crate::internals::lincowcell::Untracked;
     use std::ops::Bound;
     use std::ops::Bound::*;
+
+    #[test]
+    fn full_iterator_retains_exact_remaining_length_when_both_ends_are_consumed() {
+        for size in [0, 1, L_CAPACITY, L_CAPACITY + 1, L_CAPACITY * 16 + 3] {
+            let map: crate::bptree::BptreeMap<usize, usize> =
+                (0..size).map(|key| (key, key * 2)).collect();
+            let read = map.read();
+            let mut iter = read.iter();
+            let mut expected: std::collections::VecDeque<_> = (0..size).collect();
+            for step in 0..size {
+                assert_eq!(iter.len(), expected.len());
+                assert_eq!(iter.size_hint(), (expected.len(), Some(expected.len())));
+                let (actual, key) = if step % 2 == 0 {
+                    (iter.next(), expected.pop_front())
+                } else {
+                    (iter.next_back(), expected.pop_back())
+                };
+                let key = key.unwrap();
+                assert_eq!(actual, Some((&key, &(key * 2))));
+            }
+            for _ in 0..3 {
+                assert_eq!(iter.len(), 0);
+                assert_eq!(iter.size_hint(), (0, Some(0)));
+                assert_eq!(iter.next(), None);
+                assert_eq!(iter.next_back(), None);
+            }
+        }
+    }
 
     #[test]
     fn shared_readers_keep_live_items_across_traversal_and_private_edits() {

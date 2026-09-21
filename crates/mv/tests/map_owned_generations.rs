@@ -458,6 +458,12 @@ fn detached_owner_keeps_shared_nodes_after_source_drop_and_cross_thread_transfer
         assert!(owner.get(&1_u64).is_none());
         assert_eq!(*owner.get(&255_u64).unwrap().data, 2550);
         assert_eq!(owner.to_snapshot().len(), 255);
+        let mut entries = owner.iter();
+        assert_eq!(entries.len(), 255);
+        assert_eq!(*entries.next().unwrap().1.data, 999);
+        assert_eq!(*entries.next_back().unwrap().1.data, 2550);
+        assert_eq!(entries.len(), 253);
+        assert_eq!(entries.count(), 253);
         owner
     })
     .join()
@@ -792,4 +798,510 @@ fn fresh_map_first_commit_without_a_reader_allocates_no_new_successor() {
     assert_eq!(published.len(), 64);
     assert_eq!(std::ptr::from_ref(published.get(&0).unwrap()), pointer);
     assert_eq!(published.get(&63), Some(&189));
+}
+
+#[test]
+fn storage_transaction_abort_restores_both_parent_trees_without_allocating_or_cloning() {
+    use mv::storage::{Storage, StorageReadOnly};
+
+    let observations = Arc::new(Observations::default());
+    let storage: Storage<Key, Value> = (0..128)
+        .map(|key| {
+            (
+                Key::new(key, &observations),
+                Value::new(key * 10, &observations),
+            )
+        })
+        .collect();
+    let old = storage.view();
+    let mut block = storage.block();
+    drop(block.insert(Key::new(0, &observations), Value::new(1000, &observations)));
+    let parent: Vec<_> = block
+        .iter()
+        .map(|(key, value)| (*key.data, value.id))
+        .collect();
+    let preimages: Vec<_> = block
+        .touched_entries()
+        .map(|entry| (*entry.key.data, entry.before.map(|value| value.id)))
+        .collect();
+    let mut transaction = without_allocations("acquire both transaction checkpoints", || {
+        block.transaction()
+    });
+    for key in 0..128 {
+        drop(transaction.remove(Key::new(key, &observations)));
+    }
+    transaction.insert(
+        Key::new(256, &observations),
+        Value::new(2560, &observations),
+    );
+    transaction.remove(Key::new(512, &observations));
+    let clones = observations.clones();
+    without_allocations("abort both private transaction trees", || drop(transaction));
+    assert_eq!(observations.clones(), clones);
+    assert_eq!(
+        block
+            .iter()
+            .map(|(key, value)| (*key.data, value.id))
+            .collect::<Vec<_>>(),
+        parent
+    );
+    assert_eq!(
+        block
+            .touched_entries()
+            .map(|entry| (*entry.key.data, entry.before.map(|value| value.id)))
+            .collect::<Vec<_>>(),
+        preimages
+    );
+    assert!(block.is_dirty());
+    assert_eq!(*old.get(&0_u64).unwrap().data, 0);
+    block.commit();
+    assert_eq!(*storage.view().get(&0_u64).unwrap().data, 1000);
+    assert_eq!(storage.view().len(), 128);
+    drop(old);
+    drop(storage);
+    observations.assert_released();
+}
+
+#[test]
+fn storage_transaction_apply_keeps_original_current_and_undo_payloads_without_allocating() {
+    use mv::storage::{Storage, StorageReadOnly};
+
+    let observations = Arc::new(Observations::default());
+    let storage: Storage<Key, Value> = (0..96)
+        .map(|key| {
+            (
+                Key::new(key, &observations),
+                Value::new(key * 10, &observations),
+            )
+        })
+        .collect();
+    let original: Vec<_> = storage
+        .view()
+        .iter()
+        .map(|(key, value)| (*key.data, value.id))
+        .collect();
+    let mut block = storage.block();
+    let mut transaction = block.transaction();
+    for key in 0..96 {
+        drop(transaction.insert(
+            Key::new(key, &observations),
+            Value::new(9000 + key, &observations),
+        ));
+    }
+    assert_eq!(
+        transaction
+            .touched_entries()
+            .map(|entry| (*entry.key.data, entry.before.unwrap().id))
+            .collect::<Vec<_>>(),
+        original
+    );
+    let current: Vec<_> = transaction
+        .iter()
+        .map(|(key, value)| (*key.data, value.id))
+        .collect();
+    let block_before: Vec<_> = (0..96)
+        .map(|key| {
+            let key = Key::new(key, &observations);
+            (*key.data, transaction.get_before_block(&key).unwrap().id)
+        })
+        .collect();
+    let clones = observations.clones();
+    without_allocations("apply both original transaction successors", || {
+        transaction.apply()
+    });
+    assert_eq!(observations.clones(), clones);
+    assert_eq!(
+        block
+            .iter()
+            .map(|(key, value)| (*key.data, value.id))
+            .collect::<Vec<_>>(),
+        current
+    );
+    assert_eq!(
+        block
+            .touched_entries()
+            .map(|entry| (*entry.key.data, entry.before.unwrap().id))
+            .collect::<Vec<_>>(),
+        block_before
+    );
+    let mut sibling = block.transaction();
+    drop(sibling.remove(Key::new(4, &observations)));
+    without_allocations(
+        "abort later sibling without changing applied parent",
+        || drop(sibling),
+    );
+    assert_eq!(
+        block
+            .iter()
+            .map(|(key, value)| (*key.data, value.id))
+            .collect::<Vec<_>>(),
+        current
+    );
+    block.commit();
+    assert_eq!(storage.view().len(), 96);
+    drop(storage);
+    observations.assert_released();
+}
+
+#[test]
+fn caught_transaction_preimage_clone_panic_cannot_apply_partial_touches() {
+    use mv::storage::{Storage, StorageReadOnly};
+    use std::sync::atomic::AtomicBool;
+
+    #[derive(Debug)]
+    struct FailClone {
+        value: u64,
+        fail: Arc<AtomicBool>,
+    }
+    impl Clone for FailClone {
+        fn clone(&self) -> Self {
+            assert!(!self.fail.load(SeqCst), "injected preimage clone panic");
+            Self {
+                value: self.value,
+                fail: Arc::clone(&self.fail),
+            }
+        }
+    }
+    let fail = Arc::new(AtomicBool::new(false));
+    let value = |value| FailClone {
+        value,
+        fail: Arc::clone(&fail),
+    };
+    let storage: Storage<u64, FailClone> = [(0, value(10)), (1, value(20))].into_iter().collect();
+    let mut block = storage.block();
+    block.insert(0, value(11));
+    let mut transaction = block.transaction();
+    fail.store(true, SeqCst);
+    assert!(catch_unwind(AssertUnwindSafe(|| transaction.insert(1, value(21)))).is_err());
+    fail.store(false, SeqCst);
+    assert!(catch_unwind(AssertUnwindSafe(|| transaction.get(&1))).is_err());
+    assert!(catch_unwind(AssertUnwindSafe(|| transaction.apply())).is_err());
+    assert_eq!(block.get(&0).unwrap().value, 11);
+    assert_eq!(block.get(&1).unwrap().value, 20);
+    assert_eq!(block.touched_entries().len(), 1);
+    assert_eq!(block.get_before_block(&0).unwrap().value, 10);
+    assert!(block.is_dirty());
+    block.commit();
+    assert_eq!(storage.view().get(&1).unwrap().value, 20);
+}
+
+#[test]
+fn caught_remove_query_destructor_panic_cannot_apply_partial_transaction() {
+    use mv::storage::{Storage, StorageReadOnly};
+
+    #[derive(Debug)]
+    struct QueryKey {
+        order: u64,
+        panic_on_drop: bool,
+    }
+    impl Clone for QueryKey {
+        fn clone(&self) -> Self {
+            Self {
+                order: self.order,
+                panic_on_drop: false,
+            }
+        }
+    }
+    impl PartialEq for QueryKey {
+        fn eq(&self, other: &Self) -> bool {
+            self.order == other.order
+        }
+    }
+    impl Eq for QueryKey {}
+    impl PartialOrd for QueryKey {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for QueryKey {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.order.cmp(&other.order)
+        }
+    }
+    impl Drop for QueryKey {
+        fn drop(&mut self) {
+            assert!(!self.panic_on_drop, "injected owned query destructor panic");
+        }
+    }
+    let key = QueryKey {
+        order: 1,
+        panic_on_drop: false,
+    };
+    let storage: Storage<QueryKey, u64> = [(key.clone(), 10)].into_iter().collect();
+    let mut block = storage.block();
+    let mut transaction = block.transaction();
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| transaction.remove(QueryKey {
+            order: 1,
+            panic_on_drop: true
+        })))
+        .is_err()
+    );
+    assert!(catch_unwind(AssertUnwindSafe(|| transaction.get(&key))).is_err());
+    assert!(catch_unwind(AssertUnwindSafe(|| transaction.apply())).is_err());
+    assert_eq!(block.get(&key), Some(&10));
+    assert_eq!(block.touched_entries().len(), 0);
+    assert!(!block.is_dirty());
+    block.commit();
+    assert_eq!(storage.view().get(&key), Some(&10));
+}
+
+#[derive(Clone, Copy)]
+enum DirectBlockEdit {
+    Insert,
+    Remove,
+    Borrow,
+}
+
+fn assert_failed_block_preimage_cannot_publish(edit: DirectBlockEdit) {
+    use mv::storage::{Storage, StorageReadOnly};
+    use std::sync::atomic::AtomicBool;
+
+    #[derive(Debug)]
+    struct FailClone {
+        value: u64,
+        fail: Arc<AtomicBool>,
+    }
+    impl Clone for FailClone {
+        fn clone(&self) -> Self {
+            assert!(
+                !self.fail.load(SeqCst),
+                "injected block preimage clone panic"
+            );
+            Self {
+                value: self.value,
+                fail: Arc::clone(&self.fail),
+            }
+        }
+    }
+    for detach in [false, true] {
+        let fail = Arc::new(AtomicBool::new(false));
+        let value = |value| FailClone {
+            value,
+            fail: Arc::clone(&fail),
+        };
+        let storage: Storage<u64, FailClone> =
+            [(0, value(10)), (1, value(20))].into_iter().collect();
+        let before = storage.view();
+        let mut block = storage.block();
+        // Make the leaf private and the block dirty first. The injected panic
+        // must occur in the aggregate undo clone, outside either tree cursor.
+        block.insert(0, value(11));
+        fail.store(true, SeqCst);
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| match edit {
+                DirectBlockEdit::Insert => {
+                    block.insert(1, value(21));
+                }
+                DirectBlockEdit::Remove => {
+                    block.remove(1);
+                }
+                DirectBlockEdit::Borrow => {
+                    let _ = block.get_mut(&1);
+                }
+            }))
+            .is_err()
+        );
+        fail.store(false, SeqCst);
+        assert!(catch_unwind(AssertUnwindSafe(|| block.get(&1))).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| block.iter())).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| block.range(..))).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| block.first_key_value())).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| block.last_key_value())).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| block.len())).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| block.revert_map())).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| block.touched_entries())).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| drop(block.transaction()))).is_err());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _ = block.get_mut(&0);
+            }))
+            .is_err()
+        );
+        assert!(catch_unwind(AssertUnwindSafe(|| block.insert(2, value(30)))).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| block.remove(0))).is_err());
+        let mut admission_called = false;
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                if detach {
+                    let _ = block.try_detach(|_| {
+                        admission_called = true;
+                        Ok::<_, ()>(())
+                    });
+                } else {
+                    block.commit();
+                }
+            }))
+            .is_err()
+        );
+        assert!(
+            !admission_called,
+            "failed owners cannot reach capture admission"
+        );
+        let after = storage.view();
+        assert_eq!(after.get(&0).unwrap().value, 10);
+        assert_eq!(after.get(&1).unwrap().value, 20);
+        assert_eq!(before.get(&0).unwrap().value, 10);
+        assert_eq!(before.get(&1).unwrap().value, 20);
+    }
+}
+
+#[test]
+fn caught_block_insert_preimage_panic_cannot_publish_an_unrevertible_mutation() {
+    assert_failed_block_preimage_cannot_publish(DirectBlockEdit::Insert);
+}
+
+#[test]
+fn caught_block_remove_preimage_panic_cannot_publish_an_unrevertible_mutation() {
+    assert_failed_block_preimage_cannot_publish(DirectBlockEdit::Remove);
+}
+
+#[test]
+fn caught_block_mutable_preimage_panic_cannot_reuse_or_publish_the_owner() {
+    assert_failed_block_preimage_cannot_publish(DirectBlockEdit::Borrow);
+}
+
+#[test]
+fn caught_block_query_destructor_panic_cannot_commit_or_detach() {
+    use mv::storage::{Storage, StorageReadOnly};
+
+    #[derive(Debug)]
+    struct QueryKey {
+        order: u64,
+        panic_on_drop: bool,
+    }
+    impl Clone for QueryKey {
+        fn clone(&self) -> Self {
+            Self {
+                order: self.order,
+                panic_on_drop: false,
+            }
+        }
+    }
+    impl PartialEq for QueryKey {
+        fn eq(&self, other: &Self) -> bool {
+            self.order == other.order
+        }
+    }
+    impl Eq for QueryKey {}
+    impl PartialOrd for QueryKey {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for QueryKey {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.order.cmp(&other.order)
+        }
+    }
+    impl Drop for QueryKey {
+        fn drop(&mut self) {
+            assert!(!self.panic_on_drop, "injected block query destructor panic");
+        }
+    }
+    for remove in [false, true] {
+        for detach in [false, true] {
+            let key = QueryKey {
+                order: 1,
+                panic_on_drop: false,
+            };
+            let storage: Storage<QueryKey, u64> = [(key.clone(), 10)].into_iter().collect();
+            let mut block = storage.block();
+            // An existing first preimage leaves the second query key to be
+            // destroyed locally, after the actual current-tree edit.
+            block.insert(key.clone(), 11);
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    let query = QueryKey {
+                        order: 1,
+                        panic_on_drop: true,
+                    };
+                    if remove {
+                        block.remove(query)
+                    } else {
+                        block.insert(query, 12)
+                    }
+                }))
+                .is_err()
+            );
+            assert!(catch_unwind(AssertUnwindSafe(|| block.get(&key))).is_err());
+            let mut admission_called = false;
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    if detach {
+                        let _ = block.try_detach(|_| {
+                            admission_called = true;
+                            Ok::<_, ()>(())
+                        });
+                    } else {
+                        block.commit();
+                    }
+                }))
+                .is_err()
+            );
+            assert!(!admission_called);
+            assert_eq!(storage.view().get(&key), Some(&10));
+        }
+    }
+}
+
+#[test]
+fn caught_child_undo_cursor_panic_cannot_publish_the_healthy_current_tree() {
+    use mv::storage::{Storage, StorageReadOnly};
+    use std::sync::atomic::AtomicBool;
+
+    #[derive(Debug)]
+    struct FailUndoClone {
+        value: u64,
+        fail: Arc<AtomicBool>,
+    }
+    impl Clone for FailUndoClone {
+        fn clone(&self) -> Self {
+            assert!(
+                self.value != 10 || !self.fail.load(SeqCst),
+                "injected existing undo payload clone panic"
+            );
+            Self {
+                value: self.value,
+                fail: Arc::clone(&self.fail),
+            }
+        }
+    }
+    for detach in [false, true] {
+        let fail = Arc::new(AtomicBool::new(false));
+        let value = |value| FailUndoClone {
+            value,
+            fail: Arc::clone(&fail),
+        };
+        let storage: Storage<u64, FailUndoClone> =
+            [(0, value(10)), (1, value(20))].into_iter().collect();
+        let mut block = storage.block();
+        block.insert(0, value(11));
+        let mut transaction = block.transaction();
+        fail.store(true, SeqCst);
+        // The incoming preimage (20) clones successfully; copying the saved
+        // undo leaf's original payload (10) fails inside only the undo cursor.
+        assert!(catch_unwind(AssertUnwindSafe(|| transaction.insert(1, value(21)))).is_err());
+        fail.store(false, SeqCst);
+        drop(transaction);
+        assert!(catch_unwind(AssertUnwindSafe(|| block.get(&0))).is_err());
+        let mut admission_called = false;
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                if detach {
+                    let _ = block.try_detach(|_| {
+                        admission_called = true;
+                        Ok::<_, ()>(())
+                    });
+                } else {
+                    block.commit();
+                }
+            }))
+            .is_err()
+        );
+        assert!(!admission_called);
+        let after = storage.view();
+        assert_eq!(after.get(&0).unwrap().value, 10);
+        assert_eq!(after.get(&1).unwrap().value, 20);
+    }
 }

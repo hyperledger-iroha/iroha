@@ -175,33 +175,43 @@ pub enum PrivacyReleaseExecutableKindV1 {
 pub enum PrivacyReleaseSdkConsumerV1 {
     /// Kotlin/JVM SDK.
     #[norito(rename = "kotlin_jvm")]
+    #[codec(index = 0)]
     KotlinJvm,
     /// Kotlin Android SDK.
     #[norito(rename = "kotlin_android")]
+    #[codec(index = 1)]
     KotlinAndroid,
-    /// Mirrored Java Android SDK.
-    #[norito(rename = "java_android")]
-    JavaAndroid,
+    /// Java-source consumers of the canonical Kotlin APIs on both JVM and Android.
+    #[norito(rename = "java_source_kotlin")]
+    #[codec(index = 10)]
+    JavaSourceKotlin,
     /// Swift SDK and C bridge.
     #[norito(rename = "swift_c_bridge")]
+    #[codec(index = 3)]
     SwiftCBridge,
     /// JavaScript N-API package.
     #[norito(rename = "javascript_napi")]
+    #[codec(index = 4)]
     JavascriptNapi,
     /// Python `PyO3` package.
     #[norito(rename = "python_pyo3")]
+    #[codec(index = 5)]
     PythonPyo3,
     /// C# package.
     #[norito(rename = "csharp")]
+    #[codec(index = 6)]
     CSharp,
     /// Command-line client.
     #[norito(rename = "cli")]
+    #[codec(index = 7)]
     Cli,
     /// `OpenAPI` schema package.
     #[norito(rename = "openapi")]
+    #[codec(index = 8)]
     OpenApi,
     /// Genesis authoring tooling.
     #[norito(rename = "genesis_tooling")]
+    #[codec(index = 9)]
     GenesisTooling,
 }
 
@@ -210,7 +220,7 @@ impl PrivacyReleaseSdkConsumerV1 {
     pub const ALL: [Self; 10] = [
         Self::KotlinJvm,
         Self::KotlinAndroid,
-        Self::JavaAndroid,
+        Self::JavaSourceKotlin,
         Self::SwiftCBridge,
         Self::JavascriptNapi,
         Self::PythonPyo3,

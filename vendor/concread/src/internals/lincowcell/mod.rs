@@ -59,7 +59,6 @@ use std::alloc::Layout;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::sync::Arc;
 use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
 
 mod shared_allocation;
@@ -68,6 +67,26 @@ use shared_allocation::{Reserved, Shared};
 /// Explicitly unaccounted shell ownership; this provides no admission policy.
 #[derive(Debug)]
 pub struct Untracked;
+
+/// Exact allocation control blocks owned by a newly constructed cell.
+///
+/// Native mutex internals, the supplied data and its nested storage are separate.
+#[derive(Clone, Copy, Debug)]
+pub struct InitialLayouts {
+    /// Original permanent writer root, including its mutex and reference counter.
+    pub root: Layout,
+    /// Original first-reader shell, including its reference counter.
+    pub reader: Layout,
+}
+
+/// Move-only prepaid custody for the original root and first-reader allocations.
+#[derive(Debug)]
+pub struct InitialCharges<Charge> {
+    /// Custody held until the last cell or detached writer destroys the root.
+    pub root: Charge,
+    /// Custody retained by the original first-reader generation.
+    pub reader: Charge,
+}
 
 /// Actual control-block layouts allocated before constructing a writer.
 #[derive(Clone, Copy, Debug)]
@@ -124,7 +143,7 @@ pub trait LinCowCellCapable<R, U> {
 /// A concurrently readable cell with linearised drop behaviour.
 pub struct LinCowCell<T, R, U, Charge = Untracked> {
     updater: PhantomData<U>,
-    write: Arc<Mutex<WriteState<T, R, Charge>>>,
+    write: Shared<Mutex<WriteState<T, R, Charge>>, Charge>,
     active: Mutex<Shared<LinCowCellInner<R, Charge>, Charge>>,
 }
 
@@ -161,7 +180,7 @@ pub struct LinCowCellOwned<T, R, U, Charge = Untracked> {
     work: Shared<U, Charge>,
     next: Reserved<LinCowCellInner<R, Charge>, Charge>,
     base: Shared<LinCowCellInner<R, Charge>, Charge>,
-    root: Arc<Mutex<WriteState<T, R, Charge>>>,
+    root: Shared<Mutex<WriteState<T, R, Charge>>, Charge>,
 }
 
 /// Why an original unpublished writer could not be reacquired.
@@ -228,6 +247,15 @@ impl<T, R, U, Charge> LinCowCell<T, R, U, Charge>
 where
     T: LinCowCellCapable<R, U>,
 {
+    /// Exact original root and first-reader layouts; native mutex internals and
+    /// nested storage are separate allocations, not part of this layout pair.
+    pub fn initial_allocation_layouts() -> InitialLayouts {
+        InitialLayouts {
+            root: Reserved::<Mutex<WriteState<T, R, Charge>>, Charge>::layout(),
+            reader: Self::reader_allocation_layout(),
+        }
+    }
+
     /// Exact layout of each reader generation, including its reference counter.
     pub fn reader_allocation_layout() -> Layout {
         Reserved::<LinCowCellInner<R, Charge>, Charge>::layout()
@@ -241,18 +269,27 @@ where
         }
     }
 
-    /// Construct the initial reader under its already prepaid allocation charge.
+    /// Construct the original root and reader under their prepaid charges.
     ///
-    /// Its shell is allocated before `create_reader`. The permanent root Arc,
-    /// reader mutex, input T and all nested storage require separate admission.
-    pub fn new_charged(data: T, reader_charge: Charge) -> Self {
-        let shell = Reserved::new(reader_charge);
-        let current = shell.initialize(LinCowCellInner::new(data.create_reader()));
+    /// Both shells are allocated before `create_reader`. Input T and all nested
+    /// storage require separate admission. Native mutex internals are initialized
+    /// here, but their opaque platform allocations are not funded by these charges.
+    /// TODO: provision native mutex and runtime control storage before claiming
+    /// complete construction admission.
+    pub fn new_charged(data: T, charges: InitialCharges<Charge>) -> Self {
+        // A reader constructor may unwind. Tuple field order destroys the
+        // original data before either prepaid shell refunds and wakes a retry.
+        let root = Reserved::new(charges.root);
+        let reader = Reserved::new(charges.reader);
+        let construction = (data, reader, root);
+        let reader = construction.0.create_reader();
+        let (data, shell, root) = construction;
+        let current = shell.initialize(LinCowCellInner::new(reader));
         let active = Mutex::new(current.clone());
         // Initialize both permanent native mutexes during construction. A first
         // refused writer must not allocate a lazy platform mutex at admission.
         drop(active.lock().unwrap());
-        let write = Arc::new(Mutex::new(WriteState { data, current }));
+        let write = root.initialize(Mutex::new(WriteState { data, current }));
         drop(write.lock().unwrap());
         LinCowCell {
             updater: PhantomData,
@@ -337,7 +374,7 @@ where
         LinCowCellWriteTxn<'_, T, R, U, Charge>,
         (LinCowCellOwned<T, R, U, Charge>, OwnedWriteError),
     > {
-        if !Arc::ptr_eq(&self.write, &owned.root) {
+        if !Shared::ptr_eq(&self.write, &owned.root) {
             return Err((owned, OwnedWriteError::Changed));
         }
         let guard = match self.write.try_lock() {
@@ -452,7 +489,7 @@ where
             base,
             guard,
         } = self;
-        let root = Arc::clone(&caller.write);
+        let root = caller.write.clone();
         drop(guard);
         LinCowCellOwned {
             work,
@@ -503,9 +540,15 @@ impl<T, R, U> LinCowCell<T, R, U, Untracked>
 where
     T: LinCowCellCapable<R, U>,
 {
-    /// Construct explicitly unaccounted generation shells.
+    /// Construct an explicitly unaccounted root and generation shell.
     pub fn new(data: T) -> Self {
-        Self::new_charged(data, Untracked)
+        Self::new_charged(
+            data,
+            InitialCharges {
+                root: Untracked,
+                reader: Untracked,
+            },
+        )
     }
 
     /// Construct an explicitly unaccounted input under the original writer lock.
@@ -1018,5 +1061,91 @@ mod writer_input_tests {
         assert_eq!(**writer, 20);
         drop(writer);
         assert_eq!(*cell.read(), 17);
+    }
+
+    #[test]
+    fn original_charged_root_survives_owned_retry_and_cell_destruction() {
+        use super::{InitialCharges, OwnedWriteError, Shared, WriterAdmission, WriterCharges};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        #[derive(Debug)]
+        struct Data {
+            dropped: Arc<AtomicUsize>,
+        }
+        impl Drop for Data {
+            fn drop(&mut self) {
+                self.dropped.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        impl LinCowCellCapable<u64, u64> for Data {
+            type WriterInput = ();
+            fn create_reader(&self) -> u64 {
+                17
+            }
+            fn create_writer(&self, (): ()) -> u64 {
+                17
+            }
+            fn pre_commit(&mut self, value: u64, _previous: &u64) -> u64 {
+                value
+            }
+        }
+        #[derive(Debug)]
+        struct Charge {
+            root: bool,
+            refunded: Arc<AtomicUsize>,
+            payload: Arc<AtomicUsize>,
+        }
+        impl Drop for Charge {
+            fn drop(&mut self) {
+                if self.root {
+                    assert_eq!(self.payload.load(Ordering::SeqCst), 1);
+                    assert_eq!(self.refunded.fetch_add(1, Ordering::SeqCst), 0);
+                }
+            }
+        }
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let refunded = Arc::new(AtomicUsize::new(0));
+        let charge = |root| Charge {
+            root,
+            refunded: refunded.clone(),
+            payload: dropped.clone(),
+        };
+        let owner = LinCowCell::new_charged(
+            Data {
+                dropped: dropped.clone(),
+            },
+            InitialCharges {
+                root: charge(true),
+                reader: charge(false),
+            },
+        );
+        let admission = |_: &Data, _| {
+            Ok::<_, ()>(WriterAdmission {
+                charges: WriterCharges {
+                    cursor: charge(false),
+                    reader: charge(false),
+                },
+                input: (),
+            })
+        };
+        let writer = owner.write_charged(admission).unwrap();
+        let original = &*owner.write as *const _;
+        let owned = writer.detach();
+        assert!(Shared::ptr_eq(&owner.write, &owned.root));
+        let held = owner.write_charged(admission).unwrap();
+        let (owned, reason) = owner.try_write_owned(owned).unwrap_err();
+        assert_eq!(reason, OwnedWriteError::Busy);
+        assert_eq!(&*owned.root as *const _, original);
+        drop(held);
+        let owned = owner.try_write_owned(owned).unwrap().detach();
+        assert_eq!(&*owned.root as *const _, original);
+        drop(owner);
+        assert_eq!(dropped.load(Ordering::SeqCst), 0);
+        assert_eq!(refunded.load(Ordering::SeqCst), 0);
+        assert_eq!(*owned.as_ref(), 17);
+        drop(owned);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        assert_eq!(refunded.load(Ordering::SeqCst), 1);
     }
 }

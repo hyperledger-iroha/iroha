@@ -48,6 +48,22 @@ REPOSITORY_PRIVATE_LOCK="${REPOSITORY_ROOT}/target/kotodama-lock-final-current.t
 mkdir -p "$(dirname "${REPOSITORY_PRIVATE_LOCK}")"
 write_test_lock "${REPOSITORY_PRIVATE_LOCK}" "repository-private-selected"
 
+# BEGIN explicit absence assertion.
+expect_no_match() {
+  local status
+  if grep "$@"; then
+    echo "unexpected source pattern accepted by privacy SDK guard" >&2
+    exit 1
+  else
+    status=$?
+    if [[ "${status}" -ne 1 ]]; then
+      echo "privacy SDK source-pattern check could not read its input" >&2
+      exit "${status}"
+    fi
+  fi
+}
+# END explicit absence assertion.
+
 expect_failure() {
   local expected="$1"
   shift
@@ -1884,7 +1900,10 @@ for compatibility_child_exit in 0 1; do
     bash "${PROVISION_HELPER_PATH}" provision-ci \
     "${changed_repository}" "${changed_corridor}" "${changed_env}" "${changed_path}" \
     "${PROVISION_BIN}/rustup" "1.93.1-x86_64-unknown-linux-gnu" "${TEST_PYTHON}"
-  [[ ! -s "${changed_env}" && ! -s "${changed_path}" ]]
+  if ! [[ ! -s "${changed_env}" && ! -s "${changed_path}" ]]; then
+    echo "failed Cargo graph admission published provisioning outputs" >&2
+    exit 1
+  fi
 done
 
 # Exercise the complete Python guard with fake venv and Cargo executables. This
@@ -2700,10 +2719,38 @@ inert_native_spec = importlib.util.spec_from_file_location(
 if inert_native_spec is None:
     raise AssertionError("unable to construct inert extension-loader spec")
 def fixture_native_module():
-    native = importlib.util.module_from_spec(inert_native_spec)
+    selected = importlib.machinery.PathFinder.find_spec(
+        "iroha_native._crypto", [str(package_root)]
+    )
+    if selected is not inert_native_spec:
+        raise AssertionError("native owner did not discover its exact authenticated spec")
+    native = importlib.util.module_from_spec(selected)
     sys.modules["iroha_native._crypto"] = native
-    inert_native_spec.loader.exec_module(native)
+    selected.loader.exec_module(native)
     return native
+
+
+# A more specific native suffix or another extension must never broaden the
+# inspected package authority. Source siblings still use SourceFileLoader.
+finder = verifier._AuthenticatedNativePackageFinder(package_root, inert_native_spec)
+shadow_native = package_root / ("_crypto" + importlib.machinery.EXTENSION_SUFFIXES[0])
+unknown_native = package_root / ("uninspected" + importlib.machinery.EXTENSION_SUFFIXES[0])
+if shadow_native == native_path:
+    shadow_native = package_root / "_crypto.pyd"
+try:
+    shadow_native.write_bytes(b"uninspected shadow extension")
+    unknown_native.write_bytes(b"uninspected sibling extension")
+    finder.invalidate_caches()
+    if finder.find_spec("iroha_native._crypto") is not inert_native_spec:
+        raise AssertionError("suffix shadow replaced the authenticated native spec")
+    if finder.find_spec("iroha_native.uninspected") is not None:
+        raise AssertionError("native package admitted an uninspected extension sibling")
+    sibling_spec = finder.find_spec("iroha_native.sibling")
+    if sibling_spec is None or type(sibling_spec.loader) is not importlib.machinery.SourceFileLoader:
+        raise AssertionError("authenticated source sibling lost its source-only importer")
+finally:
+    shadow_native.unlink()
+    unknown_native.unlink()
 
 verifier._fixture_native_module = fixture_native_module
 loaded_package, loaded_native = verifier.load_from_trusted_specs(
@@ -4019,6 +4066,8 @@ if arguments(12) != [
     "tests/privacy_zk_x509_transport_test.py",
     "tests/proof_attachment_contract_test.py",
     "tests/crypto_algorithms_test.py",
+    "tests/governance_tally_test.py",
+    str(root / "python/iroha_torii_client/tests/governance_tally_response_test.py"),
     str(root / "scripts/tests/check_privacy_jvm_native_gate_test.py"), str(root / "scripts/tests/check_privacy_python_witness_boundary_test.py"),
 ]:
     raise SystemExit("installed-package pytest transcript drifted")
@@ -4484,10 +4533,10 @@ run_artifact_set_negative_control symlink
 # JavaScript keeps independent seals for the same reviewed graph at two paths.
 grep -Fq 'source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 grep -Fq '${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
-! grep -Eq '^(FROZEN|TRACKED_ROOT)_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+expect_no_match -Eq '^(FROZEN|TRACKED_ROOT)_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 grep -Fq 'export IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVACY_RELEASE_CARGO_LOCK}"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
-! grep -Fq 'external-lock requalification' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
-! grep -Eq '(install|rm -f --).*\$\{WORKSPACE_CARGO_LOCKFILE\}' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+expect_no_match -Fq 'external-lock requalification' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+expect_no_match -Eq '(install|rm -f --).*\$\{WORKSPACE_CARGO_LOCKFILE\}' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 
 # Source-level CI coverage: the root lock is tracked as the exact source
 # authority, the distinct privacy lock remains external, and every Cargo-using
@@ -4529,7 +4578,7 @@ grep -Fq 'CARGO_HOME="${private_cargo_home}"' "${LOCK_HELPER_PATH}"
 [[ "$(grep -Fc -- '--lockfile-path "${lock_path}"' "${LOCK_HELPER_PATH}")" -eq 1 ]]
 grep -Fq 'readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=' "${LOCK_HELPER_PATH}"
 grep -Fq 'privacy_sdk_materialize_canonical_cargo_lock' "${LOCK_HELPER_PATH}"
-! grep -Fq 'generate-lockfile' "${LOCK_HELPER_PATH}"
+expect_no_match -Fq 'generate-lockfile' "${LOCK_HELPER_PATH}"
 grep -Fq 'privacy_sdk_validate_repository_cargo_configuration' "${LOCK_HELPER_PATH}"
 grep -Fq 'privacy_sdk_prepare_private_cargo_home' "${LOCK_HELPER_PATH}"
 grep -Fq 'privacy_sdk_assert_ci_executable_path_order' "${LOCK_HELPER_PATH}"
@@ -4943,10 +4992,36 @@ for name in artifact:
         must_reject(workflow.replace(step, "".join(lines), 1), f"{name} use before same-step graph owner initialization")
 PY
 ! grep -Eq '(^|[[:space:]])cp[[:space:]].*Cargo\.lock' "${WORKFLOW_PATH}" || { echo "privacy SDK workflow copies Cargo.lock into the tracked root" >&2; exit 1; }
-[[ "$(grep -Ec 'install -m 600 .*Cargo\.lock.*Cargo\.lock' "${WORKFLOW_PATH}")" -eq 0 ]] && grep -Fxq '**/Cargo.lock' "${SOURCE_ROOT}/.gitignore" && grep -Fxq '!/Cargo.lock' "${SOURCE_ROOT}/.gitignore"
-ROOT_LOCK_INDEX_ENTRY="$(git -C "${SOURCE_ROOT}" ls-files --stage -- Cargo.lock)"; ROOT_LOCK_HEAD_ENTRY="$(git -C "${SOURCE_ROOT}" ls-tree HEAD -- Cargo.lock)"
-[[ "${ROOT_LOCK_INDEX_ENTRY}" =~ ^100644\ ([0-9a-f]{40})\ 0$'\t'Cargo\.lock$ ]]; ROOT_LOCK_INDEX_OID="${BASH_REMATCH[1]}"
-[[ "${ROOT_LOCK_HEAD_ENTRY}" =~ ^100644\ blob\ ([0-9a-f]{40})$'\t'Cargo\.lock$ ]]; ROOT_LOCK_HEAD_OID="${BASH_REMATCH[1]}"; [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" && "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" && "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]
+# BEGIN canonical source lock assertion.
+# Bash 3.2 does not reliably apply errexit to a false compound [[ ... && ... ]].
+# Every failed conjunction must explicitly terminate before the success marker.
+if ! { [[ "$(grep -Ec 'install -m 600 .*Cargo\.lock.*Cargo\.lock' "${WORKFLOW_PATH}")" -eq 0 ]] &&
+       grep -Fxq '**/Cargo.lock' "${SOURCE_ROOT}/.gitignore" &&
+       grep -Fxq '!/Cargo.lock' "${SOURCE_ROOT}/.gitignore"; }; then
+  echo "privacy SDK root lock tracking policy changed" >&2
+  exit 1
+fi
+ROOT_LOCK_INDEX_ENTRY="$(git -C "${SOURCE_ROOT}" ls-files --stage -- Cargo.lock)"
+ROOT_LOCK_HEAD_ENTRY="$(git -C "${SOURCE_ROOT}" ls-tree HEAD -- Cargo.lock)"
+if [[ "${ROOT_LOCK_INDEX_ENTRY}" =~ ^100644\ ([0-9a-f]{40})\ 0$'\t'Cargo\.lock$ ]]; then
+  ROOT_LOCK_INDEX_OID="${BASH_REMATCH[1]}"
+else
+  echo "privacy SDK root lock requires one regular tracked index entry" >&2
+  exit 1
+fi
+if [[ "${ROOT_LOCK_HEAD_ENTRY}" =~ ^100644\ blob\ ([0-9a-f]{40})$'\t'Cargo\.lock$ ]]; then
+  ROOT_LOCK_HEAD_OID="${BASH_REMATCH[1]}"
+else
+  echo "privacy SDK root lock requires one committed regular file" >&2
+  exit 1
+fi
+if ! [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" &&
+        "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" &&
+        "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]; then
+  echo "privacy SDK root Cargo.lock must match HEAD, index, worktree and the reviewed graph" >&2
+  exit 1
+fi
+# END canonical source lock assertion.
 [[ "$(grep -Fc 'readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh")" -eq 1 ]]
-! grep -Eq 'PRIVACY_SDK_(FROZEN_RELEASE|TRACKED_ROOT)_CARGO_LOCK_SHA256' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
+expect_no_match -Eq 'PRIVACY_SDK_(FROZEN_RELEASE|TRACKED_ROOT)_CARGO_LOCK_SHA256' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
 printf '%s\n' "privacy SDK authenticated Cargo.lock guard tests passed"

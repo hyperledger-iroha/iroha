@@ -12,6 +12,11 @@ use super::*;
 use crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::ZkAmsPhase23RnsLinkSecretChunkV1;
 use crate::vega::{VegaT256ScalarV1, bulletproof_t256::ZeroizingT256ScalarVecV1};
 
+#[path = "prepared_low_digit_plane_v1/low_digit_workspace_v1.rs"]
+mod low_digit_workspace_v1;
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use low_digit_workspace_v1::{LowDigitWorkspaceV1, LowDigitWorkspaceErrorV1};
+use low_digit_workspace_v1::LowDigitPreparationRefusalV1;
+
 const LOW_PLANES_PER_GROUP_V1: usize = 2 * RADIX_LOW_LIMBS_V2;
 const LOW_PLANE_COUNT_V1: u16 = (RADIX_GROUP_COUNT_V2 * LOW_PLANES_PER_GROUP_V1) as u16;
 const _: () = {
@@ -48,6 +53,8 @@ struct LowDigitPreparationLiveV1<R, K, P> {
     cursor: Phase23GlobalLookupRadixSourceCursorV2<R, K, P>,
     group: Option<LowDigitGroupV1>,
     next_plane: u16,
+    // Declared after group: secret vector destruction precedes credit release.
+    _workspace: LowDigitWorkspaceV1,
 }
 
 /// Sole original source and its strict canonical reread, consumed plane by plane.
@@ -59,41 +66,73 @@ struct LowDigitPreparationV1
 }
 
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> Phase23RadixWitnessMaterializedV2<R, K, P> {
-    /// Begin the D/S-low order at the exact original source-complete stage.
-    /// Preparation samples/adopts each point before its values can be emitted.
+    /// Reserve both original scalar-vector lifetimes before source reads or
+    /// allocation. Only pre-allocation capacity refusal retains a retry owner.
+    #[allow(
+        clippy::result_large_err,
+        reason = "capacity refusal retains the entire original source without allocating"
+    )]
     pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn into_low_digit_preparation_v1(
         mut self,
-    ) -> Result<LowDigitPreparationV1<R, K, P>, ZkAmsMkheErrorV1> {
-        if self.next_comparator_plane != 0 {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-        self.evidence
-            .as_ref()
-            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?
-            .validate_low_digit_preparation_start_v1(
-                self.record.replay_record_digest,
-                self.record.source_receipt_digest,
-            )?;
-        validate_materialized_context_v1(&self)?;
-        // Validate record, original lineage, seal and snapshot before allocation
-        // or source I/O. The strict cursor takes the original evidence exactly once.
-        let evidence = self
-            .evidence
-            .take()
-            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-        let (cursor, axes) = Phase23GlobalLookupRadixSourceCursorV2::begin_v2(evidence)?;
-        if axes.replay_record_digest != self.record.replay_record_digest
-            || axes.source_receipt_digest != self.record.source_receipt_digest
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-        Ok(LowDigitPreparationV1 {
-            live: Some(LowDigitPreparationLiveV1 {
-                source: self,
-                cursor,
-                group: None,
-                next_plane: 0,
-            }),
+    ) -> Result<LowDigitPreparationV1<R, K, P>, LowDigitPreparationRefusalV1<R, K, P>> {
+        let admission = (|| {
+            if self.next_comparator_plane != 0 {
+                return Err(LowDigitWorkspaceErrorV1::Source);
+            }
+            self.evidence
+                .as_ref()
+                .ok_or(LowDigitWorkspaceErrorV1::Source)?
+                .validate_low_digit_preparation_start_v1(
+                    self.record.replay_record_digest,
+                    self.record.source_receipt_digest,
+                )
+                .map_err(|_| LowDigitWorkspaceErrorV1::Source)?;
+            validate_materialized_context_v1(&self)
+                .map_err(|_| LowDigitWorkspaceErrorV1::Source)?;
+            self.evidence
+                .as_mut()
+                .ok_or(LowDigitWorkspaceErrorV1::Source)?
+                .admit_low_digit_workspace_v1()
+        })();
+        let workspace = match admission {
+            Ok(workspace) => workspace,
+            Err(reason) => {
+                return Err(LowDigitPreparationRefusalV1 {
+                    reason,
+                    source: if reason == LowDigitWorkspaceErrorV1::Capacity {
+                        Some(self)
+                    } else {
+                        None
+                    },
+                });
+            }
+        };
+        // Admission is attached before cursor creation; failure cannot detach a
+        // source from its funded lifetime. No entropy or ticket is advanced.
+        let result = (|| {
+            let evidence = self
+                .evidence
+                .take()
+                .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+            let (cursor, axes) = Phase23GlobalLookupRadixSourceCursorV2::begin_v2(evidence)?;
+            if axes.replay_record_digest != self.record.replay_record_digest
+                || axes.source_receipt_digest != self.record.source_receipt_digest
+            {
+                return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+            }
+            Ok(LowDigitPreparationV1 {
+                live: Some(LowDigitPreparationLiveV1 {
+                    source: self,
+                    cursor,
+                    group: None,
+                    next_plane: 0,
+                    _workspace: workspace,
+                }),
+            })
+        })();
+        result.map_err(|_| LowDigitPreparationRefusalV1 {
+            reason: LowDigitWorkspaceErrorV1::Source,
+            source: None,
         })
     }
 }
@@ -168,8 +207,9 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> LowDigitPreparationV1<R,
 }
 
 struct PreparedLowDigitPlaneLiveV1<R, K, P> {
-    driver: LowDigitPreparationLiveV1<R, K, P>,
+    // This outer plane must drop before its driver releases the reservation.
     values: PreparedRadixValuesV1,
+    driver: LowDigitPreparationLiveV1<R, K, P>,
 }
 
 /// Move-only prepared D/S-low values; no point, blinding or value-vector accessor.

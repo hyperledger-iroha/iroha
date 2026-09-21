@@ -230,6 +230,7 @@ fn carrier_geometry_completion_requires_original_state_and_exact_header_before_e
             attempted_header,
             &mut state.tiered_backend.lock(),
             &lease,
+            None,
         );
         assert!(matches!(result, Err(LaneLifecycleError::Storage(detail))
             if detail.contains("original State or carrier header")));
@@ -246,7 +247,13 @@ fn carrier_geometry_completion_requires_original_state_and_exact_header_before_e
     }
     assert!(
         geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None
+            )
             .unwrap()
             .updated_da_mapping()
             .is_some()
@@ -308,8 +315,13 @@ fn carrier_geometry_retirement_and_replacement_require_original_queue_custody() 
         );
         let lease = state.kura.try_publication_lease().unwrap();
         let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
-        let result =
-            geometry.complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease);
+        let result = geometry.complete_under(
+            &state,
+            header(),
+            &mut state.tiered_backend.lock(),
+            &lease,
+            None,
+        );
         assert!(matches!(result, Err(LaneLifecycleError::Storage(detail))
             if detail.contains("no retained original Queue cut")));
         assert!(geometry.raw.is_none());
@@ -472,7 +484,13 @@ fn carrier_geometry_completion_requires_original_prepared_descriptors() {
     );
     assert!(
         geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None
+            )
             .is_err()
     );
     assert!(geometry.raw.is_none());
@@ -511,7 +529,13 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
     crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
     assert!(
         geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None
+            )
             .is_err()
     );
     assert_eq!(
@@ -533,7 +557,8 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
                 &state,
                 header(),
                 &mut state.tiered_backend.lock(),
-                &foreign_lease
+                &foreign_lease,
+                None,
             )
             .is_err()
     );
@@ -544,7 +569,13 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
     let lease = state.kura.try_publication_lease().unwrap();
     {
         let completed = geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None,
+            )
             .unwrap();
         assert!(std::ptr::eq(
             completed.updated_da_mapping().unwrap(),
@@ -566,7 +597,13 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
     // they cannot replace the journal or reconstruct the mapping from live State.
     {
         let completed = geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None,
+            )
             .unwrap();
         assert!(std::ptr::eq(
             completed.updated_da_mapping().unwrap(),
@@ -599,11 +636,18 @@ fn carrier_geometry_completed_catalog_refuses_identical_replacement_journal() {
         .prepare_under(&state.tiered_backend.lock(), &lease)
         .unwrap();
     geometry
-        .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+        .complete_under(
+            &state,
+            header(),
+            &mut state.tiered_backend.lock(),
+            &lease,
+            None,
+        )
         .unwrap();
     let journal_path = state.kura.lane_geometry_journal_path();
     let original_bytes = std::fs::read(&journal_path).unwrap();
-    let original_inode = std::fs::metadata(&journal_path).unwrap().ino();
+    let original_metadata = std::fs::metadata(&journal_path).unwrap();
+    let original_inode = original_metadata.ino();
     let original_path = journal_path.with_extension("original-test-owner");
     std::fs::rename(&journal_path, &original_path).unwrap();
     std::fs::write(&journal_path, &original_bytes).unwrap();
@@ -613,7 +657,13 @@ fn carrier_geometry_completed_catalog_refuses_identical_replacement_journal() {
     );
     assert!(
         geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None
+            )
             .is_err()
     );
     assert_eq!(
@@ -622,19 +672,61 @@ fn carrier_geometry_completed_catalog_refuses_identical_replacement_journal() {
     );
     assert_eq!(std::fs::read(&journal_path).unwrap(), original_bytes);
     assert_eq!(state.committed_height(), 0);
-    // Even restoring its name must not refresh the original file's metadata
-    // baseline: an external rename changes ctime and requires storage recovery.
+    // Restoring its name must not refresh the retained metadata baseline. Make
+    // the metadata change explicit: rapid renames can share a filesystem tick.
+    let original_modified = original_metadata.modified().unwrap();
+    let changed_modified = original_modified + std::time::Duration::from_secs(60);
+    std::fs::File::options()
+        .write(true)
+        .open(&original_path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(changed_modified))
+        .unwrap();
+    assert_ne!(
+        std::fs::metadata(&original_path)
+            .unwrap()
+            .modified()
+            .unwrap(),
+        original_modified
+    );
     std::fs::remove_file(&journal_path).unwrap();
     std::fs::rename(&original_path, &journal_path).unwrap();
     assert_eq!(
         std::fs::metadata(&journal_path).unwrap().ino(),
         original_inode
     );
-    assert!(
-        geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
-            .is_err()
+    assert_ne!(
+        std::fs::metadata(&journal_path)
+            .unwrap()
+            .modified()
+            .unwrap(),
+        original_modified
     );
+    let error = geometry
+        .complete_under(
+            &state,
+            header(),
+            &mut state.tiered_backend.lock(),
+            &lease,
+            None,
+        )
+        .err()
+        .expect("the original retained metadata baseline cannot be refreshed");
+    let LaneLifecycleError::GeometryStorage(crate::kura::Error::IO(error, path)) = error else {
+        panic!("expected exact original journal metadata refusal: {error:?}");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(
+        error.to_string(),
+        "retained geometry journal predecessor changed"
+    );
+    assert_eq!(path, journal_path);
+    assert_eq!(std::fs::read(&journal_path).unwrap(), original_bytes);
+    assert_eq!(
+        geometry.raw.as_ref().unwrap().phase(),
+        crate::kura::RawGeometryPhase::CatalogPublished
+    );
+    assert_eq!(state.committed_height(), 0);
 }
 
 #[test]
@@ -647,7 +739,13 @@ fn carrier_geometry_no_change_completion_has_no_mapping_or_storage_owner() {
     let lease = state.kura.try_publication_lease().unwrap();
     assert!(
         geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None
+            )
             .unwrap()
             .updated_da_mapping()
             .is_none()
@@ -655,3 +753,6 @@ fn carrier_geometry_no_change_completion_has_no_mapping_or_storage_owner() {
     assert!(geometry.raw.is_none());
     assert!(geometry.tiered.is_none());
 }
+
+#[path = "carrier_queue_retirement_tests.rs"]
+mod queue_retirement_tests;

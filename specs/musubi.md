@@ -556,6 +556,8 @@ The first-release command groups are:
 
 - Project: `new`, `init`, `add`, `remove`, `metadata`, `tree`.
 - Build: `fetch`, `check`, `build`, `test`, `package`.
+- Contract runtime: `network configure|list`, `deploy`, and `view`.
+- Developer custody and transactions: `wallet create|import|list|show|balance|fund|send|namespace`.
 - Registry: `publish`, `search`, `info`, `versions`, `yank`, `unyank`.
 - Governance: `owner invite|accept|list|set-role|remove` and
   `alias register|resolve|info|history`.
@@ -563,6 +565,84 @@ The first-release command groups are:
 
 The retired `install`, `pack`, short-alias `set`, cache `import`, and public
 Torii upload workflows are not aliases.
+
+### Developer wallet boundary
+
+`iroha_wallet` owns persistent developer custody and the recoverable account-operation
+lifecycle. Musubi selects inputs and renders results; it uses the native SDK to discover
+network policy, construct and verify transactions, quote fees, and observe finality.
+The ordinary `iroha taira account` adapter shares the same onboarding/faucet owner.
+The public-reset coordinator retains its separate durable protocol and consumes the
+same bounded faucet proof-of-work implementation.
+
+The default wallet name is `default`. Its store is the platform user-data directory
+outside Git repositories and Musubi packages; `--wallet-dir` selects an explicit
+absolute directory. Each immutable named wallet binds a native signer to the exact
+genesis-derived `NetworkId`, chain label, Torii root and account-address profile.
+The SDK's shared account-service endpoint validator permits HTTPS or explicit
+loopback HTTP, rejects URL credentials/query/fragment fields and bounds the URL to
+2,048 bytes. Custody imports and network discovery use that same validator.
+Taira discovery requires its canonical chain label and profile 369. A public endpoint
+response supplies the current deployment identity; an explicitly expected identity
+must agree before creation. Wallet generation alone neither registers an account nor
+funds it.
+
+Wallet directories have mode 0700 and newly written regular files have mode 0600;
+owner-read-only mode 0400 is also accepted when reading private files. Creation
+publishes a complete private directory atomically without replacing an existing name.
+Key reads are bounded, current-owner, single-link and descriptor-relative with
+no-follow checks. The canonical native `account.private_key_file` reader enforces
+these key-file constraints for every SDK consumer. Wallet imports accept an
+owner-private native key file or native client configuration; signing material never
+appears in argv, public wallet information, project bindings or operation reports.
+Native client imports retain the signer and exact network context while using native
+wallet defaults; unrelated publication sidecars and separate Basic Auth credentials
+are not imported. Public `list` and `show` do not load a private key. Custody currently
+requires supported native Unix filesystem operations.
+
+`network configure taira --wallet default` records the selected wallet's native client
+file reference. A new binding defaults to authority-paid deployment fees; explicit
+sponsorship selects an exact immutable program revision. Updating an existing binding
+without `--wallet`, `--wallet-dir` or `--config` retains its selected client. Omitted
+fee selection also preserves the binding's existing policy. Project bindings contain
+no signing material. Public target aliases remain independent from the package namespace.
+
+Build next-step guidance retains the canonical project manifest, selected network and
+exact client reference. An unbound Taira project points to integrated wallet creation,
+funding and paid namespace setup; custom networks do not receive a Taira faucet
+instruction. Deployment preparation and prior-journal recovery print a continuation
+with that same manifest/network/client selection. Each preflight transaction shows
+its quoted fee bounds and authority payer or exact sponsor program/revision.
+
+Authenticated registry readers and signers also select the platform wallet named
+`default` when no selector is supplied. `--wallet` and `--wallet-dir` select other
+integrated custody and are mutually exclusive with native `--config`. Package
+publication, recovery and resume inherit an available workspace default network
+binding; explicit selectors must agree with that binding's pinned genesis identity
+and profile. They share one bounded configuration
+image and the canonical native key reader; an implicit working-directory `client.toml`
+is not another credential source. Explicit native configuration remains available for
+operator contexts. Registry publication additionally requires explicit storage service
+routing, provider policy and any namespace delegation. Wallet creation does not invent
+those settings, and contract deployment does not require registry publication.
+
+When a new transaction is required, `fund`, `send` and `namespace` prepare one durable
+signed transaction and submit that exact envelope. `--prepare` stops after preparation; `--submit <journal>`
+dispatches wholly unattempted work, while an existing attempt is reconciled by hash.
+`--resume <journal>` only reconciles the retained operation. Recovery validates the
+selected command kind, network, endpoint, authority, signed terms and fee quote.
+Wallet-owned operation directories remove the need to choose a journal path for
+every new operation. Testnet funding uses the discovered policy's issuer and amount
+and requires the canonical XOR asset. Transfer fees use the selected payer and
+SDK-quoted limits in the signed envelope. An HTTP acknowledgement is not completion:
+success requires the exact globally Applied transaction and matching committed wire,
+or the operation-specific authenticated already-present proof.
+
+These are source ownership and behavior constraints. Current test qualification and
+the remaining public Taira admission, funding, deployment and recording gates are
+tracked in [the workflow goal ledger](musubi_taira_workflow_goals.md).
+
+### Compilation and registry commands
 
 `fetch`, `check`, `build`, and `test` resolve and atomically update the lock
 when permitted, then fetch missing archives. A graph containing only local packages
@@ -594,8 +674,8 @@ consensus inclusion proofs, the cache remains rooted in the validated online
 read and private cache identity.
 
 Purely local commands do not load a signer. Every network registry read requires the exact
-`NetworkId`, canonical account, and matching private key from explicit or platform Iroha
-configuration; it signs the exact raw POST body/path with fresh one-shot authentication. Mutation
+`NetworkId`, canonical account, and matching private key from an explicit native configuration
+or the default developer wallet; it signs the exact raw POST body/path with fresh one-shot authentication. Mutation
 credentials use the same configuration boundary. Secrets and stream tokens are rejected on argv
 and are never persisted. Human output has deterministic stdout/stderr separation; JSON output is
 one document with a stable schema and error code.

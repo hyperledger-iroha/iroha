@@ -27,7 +27,7 @@ pub(super) fn grouped<K: mv::Key, V: mv::Value, B: mv::Key>(
             .insert(key.clone());
     }
     let mut touched = BTreeSet::new();
-    for (key, prior) in history.revert_map() {
+    for (key, prior) in history.revert_map().iter() {
         for value in [prior.as_ref(), history.current().get(key)]
             .into_iter()
             .flatten()

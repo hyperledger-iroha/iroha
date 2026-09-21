@@ -9519,6 +9519,12 @@ mod decode_tests {
                 h_end: 2,
                 status: GovernanceReferendumStatus::Proposed,
                 mode: GovernanceReferendumMode::Plain,
+                plain_context: crate::query::standalone_plain_test_fixture::context(
+                    &iroha_config::parameters::actual::Governance::default(),
+                    0,
+                ),
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
             },
         );
         let error = validate_no_standalone_governance_state_for_typed_proposals_v1(&world)

@@ -19,7 +19,7 @@ impl<K: Key, V: Value + std::fmt::Debug> FieldImage for Storage<K, V> {
             "{:?}",
             (
                 snapshot.current().iter().collect::<Vec<_>>(),
-                snapshot.revert_map()
+                snapshot.revert_map().iter().collect::<Vec<_>>()
             )
         )
     }

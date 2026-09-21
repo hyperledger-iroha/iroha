@@ -133,7 +133,12 @@ pub(super) fn run_deploy(
     let _slot_lock = writer
         .lock_exclusive(Path::new("deployment.lock"))
         .map_err(atomic_diagnostic)?;
-    ensure_previous_terminal(&writer, &service)?;
+    ensure_previous_terminal(
+        &writer,
+        &service,
+        build.workspace.root_manifest_path(),
+        &build.network,
+    )?;
     let prepared = service
         .prepare(&DeploymentRequest {
             artifact: artifact_bytes,
@@ -171,13 +176,16 @@ pub(super) fn run_deploy(
     if args.prepare {
         return Ok(Success {
             message: format!(
-                "Prepared {} for {}\n{}Plan: {}\nNext: musubi deploy --network {} --resume {}",
+                "Prepared {} for {}\n{}Plan: {}\nNext: {}",
                 artifact.target,
                 build.network.name,
                 render_preflight(prepared.preflight()),
                 journal.display(),
-                build.network.name,
-                quote_cli_argument(&journal.display().to_string())
+                deployment_resume_command(
+                    build.workspace.root_manifest_path(),
+                    &build.network,
+                    &journal,
+                )
             ),
             data: object([
                 ("journal", Value::from(journal.display().to_string())),
@@ -269,6 +277,18 @@ fn render_preflight(preflight: &DeploymentPreflight) -> String {
         .enumerate()
     {
         let _ = writeln!(output, "Transaction {}: {hash}", index + 1);
+        match &quote.intent {
+            FeePaymentIntent::Authority(_) => {
+                output.push_str("  Fee payer: transaction authority\n");
+            }
+            FeePaymentIntent::Sponsor(sponsor) => {
+                let _ = writeln!(
+                    output,
+                    "  Fee payer: sponsor {} at revision {}",
+                    sponsor.program_id, sponsor.program_revision
+                );
+            }
+        }
         if quote.components.is_empty() {
             output.push_str("  Quoted fee: no charge components\n");
         }
@@ -366,7 +386,7 @@ fn bound_alias(
 ) -> Result<ContractAlias, Diagnostic> {
     network.contracts.get(&network::contract_key(package, target)).cloned().ok_or_else(|| Diagnostic::new(ErrorCode::Usage, "the contract has no alias binding on this network")
         .with_context("contract", target).with_context("network", &network.name)
-        .with_help(format!("run `musubi network configure {} --config <client.toml> --package {} --contract {} --alias <name::domain>`", network.name, quote_cli_argument(&package.to_string()), quote_cli_argument(target))))
+        .with_help(format!("run `musubi network configure {} --package {} --contract {} --alias <name::your-domain>`; the network's selected wallet and fee policy are retained", network.name, quote_cli_argument(&package.to_string()), quote_cli_argument(target))))
 }
 
 fn selected_fee_payment(
@@ -427,6 +447,8 @@ fn validate_journal_id(id: &str) -> Result<(), Diagnostic> {
 fn ensure_previous_terminal(
     writer: &AtomicWriteRoot,
     service: &DeploymentService,
+    manifest: &Path,
+    network: &network::SelectedNetwork,
 ) -> Result<(), Diagnostic> {
     let Some(bytes) = writer
         .load_immutable(Path::new("active-journal"), 64)
@@ -453,11 +475,36 @@ fn ensure_previous_terminal(
             "an earlier deployment plan is unresolved",
         )
         .with_help(format!(
-            "resume the exact plan with `musubi deploy --resume {}`",
-            quote_cli_argument(&journal.display().to_string())
+            "resume the exact plan with `{}`",
+            deployment_resume_command(manifest, network, &journal)
         )));
     }
     Ok(())
+}
+
+fn deployment_resume_command(
+    manifest: &Path,
+    network: &network::SelectedNetwork,
+    journal: &Path,
+) -> String {
+    let mut command = format!(
+        "musubi --manifest-path {} deploy --network {}",
+        quote_cli_argument(&manifest.display().to_string()),
+        quote_cli_argument(&network.name),
+    );
+    if let Some(config) = &network.config {
+        let _ = write!(
+            command,
+            " --config {}",
+            quote_cli_argument(&config.display().to_string())
+        );
+    }
+    let _ = write!(
+        command,
+        " --resume {}",
+        quote_cli_argument(&journal.display().to_string())
+    );
+    command
 }
 
 fn receipt_output(receipt: &DeploymentReceipt, journal: &Path) -> CommandResult {
@@ -577,7 +624,7 @@ mod tests {
         use iroha_data_model::{
             NetworkId,
             account::AccountId,
-            nexus::FeeDebitSource,
+            nexus::{FeeDebitSource, FeeSponsorProgramId},
             permission::Permission,
             smart_contract::ContractAddress,
             transaction::{FeeChargeKind, FeeChargeLimit},
@@ -635,17 +682,15 @@ mod tests {
             ),
         ]))
         .expect("native quote");
-        let token = Permission::new(
-            "CanRegisterSmartContractCode".into(),
-            iroha_primitives::json::Json::new(()),
-        );
-        let preflight = DeploymentPreflight {
+        let token: Permission = iroha::executor_data_model::permission::account::CanManageAccountAlias {
+            scope: iroha::executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+        }.into();
+        let mut preflight = DeploymentPreflight {
             network_id: id,
             chain_id: "test-chain".to_owned(),
             authority: authority.clone(),
             authorization: iroha_contract_deploy::DeploymentAuthorization {
                 account_exists: true,
-                register_code_permission: token.clone(),
                 manage_alias_permission: token,
             },
             chain_discriminant: 369,
@@ -670,6 +715,7 @@ mod tests {
             address.to_string(),
             "coffee::universal".to_owned(),
             "Transaction 1:".to_owned(),
+            "Fee payer: transaction authority".to_owned(),
             "at most 2 6TEAJqbb8oEPmLncoNiMRbLEK6tw".to_owned(),
         ] {
             assert!(human.contains(&expected), "missing {expected}: {human}");
@@ -678,6 +724,34 @@ mod tests {
             render_progress(DeploymentProgress::Prepared(Box::new(preflight.clone()))),
             format!("Deployment plan\n{}", human.trim_end())
         );
+        let sponsor =
+            FeeSponsorProgramId::new(authority, "coffee-fees".parse().expect("program name"));
+        let encoded_sponsor = {
+            let _profile = ChainDiscriminantGuard::enter(369);
+            sponsor.to_string()
+        };
+        preflight.fee_quotes[0].intent =
+            FeePaymentIntent::sponsor(sponsor.clone(), 7, fee.charge_limits().to_vec(), None);
+        preflight.fee_quotes[0].decision = norito::json::from_value(object([
+            ("status", Value::from("accepted")),
+            (
+                "value",
+                object([
+                    (
+                        "debit_source",
+                        deployment_json(&FeeDebitSource::SponsorProgram(sponsor)).expect("sponsor"),
+                    ),
+                    ("program_revision", Value::from(7_u64)),
+                ]),
+            ),
+        ]))
+        .expect("sponsored quote decision");
+        let sponsored = render_preflight(&preflight);
+        assert!(sponsored.contains(&format!(
+            "Fee payer: sponsor {encoded_sponsor} at revision 7"
+        )));
+        assert!(!sponsored.contains("Fee payer: transaction authority"));
+        assert!(sponsored.contains("at most 2 6TEAJqbb8oEPmLncoNiMRbLEK6tw"));
         let stage = iroha_contract_deploy::DeploymentStage {
             number: 2,
             total: 3,
@@ -708,6 +782,55 @@ mod tests {
         });
         assert!(readback.contains("Verifying stored artifact and alias readback"));
         assert!(readback.contains("coffee::universal"));
+    }
+
+    #[test]
+    fn deployment_continuation_retains_project_network_and_selected_client() {
+        let manifest = Path::new("/projects/coffee club/Musubi.toml");
+        let journal = Path::new("/projects/coffee club/target/deploy/exact-journal");
+        let mut network = network::SelectedNetwork {
+            name: "other-taira".to_owned(),
+            config: Some(PathBuf::from("/runtime/owner's wallet/client.toml")),
+            config_image: None,
+            chain_discriminant: 369,
+            network_id: None,
+            fee_payment: None,
+            contracts: BTreeMap::new(),
+        };
+        assert_eq!(
+            deployment_resume_command(manifest, &network, journal),
+            r#"musubi --manifest-path '/projects/coffee club/Musubi.toml' deploy --network other-taira --config '/runtime/owner'"'"'s wallet/client.toml' --resume '/projects/coffee club/target/deploy/exact-journal'"#
+        );
+        let parsed = Cli::try_parse_from([
+            "musubi",
+            "--manifest-path",
+            manifest.to_str().expect("manifest"),
+            "deploy",
+            "--network",
+            &network.name,
+            "--config",
+            network
+                .config
+                .as_ref()
+                .expect("client")
+                .to_str()
+                .expect("path"),
+            "--resume",
+            journal.to_str().expect("journal"),
+        ])
+        .expect("continuation is valid resume grammar without ignored package selection");
+        assert_eq!(parsed.manifest_path.as_deref(), Some(manifest));
+        let Command::Deploy(args) = parsed.command else {
+            panic!("deployment continuation");
+        };
+        assert_eq!(args.network.as_deref(), Some("other-taira"));
+        assert_eq!(args.config, network.config);
+        assert_eq!(args.resume.as_deref(), Some(journal));
+        network.config = None;
+        assert_eq!(
+            deployment_resume_command(manifest, &network, journal),
+            "musubi --manifest-path '/projects/coffee club/Musubi.toml' deploy --network other-taira --resume '/projects/coffee club/target/deploy/exact-journal'"
+        );
     }
 
     #[test]

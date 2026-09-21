@@ -17,6 +17,9 @@ class StubResponse(requests.Response):
         self.headers = CaseInsensitiveDict({"Content-Type": "application/json"})
         content = json.dumps(payload).encode("utf-8") if payload is not None else b""
         self._content = content
+        # This fixture already buffers the complete body; Requests streaming
+        # must slice those bytes instead of reading a nonexistent raw socket.
+        self._content_consumed = True
         self.encoding = "utf-8"
 
     def json(self, **kwargs: Any) -> Any:

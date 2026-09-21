@@ -22,7 +22,9 @@ pub(in super::super) use radix_source_cursor_v2::Phase23GlobalLookupRadixSourceC
 #[path = "global_lookup_source_replay_v1/source_openings_v1.rs"]
 mod source_openings_v1;
 pub(in super::super) use source_openings_v1::{
-    GlobalLookupProofSessionEntropySealV1, source_opening_commitment_for_suite_v1,
+    CompleteQMaskSOpeningsV1, GlobalLookupProofSessionEntropySealV1, PreparedPlaneOpeningTailV1,
+    QMaskComplementOpeningsV1, QMaskFirstBlockMemoryV1, QMaskSBlockAdmissionV1, QMaskSErrorV1,
+    QMaskSOpeningStreamV1, SampledQMaskSBlockV1, source_opening_commitment_for_suite_v1,
 };
 use source_openings_v1::{GlobalLookupSourceOpeningMaterialV1, SourceOpeningAssemblyV1};
 const SOURCE_REPLAY_VERSION_V1: u8 = 1;
@@ -625,6 +627,135 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> ReplayRadixHyraxBindingV
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
     Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>
 {
+    /// Derive source/packing masks only inside the same authenticated source owner.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn prepare_source_packing_openings_v1(
+        &mut self,
+        replay_record_digest: [u8; 32],
+        source_receipt_digest: [u8; 32],
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_radix_materialization_source_v1(replay_record_digest, source_receipt_digest)?;
+        self.openings.prepare_source_packing_openings_v1()
+    }
+
+    /// Revalidate this source and lend its existing early storage-record identities.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn ordered_storage_records_v1(
+        &self,
+        replay: [u8; 32],
+        receipt: [u8; 32],
+    ) -> Result<[[u8; 32]; 2], ZkAmsMkheErrorV1> {
+        self.validate_radix_materialization_source_v1(replay, receipt)?;
+        Ok([
+            self.record.record_digest,
+            self.openings.ordered_storage_record_v1()?,
+        ])
+    }
+
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn admit_next_q_mask_s_block_v1(
+        &mut self,
+        stream: &QMaskSOpeningStreamV1,
+        file: &crate::vega::zk_ams::mkhe::global_lookup_statement_v1::WrittenQMaskSBlockFileV1,
+    ) -> Result<QMaskSBlockAdmissionV1, QMaskSErrorV1> {
+        self.openings.admit_next_q_mask_s_block_v1(stream, file)
+    }
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn continue_q_mask_s_block_v1(
+        &mut self,
+        stream: QMaskSOpeningStreamV1,
+        file: &mut crate::vega::zk_ams::mkhe::global_lookup_statement_v1::QMaskSFileV1,
+        admission: QMaskSBlockAdmissionV1,
+    ) -> Result<QMaskSOpeningStreamV1, QMaskSErrorV1> {
+        self.openings
+            .continue_q_mask_s_block_v1(stream, file, admission)
+    }
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn finish_q_mask_s_openings_v1(
+        &mut self,
+        stream: QMaskSOpeningStreamV1,
+    ) -> Result<CompleteQMaskSOpeningsV1, QMaskSErrorV1> {
+        self.openings.finish_q_mask_s_openings_v1(stream)
+    }
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn begin_q_mask_complements_v1(
+        &mut self,
+        source: &CompleteQMaskSOpeningsV1,
+        file: &crate::vega::zk_ams::mkhe::global_lookup_statement_v1::SealedQMaskSFileV1,
+    ) -> Result<QMaskComplementOpeningsV1, QMaskSErrorV1> {
+        self.openings.begin_q_mask_complements_v1(source, file)
+    }
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn produce_q_mask_complement_block_v1(
+        &mut self,
+        source: &mut CompleteQMaskSOpeningsV1,
+        file: &mut crate::vega::zk_ams::mkhe::global_lookup_statement_v1::SealedQMaskSFileV1,
+        complements: &mut QMaskComplementOpeningsV1,
+    ) -> Result<(), QMaskSErrorV1> {
+        self.openings
+            .produce_q_mask_complement_block_v1(source, file, complements)
+    }
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn finish_q_mask_complements_v1(
+        &mut self,
+        source: &CompleteQMaskSOpeningsV1,
+        file: &crate::vega::zk_ams::mkhe::global_lookup_statement_v1::SealedQMaskSFileV1,
+        complements: &QMaskComplementOpeningsV1,
+    ) -> Result<(), QMaskSErrorV1> {
+        self.openings
+            .finish_q_mask_complements_v1(source, file, complements)
+    }
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn admit_first_q_mask_openings_v1(
+        &mut self,
+        block: &SampledQMaskSBlockV1,
+        file: &crate::vega::zk_ams::mkhe::global_lookup_statement_v1::WrittenQMaskSBlockFileV1,
+    ) -> Result<QMaskSBlockAdmissionV1, QMaskSErrorV1> {
+        self.openings.admit_first_q_mask_openings_v1(block, file)
+    }
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn produce_first_q_mask_openings_v1(
+        &mut self,
+        block: SampledQMaskSBlockV1,
+        admission: QMaskSBlockAdmissionV1,
+    ) -> Result<QMaskSOpeningStreamV1, QMaskSErrorV1> {
+        self.openings
+            .produce_first_q_mask_openings_v1(block, admission)
+    }
+
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn reserve_q_mask_first_memory_v1(
+        &mut self,
+        plan: &crate::vega::zk_ams::mkhe::global_lookup_statement_v1::QMaskSFilePlanV1,
+    ) -> Result<
+        (
+            QMaskFirstBlockMemoryV1,
+            crate::vega::zk_ams::mkhe::global_lookup_statement_v1::QMaskSFileMemoryV1,
+        ),
+        QMaskSErrorV1,
+    > {
+        self.openings.reserve_q_mask_first_memory_v1(plan)
+    }
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn sample_q_mask_first_block_v1(
+        &mut self,
+        memory: QMaskFirstBlockMemoryV1,
+    ) -> Result<SampledQMaskSBlockV1, QMaskSErrorV1> {
+        self.openings.sample_q_mask_first_block_v1(memory)
+    }
+
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn begin_q_mask_kernel_v1(
+        &mut self,
+    ) -> Result<(), crate::vega::zk_ams::mkhe::rns_native_u15_msm::RnsNativeU15MsmErrorV1> {
+        validate_replay_evidence_v1(self).map_err(|_| {
+            crate::vega::zk_ams::mkhe::rns_native_u15_msm::RnsNativeU15MsmErrorV1::Source
+        })?;
+        self.openings.begin_q_mask_kernel_v1()
+    }
+
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn begin_stored_plane_replay_v1(
+        &mut self,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        validate_replay_evidence_v1(self)?;
+        self.openings.begin_stored_plane_replay_v1()
+    }
+
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn validate_stored_plane_tail_v1(
+        &self,
+        ordinal: u16,
+        bytes: &[u8],
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        self.openings.validate_stored_plane_tail_v1(ordinal, bytes)
+    }
+
     /// Require exact completed D/S and top-plane session position before source I/O.
     pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn validate_comparator_preparation_v1(
         &self,
@@ -641,7 +772,7 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
     pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn commit_prepared_comparator_v1(
         &mut self,
         statement: &crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::PreparedComparatorStatementV1<'_>,
-    ) -> Result<(), ZkAmsMkheErrorV1> {
+    ) -> Result<PreparedPlaneOpeningTailV1, ZkAmsMkheErrorV1> {
         validate_replay_evidence_v1(self)?;
         statement
             .validate_origin_v1(self.record.record_digest, self.record.source_receipt_digest)?;
@@ -664,6 +795,14 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
     ) -> Result<(), ZkAmsMkheErrorV1> {
         validate_replay_evidence_v1(self)?;
         self.openings.require_difference_complete_v1()
+    }
+
+    /// Fund only the next original low-digit preparation; no caller budget enters.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn admit_low_digit_workspace_v1(
+        &mut self,
+    ) -> Result<crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::LowDigitWorkspaceV1, crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::LowDigitWorkspaceErrorV1>{
+        validate_replay_evidence_v1(self).map_err(|_| crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::LowDigitWorkspaceErrorV1::Source)?;
+        self.openings.admit_low_digit_workspace_v1()
     }
 
     /// Admit the earlier low-digit pass only at the actual source-complete stage.

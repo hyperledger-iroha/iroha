@@ -74,7 +74,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use url::Url;
-const DEFAULT_CLIENT_CONFIG: &str = "client.toml";
 const MAX_PUBLIC_CONFIG_BYTES_USIZE: usize = 1024 * 1024;
 const PLATFORM_CONFIG_PROVENANCE_CONTEXT: &str =
     "iroha:musubi:platform-client-config-provenance:v1";
@@ -170,6 +169,54 @@ impl fmt::Display for RegistryErrorV1 {
     }
 }
 impl Error for RegistryErrorV1 {}
+
+/// Resolve an explicit native configuration or the public configuration of the default wallet.
+///
+/// This selection does not load signing material. It is invoked only by consumers that need an
+/// authenticated registry context; local graph and offline-cache paths remain independent.
+pub(crate) fn selected_client_config_path_v1(
+    explicit: Option<&Path>,
+) -> Result<PathBuf, RegistryErrorV1> {
+    select_client_config_path(explicit, || {
+        let root = iroha_wallet::default_wallet_dir().map_err(|_| default_wallet_unavailable())?;
+        default_wallet_config_at(&root)
+    })
+}
+
+fn select_client_config_path(
+    explicit: Option<&Path>,
+    default: impl FnOnce() -> Result<PathBuf, RegistryErrorV1>,
+) -> Result<PathBuf, RegistryErrorV1> {
+    let path = match explicit {
+        Some(path) => path.to_owned(),
+        None => return default(),
+    };
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        std::env::current_dir()
+            .map(|current| current.join(path))
+            .map_err(|_| invalid_public_config())
+    }
+}
+
+fn default_wallet_config_at(root: &Path) -> Result<PathBuf, RegistryErrorV1> {
+    // Selecting a missing wallet must not create custody while performing a registry read.
+    if !root.is_dir() {
+        return Err(default_wallet_unavailable());
+    }
+    iroha_wallet::WalletStore::open(root, None)
+        .and_then(|store| store.config_path("default"))
+        .map_err(|_| default_wallet_unavailable())
+}
+
+fn default_wallet_unavailable() -> RegistryErrorV1 {
+    RegistryErrorV1::new(
+        RegistryFailureClassV1::Permanent,
+        "MUSUBI_DEFAULT_WALLET_UNAVAILABLE",
+    )
+}
+
 /// Exact-network authenticated client for the fixed public Musubi V1 finalized-query inventory.
 #[derive(Clone)]
 pub struct RegistryReadClientV1 {
@@ -233,15 +280,7 @@ impl fmt::Debug for RegistryPublicConfigImageV1 {
 impl RegistryPublicConfigImageV1 {
     /// Read one anchored, bounded configuration image without constructing a signer or transport.
     pub(crate) fn load(config: Option<&Path>) -> Result<Self, RegistryErrorV1> {
-        let selected =
-            config.map_or_else(|| PathBuf::from(DEFAULT_CLIENT_CONFIG), Path::to_path_buf);
-        let path = if selected.is_absolute() {
-            selected
-        } else {
-            std::env::current_dir()
-                .map_err(|_| invalid_public_config())?
-                .join(selected)
-        };
+        let path = selected_client_config_path_v1(config)?;
         let bytes = read_bounded_config(&path)?;
         Ok(Self { path, bytes })
     }
@@ -438,12 +477,12 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
             .build()
             .map_err(|_| invalid_public_config())
     }
-    /// Load the exact-network account signer from `--config` or platform `client.toml`.
+    /// Load the exact-network account signer from `--config` or the default developer wallet.
     ///
     /// The exact network identity, account, matching private key, Torii URL, timeout, and account
-    /// profile are mandatory typed configuration. The default path is the same required
-    /// `client.toml` used by the Iroha CLI; project manifests, environment values, and command-line
-    /// credential values are never consulted.
+    /// profile are mandatory typed configuration. Default custody is the platform wallet named
+    /// `default`; an implicit working-directory client file is never consulted. Command-line
+    /// credential values are never accepted.
     ///
     /// # Errors
     ///
@@ -783,34 +822,22 @@ impl RegistrySigningClientV1 {
             self.account_chain_discriminant,
         )
     }
-    /// Load a required explicit `--config` or the platform `client.toml`, without env overrides.
+    /// Load an explicit native configuration or the default developer wallet.
     ///
     /// # Errors
     ///
     /// Returns an error when the signing configuration cannot be loaded or is invalid.
     pub fn load(config: Option<&Path>) -> Result<Self, RegistryErrorV1> {
-        let path = config.map_or_else(|| PathBuf::from(DEFAULT_CLIENT_CONFIG), Path::to_path_buf);
-        let configuration = Config::load_file(path).map_err(|_| {
-            RegistryErrorV1::new(
-                RegistryFailureClassV1::Permanent,
-                "MUSUBI_REGISTRY_SIGNING_CONFIG_INVALID",
-            )
-        })?;
-        Self::from_configuration(configuration)
+        let image = RegistryPublicConfigImageV1::load(config)?;
+        Self::load_with_publication_config_bytes(image.path(), image.bytes())
+            .map(|(signer, _)| signer)
     }
     #[cfg(test)]
     pub(crate) fn load_with_publication_config(
         config: Option<&Path>,
     ) -> Result<(Self, iroha::config::MusubiPublicationConfig), RegistryErrorV1> {
-        let path = config.map_or_else(|| PathBuf::from(DEFAULT_CLIENT_CONFIG), Path::to_path_buf);
-        let (configuration, publication) = Config::load_file_with_musubi_publication(path)
-            .map_err(|_| {
-                RegistryErrorV1::new(
-                    RegistryFailureClassV1::Permanent,
-                    "MUSUBI_REGISTRY_SIGNING_CONFIG_INVALID",
-                )
-            })?;
-        Ok((Self::from_configuration(configuration)?, publication))
+        let image = RegistryPublicConfigImageV1::load(config)?;
+        Self::load_with_publication_config_bytes(image.path(), image.bytes())
     }
     pub(crate) fn load_with_publication_config_bytes(
         path: &Path,
@@ -2397,6 +2424,57 @@ mod tests {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([byte; Hash::LENGTH]),
         ))
+    }
+
+    #[test]
+    fn explicit_registry_config_never_consults_default_custody() {
+        let temporary = tempdir().unwrap();
+        let absolute = temporary.path().join("explicit.toml");
+        assert_eq!(
+            selected_client_config_path_v1(Some(&absolute)).unwrap(),
+            absolute
+        );
+        let relative = Path::new("explicit-client.toml");
+        let selected = select_client_config_path(Some(relative), || {
+            panic!("explicit configuration must not inspect default custody")
+        })
+        .unwrap();
+        assert_eq!(selected, std::env::current_dir().unwrap().join(relative));
+    }
+
+    #[test]
+    fn registry_wallet_selection_reads_only_validated_public_identity() {
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("wallets");
+        let store = iroha_wallet::WalletStore::open(&root, None).unwrap();
+        let network = iroha_wallet::WalletNetwork::new(
+            test_network_id(0x61),
+            "fc56984b-2be7-431d-840e-21514d1883f0".into(),
+            "https://taira.sora.org/".parse().unwrap(),
+            369,
+        )
+        .unwrap();
+        let info = store.create("default", &network).unwrap();
+        fs::remove_file(info.config_path.parent().unwrap().join("private.key")).unwrap();
+        let path = select_client_config_path(None, || default_wallet_config_at(&root)).unwrap();
+        assert_eq!(path, info.config_path);
+        let image = RegistryPublicConfigImageV1::load(Some(&path)).unwrap();
+        assert_eq!(image.registry_binding().unwrap(), (network.network_id, 369));
+        assert!(RegistrySigningClientV1::load(Some(&path)).is_err());
+        let missing = temporary.path().join("absent-custody");
+        assert_eq!(
+            default_wallet_config_at(&missing).unwrap_err().code(),
+            "MUSUBI_DEFAULT_WALLET_UNAVAILABLE"
+        );
+        assert!(
+            !missing.exists(),
+            "registry selection must not create custody"
+        );
+        fs::write(&info.config_path, "substituted-public-context").unwrap();
+        assert_eq!(
+            default_wallet_config_at(&root).unwrap_err().code(),
+            "MUSUBI_DEFAULT_WALLET_UNAVAILABLE"
+        );
     }
     /// Bind a simulated reader to a fixture's independently selected exact network.
     fn read_client_on_network(

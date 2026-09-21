@@ -30,6 +30,10 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
             h_end: 2,
             status: GovernanceReferendumStatus::Open,
             mode: GovernanceReferendumMode::Zk,
+            plain_context:
+                iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+            plain_result:
+                iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
         },
     );
     stx1.world.elections_mut().insert(
