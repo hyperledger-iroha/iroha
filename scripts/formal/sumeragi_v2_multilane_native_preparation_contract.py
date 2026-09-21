@@ -1535,7 +1535,20 @@ DEFERRED_COMPLETION_BINDINGS = (
 )
 PREPARATION_OWNER_BINDINGS += DEFERRED_COMPLETION_BINDINGS
 
-NATIVE_PREPARATION_SOURCE_RELATIVES = tuple(Path(p) for p in (
+# A fully acquired aggregate owns joint release on ordinary Drop and unwind.
+AGGREGATE_ABANDONMENT_BINDINGS = (
+    ('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'struct', 'PreparedRuntimeJournals', ("original: Option<AcquiredRuntimeJournals<'target, Admission, Installation>>",)),
+    ('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'PreparedRuntimeJournals::abort', ('self.original\n            .take()\n            .expect("original prepared runtime")\n            .abort()',)),
+    ('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'PreparedRuntimeJournals::publish', ('self.original\n            .take()\n            .expect("original prepared runtime")\n            .publish()',)),
+    ('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'PreparedRuntimeJournals::drop', ('let Some(original) = self.original.take() else {\n            return;\n        };', 'let admission;\n        let installation;', 'let AcquiredRuntimeJournals {', 'admission = retained_admission;\n        installation = retained_installation;\n        let canonical_runtime = canonical_runtime.abort();\n        let commit_topology = commit_topology.abort();\n        let prev_commit_topology = prev_commit_topology.abort();\n        let lane_consensus_contexts = lane_consensus_contexts.abort();\n        drop((\n            canonical_runtime,\n            commit_topology,\n            prev_commit_topology,\n            lane_consensus_contexts,\n        ));\n        drop((admission, installation));')),
+    ('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'struct', 'PreparedSet', ("original: Option<AcquiredSet<'target, Admission, Installation>>",)),
+    ('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'PreparedSet::abort', ('self.original\n            .take()\n            .expect("original prepared triggers")\n            .abort()',)),
+    ('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'PreparedSet::publish', ('self.original\n            .take()\n            .expect("original prepared triggers")\n            .publish()',)),
+    ('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'PreparedSet::drop', ('let Some(original) = self.original.take() else {\n            return;\n        };', 'let admission;\n        let installation;', 'let AcquiredSet {', 'admission = retained_admission;\n        installation = retained_installation;\n        let data_triggers = data_triggers.abort();\n        let pipeline_triggers = pipeline_triggers.abort();\n        let time_triggers = time_triggers.abort();\n        let by_call_triggers = by_call_triggers.abort();\n        let ids = ids.abort();\n        let active_data_trigger_ids = active_data_trigger_ids.abort();\n        let active_pipeline_trigger_ids = active_pipeline_trigger_ids.abort();\n        let active_time_trigger_ids = active_time_trigger_ids.abort();\n        let active_by_call_trigger_ids = active_by_call_trigger_ids.abort();\n        let contracts = contracts.abort();\n        drop((\n            data_triggers,\n            pipeline_triggers,\n            time_triggers,\n            by_call_triggers,\n            ids,\n            active_data_trigger_ids,\n            active_pipeline_trigger_ids,\n            active_time_trigger_ids,\n            active_by_call_trigger_ids,\n            contracts,\n        ));\n        drop((admission, installation));')),
+)
+PREPARATION_OWNER_BINDINGS += AGGREGATE_ABANDONMENT_BINDINGS
+
+_NATIVE_EXPLICIT_SOURCE_RELATIVES = tuple(Path(p) for p in (
     STATE, HASH_RESTORE, RUNNER_HISTORY, LANE_WORK_HISTORY, HASH_ADMISSION, RUNTIME_ACQUISITION, HASH_PUBLICATION, HASH_SURFACE,
     QUEUE_OWNER, PUBLICATION_MUTEX, GEOMETRY_OWNER, RAW_GEOMETRY, SERVICE_QUEUE, CARRIER_QUEUE,
     "crates/iroha_core/src/kura/publication_lease.rs",
@@ -1547,6 +1560,13 @@ NATIVE_PREPARATION_SOURCE_RELATIVES = tuple(Path(p) for p in (
     "scripts/formal/sumeragi_v2_multilane_native_preparation_contract.py",
     "pytests/scripts/sumeragi_v2_multilane_native_preparation_contract_test.py",
 ))
+
+# Binding owners are authoritative inputs; mutation fixtures must copy every
+# referenced owner without a second manually synchronized Rust path inventory.
+NATIVE_PREPARATION_SOURCE_RELATIVES = tuple(dict.fromkeys((
+    *_NATIVE_EXPLICIT_SOURCE_RELATIVES,
+    *(Path(path) for path, _, _, _ in PREPARATION_OWNER_BINDINGS),
+)))
 
 
 def validate_native_preparation_contract(

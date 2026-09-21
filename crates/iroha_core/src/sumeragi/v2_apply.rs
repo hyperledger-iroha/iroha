@@ -5135,9 +5135,14 @@ impl V2ApplyService {
             .state
             .try_lock_lane_lifecycle_work_admission()
             .map_err(|wait| busy("lane_lifecycle_lock", wait))?;
-        queue_retirement_cut = observer
-            .try_into_cut()
-            .map_err(|error| busy(error.field, error.wait))?;
+        queue_retirement_cut = match observer.try_into_cut() {
+            Ok(cut) => cut,
+            Err((error, cleanup)) => {
+                drop(lifecycle_guard);
+                drop(cleanup);
+                return Err(busy(error.field, error.wait));
+            }
+        };
         let result = Self::classify_autoscale_retirement_queue_release(
             queue_retirement_cut.lane_pending_work_release(lane_id, dataspace_id, lane_incarnation),
             self.queue.sumeragi_waker(),

@@ -1283,3 +1283,24 @@ def test_world_refusal_preserves_original_cleanup_shells(fixture):
                               "_fields: PreparedWorldFields(Vec::new()),")
     errors = validate(fixture)
     assert any("executable relation" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("path,owner,first,last", [
+    ("crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs", "PreparedRuntimeJournals", "canonical_runtime", "lane_consensus_contexts"),
+    ("crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs", "PreparedSet", "data_triggers", "contracts"),
+])
+@pytest.mark.parametrize("cut", ["raw-drop", "early-notification", "early-capacity"])
+def test_aggregate_abandonment_retains_joint_release_and_original_capacity(fixture, path, owner, first, last, cut):
+    root, helper, _, _ = fixture
+    anchor = f"Drop for {owner}"
+    if cut == "raw-drop":
+        helper.replace_once_after(root / path, anchor,
+                                  f"let {first} = {first}.abort();", f"let {first} = {first};")
+    elif cut == "early-notification":
+        helper.replace_once_after(root / path, anchor,
+                                  f"let {last} = {last}.abort();", f"drop({first}); let {last} = {last}.abort();")
+    else:
+        helper.replace_once_after(root / path, anchor,
+                                  f"let {first} = {first}.abort();", f"drop((admission, installation)); let {first} = {first}.abort();")
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors

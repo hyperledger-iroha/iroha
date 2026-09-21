@@ -171,7 +171,7 @@ fn storage_prepared_drop_abort_and_publish_release_the_original_writers() {
         match finish {
             0 => drop(prepared),
             1 => {
-                prepared.abort();
+                drop(prepared.abort());
             }
             _ => {
                 prepared.publish();
@@ -234,7 +234,7 @@ fn cell_prepared_and_storage_original_guards_notify_every_release_path() {
         match finish {
             0 => drop(prepared),
             1 => {
-                prepared.abort();
+                drop(prepared.abort());
             }
             _ => {
                 prepared.publish();

@@ -5,7 +5,7 @@
 //! to authorize the actual namespace transition independently.
 
 use crate::{
-    queue::{QueueLaneRetirementCut, QueueLaneRetirementUnavailable},
+    queue::{QueueLaneRetirementCut, QueueLaneRetirementUnavailable, QueueRetirementCleanup},
     state::{
         LaneLifecycleError, NativeLaneStateOwner, State,
         carrier_geometry_preparation::PreparedCarrierGeometry,
@@ -83,42 +83,52 @@ impl<'queue> CarrierQueueRetirement<'queue> {
         header: BlockHeader,
         source: &crate::sumeragi::v2_apply::carrier_queue_retirement::OriginalCarrierQueue<'queue>,
         cut: QueueLaneRetirementCut<'queue>,
-    ) -> Result<Self, CarrierQueueRetirementError> {
-        if !source.belongs_to(target) || !geometry.matches_publication_target(target, header) {
-            return Err(CarrierQueueRetirementError::ForeignState);
-        }
-        if !source.owns_cut(&cut) {
-            return Err(CarrierQueueRetirementError::ForeignQueue);
-        }
-        let mut routes = Vec::new();
-        geometry
-            .for_each_retirement_route(|lane, dataspace, incarnation| {
-                routes.push((lane, dataspace, incarnation));
-                Ok(())
-            })
-            .map_err(CarrierQueueRetirementError::Geometry)?;
-        for &(lane, dataspace, incarnation) in &routes {
-            match cut.lane_pending_work_release(lane, dataspace, incarnation) {
-                Ok(None) => {}
-                Ok(Some(wait)) => {
-                    return Err(CarrierQueueRetirementError::Pending {
-                        lane,
-                        dataspace,
-                        incarnation,
-                        wait,
-                    });
-                }
-                Err(error) => return Err(CarrierQueueRetirementError::Unavailable(error)),
+    ) -> Result<Self, (CarrierQueueRetirementError, QueueRetirementCleanup)> {
+        let checked = (|| {
+            if !source.belongs_to(target) || !geometry.matches_publication_target(target, header) {
+                return Err(CarrierQueueRetirementError::ForeignState);
             }
-        }
-        Ok(Self {
-            state_owner: target
+            if !source.owns_cut(&cut) {
+                return Err(CarrierQueueRetirementError::ForeignQueue);
+            }
+            let mut routes = Vec::new();
+            geometry
+                .for_each_retirement_route(|lane, dataspace, incarnation| {
+                    routes.push((lane, dataspace, incarnation));
+                    Ok(())
+                })
+                .map_err(CarrierQueueRetirementError::Geometry)?;
+            for &(lane, dataspace, incarnation) in &routes {
+                match cut.lane_pending_work_release(lane, dataspace, incarnation) {
+                    Ok(None) => {}
+                    Ok(Some(wait)) => {
+                        return Err(CarrierQueueRetirementError::Pending {
+                            lane,
+                            dataspace,
+                            incarnation,
+                            wait,
+                        });
+                    }
+                    Err(error) => return Err(CarrierQueueRetirementError::Unavailable(error)),
+                }
+            }
+            let state_owner = target
                 .native_lane_state_owner()
-                .ok_or(CarrierQueueRetirementError::ForeignState)?,
-            header,
-            routes,
-            _cut: cut,
-        })
+                .ok_or(CarrierQueueRetirementError::ForeignState)?;
+            Ok((state_owner, routes))
+        })();
+        match checked {
+            Ok((state_owner, routes)) => Ok(Self {
+                state_owner,
+                header,
+                routes,
+                _cut: cut,
+            }),
+            Err(error) => Err((
+                error,
+                QueueRetirementCleanup(cut.release_deferred().map(Some)),
+            )),
+        }
     }
 
     /// A sticky recovery fault may latch independently of the retained mutation locks.

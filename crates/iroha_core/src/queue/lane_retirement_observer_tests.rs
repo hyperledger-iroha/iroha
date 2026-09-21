@@ -92,12 +92,13 @@ mod lane_retirement_observer {
             let mutation = (field == "push_remove_lock").then(|| queue.push_remove_lock.lock());
             let reservations =
                 (field == "lane_reservations").then(|| queue.lane_reservations.lock());
-            let busy = queue
+            let (busy, cleanup) = queue
                 .try_lock_lane_retirement_observer()
                 .expect("outer available")
                 .try_into_cut()
                 .err()
                 .expect("the actual inner owner is held");
+            drop(cleanup);
             assert_eq!(busy.field, field);
             // Refusal cannot retain T, or P when R was the contended mutex.
             drop(

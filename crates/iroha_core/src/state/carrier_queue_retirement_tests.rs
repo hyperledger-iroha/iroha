@@ -103,7 +103,7 @@ fn empty_decoy_queue_and_foreign_state_never_supply_original_cut() {
     let queue = queue();
     let decoy = self::queue();
     let source = OriginalCarrierQueue::for_test(&state, &queue);
-    let error = CarrierQueueRetirement::try_new(
+    let (error, cleanup) = CarrierQueueRetirement::try_new(
         &state,
         &geometry,
         header(),
@@ -116,6 +116,7 @@ fn empty_decoy_queue_and_foreign_state_never_supply_original_cut() {
     )
     .err()
     .unwrap();
+    drop(cleanup);
     assert!(matches!(error, CarrierQueueRetirementError::ForeignQueue));
     drop(decoy.try_lock_lane_retirement_observer().unwrap());
     let foreign = State::new_for_testing(
@@ -123,7 +124,7 @@ fn empty_decoy_queue_and_foreign_state_never_supply_original_cut() {
         Arc::clone(&state.kura),
         LiveQueryStore::start_test(),
     );
-    let error = CarrierQueueRetirement::try_new(
+    let (error, cleanup) = CarrierQueueRetirement::try_new(
         &foreign,
         &geometry,
         header(),
@@ -132,6 +133,7 @@ fn empty_decoy_queue_and_foreign_state_never_supply_original_cut() {
     )
     .err()
     .unwrap();
+    drop(cleanup);
     assert!(matches!(error, CarrierQueueRetirementError::ForeignState));
     drop(queue.try_lock_lane_retirement_observer().unwrap());
     assert_eq!(state.committed_height(), 0);
@@ -157,9 +159,10 @@ fn malformed_captured_retirement_route_releases_original_queue_cut() {
         &source,
         source.try_observe().unwrap().try_into_cut().unwrap(),
     );
-    let error = result
+    let (error, cleanup) = result
         .err()
         .expect("missing predecessor incarnation must refuse");
+    drop(cleanup);
     let CarrierQueueRetirementError::Geometry(LaneLifecycleError::RuntimeCatalog(reason)) = error
     else {
         panic!("expected captured-route geometry error: {error:?}");
@@ -195,7 +198,7 @@ fn pending_queue_work_releases_without_applying_the_blocked_carrier() {
     let source = OriginalCarrierQueue::for_test(&state, &queue);
     let observer = source.try_observe().unwrap();
     let lifecycle = state.try_lock_lane_lifecycle_work_admission().unwrap();
-    let refused = CarrierQueueRetirement::try_new(
+    let (refused, cleanup) = CarrierQueueRetirement::try_new(
         &state,
         &geometry,
         header(),
@@ -205,6 +208,7 @@ fn pending_queue_work_releases_without_applying_the_blocked_carrier() {
     .err()
     .unwrap();
     drop(lifecycle);
+    drop(cleanup);
     let CarrierQueueRetirementError::Pending {
         lane,
         dataspace,

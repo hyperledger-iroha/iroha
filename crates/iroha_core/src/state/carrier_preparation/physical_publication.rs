@@ -190,7 +190,7 @@ impl<'target, Admission, BindingAdmission>
         KuraWsvCheckpointReceipt,
     > {
         let Self { decision, kura } = self;
-        drop(kura);
+        drop(kura.release_deferred());
         decision
     }
 }
@@ -203,19 +203,47 @@ struct StateFences<'target> {
 }
 
 impl<'target> StateFences<'target> {
-    fn try_acquire<E>(target: &'target State) -> Result<Self, CarrierPhysicalPreparationError<E>> {
+    fn try_acquire<E>(
+        target: &'target State,
+    ) -> Result<
+        Self,
+        (
+            CarrierPhysicalPreparationError<E>,
+            [Option<concread::release::DeferredRelease>; 3],
+        ),
+    > {
         let acquire = |field, lock: &'target crate::publication_lock::PublicationMutex| {
             lock.try_lock_or_wait()
                 .map_err(|wait| CarrierPhysicalPreparationError::Fence { field, wait })
         };
-        let commit = acquire("state_commit_lock", &target.state_commit_lock)?;
-        let lifecycle = acquire("lane_lifecycle_lock", &target.lane_lifecycle_lock)?;
-        let write = acquire("state_write_lock", &target.state_write_lock)?;
+        let commit = acquire("state_commit_lock", &target.state_commit_lock)
+            .map_err(|error| (error, [None, None, None]))?;
+        let lifecycle = match acquire("lane_lifecycle_lock", &target.lane_lifecycle_lock) {
+            Ok(guard) => guard,
+            Err(error) => return Err((error, [None, None, Some(commit.release_deferred())])),
+        };
+        let write = match acquire("state_write_lock", &target.state_write_lock) {
+            Ok(guard) => guard,
+            Err(error) => {
+                let lifecycle = lifecycle.release_deferred();
+                let commit = commit.release_deferred();
+                return Err((error, [None, Some(lifecycle), Some(commit)]));
+            }
+        };
         Ok(Self {
             _write: write,
             _lifecycle: lifecycle,
             _commit: commit,
         })
+    }
+
+    /// Release every acquired State fence while retaining all original callbacks.
+    fn release_deferred(self) -> [concread::release::DeferredRelease; 3] {
+        [
+            self._write.release_deferred(),
+            self._lifecycle.release_deferred(),
+            self._commit.release_deferred(),
+        ]
     }
 }
 
@@ -540,9 +568,14 @@ impl<Admission, BindingAdmission>
         };
         let state = match StateFences::try_acquire(target) {
             Ok(fences) => fences,
-            Err(error) => {
-                drop(queue_observer);
-                let original = authenticated.release();
+            Err((error, state_retirement)) => {
+                let queue_retirement = queue_observer.map(|observer| observer.release_deferred());
+                let SourceAuthenticatedCarrier {
+                    decision: original,
+                    kura,
+                } = authenticated;
+                let kura_retirement = kura.release_deferred();
+                drop((state_retirement, queue_retirement, kura_retirement));
                 drop(installation);
                 return Err((original, error));
             }
@@ -552,9 +585,14 @@ impl<Admission, BindingAdmission>
                 let source = queue_source.expect("original service source remains borrowed");
                 let acquired = observer
                     .try_into_cut()
-                    .map_err(|error| CarrierQueueRetirementError::Busy {
-                        field: error.field,
-                        wait: error.wait,
+                    .map_err(|(error, cleanup)| {
+                        (
+                            CarrierQueueRetirementError::Busy {
+                                field: error.field,
+                                wait: error.wait,
+                            },
+                            cleanup,
+                        )
                     })
                     .and_then(|cut| {
                         CarrierQueueRetirement::try_new(
@@ -567,9 +605,14 @@ impl<Admission, BindingAdmission>
                     });
                 match acquired {
                     Ok(cut) => Some(cut),
-                    Err(error) => {
-                        drop(state);
-                        let original = authenticated.release();
+                    Err((error, queue_retirement)) => {
+                        let state_retirement = state.release_deferred();
+                        let SourceAuthenticatedCarrier {
+                            decision: original,
+                            kura,
+                        } = authenticated;
+                        let kura_retirement = kura.release_deferred();
+                        drop((queue_retirement, state_retirement, kura_retirement));
                         drop(installation);
                         return Err((original, CarrierPhysicalPreparationError::Queue(error)));
                     }

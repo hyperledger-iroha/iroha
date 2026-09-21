@@ -31,6 +31,11 @@ pub(in crate::state::carrier_preparation::journals) struct PreparedRuntimeJourna
     Admission,
     Installation,
 > {
+    original: Option<AcquiredRuntimeJournals<'target, Admission, Installation>>,
+}
+
+/// Physical components move together; only the outer owner supplies default Drop.
+struct AcquiredRuntimeJournals<'target, Admission, Installation> {
     canonical_runtime: PreparedPublication<'target, SnapshotNexusRuntime, (), ()>,
     commit_topology: PreparedPublication<'target, Vec<PeerId>, (), ()>,
     prev_commit_topology: PreparedPublication<'target, Vec<PeerId>, (), ()>,
@@ -77,7 +82,7 @@ macro_rules! prepare_components {
             [$($done,)* $next,]; [$($rest,)*])
     }};
     ($target:ident, $admission:ident, $installation:ident; [$($done:ident,)*]; []) => {
-        Ok(PreparedRuntimeJournals { $($done,)* admission: $admission, installation: $installation })
+        Ok(PreparedRuntimeJournals { original: Some(AcquiredRuntimeJournals { $($done,)* admission: $admission, installation: $installation }) })
     };
 }
 
@@ -131,7 +136,7 @@ impl<Admission> RuntimeJournals<Admission> {
     }
 }
 
-impl<Admission, Installation> PreparedRuntimeJournals<'_, Admission, Installation> {
+impl<Admission, Installation> AcquiredRuntimeJournals<'_, Admission, Installation> {
     /// Release every writer and return the original journals and capture guard.
     pub(in crate::state::carrier_preparation::journals) fn abort(
         self,
@@ -195,5 +200,64 @@ impl<Admission, Installation> PreparedRuntimeJournals<'_, Admission, Installatio
             _admission: admission,
             _installation: installation,
         }
+    }
+}
+
+impl<Admission, Installation> PreparedRuntimeJournals<'_, Admission, Installation> {
+    /// Release every physical component before returning the original journals.
+    pub(in crate::state::carrier_preparation::journals) fn abort(
+        mut self,
+    ) -> (
+        RuntimeJournals<Admission>,
+        AbortedRuntimeJournals<Installation>,
+    ) {
+        self.original
+            .take()
+            .expect("original prepared runtime")
+            .abort()
+    }
+
+    /// Consume the same original components under the enclosing State authority.
+    pub(in crate::state::carrier_preparation::journals) fn publish(
+        mut self,
+    ) -> PublishedRuntimeJournals<Admission, Installation> {
+        self.original
+            .take()
+            .expect("original prepared runtime")
+            .publish()
+    }
+}
+
+impl<Admission, Installation> Drop for PreparedRuntimeJournals<'_, Admission, Installation> {
+    fn drop(&mut self) {
+        let Some(original) = self.original.take() else {
+            return;
+        };
+        // Declare capacity owners first so they also outlive payload/notification
+        // cleanup if a callback itself unwinds. Release every writer before any
+        // original journal or deferred notification can be destroyed.
+        let admission;
+        let installation;
+        let AcquiredRuntimeJournals {
+            canonical_runtime,
+            commit_topology,
+            prev_commit_topology,
+            lane_consensus_contexts,
+            admission: retained_admission,
+            installation: retained_installation,
+        } = original;
+        admission = retained_admission;
+        installation = retained_installation;
+        let canonical_runtime = canonical_runtime.abort();
+        let commit_topology = commit_topology.abort();
+        let prev_commit_topology = prev_commit_topology.abort();
+        let lane_consensus_contexts = lane_consensus_contexts.abort();
+        drop((
+            canonical_runtime,
+            commit_topology,
+            prev_commit_topology,
+            lane_consensus_contexts,
+        ));
+        drop((admission, installation));
     }
 }

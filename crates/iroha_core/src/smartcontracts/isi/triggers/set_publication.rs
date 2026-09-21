@@ -26,6 +26,11 @@ pub(crate) enum SetPublicationError<E> {
 /// This is not a State/finality authorization. The enclosing publisher must
 /// prepare all other State components before consuming this owner.
 pub(crate) struct PreparedSet<'target, Admission, Installation> {
+    original: Option<AcquiredSet<'target, Admission, Installation>>,
+}
+
+/// Original physical components consumed only through their aggregate owner.
+struct AcquiredSet<'target, Admission, Installation> {
     mode: mv::BlockMode,
     data_triggers: PreparedPublication<'target, TriggerId, LoadedAction<DataEventFilter>, (), ()>,
     pipeline_triggers:
@@ -92,7 +97,7 @@ macro_rules! prepare_components {
     }};
     ($target:ident, $mode:ident, $admission:ident, $installation:ident;
         [$($done:ident,)*]; []) => {
-        Ok(PreparedSet { mode: $mode, $($done,)* admission: $admission, installation: $installation })
+        Ok(PreparedSet { original: Some(AcquiredSet { mode: $mode, $($done,)* admission: $admission, installation: $installation }) })
     };
 }
 
@@ -147,7 +152,7 @@ impl<Admission> DetachedSet<Admission> {
 
 macro_rules! consume_components {
     ($original:ident, $operation:ident; [$($field:ident,)*]) => {{
-        let PreparedSet { mode, $($field,)* admission, installation } = $original;
+        let AcquiredSet { mode, $($field,)* admission, installation } = $original;
         consume_components!(@$operation mode, admission, installation; [$($field,)*])
     }};
     (@abort $mode:ident, $admission:ident, $installation:ident; [$($field:ident,)*]) => {{
@@ -157,7 +162,7 @@ macro_rules! consume_components {
     }};
 }
 
-impl<Admission, Installation> PreparedSet<'_, Admission, Installation> {
+impl<Admission, Installation> AcquiredSet<'_, Admission, Installation> {
     /// Release every writer, returning the original ten journals and retention guard.
     pub(crate) fn abort(self) -> (DetachedSet<Admission>, AbortedSet<Installation>) {
         consume_components!(self, abort; [
@@ -183,5 +188,75 @@ impl<Admission, Installation> PreparedSet<'_, Admission, Installation> {
             _admission: self.admission,
             _installation: self.installation,
         }
+    }
+}
+
+impl<Admission, Installation> PreparedSet<'_, Admission, Installation> {
+    /// Release all original writers before returning journals and deferred cleanup.
+    pub(crate) fn abort(mut self) -> (DetachedSet<Admission>, AbortedSet<Installation>) {
+        self.original
+            .take()
+            .expect("original prepared triggers")
+            .abort()
+    }
+
+    /// Consume the same original components under the enclosing State authority.
+    pub(crate) fn publish(mut self) -> PublishedSet<Admission, Installation> {
+        self.original
+            .take()
+            .expect("original prepared triggers")
+            .publish()
+    }
+}
+
+impl<Admission, Installation> Drop for PreparedSet<'_, Admission, Installation> {
+    fn drop(&mut self) {
+        let Some(original) = self.original.take() else {
+            return;
+        };
+        // Both capacities outlive every original payload and callback, including
+        // cleanup unwind. No component may notify while a sibling is still held.
+        let admission;
+        let installation;
+        let AcquiredSet {
+            mode: _,
+            data_triggers,
+            pipeline_triggers,
+            time_triggers,
+            by_call_triggers,
+            ids,
+            active_data_trigger_ids,
+            active_pipeline_trigger_ids,
+            active_time_trigger_ids,
+            active_by_call_trigger_ids,
+            contracts,
+            admission: retained_admission,
+            installation: retained_installation,
+        } = original;
+        admission = retained_admission;
+        installation = retained_installation;
+        let data_triggers = data_triggers.abort();
+        let pipeline_triggers = pipeline_triggers.abort();
+        let time_triggers = time_triggers.abort();
+        let by_call_triggers = by_call_triggers.abort();
+        let ids = ids.abort();
+        let active_data_trigger_ids = active_data_trigger_ids.abort();
+        let active_pipeline_trigger_ids = active_pipeline_trigger_ids.abort();
+        let active_time_trigger_ids = active_time_trigger_ids.abort();
+        let active_by_call_trigger_ids = active_by_call_trigger_ids.abort();
+        let contracts = contracts.abort();
+        drop((
+            data_triggers,
+            pipeline_triggers,
+            time_triggers,
+            by_call_triggers,
+            ids,
+            active_data_trigger_ids,
+            active_pipeline_trigger_ids,
+            active_time_trigger_ids,
+            active_by_call_trigger_ids,
+            contracts,
+        ));
+        drop((admission, installation));
     }
 }

@@ -4148,32 +4148,48 @@ impl<'queue> QueueLaneRetirementObserver<'queue> {
     /// Call this after the State lifecycle fence and before component writers.
     /// Later State/component acquisition must remain try-only: normal admission
     /// holds a State view before taking the Queue mutation lock. On refusal this
-    /// consumes and releases the observer and every earlier inner guard; the
-    /// returned observation belongs only to the actual mutex which refused.
+    /// physically releases the observer and every earlier inner guard, returning
+    /// their cleanup for retention through enclosing fences. The Busy observation
+    /// belongs only to the actual mutex which refused.
     pub(crate) fn try_into_cut(
         self,
-    ) -> Result<QueueLaneRetirementCut<'queue>, QueueRetirementBusy> {
-        let mutation = self
-            .queue
-            .push_remove_lock
-            .try_lock_or_wait()
-            .map_err(|wait| QueueRetirementBusy {
-                field: "push_remove_lock",
-                wait,
-            })?;
-        let reservations = self
-            .queue
-            .lane_reservations
-            .try_lock_or_wait()
-            .map_err(|wait| QueueRetirementBusy {
-                field: "lane_reservations",
-                wait,
-            })?;
+    ) -> Result<QueueLaneRetirementCut<'queue>, (QueueRetirementBusy, QueueRetirementCleanup)> {
+        let mutation = match self.queue.push_remove_lock.try_lock_or_wait() {
+            Ok(guard) => guard,
+            Err(wait) => {
+                return Err((
+                    QueueRetirementBusy {
+                        field: "push_remove_lock",
+                        wait,
+                    },
+                    QueueRetirementCleanup([None, None, Some(self.release_deferred())]),
+                ));
+            }
+        };
+        let reservations = match self.queue.lane_reservations.try_lock_or_wait() {
+            Ok(guard) => guard,
+            Err(wait) => {
+                let mutation = mutation.release_deferred();
+                let transition = self.release_deferred();
+                return Err((
+                    QueueRetirementBusy {
+                        field: "lane_reservations",
+                        wait,
+                    },
+                    QueueRetirementCleanup([None, Some(mutation), Some(transition)]),
+                ));
+            }
+        };
         Ok(QueueLaneRetirementCut {
             reservations,
             _mutation: mutation,
             observer: self,
         })
+    }
+
+    /// Unlock this actual transition guard, retaining its original notification.
+    pub(crate) fn release_deferred(self) -> concread::release::DeferredRelease {
+        self._reservation_transition_guard.release_deferred()
     }
 
     /// Return whether the exact lane incarnation still owns or may receive
@@ -4190,6 +4206,25 @@ impl<'queue> QueueLaneRetirementObserver<'queue> {
             dataspace_id,
             lane_incarnation,
         )
+    }
+}
+
+/// Original notifications from a refused Queue cut, after physical unlock.
+/// The caller retains this through every enclosing State/Kura fence.
+#[must_use = "retain Queue refusal cleanup through its enclosing fences"]
+pub(crate) struct QueueRetirementCleanup(
+    pub(crate) [Option<concread::release::DeferredRelease>; 3],
+);
+
+impl std::fmt::Debug for QueueRetirementCleanup {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QueueRetirementCleanup")
+            .field(
+                "released_fences",
+                &self.0.iter().filter(|release| release.is_some()).count(),
+            )
+            .finish()
     }
 }
 

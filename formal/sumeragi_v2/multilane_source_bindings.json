@@ -14869,6 +14869,76 @@
             "_fields: PreparedWorldFields<'target>",
             "_installation: Option<Installation>"
           ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs",
+          "kind": "struct",
+          "symbol": "PreparedRuntimeJournals",
+          "required_tokens": [
+            "original: Option<AcquiredRuntimeJournals<'target, Admission, Installation>>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs",
+          "kind": "method",
+          "symbol": "PreparedRuntimeJournals::abort",
+          "required_tokens": [
+            "self.original\n            .take()\n            .expect(\"original prepared runtime\")\n            .abort()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs",
+          "kind": "method",
+          "symbol": "PreparedRuntimeJournals::publish",
+          "required_tokens": [
+            "self.original\n            .take()\n            .expect(\"original prepared runtime\")\n            .publish()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs",
+          "kind": "method",
+          "symbol": "PreparedRuntimeJournals::drop",
+          "required_tokens": [
+            "let Some(original) = self.original.take() else {\n            return;\n        };",
+            "let admission;\n        let installation;",
+            "let AcquiredRuntimeJournals {",
+            "admission = retained_admission;\n        installation = retained_installation;\n        let canonical_runtime = canonical_runtime.abort();\n        let commit_topology = commit_topology.abort();\n        let prev_commit_topology = prev_commit_topology.abort();\n        let lane_consensus_contexts = lane_consensus_contexts.abort();\n        drop((\n            canonical_runtime,\n            commit_topology,\n            prev_commit_topology,\n            lane_consensus_contexts,\n        ));\n        drop((admission, installation));"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs",
+          "kind": "struct",
+          "symbol": "PreparedSet",
+          "required_tokens": [
+            "original: Option<AcquiredSet<'target, Admission, Installation>>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs",
+          "kind": "method",
+          "symbol": "PreparedSet::abort",
+          "required_tokens": [
+            "self.original\n            .take()\n            .expect(\"original prepared triggers\")\n            .abort()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs",
+          "kind": "method",
+          "symbol": "PreparedSet::publish",
+          "required_tokens": [
+            "self.original\n            .take()\n            .expect(\"original prepared triggers\")\n            .publish()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs",
+          "kind": "method",
+          "symbol": "PreparedSet::drop",
+          "required_tokens": [
+            "let Some(original) = self.original.take() else {\n            return;\n        };",
+            "let admission;\n        let installation;",
+            "let AcquiredSet {",
+            "admission = retained_admission;\n        installation = retained_installation;\n        let data_triggers = data_triggers.abort();\n        let pipeline_triggers = pipeline_triggers.abort();\n        let time_triggers = time_triggers.abort();\n        let by_call_triggers = by_call_triggers.abort();\n        let ids = ids.abort();\n        let active_data_trigger_ids = active_data_trigger_ids.abort();\n        let active_pipeline_trigger_ids = active_pipeline_trigger_ids.abort();\n        let active_time_trigger_ids = active_time_trigger_ids.abort();\n        let active_by_call_trigger_ids = active_by_call_trigger_ids.abort();\n        let contracts = contracts.abort();\n        drop((\n            data_triggers,\n            pipeline_triggers,\n            time_triggers,\n            by_call_triggers,\n            ids,\n            active_data_trigger_ids,\n            active_pipeline_trigger_ids,\n            active_time_trigger_ids,\n            active_by_call_trigger_ids,\n            contracts,\n        ));\n        drop((admission, installation));"
+          ]
         }
       ]
     },

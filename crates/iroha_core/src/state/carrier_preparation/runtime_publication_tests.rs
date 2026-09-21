@@ -511,3 +511,145 @@ fn runtime_equal_values_from_another_state_do_not_supply_original_publication_id
     prepare(journal, &state).publish();
     assert_ne!(images(&state), images(&foreign));
 }
+
+#[test]
+fn runtime_abandonment_releases_every_component_before_callbacks_and_capacity() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::Mutex,
+        task::{Context, Wake, Waker},
+    };
+
+    struct Capacity(Arc<AtomicUsize>, usize);
+    impl Drop for Capacity {
+        fn drop(&mut self) {
+            self.0.fetch_or(self.1, Ordering::SeqCst);
+        }
+    }
+    struct Reenter {
+        target: Arc<State>,
+        journals: Mutex<Option<RuntimeJournals<()>>>,
+        released: Arc<AtomicUsize>,
+        checks: AtomicUsize,
+        failures: AtomicUsize,
+        wakes: AtomicUsize,
+        unwind: bool,
+    }
+    impl Wake for Reenter {
+        fn wake(self: Arc<Self>) {
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+            if self.released.load(Ordering::SeqCst) != 0 {
+                self.failures.fetch_add(1, Ordering::SeqCst);
+            }
+            let journals = self
+                .journals
+                .lock()
+                .unwrap()
+                .take()
+                .expect("one original wake");
+            // Probe each original component independently: a poisoned earlier
+            // component must not hide a later sibling whose lock is still held.
+            macro_rules! check {
+                ($field:ident) => {{
+                    match journals
+                        .$field
+                        .try_prepare_publication(&self.target.$field, |_, _| Ok::<_, ()>(()))
+                    {
+                        Ok(prepared) => drop(prepared.abort()),
+                        Err((_, PublicationPreparationError::Poisoned, _)) if self.unwind => {}
+                        Err(_) => {
+                            self.failures.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    self.checks.fetch_add(1, Ordering::SeqCst);
+                }};
+            }
+            check!(canonical_runtime);
+            check!(commit_topology);
+            check!(prev_commit_topology);
+            check!(lane_consensus_contexts);
+        }
+    }
+
+    for unwind in [false, true] {
+        for component in 0..4 {
+            let released = Arc::new(AtomicUsize::new(0));
+            let target: Arc<State> = Arc::from(fixture());
+            let before = images(&target);
+            let watcher = capture(blocks(&target, BlockMode::Ordinary), ());
+            let reentry = capture(blocks(&target, BlockMode::Ordinary), ());
+            let mut block = blocks(&target, BlockMode::Ordinary);
+            mutate(&mut block, 2);
+            let journal = capture(block, Capacity(Arc::clone(&released), 1));
+            let prepared = journal
+                .try_prepare_publication(&target, |_, _| {
+                    Ok::<_, ()>(Capacity(Arc::clone(&released), 2))
+                })
+                .unwrap_or_else(|_| panic!("prepare original aggregate"));
+            macro_rules! observe {
+                ($field:ident) => {{
+                    let (_, error, cleanup) = watcher
+                        .$field
+                        .try_prepare_publication(&target.$field, |_, _| Ok::<_, ()>(()))
+                        .err()
+                        .expect("original prepared component held");
+                    drop(cleanup);
+                    let PublicationPreparationError::Busy(wait) = error else {
+                        panic!("expected original prepared identity contention");
+                    };
+                    wait.wait_for_release()
+                }};
+            }
+            let mut wait = match component {
+                0 => observe!(canonical_runtime),
+                1 => observe!(commit_topology),
+                2 => observe!(prev_commit_topology),
+                3 => observe!(lane_consensus_contexts),
+                _ => unreachable!(),
+            };
+            let callback = Arc::new(Reenter {
+                target: Arc::clone(&target),
+                journals: Mutex::new(Some(reentry)),
+                released: Arc::clone(&released),
+                checks: AtomicUsize::new(0),
+                failures: AtomicUsize::new(0),
+                wakes: AtomicUsize::new(0),
+                unwind,
+            });
+            let waker = Waker::from(Arc::clone(&callback));
+            assert!(
+                Pin::new(&mut wait)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+            if unwind {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let _original = prepared;
+                    panic!("abandon original aggregate during unwind");
+                }));
+                assert!(result.is_err());
+            } else {
+                drop(prepared);
+                assert_eq!(images(&target), before);
+            }
+            assert_eq!(
+                callback.wakes.load(Ordering::SeqCst),
+                1,
+                "component {component}, unwind {unwind}"
+            );
+            assert_eq!(callback.checks.load(Ordering::SeqCst), 4);
+            assert_eq!(
+                callback.failures.load(Ordering::SeqCst),
+                0,
+                "component {component}, unwind {unwind}"
+            );
+            assert_eq!(released.load(Ordering::SeqCst), 3);
+            assert!(
+                Pin::new(&mut wait)
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_ready()
+            );
+        }
+    }
+}
