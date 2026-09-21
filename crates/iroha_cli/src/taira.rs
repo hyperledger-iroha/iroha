@@ -7789,6 +7789,7 @@ mod tests {
     use clap::Parser as _;
     use iroha_i18n::{Bundle, Language, Localizer};
     use std::{
+        io::Read,
         net::{TcpListener, TcpStream},
         sync::{
             Arc, Mutex,
@@ -9683,7 +9684,27 @@ mod tests {
                         stream
                             .set_nonblocking(false)
                             .expect("set accepted mock stream blocking");
-                        let request = read_mock_request(&mut stream);
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .expect("mock stream timeout");
+                        let request = match read_mock_request(&mut stream) {
+                            Ok(Some(request)) => request,
+                            // Deadline-bound clients may cancel before sending a complete
+                            // request. Such connections do not consume the request budget.
+                            Ok(None) => continue,
+                            Err(error)
+                                if matches!(
+                                    error.kind(),
+                                    std::io::ErrorKind::ConnectionReset
+                                        | std::io::ErrorKind::ConnectionAborted
+                                        | std::io::ErrorKind::TimedOut
+                                        | std::io::ErrorKind::WouldBlock
+                                ) =>
+                            {
+                                continue;
+                            }
+                            Err(error) => panic!("read mock request: {error}"),
+                        };
                         let response = responder(&request);
                         server_requests
                             .lock()
@@ -9718,16 +9739,16 @@ mod tests {
             handle,
         }
     }
-    fn read_mock_request(stream: &mut TcpStream) -> MockRequest {
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .expect("mock stream timeout");
+    fn read_mock_request(reader: &mut impl Read) -> std::io::Result<Option<MockRequest>> {
         let mut raw = Vec::new();
         let mut buf = [0_u8; 4096];
-        loop {
-            let read = stream.read(&mut buf).expect("read mock request");
+        let (header_end, body_end) = loop {
+            let read = match reader.read(&mut buf) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => result?,
+            };
             if read == 0 {
-                break;
+                return Ok(None);
             }
             raw.extend_from_slice(&buf[..read]);
             if let Some(header_end) = find_header_end(&raw) {
@@ -9741,12 +9762,12 @@ mod tests {
                             .flatten()
                     })
                     .unwrap_or(0);
-                if raw.len() >= header_end + 4 + content_length {
-                    break;
+                let body_end = header_end + 4 + content_length;
+                if raw.len() >= body_end {
+                    break (header_end, body_end);
                 }
             }
-        }
-        let header_end = find_header_end(&raw).expect("mock request header end");
+        };
         let headers = String::from_utf8_lossy(&raw[..header_end]);
         let request_line = headers.lines().next().expect("request line");
         let mut parts = request_line.split_whitespace();
@@ -9760,13 +9781,13 @@ mod tests {
                 Some((name.trim().to_owned(), value.trim().to_owned()))
             })
             .collect();
-        let body = String::from_utf8_lossy(&raw[header_end + 4..]).to_string();
-        MockRequest {
+        let body = String::from_utf8_lossy(&raw[header_end + 4..body_end]).to_string();
+        Ok(Some(MockRequest {
             method,
             path,
             headers: parsed_headers,
             body,
-        }
+        }))
     }
     fn find_header_end(raw: &[u8]) -> Option<usize> {
         raw.windows(4).position(|window| window == b"\r\n\r\n")
@@ -9805,6 +9826,91 @@ mod tests {
             .expect("request references")
             .into_inner()
             .expect("requests")
+    }
+
+    #[test]
+    fn mock_request_reader_requires_complete_headers_and_body() {
+        let raw = b"POST /retry HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody";
+        for end in 0..raw.len() {
+            let request = read_mock_request(&mut std::io::Cursor::new(&raw[..end]))
+                .expect("read truncated fixture");
+            assert!(request.is_none(), "accepted truncated request at byte {end}");
+        }
+        let request = read_mock_request(&mut std::io::Cursor::new(raw))
+            .expect("read complete fixture")
+            .expect("complete request");
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/retry");
+        assert_eq!(request.header_values("content-length"), ["4"]);
+        assert_eq!(request.body, "body");
+    }
+
+    #[test]
+    fn mock_request_reader_handles_fragmentation_and_interrupted_reads() {
+        struct FragmentedReader<'a> {
+            remaining: &'a [u8],
+            interrupt: bool,
+        }
+        impl Read for FragmentedReader<'_> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.interrupt = !self.interrupt;
+                if self.interrupt {
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                self.remaining.read(&mut buf[..1])
+            }
+        }
+        let mut reader = FragmentedReader {
+            remaining: b"POST /fragmented HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody",
+            interrupt: false,
+        };
+        let request = read_mock_request(&mut reader)
+            .expect("retry interrupted reads")
+            .expect("reassemble complete request");
+        assert_eq!(request.path, "/fragmented");
+        assert_eq!(request.body, "body");
+    }
+
+    #[test]
+    fn mock_http_server_continues_after_incomplete_requests() {
+        let server = spawn_mock_http(1, |request| {
+            assert_eq!(request.path, "/retry");
+            MockResponse::text(200, "ok")
+        });
+        let address = server.base_url.strip_prefix("http://").unwrap();
+        for partial in [
+            b"".as_slice(),
+            b"GET /cancelled HTTP/1.1\r\nHost: localhost\r\n",
+            b"POST /cancelled HTTP/1.1\r\nContent-Length: 4\r\n\r\nab",
+        ] {
+            let mut cancelled = TcpStream::connect(address).expect("connect cancelled request");
+            cancelled.write_all(partial).expect("send partial request");
+            cancelled
+                .shutdown(std::net::Shutdown::Write)
+                .expect("close incomplete request");
+            cancelled
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("bound cancelled read");
+            let mut response = Vec::new();
+            cancelled
+                .read_to_end(&mut response)
+                .expect("server discards incomplete request");
+            assert!(response.is_empty());
+        }
+        let mut retry = TcpStream::connect(address).expect("connect retry");
+        retry
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("bound retry read");
+        retry
+            .write_all(b"GET /retry HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .expect("send complete retry");
+        let mut response = String::new();
+        retry.read_to_string(&mut response).expect("read retry response");
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(response.ends_with("\r\n\r\nok"));
+        let requests = finish_mock(server);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/retry");
     }
 
     #[test]
@@ -11909,7 +12015,12 @@ mod tests {
         let address = listener.local_addr().expect("local health fixture address");
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept local health request");
-            let _request = read_mock_request(&mut stream);
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("local health request timeout");
+            let _request = read_mock_request(&mut stream)
+                .expect("read local health request")
+                .expect("complete local health request");
             write!(
                 stream,
                 "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{{}}",
