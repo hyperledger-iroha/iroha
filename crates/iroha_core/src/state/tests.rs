@@ -120,6 +120,8 @@ use std::{
 };
 #[path = "committed_hash_journal_tests.rs"]
 mod committed_hash_journal_tests;
+#[path = "transaction_stack_tests.rs"]
+mod transaction_stack_tests;
 macro_rules! let_row { ($($tokens:tt)*) => { let $($tokens)*; }; }
 macro_rules! state_test {
     (consensus_stack $name:ident $($body:tt)*) => {
@@ -1604,7 +1606,7 @@ state_test! { sync merge_write_set_encoder_mentions_every_persisted_world_block_
     let struct_body = &struct_tail[..struct_end];
     let_row! { encoder_start = source .find("fn merge_execution_write_set_bytes(&self)") .expect("merge write-set encoder must exist") };
     let encoder_tail = &source[encoder_start..];
-    let_row! { encoder_end = encoder_tail .find("/// Struct for single transaction's aggregated changes") .expect("merge write-set encoder terminator must remain discoverable") };
+    let_row! { encoder_end = encoder_tail .find("pub struct WorldTransaction") .expect("merge write-set encoder terminator must remain discoverable") };
     let encoder = &encoder_tail[..encoder_end];
     let_row! { fields = struct_body.lines().filter_map(|line| { if !line.starts_with("    ") || line.starts_with("        ") { return None; } let declaration = line .trim() .strip_prefix("pub(crate) ") .or_else(|| line.trim().strip_prefix("pub ")) .unwrap_or_else(|| line.trim()); let (field, _) = declaration.split_once(':')?; field .chars() .all(|character| character == '_' || character.is_ascii_alphanumeric()) .then_some(field) }) };
     for field in fields {
