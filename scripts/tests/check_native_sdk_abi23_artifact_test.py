@@ -246,3 +246,20 @@ def test_top_up_binding_requires_all_c_and_kotlin_endpoints() -> None:
                 assert str(error) == "native C ABI artifact is missing required symbols: " + missing
             else:
                 raise AssertionError("missing top-up binding endpoint accepted: " + missing)
+
+
+def test_python_probe_disables_bytecode_in_its_actual_isolated_child(tmp_path: Path) -> None:
+    """An inert probe exercises child flags without claiming native qualification."""
+    artifact = tmp_path / "probe_fixture.py"
+    artifact.write_text(
+        "import sys\n"
+        "assert sys.flags.isolated == 1\n"
+        "assert sys.dont_write_bytecode\n"
+        "def connect_norito_bridge_abi_version():\n"
+        "    return 23\n",
+        encoding="utf-8",
+    )
+    assert MODULE.probe_python_abi(
+        artifact, ("connect_norito_bridge_abi_version",)
+    ) == 23
+    assert not (tmp_path / "__pycache__").exists()

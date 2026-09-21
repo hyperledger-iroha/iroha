@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -867,6 +869,55 @@ def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_sk
     assert '--junitxml "${JUNIT_REPORT}"' in runner
     assert 'skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)' in runner
     assert "SoraFS native Python SDK parity may not contain skipped tests" in runner
+
+
+@pytest.mark.parametrize("inherited_mode", [None, "0"])
+@pytest.mark.parametrize("remove_binding", [False, True])
+def test_python_native_lane_requires_installed_packages_in_pytest_child(
+    tmp_path: Path, inherited_mode: str | None, remove_binding: bool
+) -> None:
+    """Execute the actual child command and detect removal of its wheel binding."""
+
+    runner = read("ci/check_sorafs_python_native_sdk.sh")
+    start = runner.index('JUNIT_REPORT="${SDK_SESSION}/pytest.xml"')
+    end = runner.index('"${VENV_PYTHON}" -I - "${JUNIT_REPORT}"', start)
+    command = runner[start:end]
+    if remove_binding:
+        command = command.replace("IROHA_PYTHON_TEST_INSTALLED_PACKAGE=1 \\\n", "", 1)
+    # This child observes dispatch only; it never claims to execute SDK tests.
+    child = tmp_path / "observe-pytest"
+    child.write_text(
+        '#!/bin/sh\n'
+        '[ "${IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-}" = 1 ] || exit 73\n'
+        '[ "$1" = -m ] && [ "$2" = pytest ] || exit 74\n'
+        'printf "%s\\n" "$@" > "${SDK_SESSION}/observed-arguments"\n',
+        encoding="utf-8",
+    )
+    child.chmod(0o700)
+    environment = dict(os.environ, SDK_SESSION=str(tmp_path), VENV_PYTHON=str(child))
+    if inherited_mode is None:
+        environment.pop("IROHA_PYTHON_TEST_INSTALLED_PACKAGE", None)
+    else:
+        environment["IROHA_PYTHON_TEST_INSTALLED_PACKAGE"] = inherited_mode
+    result = subprocess.run(
+        ["bash", "-eu", "-c", command], cwd=tmp_path, env=environment,
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert result.returncode == (73 if remove_binding else 0), result.stderr
+    if not remove_binding:
+        arguments = (tmp_path / "observed-arguments").read_text().splitlines()
+        assert arguments[:5] == ["-m", "pytest", "-q", "-p", "no:cacheprovider"]
+        assert arguments[5:7] == ["--junitxml", str(tmp_path / "pytest.xml")]
+        assert arguments[7:] == [
+            "tests/cancel_asset_lock_v1_test.py",
+            "tests/cancel_asset_lock_client_helpers_test.py",
+            "tests/client_hard_cut_contract_test.py",
+            "tests/client_ledger_helpers_test.py",
+            "tests/client_sorafs_orderbook_test.py",
+            "tests/sorafs_reference_validation_test.py",
+            "tests/sorafs_replication_instruction_test.py",
+            "../iroha_torii_client/tests/orderbook_submission_test.py",
+        ]
 
 
 def test_python_cancel_builder_has_exact_archive_and_typed_two_argument_coverage() -> None:

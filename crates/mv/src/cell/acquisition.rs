@@ -203,7 +203,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
                 Err(_) => unreachable!("original healthy current stays acquired"),
             }
         });
-        self.phase = AcquisitionPhase::Writers(CellWriters::new(target, undo, current));
+        self.phase = AcquisitionPhase::Writers(CellWriters::new(undo, current));
     }
 }
 
@@ -302,21 +302,15 @@ enum CellWriterState<'a, V: Value, C: Send + Sync + 'static> {
 
 pub(super) struct CellWriters<'a, V: Value, C: Send + Sync + 'static> {
     state: Option<CellWriterState<'a, V, C>>,
-    target: &'a Cell<V, C>,
 }
 
 impl<'a, V: Value, C: Send + Sync + 'static> CellWriters<'a, V, C> {
-    fn new(
-        target: &'a Cell<V, C>,
-        revert: CellWriter<'a, Option<V>, C>,
-        blocks: CellWriter<'a, V, C>,
-    ) -> Self {
+    fn new(revert: CellWriter<'a, Option<V>, C>, blocks: CellWriter<'a, V, C>) -> Self {
         Self {
             state: Some(CellWriterState::Attached(OriginalCellWriters {
                 revert,
                 blocks,
             })),
-            target,
         }
     }
 

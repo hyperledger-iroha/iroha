@@ -27,7 +27,8 @@ from sorafs_evidence_json import decode_evidence_json, read_evidence_bytes
 from sorafs_java_consumer_artifact import (
     ArtifactError, CORE_OWNERS, GROUPS, MAX_ARCHIVE_BYTES, MAX_LOG_BYTES, MAX_REPORT_BYTES,
     SCHEMA, SDK_PREFIX, SUITE, archive_members, canonical_json, deterministic_archive,
-    identity, jar_classes, package_classes, read_file, validate_class_origins,
+    identity, package_classes, read_file, validate_class_origins,
+    dependency_classes, dependency_classpath, validate_dependency_origins,
     validate_library_origin, validate_report, validate_test_classes,
 )
 
@@ -117,12 +118,10 @@ def load_dependencies(raw: bytes, expected_sha256: str) -> dict[str, tuple[Path,
         body = read_file(source, 64 * 1024 * 1024)
         if identity(body) != {"sha256": row["sha256"], "size": row["size"]} or type(row["size"]) is not int:
             raise ArtifactError("tool dependency bytes differ")
-        jar_classes(body, sdk=False)
-        for entry in archive_members(body):
-            if entry.endswith(".class") and not entry.startswith("META-INF/") and entry != "module-info.class":
-                if entry in class_names:
-                    raise ArtifactError("tool dependencies shadow one another")
-                class_names.add(entry)
+        classes = dependency_classes(body)
+        if class_names.intersection(classes):
+            raise ArtifactError("tool dependencies shadow effective runtime class ownership")
+        class_names.update(classes)
         result[name] = (source, body)
     if set(result) != DEPENDENCIES:
         raise ArtifactError("tool dependency inventory is incomplete")
@@ -234,8 +233,8 @@ def produce(args: argparse.Namespace) -> dict[str, object]:
         raise ArtifactError("source root must be an absolute canonical directory")
     if not work.is_absolute() or work.parent.resolve(strict=True) != work.parent or os.path.lexists(work):
         raise ArtifactError("qualification work directory must be fresh under a canonical parent")
-    if root == work or root in work.parents:
-        raise ArtifactError("qualification outputs must be outside the source tree")
+    if root == work or (root in work.parents and work.relative_to(root).parts[0] != "target"):
+        raise ArtifactError("qualification outputs within the source tree must be under target/")
     work.mkdir(mode=0o700)
     captures: dict[Path, bytes] = {}
     private_inputs: dict[str, bytes] = {}
@@ -272,6 +271,7 @@ def produce(args: argparse.Namespace) -> dict[str, object]:
         private_inputs[relative] = raw
         write_fresh(work / relative, raw)
         dependency_paths.append(work / relative)
+    dependency_jars = dependency_classpath({name: raw for name, (_path, raw) in dependencies.items()}, work)
     source = capture(root / SOURCE, "sources/SorafsReferenceValidatorsJavaConsumerTest.java", 256 * 1024)
     capture(root / RUNNER, "sources/SorafsJavaConsumerQualificationRunner.java", 64 * 1024)
     capture(root / PROBE, "sources/SorafsAndroidPackageLinkProbe.java", 64 * 1024)
@@ -334,6 +334,8 @@ def produce(args: argparse.Namespace) -> dict[str, object]:
                 raise ArtifactError("compiler introduced an unexpected source owner")
             compiled[owner.name] = raw
         validate_test_classes(compiled)
+        if not set(allowed) <= compiled.keys():
+            raise ArtifactError("compiler omitted a required runner/assertion/probe owner")
         runtime_classpath = str(classes) + os.pathsep + classpath
         common = [java, "-ea", "-XX:-UsePerfData", "-Djava.library.path=" + str(work / "native"), "-Diroha.sorafs.fixtureRoot=" + str(work / "snapshot"), "-classpath", runtime_classpath]
         probe_log = b""
@@ -351,8 +353,9 @@ def produce(args: argparse.Namespace) -> dict[str, object]:
         write_fresh(directory / "junit.xml", report)
         write_fresh(directory / "classes.log", classes_log)
         write_fresh(directory / "libraries.log", libraries_log)
+        dependency_loads = {"execution": validate_dependency_origins(classes_log, dependency_jars, execution=True), "android_probe": validate_dependency_origins(probe_log, dependency_jars, execution=False) if lane == "android-host" else []}
         cases = validate_report(report)
-        loaded = validate_class_origins(classes_log + b"\n" + probe_log, jars, android=lane == "android-host", consumer_classes=(classes, compiled))
+        loaded = validate_class_origins(classes_log + b"\n" + probe_log, jars, android=lane == "android-host", consumer_classes=(classes, compiled), required_consumer_owners=tuple(allowed))
         validate_library_origin(libraries_log, copied_native)
         if capture_tree(classes, 16 * 1024 * 1024) != compiled_files:
             raise ArtifactError("compiled consumers changed during execution")
@@ -368,7 +371,7 @@ def produce(args: argparse.Namespace) -> dict[str, object]:
             raise ArtifactError("observed Android probe log changed before capture")
         if {name.removeprefix("classes/"): raw for name, raw in consumed_outputs[lane].items() if name.startswith("classes/")} != compiled_files:
             raise ArtifactError("consumed compiled classes changed before capture")
-        results.append({"lane": lane, "cases": list(cases), "loaded_classes": loaded, "report": identity(report), "compiled_classes": {name: identity(raw) for name, raw in sorted(compiled_files.items())}})
+        results.append({"lane": lane, "cases": list(cases), "loaded_classes": loaded, "dependency_classes": dependency_loads, "report": identity(report), "compiled_classes": {name: identity(raw) for name, raw in sorted(compiled_files.items())}})
     if any(empty_sources.iterdir()):
         raise ArtifactError("isolated empty source path was populated")
     native.verify_manifest(manifest, artifact_path=copied_native, source_root=root)

@@ -2474,10 +2474,10 @@ kura.claim_autonomous_lifecycle_process_generation(
         '"preflight-release-receipt",\n                "pytest",\n                362,'
         in receipt_source
     )
-    assert "did not run exactly 6172 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 6172" in release_source
+    assert "did not run exactly 6795 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 6795" in release_source
     assert (
-        "^6172 passed in [0-9]+([.][0-9]+)?s( "
+        "^6795 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -2490,6 +2490,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     )
     for contract_file in (
         "pytests/scripts/sumeragi_v2_proof_ledger_test.py",
+        "pytests/scripts/sumeragi_v2_tlc_result_contract_test.py",
         "pytests/scripts/sumeragi_v2_verus_evidence_test.py",
         "pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py",
         "pytests/scripts/sumeragi_v2_reviewed_rust_source_test.py",
@@ -2529,15 +2530,15 @@ kura.claim_autonomous_lifecycle_process_generation(
     proof_fidelity_receipt_nodes = tuple(
         proof_fidelity_receipt_command[len(proof_fidelity_command_prefix) :].split()
     )
-    assert len(proof_fidelity_runner_nodes) == 24
-    assert len(set(proof_fidelity_runner_nodes)) == 24
+    assert len(proof_fidelity_runner_nodes) == 25
+    assert len(set(proof_fidelity_runner_nodes)) == 25
     assert proof_fidelity_runner_nodes == proof_fidelity_receipt_nodes
     proof_fidelity_receipt_legs = [
         leg for leg in receipt_module._corridor_legs()
         if leg[0] == "preflight-proof-fidelity"
     ]
     assert proof_fidelity_receipt_legs == [(
-        "preflight-proof-fidelity", "pytest", 6172,
+        "preflight-proof-fidelity", "pytest", 6795,
         proof_fidelity_command_prefix + " ".join(proof_fidelity_runner_nodes),
     )], "proof-fidelity receipt must bind the exact counted selector inventory"
     for selector in (
@@ -2573,7 +2574,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         assert selector in release_source
         assert selector in proof_fidelity_receipt_command
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                6172,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                6795,'
         in receipt_source
     )
     assert "did not run exactly 55 passing tests" in release_source

@@ -6,6 +6,7 @@ mod fastpq_artifact_store;
 mod kagemusha_finality_decode;
 mod lane_geometry;
 mod lane_storage;
+mod snapshot_hash_journal;
 use crate::lane_consensus::{
     CommittedLaneBlockSession, DurableLaneBlockNewViewCertificateV1,
     DurableLaneBlockViewCheckpointV1, DurableLanePayloadAvailabilityCertificateV1,
@@ -172,6 +173,7 @@ use norito::{
     json::Value as JsonValue,
 };
 use parking_lot::{Condvar, Mutex};
+use snapshot_hash_journal::{checked_block_hash_read_range, verified_snapshot_hash_journal_digest};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt::Debug,
@@ -23253,15 +23255,6 @@ fn snapshot_bootstrap_lineage_digest(record: &SnapshotV2BootstrapRecord) -> Hash
     let encoded = record.encode();
     Hash::new_from_chunks(&[SNAPSHOT_BOOTSTRAP_LINEAGE_DIGEST_DOMAIN, &encoded])
 }
-fn verified_snapshot_hash_journal_digest(snapshot_hashes: &[HashOf<BlockHeader>]) -> Result<Hash> {
-    let snapshot_height = u64::try_from(snapshot_hashes.len())?;
-    let snapshot_height_bytes = snapshot_height.to_le_bytes();
-    let mut chunks = Vec::with_capacity(snapshot_hashes.len().saturating_add(2));
-    chunks.push(VERIFIED_SNAPSHOT_TAIL_DIGEST_DOMAIN);
-    chunks.push(snapshot_height_bytes.as_slice());
-    chunks.extend(snapshot_hashes.iter().map(|hash| hash.as_ref().as_slice()));
-    Ok(Hash::new_from_chunks(&chunks))
-}
 impl BlockStoreCommitMarker {
     const VERSION: u32 = 1;
     fn new(count: u64, tip_hash: Option<HashOf<BlockHeader>>) -> Self {
@@ -44483,7 +44476,8 @@ impl BlockStore {
         let marker = VerifiedSnapshotTailMarkerV1::new(
             body_prefix_count,
             snapshot_height,
-            verified_snapshot_hash_journal_digest(snapshot_hashes)?,
+            verified_snapshot_hash_journal_digest(snapshot_hashes)
+                .add_err_context(&self.path_to_blockchain.join(HASHES_FILE_NAME))?,
             bootstrap_lineage_hash,
         );
         let bytes = norito::encode_canonical(&marker).map_err(Error::NoritoFrame)?;
@@ -44655,9 +44649,8 @@ impl BlockStore {
                 )));
             }
         }
-        let snapshot_height = usize::try_from(marker.snapshot_height)?;
-        let hashes = self.read_block_hashes(0, snapshot_height)?;
-        let actual_digest = verified_snapshot_hash_journal_digest(&hashes)?;
+        let actual_digest =
+            self.verified_snapshot_hash_journal_digest_from_store(marker.snapshot_height)?;
         if actual_digest != marker.hash_journal_digest {
             return Err(invalid(
                 "marker hash-journal digest does not match durable hashes".to_owned(),
@@ -44700,9 +44693,8 @@ impl BlockStore {
                 return Ok(None);
             }
         }
-        let snapshot_height = usize::try_from(marker.snapshot_height)?;
-        let hashes = self.read_block_hashes(0, snapshot_height)?;
-        let actual_digest = verified_snapshot_hash_journal_digest(&hashes)?;
+        let actual_digest =
+            self.verified_snapshot_hash_journal_digest_from_store(marker.snapshot_height)?;
         if actual_digest != marker.hash_journal_digest {
             warn!(
                 expected = %marker.hash_journal_digest,
@@ -46058,22 +46050,17 @@ impl BlockStore {
     /// Read a series of block hashes from the block hashes file
     ///
     /// # Errors
-    /// IO Error.
+    /// Returns an out-of-bounds error for an overflowing or unavailable range,
+    /// or the original allocation or journal I/O error.
     pub(crate) fn read_block_hashes(
         &mut self,
         start_block_height: u64,
         block_count: usize,
     ) -> Result<Vec<HashOf<BlockHeader>>> {
         let hashes_file = self.ensure_hashes_file()?;
-        let start_location = start_block_height * SIZE_OF_BLOCK_HASH;
-        let required = SIZE_OF_BLOCK_HASH * block_count as u64;
         let file_len = hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
-        if start_location + required > file_len {
-            return Err(Error::OutOfBoundsBlockRead {
-                start_block_height,
-                block_count,
-            });
-        }
+        let (start_location, _) =
+            checked_block_hash_read_range(start_block_height, block_count, file_len)?;
         let mut hashes = Vec::new();
         hashes.try_reserve(block_count)?;
         hashes_file.try_io(|file| {
@@ -47372,4 +47359,5 @@ pub(crate) mod tests {
     include!("kura/tests/16_resource_file_admission_tests.rs");
     #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
     include!("kura/tests/17_read_only_evidence_tests.rs");
+    include!("kura/tests/18_snapshot_hash_streaming.rs");
 }

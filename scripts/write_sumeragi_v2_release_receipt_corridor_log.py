@@ -1511,10 +1511,11 @@ def _corridor_legs(
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                6172,
+                6795,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
+                "pytests/scripts/sumeragi_v2_tlc_result_contract_test.py "
                 "pytests/scripts/sumeragi_v2_verus_evidence_test.py "
                 "pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py "
                 "pytests/scripts/sumeragi_v2_reviewed_rust_source_test.py "

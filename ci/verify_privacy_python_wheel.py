@@ -29,7 +29,7 @@ import sysconfig
 import unicodedata
 import zipfile
 import zipimport
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Iterable, NoReturn, Sequence
 
@@ -69,6 +69,7 @@ READ_CHUNK_BYTES = 1024 * 1024
 ALLOWED_COMPRESSION = frozenset((zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED))
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _EOCD = struct.Struct("<4s4H2LH")
+_CENTRAL_DIRECTORY_HEADER = struct.Struct("<4s6H3L5H2L")
 _LOCAL_FILE_HEADER = struct.Struct("<4s5H3L2H")
 _DATA_DESCRIPTOR = struct.Struct("<4s3L")
 _DATA_DESCRIPTOR_WITHOUT_SIGNATURE = struct.Struct("<3L")
@@ -155,11 +156,13 @@ class WheelMember:
 
 
 @dataclass(frozen=True)
-class WheelPreflight:
-    """Authenticated complete package/dist-info layout for a private wheel."""
+class WheelArchive:
+    """Validated captured wheel layout; no file, installation or execution authority.
 
-    path: Path
-    seal: FileSeal
+    The caller owns and authenticates the original captured bytes. This immutable
+    description grants no path/seal authority and never imports package code.
+    """
+
     owner: WheelOwner
     package_member: str
     native_member: str | None
@@ -169,6 +172,14 @@ class WheelPreflight:
     package_directories: tuple[str, ...]
     dist_info_members: tuple[WheelMember, ...]
     dist_info_directories: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class WheelPreflight(WheelArchive):
+    """The parsed wheel layout with its authenticated original file identity."""
+
+    path: Path
+    seal: FileSeal
 
 
 @dataclass(frozen=True)
@@ -192,12 +203,25 @@ class StableFile:
 
 
 @dataclass(frozen=True)
+class InstalledWheelContent:
+    """Verified installed bytes only; no live file, seal or execution authority."""
+
+    owner: WheelOwner
+    source_uri: str
+    wheel_sha256: str
+    files: tuple[WheelMember, ...]
+    package: WheelMember
+    native: WheelMember | None
+
+
+@dataclass(frozen=True)
 class InstalledFileSet:
     """Stable seals for every installed wheel-owned or modeled file."""
 
     files: tuple[StableFile, ...]
     package: StableFile
     native: StableFile | None
+    content: InstalledWheelContent
 
 
 @dataclass(frozen=True)
@@ -497,6 +521,73 @@ def _metadata_identity(payload: bytes, owner: WheelOwner) -> tuple[str, str]:
     return names[0], version
 
 
+def preflight_zip_directory(
+    payload: bytes,
+    *,
+    max_members: int,
+    max_name_bytes: int,
+    allow_member_extra: bool,
+    allow_member_comments: bool,
+) -> None:
+    """Bound the original central directory before ZipFile allocates its inventory.
+
+    Callers first enforce their whole-original byte limit. This fixed-header walk
+    allocates no directory or member collection and does not extract or replace
+    the existing ZIP/RECORD parser. It bounds actual records, raw central names and variable
+    extents rather than trusting only the end-record count, which ZipFile ignores
+    while constructing its full inventory. Wheel profiles preserve member extras
+    and comments, including their bounded Unicode metadata; downstream canonical
+    name checks remain necessary. The canonical execution writer permits neither.
+    """
+    if (type(payload) is not bytes or type(max_members) is not int
+            or not 0 < max_members <= 0xFFFF or type(max_name_bytes) is not int
+            or not 0 < max_name_bytes <= 0xFFFF or type(allow_member_extra) is not bool
+            or type(allow_member_comments) is not bool):
+        _fail("ZIP directory requires immutable original bytes and bounded policy")
+    if len(payload) < _EOCD.size:
+        raise zipfile.BadZipFile("ZIP has no complete canonical end record")
+    end = len(payload) - _EOCD.size
+    signature, disk, central_disk, disk_count, count, size, offset, comment = _EOCD.unpack_from(payload, end)
+    if signature != b"PK\x05\x06":
+        raise zipfile.BadZipFile("ZIP contains data outside its canonical ZIP records")
+    # ZipFile probes this exact suffix even with unsaturated classic fields.
+    # A locator embedded in a permitted final-member comment can redirect its
+    # eager parser to a different directory than the one admitted below.
+    if end >= 20 and payload[end - 20:end - 16] == b"PK\x06\x07":
+        _fail("ZIP must not contain a ZIP64 directory alias")
+    if comment != 0:
+        _fail("ZIP must have one canonical un-commented ZIP end record")
+    if disk != 0 or central_disk != 0 or disk_count != count:
+        _fail("ZIP must not use split or spanned ZIP records")
+    if not 0 < count <= max_members:
+        _fail(f"archive member bound: requires between one and {max_members} members")
+    if offset + size != end:
+        _fail("ZIP must not contain a prepended payload or data outside its canonical ZIP records")
+    maximum_record = (_CENTRAL_DIRECTORY_HEADER.size + max_name_bytes
+                      + (0xFFFF if allow_member_extra else 0)
+                      + (0xFFFF if allow_member_comments else 0))
+    if not count * _CENTRAL_DIRECTORY_HEADER.size <= size <= max_members * maximum_record:
+        _fail("ZIP central-directory byte bound")
+    position, observed = offset, 0
+    while position < end:
+        if observed >= count or observed >= max_members or position + _CENTRAL_DIRECTORY_HEADER.size > end:
+            _fail("ZIP central-directory member count or extent differs")
+        header = _CENTRAL_DIRECTORY_HEADER.unpack_from(payload, position)
+        name_size, extra_size, comment_size, start_disk = header[10:14]
+        if header[0] != b"PK\x01\x02" or start_disk != 0:
+            _fail("ZIP central record is not a single-disk file header")
+        if not 0 < name_size <= max_name_bytes:
+            _fail("ZIP member exceeds its path-length bound")
+        if (not allow_member_extra and extra_size != 0) or (not allow_member_comments and comment_size != 0):
+            _fail("ZIP member extra or comment differs from its canonical policy")
+        position += _CENTRAL_DIRECTORY_HEADER.size + name_size + extra_size + comment_size
+        if position > end:
+            _fail("ZIP central record exceeds its original directory")
+        observed += 1
+    if position != end or observed != count:
+        _fail("ZIP central-directory member count or extent differs")
+
+
 def _assert_canonical_zip_envelope(
     payload: bytes, wheel: zipfile.ZipFile, infos: Sequence[zipfile.ZipInfo]
 ) -> None:
@@ -674,6 +765,38 @@ def preflight_wheel(
         expected_seal=expected,
     )
 
+    archive = parse_wheel_bytes(
+        payload, extension_suffixes=extension_suffixes, owner=owner
+    )
+    return WheelPreflight(
+        path=wheel_path,
+        seal=observed_seal,
+        **{field.name: getattr(archive, field.name) for field in fields(WheelArchive)},
+    )
+
+
+def parse_wheel_bytes(
+    payload: bytes,
+    *,
+    extension_suffixes: Sequence[str] | None = None,
+    owner: WheelOwner = NATIVE_OWNER,
+) -> WheelArchive:
+    """Validate one bounded immutable captured wheel without opening or importing it.
+
+    This is the sole archive/RECORD parser used by file preflight and indexed
+    evidence consumers. It authenticates no source path, expected digest,
+    installed files or process execution; those remain the caller's original
+    input owner's responsibility. Mutable buffers and implicit conversions are
+    rejected so every check examines the same captured byte sequence.
+    """
+
+    if owner not in (NATIVE_OWNER, SDK_OWNER):
+        _fail("wheel owner must be the fixed native or SDK distribution")
+    if type(payload) is not bytes:
+        _fail("captured wheel must be exact immutable bytes")
+    if not payload or len(payload) > MAX_WHEEL_BYTES:
+        _fail(f"fresh private wheel violates its {MAX_WHEEL_BYTES}-byte size bound")
+
     suffixes = tuple(
         importlib.machinery.EXTENSION_SUFFIXES
         if extension_suffixes is None
@@ -692,6 +815,11 @@ def preflight_wheel(
     }
 
     try:
+        preflight_zip_directory(
+            payload, max_members=MAX_ARCHIVE_MEMBERS,
+            max_name_bytes=MAX_MEMBER_NAME_BYTES,
+            allow_member_extra=True, allow_member_comments=True,
+        )
         with zipfile.ZipFile(io.BytesIO(payload), "r") as wheel:
             infos = wheel.infolist()
             if not infos or len(infos) > MAX_ARCHIVE_MEMBERS:
@@ -765,6 +893,7 @@ def preflight_wheel(
                 name
                 for name in infos_by_name
                 if name.startswith(f"{owner.package}/")
+                and len(PurePosixPath(name).parts) > 1
                 and PurePosixPath(name).parts[1].casefold()
                 in {"_native", "_native.py", "_crypto", "_crypto.py"}
             }
@@ -926,9 +1055,7 @@ def preflight_wheel(
     ) as error:
         _fail(f"fresh private wheel is not a valid bounded ZIP archive: {error}")
 
-    return WheelPreflight(
-        path=wheel_path,
-        seal=observed_seal,
+    return WheelArchive(
         owner=owner,
         package_member=owner.initializer,
         native_member=selected_native_name,
@@ -1197,41 +1324,22 @@ def derive_installed_layout(
     return layout
 
 
-def _read_installed_file(
-    path: Path,
-    *,
-    label: str,
-    site_root: Path,
-    expected_digest: str | None = None,
-    expected_size: int | None = None,
-) -> StableFile:
-    if not path.is_relative_to(site_root):
-        _fail(f"{label} escaped private venv site-packages")
-    payload, seal = _read_stable_regular_file(
-        path,
-        label=label,
-        max_bytes=MAX_MEMBER_BYTES,
-        allow_empty=True,
-    )
-    if expected_digest is not None and seal.sha256 != expected_digest:
-        _fail(f"{label} does not match the fresh wheel")
-    if expected_size is not None and seal.size != expected_size:
-        _fail(f"{label} size does not match the fresh wheel")
-    # Keep the payload live through the digest comparison so this helper
-    # authenticates actual bytes rather than metadata alone.
-    if len(payload) != seal.size:
-        _fail(f"{label} changed while its installed bytes were verified")
-    return StableFile(path=path, seal=seal)
+def _assert_direct_url(payload: bytes, *, source_uri: str, wheel_sha256: str) -> None:
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                _fail("installed direct_url.json repeats a field")
+            result[key] = value
+        return result
 
-
-def _assert_direct_url(payload: bytes, wheel: WheelPreflight) -> None:
     try:
-        value = json.loads(payload.decode("utf-8", errors="strict"))
+        value = json.loads(payload.decode("utf-8", errors="strict"), object_pairs_hook=unique)
     except (UnicodeError, json.JSONDecodeError) as error:
         _fail(f"installed direct_url.json is invalid: {error}")
     if not isinstance(value, dict) or set(value) != {"archive_info", "url"}:
         _fail("installed direct_url.json has an unexpected top-level policy")
-    if value["url"] != wheel.path.as_uri():
+    if value["url"] != source_uri:
         _fail("installed direct_url.json does not name the authenticated wheel")
     archive_info = value["archive_info"]
     if not isinstance(archive_info, dict) or set(archive_info) not in (
@@ -1239,105 +1347,107 @@ def _assert_direct_url(payload: bytes, wheel: WheelPreflight) -> None:
         {"hash", "hashes"},
     ):
         _fail("installed direct_url.json has an unexpected archive policy")
-    if archive_info["hashes"] != {"sha256": wheel.seal.sha256}:
+    if archive_info["hashes"] != {"sha256": wheel_sha256}:
         _fail("installed direct_url.json has the wrong wheel digest")
-    if "hash" in archive_info and archive_info["hash"] != f"sha256={wheel.seal.sha256}":
+    if "hash" in archive_info and archive_info["hash"] != f"sha256={wheel_sha256}":
         _fail("installed direct_url.json has the wrong legacy wheel digest")
+
+
+def verify_installed_wheel_bytes(
+    wheel: WheelArchive, *, source_uri: str, wheel_sha256: str,
+    installed_files: dict[str, bytes],
+) -> InstalledWheelContent:
+    """Check captured installed bytes against the sole parsed original wheel.
+
+    The caller authenticates original archive bytes and the source URI/digest.
+    Names are relative to site-packages. No filesystem path is opened and no
+    physical seal or process observation is manufactured from these values.
+    """
+    from urllib.parse import unquote, urlsplit
+
+    if type(wheel) not in (WheelArchive, WheelPreflight) or wheel.owner not in (NATIVE_OWNER, SDK_OWNER):
+        _fail("installed byte verification requires the sole parsed wheel owner")
+    if type(source_uri) is not str or type(wheel_sha256) is not str or not _SHA256_RE.fullmatch(wheel_sha256):
+        _fail("installed byte source identity is malformed")
+    try:
+        uri = urlsplit(source_uri)
+        decoded = unquote(uri.path, errors="strict")
+        # URI labels retain the original host's path grammar even when an
+        # offline consumer runs on a different supported platform. Real path
+        # existence and seals remain the live owner's responsibility.
+        if uri.netloc:
+            label = PureWindowsPath("//" + uri.netloc + decoded)
+        elif re.match(r"^/[A-Za-z]:/", decoded):
+            label = PureWindowsPath(decoded[1:])
+        else:
+            label = PurePosixPath(decoded)
+        if (uri.scheme != "file" or uri.query or uri.fragment or "\x00" in decoded
+                or not label.is_absolute() or ".." in label.parts or label.as_uri() != source_uri):
+            _fail("installed byte source URI is not canonical")
+    except (ValueError, UnicodeError) as error:
+        _fail(f"installed byte source URI is not canonical: {error}")
+    record_name = f"{wheel.dist_info_root}/RECORD"
+    originals = {member.name: member for member in (*wheel.package_members, *wheel.dist_info_members)
+                 if member.name != record_name}
+    generated = {f"{wheel.dist_info_root}/INSTALLER": b"pip\n",
+                 f"{wheel.dist_info_root}/REQUESTED": b""}
+    direct_name = f"{wheel.dist_info_root}/direct_url.json"
+    expected = set(originals) | set(generated) | {direct_name, record_name}
+    if type(installed_files) is not dict or set(installed_files) != expected:
+        _fail("installed byte inventory differs from the original wheel")
+    if (len(installed_files) > MAX_ARCHIVE_MEMBERS + len(PIP_GENERATED_DIST_INFO_FILES)
+            or any(type(raw) is not bytes or len(raw) > MAX_MEMBER_BYTES for raw in installed_files.values())
+            or sum(map(len, installed_files.values())) > MAX_TOTAL_UNCOMPRESSED_BYTES):
+        _fail("installed bytes exceed their admitted bounds")
+    members = {}
+    for name, raw in installed_files.items():
+        member = WheelMember(name, hashlib.sha256(raw).hexdigest(), len(raw))
+        original = originals.get(name)
+        if original is not None and member.sha256 != original.sha256:
+            _fail(f"installed {name} does not match the fresh wheel")
+        if original is not None and member.size != original.size:
+            _fail(f"installed {name} size does not match the fresh wheel")
+        if name in generated and raw != generated[name]:
+            _fail(f"installed {name} does not match the modeled pip output")
+        members[name] = member
+    _assert_direct_url(installed_files[direct_name], source_uri=source_uri, wheel_sha256=wheel_sha256)
+    _assert_record_payload(installed_files[record_name],
+                           expected_files={name: (member.sha256, member.size)
+                                           for name, member in members.items() if name != record_name},
+                           record_name=record_name, label="installed RECORD")
+    return InstalledWheelContent(wheel.owner, source_uri, wheel_sha256,
+                                 tuple(members[name] for name in sorted(members)),
+                                 members[wheel.package_member],
+                                 members[wheel.native_member] if wheel.native_member else None)
 
 
 def verify_installed_files(
     wheel: WheelPreflight,
     layout: InstalledLayout,
 ) -> InstalledFileSet:
-    """Seal and authenticate every installed package and dist-info file."""
-
+    """Retain actual installed file seals around the sole captured-byte relation."""
     package_paths, dist_info_paths = _assert_installed_layout(wheel, layout)
-    stable_by_name: dict[str, StableFile] = {}
-    for member in wheel.package_members:
-        relative = member.name.removeprefix(f"{wheel.owner.package}/")
-        stable_by_name[member.name] = _read_installed_file(
-            package_paths[relative],
-            label=f"installed {member.name}",
-            site_root=layout.site_root,
-            expected_digest=member.sha256,
-            expected_size=member.size,
-        )
-
-    record_name = f"{wheel.dist_info_root}/RECORD"
-    for member in wheel.dist_info_members:
-        if member.name == record_name:
-            continue
-        relative = member.name.removeprefix(f"{wheel.dist_info_root}/")
-        stable_by_name[member.name] = _read_installed_file(
-            dist_info_paths[relative],
-            label=f"installed {member.name}",
-            site_root=layout.site_root,
-            expected_digest=member.sha256,
-            expected_size=member.size,
-        )
-
-    installer_name = f"{wheel.dist_info_root}/INSTALLER"
-    requested_name = f"{wheel.dist_info_root}/REQUESTED"
-    direct_url_name = f"{wheel.dist_info_root}/direct_url.json"
-    for name, expected_payload in (
-        (installer_name, b"pip\n"),
-        (requested_name, b""),
-    ):
-        relative = name.removeprefix(f"{wheel.dist_info_root}/")
-        payload, _seal = _read_stable_regular_file(
-            dist_info_paths[relative],
-            label=f"installed {name}",
-            max_bytes=MAX_MEMBER_BYTES,
-            allow_empty=True,
-        )
-        if payload != expected_payload:
-            _fail(f"installed {name} does not match the modeled pip output")
-        stable_by_name[name] = StableFile(
-            path=dist_info_paths[relative],
-            seal=_seal,
-        )
-
-    direct_url_relative = direct_url_name.removeprefix(f"{wheel.dist_info_root}/")
-    direct_url_payload, direct_url_seal = _read_stable_regular_file(
-        dist_info_paths[direct_url_relative],
-        label=f"installed {direct_url_name}",
-        max_bytes=MAX_MEMBER_BYTES,
-        allow_empty=False,
-    )
-    _assert_direct_url(direct_url_payload, wheel)
-    stable_by_name[direct_url_name] = StableFile(
-        path=dist_info_paths[direct_url_relative],
-        seal=direct_url_seal,
-    )
-
-    record_relative = record_name.removeprefix(f"{wheel.dist_info_root}/")
-    record_payload, record_seal = _read_stable_regular_file(
-        dist_info_paths[record_relative],
-        label="installed RECORD",
-        max_bytes=MAX_MEMBER_BYTES,
-        allow_empty=False,
-    )
-    _assert_record_payload(
-        record_payload,
-        expected_files={
-            name: (installed.seal.sha256, installed.seal.size)
-            for name, installed in stable_by_name.items()
-        },
-        record_name=record_name,
-        label="installed RECORD",
-    )
-    stable_by_name[record_name] = StableFile(
-        path=dist_info_paths[record_relative],
-        seal=record_seal,
-    )
-
-    package = stable_by_name[wheel.package_member]
-    native = stable_by_name[wheel.native_member] if wheel.native_member else None
-    return InstalledFileSet(
-        files=tuple(stable_by_name[name] for name in sorted(stable_by_name)),
-        package=package,
-        native=native,
-    )
+    paths = {f"{wheel.owner.package}/{relative}": path for relative, path in package_paths.items()}
+    paths.update({f"{wheel.dist_info_root}/{relative}": path for relative, path in dist_info_paths.items()})
+    if len(paths) > MAX_ARCHIVE_MEMBERS + len(PIP_GENERATED_DIST_INFO_FILES):
+        _fail("installed bytes exceed their admitted file count")
+    captured, stable, total = {}, {}, 0
+    for name, path in sorted(paths.items()):
+        if not path.is_relative_to(layout.site_root):
+            _fail(f"installed {name} escaped private venv site-packages")
+        raw, seal = _read_stable_regular_file(
+            path, label=f"installed {name}",
+            max_bytes=min(MAX_MEMBER_BYTES, MAX_TOTAL_UNCOMPRESSED_BYTES - total),
+            allow_empty=True)
+        total += len(raw)
+        captured[name] = raw
+        stable[name] = StableFile(path=path, seal=seal)
+    content = verify_installed_wheel_bytes(wheel, source_uri=wheel.path.as_uri(),
+                                           wheel_sha256=wheel.seal.sha256, installed_files=captured)
+    return InstalledFileSet(files=tuple(stable[name] for name in sorted(stable)),
+                            package=stable[wheel.package_member],
+                            native=stable[wheel.native_member] if wheel.native_member else None,
+                            content=content)
 
 
 def reject_preseeded_modules(modules: dict[str, object] | None = None) -> None:

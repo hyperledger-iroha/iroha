@@ -6,6 +6,8 @@
 //! transition before the queue exposes it to callers. The first-release admission-bound layout is
 //! V1 only: its bootstrap digest binds the exact operation schema and unknown frame envelopes fail
 //! closed.
+#[path = "reservation_compaction_prefix.rs"]
+mod compaction_prefix;
 #[cfg(test)]
 use super::LaneQueueReservationRecoveryPhaseV1;
 use super::{
@@ -4643,15 +4645,7 @@ fn reconcile_compaction_temp(
     }
     let mut temp = open_regular_read(&tmp)?;
     let temp_identity = verify_open_regular_path(&tmp, &temp)?;
-    let actual_len = usize::try_from(temp_len)
-        .map_err(|_| invalid_data("lane reservation compaction temp exceeds usize"))?;
-    let mut actual = Vec::with_capacity(actual_len);
-    temp.read_to_end(&mut actual)?;
-    if !expected.starts_with(&actual) {
-        return Err(invalid_data(
-            "lane reservation compaction temp is not an authenticated prefix of canonical state",
-        ));
-    }
+    compaction_prefix::verify_prefix(&mut temp, &expected, temp_len)?;
     if verify_open_regular_path(&tmp, &temp)? != temp_identity || temp.metadata()?.len() != temp_len
     {
         return Err(invalid_data(
@@ -5192,4 +5186,5 @@ mod tests {
     }
     // Release, recovery, and checked-transition tests retain the parent test path.
     include!("reservation_journal_recovery_tests.rs");
+    include!("reservation_compaction_recovery_tests.rs");
 }

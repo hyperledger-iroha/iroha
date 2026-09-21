@@ -3,7 +3,9 @@
 Set: 2026-09-20. Overall goal: **Active**. This record coordinates the accepted
 privacy/ZK, SoraFS V1, and multilane implementation and qualification plan.
 Starting checkout: `f11eed2d6c7113163295e65703d9c206a5ce07d9` (`optimizations`).
-Integration branch: `codex/complete-privacy-sorafs-multilane`.
+Required working directory: `/Users/takemiyamakoto/devstuff/iroha`.
+Required branch: `optimizations`. Perform all further implementation and
+validation here; do not create or use another checkout, worktree or branch.
 The [integration checkpoint](../docs/history/2026-09-20/first-release-integration.md)
 records preservation, implementation boundaries and scoped validation failures.
 The [September 21 runtime checkpoint](../docs/history/2026-09-21/runtime-and-governance-integration.md)
@@ -23,6 +25,10 @@ tracks assertion migration, the executed native evidence-validator join, and
 the package producer with final candidate execution still outstanding.
 The [prepared insertion and stream record](../docs/history/2026-09-21/prepared-insertion-and-s-stream-integration.md)
 records bounded component ownership changes and their remaining qualification.
+The [current checkout record](../docs/history/2026-09-21/current-optimizations-qualification.md)
+separates newer runtime validation and executing Cell ownership from superseded
+failures, and records [SDK input ownership](sorafs/reference_sdk_package_index.md)
+and the [Python producer](sorafs/python_consumer_producer_v1.md).
 
 The component ledgers remain the detailed acceptance authorities:
 [privacy](privacy_first_release_closure.md),
@@ -34,6 +40,7 @@ release goal.
 
 ## Fixed requirements
 
+- Work only in `/Users/takemiyamakoto/devstuff/iroha` on `optimizations`.
 - First release means **no backward compatibility**: one final V1 implementation
   and wire contract; delete retired aliases, shims, fallback decoders, and
   competing legacy execution paths. Canonical account aliases remain ordinary

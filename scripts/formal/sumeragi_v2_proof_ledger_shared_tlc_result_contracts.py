@@ -203,6 +203,11 @@ def _shared_tlc_result_contract_source_fidelity_errors(
             "exact fixed-success marker",
         ),
         (
+            'readonly SUMERAGI_V2_TLC_VIOLATION_BEHAVIOR_MARKER="Error: '
+            'The behavior up to this point is:"',
+            "exact violation-behavior marker",
+        ),
+        (
             "readonly SUMERAGI_V2_TLC_STATE_SUMMARY_PATTERN="
             "'^[0-9][0-9,]* states generated, [0-9][0-9,]* "
             "distinct states found, [0-9][0-9,]* states left on "
@@ -252,6 +257,7 @@ def _shared_tlc_result_contract_source_fidelity_errors(
         "sumeragi_v2_tlc_assert_terminal() {",
         "sumeragi_v2_tlc_assert_exact_line() {",
         "sumeragi_v2_tlc_assert_fixed_success() {",
+        "sumeragi_v2_tlc_assert_action_property_violation() {",
         "sumeragi_v2_tlc_assert_replay_tool_result() {",
     )
     helper_offsets = [helper_source.find(header) for header in helper_headers]
@@ -259,6 +265,9 @@ def _shared_tlc_result_contract_source_fidelity_errors(
         any(helper_source.count(header) != 1 for header in helper_headers)
         or any(offset < 0 for offset in helper_offsets)
         or helper_offsets != sorted(helper_offsets)
+        or tuple(re.findall(
+            r"^sumeragi_v2_tlc_[A-Za-z0-9_]+\(\) \{", helper_source, re.MULTILINE
+        )) != helper_headers
     ):
         errors.append(
             f"{repo_root / SHARED_TLC_RESULT_CONTRACT}: shared TLC result "
@@ -405,6 +414,59 @@ def _shared_tlc_result_contract_source_fidelity_errors(
             errors.append(
                 f"{repo_root / SHARED_TLC_RESULT_CONTRACT}: shared TLC "
                 f"fixed-success helper must retain exactly one {description}"
+            )
+
+    action_property_section = helper_sections[
+        "sumeragi_v2_tlc_assert_action_property_violation() {"
+    ]
+    for token, description in (
+        (
+            '[[ "$expected_marker" =~ '
+            r'^Error:\ Action\ property\ .+\ is\ violated\.$ ]] || {',
+            "canonical action-property marker guard",
+        ),
+        ('[[ "$actual_status" -eq 13 ]] || {', "exact status-13 guard"),
+        (
+            'sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+            "nonzero-state assertion",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_exact_line \\\n'
+            '    "$label" "$log" "$expected_marker"',
+            "exact action-property marker assertion",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_exact_line \\\n'
+            '    "$label" "$log" "$SUMERAGI_V2_TLC_VIOLATION_BEHAVIOR_MARKER"',
+            "exact violation-behavior marker assertion",
+        ),
+        (
+            'grep -Ec "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" '
+            '"$log" || true',
+            "primary-diagnostic counter",
+        ),
+        (
+            '[[ "$primary_diagnostic_count" == 1 ]] || {',
+            "single primary-diagnostic guard",
+        ),
+        (
+            'grep -Ec "$SUMERAGI_V2_TLC_FAILURE_DIAGNOSTIC_PATTERN" '
+            '"$log" || true',
+            "all-failure diagnostic counter",
+        ),
+        (
+            '[[ "$failure_count" == 2 ]] || {',
+            "exact primary-plus-behavior diagnostic guard",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            "terminal-footer assertion",
+        ),
+    ):
+        if action_property_section.count(token) != 1:
+            errors.append(
+                f"{repo_root / SHARED_TLC_RESULT_CONTRACT}: shared TLC "
+                f"action-property helper must retain exactly one {description}"
             )
 
     replay_result_section = helper_sections[
@@ -625,6 +687,36 @@ def _shared_tlc_result_contract_source_fidelity_errors(
                     f"{path}: non-specialized TLC mutation runner must "
                     "require exactly one primary failure diagnostic"
                 )
+
+    # Bind the reviewed runner counts to actual top-level corpus invocations.
+    # A source-digest refresh must not silently erase a positive or negative case.
+    reviewed_branch_calls = {
+        "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh":
+            ("run_green", "run_mutant"),
+        "scripts/formal/run_sumeragi_v2_inflight_first_release.sh":
+            ("run_positive", "run_mutant"),
+    }
+    for relative, (positive, negative) in reviewed_branch_calls.items():
+        source = sources.get(relative)
+        if source is None:
+            continue
+        observed = tuple(
+            len(re.findall(rf"^{name}(?:[ \t]|$)", source, re.MULTILINE))
+            for name in (positive, negative)
+        ) + (0, 0, 0)
+        expected = SHARED_TLC_RESULT_BRANCH_PROFILES.get(relative)
+        if observed != expected:
+            errors.append(
+                f"{repo_root / relative}: shared TLC reviewed corpus branch "
+                f"counts must equal {expected}; found {observed}"
+            )
+        if positive == "run_positive" and source.count(
+            f'--expected-cases {sum(observed)} \\\n'
+        ) != 1:
+            errors.append(
+                f"{repo_root / relative}: retained TLC expected-case count "
+                "must equal the complete reviewed corpus"
+            )
 
     item_carrier = (
         "scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh"
