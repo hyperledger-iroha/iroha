@@ -400,3 +400,70 @@ fn original_queue_cut_completes_retirement_storage_without_publishing_state() {
         drop(queue.try_lock_lane_retirement_observer().unwrap());
     }
 }
+
+#[test]
+fn route_refusal_retains_original_cut_cleanup_through_lifecycle() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Reenter {
+        state: Arc<State>,
+        queue: Arc<Queue>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for Reenter {
+        fn wake(self: Arc<Self>) {
+            assert!(self.state.try_lock_lane_lifecycle_work_admission().is_ok());
+            assert!(
+                self.queue
+                    .try_lock_lane_retirement_observer()
+                    .unwrap()
+                    .try_into_cut()
+                    .is_ok()
+            );
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let (state, mut geometry) = fixture(false);
+    let state: Arc<State> = state.into();
+    let queue = Arc::new(queue());
+    geometry
+        ._pending
+        .as_mut()
+        .unwrap()
+        .catalog_update
+        .previous_lane_incarnations
+        .remove(&LaneId::new(1));
+    let source = OriginalCarrierQueue::for_test(&state, &queue);
+    let observer = source.try_observe().unwrap();
+    let lifecycle = state.try_lock_lane_lifecycle_work_admission().unwrap();
+    let mut wait = source.try_observe().err().unwrap().wait_for_release();
+    let callback = Arc::new(Reenter {
+        state: Arc::clone(&state),
+        queue: Arc::clone(&queue),
+        wakes: AtomicUsize::new(0),
+    });
+    let waker = Waker::from(Arc::clone(&callback));
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    let (error, cleanup) = CarrierQueueRetirement::try_new(
+        &state,
+        &geometry,
+        header(),
+        &source,
+        observer.try_into_cut().unwrap(),
+    )
+    .err()
+    .expect("malformed exact predecessor");
+    assert!(matches!(error, CarrierQueueRetirementError::Geometry(_)));
+    assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
+    drop(lifecycle);
+    drop(cleanup);
+    assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready()
+    );
+}

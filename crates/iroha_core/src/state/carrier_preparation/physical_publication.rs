@@ -7,7 +7,8 @@
 use super::super::runtime_journals::{PreparedRuntimeJournals, RuntimePublicationError};
 use super::{super::DetachedCarrierComponents, DecisionBoundCarrierJournals};
 use crate::kura::{
-    KuraPublicationLease, KuraPublicationPreparationError, KuraWsvCheckpointReceipt,
+    KuraPublicationCleanup, KuraPublicationLease, KuraPublicationPreparationError,
+    KuraWsvCheckpointReceipt,
 };
 use crate::publication_lock::PublicationGuard;
 use crate::state::carrier_preparation::queue_retirement::{
@@ -260,7 +261,7 @@ struct CompletionFences<'target> {
     _commit: PublicationGuard<'target>,
     _state: [concread::release::DeferredRelease; 2],
     _queue: Option<ReleasedCarrierQueue>,
-    _kura: [concread::release::DeferredRelease; 4],
+    _kura: KuraPublicationCleanup,
 }
 
 impl<'target> CarrierFences<'target> {
@@ -651,8 +652,9 @@ impl<Admission, BindingAdmission>
                 .try_prepare_publication(&target.block_hashes, |_, _| Ok::<_, Infallible>(()))
             {
                 Ok(prepared) => prepared,
-                Err((block_hashes, cause)) => {
+                Err((block_hashes, cause, hash_retirement)) => {
                     drop(fences.release_for_completion());
+                    drop(hash_retirement);
                     return Err((
                         DetachedCarrierComponents {
                             world,

@@ -84,20 +84,35 @@ impl<K: Key, V: Value> Storage<K, V> {
     }
     /// Create block to aggregate updates
     pub fn block(&self) -> Block<'_, K, V> {
-        let revert = self.revert_released.poisoning_guard(
-            self.revert_released
-                .with_acquisition_unwind_notification(|| self.revert.write()),
-        );
-        let blocks = self.blocks_released.poisoning_guard(
-            self.blocks_released
-                .with_acquisition_unwind_notification(|| self.blocks.write()),
-        );
-        let mut writers = StorageWriters::new(self, revert, blocks);
+        let mut writers = self.open_writers();
         let predecessor = self.publication.capture();
         // Clear revert
         writers.as_mut().revert.clear();
         Block::new(writers, false, predecessor, BlockMode::Ordinary)
     }
+    // Reject known undo poison before waiting for current. Both actual mutexes
+    // and their original notifications belong to the pair before construction.
+    fn open_writers(&self) -> StorageWriters<'_, K, V, Untracked> {
+        let revert = self
+            .revert_released
+            .poisoning_guard(self.revert.acquire_writer());
+        assert!(!revert.is_poisoned(), "original undo writer is poisoned");
+        let blocks = self
+            .blocks_released
+            .poisoning_guard(self.blocks.acquire_writer());
+        let (revert, blocks) = revert
+            .try_map_pair_preserving_release(
+                blocks,
+                |revert, blocks| {
+                    assert!(!blocks.is_poisoned(), "original storage writer is poisoned");
+                    Ok::<_, std::convert::Infallible>((revert.write(), blocks.write()))
+                },
+                || (self.revert.is_poisoned(), self.blocks.is_poisoned()),
+            )
+            .unwrap_or_else(|never| match never {});
+        StorageWriters::new(self, revert, blocks)
+    }
+
     /// Insert a value directly into the latest committed state.
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         let mut blocks = self.blocks_released.poisoning_guard(
@@ -119,15 +134,7 @@ impl<K: Key, V: Value> Storage<K, V> {
     }
     /// Create block to aggregate updates and revert changes created in the latest block
     pub fn block_and_revert(&self) -> Block<'_, K, V> {
-        let revert = self.revert_released.poisoning_guard(
-            self.revert_released
-                .with_acquisition_unwind_notification(|| self.revert.write()),
-        );
-        let blocks = self.blocks_released.poisoning_guard(
-            self.blocks_released
-                .with_acquisition_unwind_notification(|| self.blocks.write()),
-        );
-        let mut writers = StorageWriters::new(self, revert, blocks);
+        let mut writers = self.open_writers();
         let predecessor = self.publication.capture();
         // The committed undo tree may still be retained by snapshots. Copy its
         // preimages into the new current generation before clearing this writer;
@@ -449,61 +456,55 @@ impl<K: Key, V: Value, Admission, M: StorageMode<K, V>> Detached<K, V, Admission
             metadata,
         } = self;
         let wait = target.revert_released.observe();
-        let revert = match target.revert.try_write_owned(revert) {
-            Ok(writer) => target.revert_released.poisoning_guard(writer),
-            Err((revert, error)) => {
-                let error = match error {
-                    OwnedWriteError::Busy => {
-                        PublicationPreparationError::after_failed_acquisition(wait)
-                    }
-                    OwnedWriteError::Poisoned => PublicationPreparationError::Poisoned,
-                    OwnedWriteError::Changed => {
-                        // A stale base can be rejected after taking and releasing
-                        // the raw writer, before any wrapper is returned.
-                        cleanup.writers[1] =
-                            Some(target.revert_released.guard(()).release_deferred(drop).1);
-                        PublicationPreparationError::Changed
-                    }
-                };
-                return Err((
-                    Self {
-                        revert,
-                        blocks,
-                        metadata,
-                    },
-                    error,
-                    cleanup,
-                ));
-            }
-        };
+        let revert =
+            match physical::acquire_owned_writer(&target.revert, &target.revert_released, revert) {
+                Ok(writer) => writer,
+                Err((revert, error, released)) => {
+                    cleanup.writers[1] = released;
+                    let error = match error {
+                        OwnedWriteError::Busy => {
+                            PublicationPreparationError::after_failed_acquisition(wait)
+                        }
+                        OwnedWriteError::Poisoned => PublicationPreparationError::Poisoned,
+                        OwnedWriteError::Changed => PublicationPreparationError::Changed,
+                    };
+                    return Err((
+                        Self {
+                            revert,
+                            blocks,
+                            metadata,
+                        },
+                        error,
+                        cleanup,
+                    ));
+                }
+            };
         let wait = target.blocks_released.observe();
-        let blocks = match target.blocks.try_write_owned(blocks) {
-            Ok(writer) => target.blocks_released.poisoning_guard(writer),
-            Err((blocks, error)) => {
-                let error = match error {
-                    OwnedWriteError::Busy => {
-                        PublicationPreparationError::after_failed_acquisition(wait)
-                    }
-                    OwnedWriteError::Poisoned => PublicationPreparationError::Poisoned,
-                    OwnedWriteError::Changed => {
-                        cleanup.writers[0] =
-                            Some(target.blocks_released.guard(()).release_deferred(drop).1);
-                        PublicationPreparationError::Changed
-                    }
-                };
-                let (revert, released) = revert.release_deferred(|writer| writer.detach());
-                cleanup.writers[1] = Some(released);
-                return Err((
-                    Self {
-                        revert,
-                        blocks,
-                        metadata,
-                    },
-                    error,
-                    cleanup,
-                ));
-            }
-        };
+        let blocks =
+            match physical::acquire_owned_writer(&target.blocks, &target.blocks_released, blocks) {
+                Ok(writer) => writer,
+                Err((blocks, error, released)) => {
+                    cleanup.writers[0] = released;
+                    let error = match error {
+                        OwnedWriteError::Busy => {
+                            PublicationPreparationError::after_failed_acquisition(wait)
+                        }
+                        OwnedWriteError::Poisoned => PublicationPreparationError::Poisoned,
+                        OwnedWriteError::Changed => PublicationPreparationError::Changed,
+                    };
+                    let (revert, released) = revert.release_deferred(|writer| writer.detach());
+                    cleanup.writers[1] = Some(released);
+                    return Err((
+                        Self {
+                            revert,
+                            blocks,
+                            metadata,
+                        },
+                        error,
+                        cleanup,
+                    ));
+                }
+            };
         let mut prepared = PreparedPublication {
             writers: PreparedStorageWriters::new(
                 StorageWriters::new(target, revert, blocks),

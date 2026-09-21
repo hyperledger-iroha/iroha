@@ -7065,14 +7065,22 @@ mod tests {
     #[cfg(not(feature = "test-fixtures"))]
     fn release_envelope_requires_canonical_java_source_kotlin_phase() {
         let (policy, evidence) = unit_signed_release_context();
-        let java_phase = evidence.validation.phases.iter()
+        let java_phase = evidence
+            .validation
+            .phases
+            .iter()
             .position(|phase| phase.name == "java-source-kotlin")
             .expect("the canonical Java source consumer has its own required phase");
         assert_eq!(evidence.validation.phases.len(), 12);
         assert_eq!(java_phase, 6);
         validate_release_evidence_envelope(&evidence, &policy, ReleaseEnvironment::TestFixture)
             .expect("complete canonical phase inventory");
-        for retired_or_aliased in ["java-android", "java_android", "java_source_kotlin", "kotlin-sdk"] {
+        for retired_or_aliased in [
+            "java-android",
+            "java_android",
+            "java_source_kotlin",
+            "kotlin-sdk",
+        ] {
             let mut candidate = evidence.clone();
             candidate.validation.phases[java_phase].name = retired_or_aliased.to_owned();
             assert_eq!(

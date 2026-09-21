@@ -57,38 +57,115 @@ impl From<Error> for KuraPublicationPreparationError {
 
 /// All original Kura publication fences, acquired in the established order.
 ///
-/// Fields drop from the innermost fence to the outermost. This is not a receipt
-/// or a State publication authorization. Kura methods which acquire these locks
-/// must not be called while this owner is retained.
+/// Every physical fence unlocks before any release callback, including partial
+/// acquisition and unwind. This is not a receipt or State publication authority.
+/// Kura methods which reacquire these locks must not be called while retained.
 #[must_use = "retain the physical boundary through the authorized operation"]
 pub(crate) struct KuraPublicationLease<'kura> {
     kura: &'kura Kura,
     pending_canonical_bytes: u64,
-    _sidecar: PublicationGuard<'kura>,
-    _geometry: PublicationGuard<'kura>,
-    _canonical: PublicationGuard<'kura>,
-    _prune: PublicationGuard<'kura>,
+    fences: AcquiredKuraPublicationFences<'kura>,
+}
+
+/// Original partial or complete acquisition; absence never manufactures a wake.
+struct AcquiredKuraPublicationFences<'kura> {
+    sidecar: Option<PublicationGuard<'kura>>,
+    geometry: Option<PublicationGuard<'kura>>,
+    canonical: Option<PublicationGuard<'kura>>,
+    prune: Option<PublicationGuard<'kura>>,
+    cold_sidecar: Option<concread::release::DeferredReleaseBatch>,
+}
+
+/// Original notifications after every physical Kura owner has unlocked.
+#[must_use = "retain Kura cleanup through every enclosing physical owner"]
+pub(crate) struct KuraPublicationCleanup {
+    _fences: [Option<concread::release::DeferredRelease>; 4],
+    _cold_sidecar: Option<concread::release::DeferredReleaseBatch>,
+}
+
+impl<'kura> AcquiredKuraPublicationFences<'kura> {
+    fn new(kura: &'kura Kura) -> Self {
+        Self {
+            sidecar: None,
+            geometry: None,
+            canonical: None,
+            prune: None,
+            cold_sidecar: Some(kura.sidecar_lock.deferred_releases()),
+        }
+    }
+
+    /// Unlock for merge-log access while the original outer owners retain wakes.
+    fn release_cold_sidecar(&mut self) -> Result<(), KuraPublicationPreparationError> {
+        let sidecar = self.sidecar.take().expect("original cold sidecar guard");
+        match sidecar.try_release_into(
+            self.cold_sidecar
+                .as_mut()
+                .expect("original sidecar release batch"),
+        ) {
+            Ok(()) => Ok(()),
+            Err(sidecar) => {
+                // Preserve even an invalid source substitution for joint cleanup.
+                // Nothing was unlocked or notified by the refused transfer.
+                self.sidecar = Some(sidecar);
+                Err(KuraPublicationPreparationError::Storage(
+                    Error::PruneIntentConflict(
+                        "publication sidecar release belongs to a foreign physical owner"
+                            .to_owned(),
+                    ),
+                ))
+            }
+        }
+    }
+
+    fn take_cleanup(&mut self) -> KuraPublicationCleanup {
+        KuraPublicationCleanup {
+            _fences: [
+                self.sidecar.take().map(PublicationGuard::release_deferred),
+                self.geometry.take().map(PublicationGuard::release_deferred),
+                self.canonical
+                    .take()
+                    .map(PublicationGuard::release_deferred),
+                self.prune.take().map(PublicationGuard::release_deferred),
+            ],
+            _cold_sidecar: self.cold_sidecar.take(),
+        }
+    }
+
+    fn release_deferred(mut self) -> KuraPublicationCleanup {
+        self.take_cleanup()
+    }
+}
+
+impl Drop for AcquiredKuraPublicationFences<'_> {
+    fn drop(&mut self) {
+        // The fixed cleanup owner is built only after all four physical unlocks.
+        // Empty slots and an unused cold batch cannot signal an unacquired lock.
+        drop(self.take_cleanup());
+    }
 }
 
 impl Kura {
     /// Capture immutable pending-byte accounting before acquiring geometry/sidecar.
     /// The caller owns prune and canonical fences. Cold merge lookups must return
     /// the actual sidecar release observation instead of blocking behind its owner.
-    fn try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards(
-        &self,
+    fn try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards<'kura>(
+        &'kura self,
+        fences: &mut AcquiredKuraPublicationFences<'kura>,
     ) -> Result<u64, KuraPublicationPreparationError> {
         if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
             return Ok(0);
         }
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
         self.pending_block_bytes_with_merge_resolver(persisted_count, unindexed_bytes, |hash| {
-            let sidecar = self.sidecar_lock.try_lock_or_wait().map_err(|wait| {
+            fences.sidecar = Some(self.sidecar_lock.try_lock_or_wait().map_err(|wait| {
                 KuraPublicationPreparationError::Busy {
                     field: "sidecar_lock",
                     wait,
                 }
-            })?;
-            self.merge_entry_by_hash_with_sidecar_guard(hash, sidecar)
+            })?);
+            let pending = self.pending_merge_entry_by_hash_under_sidecar_guard(hash)?;
+            fences.release_cold_sidecar()?;
+            self.merge_entry_by_hash_after_sidecar(hash, pending)
                 .map_err(KuraPublicationPreparationError::Storage)
         })
     }
@@ -110,18 +187,16 @@ impl Kura {
         frontiers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
     ) -> super::Result<()> {
         self.ensure_canonical_storage_not_poisoned()?;
-        let prune = self.prune_lock.lock();
+        let mut fences = AcquiredKuraPublicationFences::new(self);
+        fences.prune = Some(self.prune_lock.lock());
         self.ensure_prune_recovery_not_required()?;
-        let canonical = self.canonical_chain_lock.lock();
-        let geometry = self.lane_geometry_lock.lock();
-        let sidecar = self.sidecar_lock.lock();
+        fences.canonical = Some(self.canonical_chain_lock.lock());
+        fences.geometry = Some(self.lane_geometry_lock.lock());
+        fences.sidecar = Some(self.sidecar_lock.lock());
         let result = self.reauthenticate_native_amx_prepublication_under_publication_guards(
             token, block, manifest, finality, frontiers,
         );
-        drop(sidecar);
-        drop(geometry);
-        drop(canonical);
-        drop(prune);
+        drop(fences);
         result
     }
 
@@ -204,9 +279,10 @@ impl Kura {
         finalized_at_unix_ms: u64,
         receipt: &super::KuraV2CommitReceipt,
     ) -> Result<(), KuraArchiveCaptureAuthenticationError> {
-        let _prune = self.prune_lock.lock();
-        let _canonical = self.canonical_chain_lock.lock();
-        let _sidecar = self.sidecar_lock.lock();
+        let mut fences = AcquiredKuraPublicationFences::new(self);
+        fences.prune = Some(self.prune_lock.lock());
+        fences.canonical = Some(self.canonical_chain_lock.lock());
+        fences.sidecar = Some(self.sidecar_lock.lock());
         self.authenticate_archive_capture_under_publication_guards(
             network_id,
             height,
@@ -310,16 +386,17 @@ impl Kura {
         // lock-release dependency, even when another physical owner is busy.
         self.ensure_canonical_storage_not_poisoned()
             .map_err(KuraPublicationPreparationError::Storage)?;
-        let prune = acquire("prune_lock", &self.prune_lock)?;
+        let mut fences = AcquiredKuraPublicationFences::new(self);
+        fences.prune = Some(acquire("prune_lock", &self.prune_lock)?);
         // Active pruning also sets this flag while it owns prune_lock. Only
         // classify it as restart-required after acquiring that actual owner.
         self.ensure_prune_recovery_not_required()
             .map_err(KuraPublicationPreparationError::Storage)?;
-        let canonical = acquire("canonical_chain_lock", &self.canonical_chain_lock)?;
-        let pending_canonical_bytes =
-            self.try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
-        let geometry = acquire("lane_geometry_lock", &self.lane_geometry_lock)?;
-        let sidecar = acquire("sidecar_lock", &self.sidecar_lock)?;
+        fences.canonical = Some(acquire("canonical_chain_lock", &self.canonical_chain_lock)?);
+        let pending_canonical_bytes = self
+            .try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards(&mut fences)?;
+        fences.geometry = Some(acquire("lane_geometry_lock", &self.lane_geometry_lock)?);
+        fences.sidecar = Some(acquire("sidecar_lock", &self.sidecar_lock)?);
         self.ensure_prune_recovery_not_required()
             .map_err(KuraPublicationPreparationError::Storage)?;
         self.ensure_canonical_storage_not_poisoned()
@@ -327,10 +404,7 @@ impl Kura {
         Ok(KuraPublicationLease {
             kura: self,
             pending_canonical_bytes,
-            _sidecar: sidecar,
-            _geometry: geometry,
-            _canonical: canonical,
-            _prune: prune,
+            fences,
         })
     }
 }
@@ -353,10 +427,13 @@ impl<'kura> KuraPublicationLease<'kura> {
         Self {
             kura,
             pending_canonical_bytes,
-            _sidecar: sidecar,
-            _geometry: geometry,
-            _canonical: canonical,
-            _prune: prune,
+            fences: AcquiredKuraPublicationFences {
+                sidecar: Some(sidecar),
+                geometry: Some(geometry),
+                canonical: Some(canonical),
+                prune: Some(prune),
+                cold_sidecar: Some(kura.sidecar_lock.deferred_releases()),
+            },
         }
     }
 }
@@ -364,20 +441,8 @@ impl<'kura> KuraPublicationLease<'kura> {
 impl KuraPublicationLease<'_> {
     /// Release every physical Kura fence without invoking retry callbacks.
     /// The caller retains these original notifications through its outer fences.
-    pub(crate) fn release_deferred(self) -> [concread::release::DeferredRelease; 4] {
-        let Self {
-            _sidecar,
-            _geometry,
-            _canonical,
-            _prune,
-            ..
-        } = self;
-        [
-            _sidecar.release_deferred(),
-            _geometry.release_deferred(),
-            _canonical.release_deferred(),
-            _prune.release_deferred(),
-        ]
+    pub(crate) fn release_deferred(self) -> KuraPublicationCleanup {
+        self.fences.release_deferred()
     }
 
     /// Pending canonical bytes captured before the inner publication fences.

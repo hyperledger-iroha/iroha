@@ -2091,7 +2091,7 @@ impl BlockHashesBlock<'_> {
         let prepared = self
             .detach()
             .try_prepare_publication(target, |_, _| Ok::<_, std::convert::Infallible>(()))
-            .unwrap_or_else(|(_, error)| panic!("test hash publication refused: {error:?}"));
+            .unwrap_or_else(|(_, error, _)| panic!("test hash publication refused: {error:?}"));
         drop(prepared.publish());
     }
 }
@@ -55903,6 +55903,7 @@ impl<'state> StateBlock<'state> {
         };
         let merge_runtime_effects = self.merge_execution_runtime_effects();
         // Outlive the component writers and commit fence, including unwind.
+        let mut hash_refusal_cleanup = None;
         let membership_retirement;
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
@@ -56349,7 +56350,10 @@ impl<'state> StateBlock<'state> {
                 .try_prepare_publication(&state_ref.block_hashes, |_, _| {
                     Ok::<_, std::convert::Infallible>(())
                 })
-                .map_err(|(_, _)| TransactionsBlockError::SnapshotObservationChanged)?;
+                .map_err(|(_, _, cleanup)| {
+                    hash_refusal_cleanup = Some(cleanup);
+                    TransactionsBlockError::SnapshotObservationChanged
+                })?;
             let _view_generation = state_ref.begin_state_view_write();
             let state_write_lock_hold_start = Instant::now();
             let tx_commit_start = Instant::now();
@@ -56563,6 +56567,7 @@ impl<'state> StateBlock<'state> {
             }
         }
         drop(_state_commit_lock);
+        drop(hash_refusal_cleanup);
         drop(membership_retirement);
         drop(hash_retirement);
         Ok(())

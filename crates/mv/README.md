@@ -226,3 +226,15 @@ shells. A retained carrier releases its State/Queue/Kura fences before retiring
 World/runtime refusal cleanup. This covers returned errors; panic propagation
 during acquisition, earlier Kura/State/Queue probes and successor acquisitions
 still require enclosing ownership.
+
+Map publication binds release observations to Concread’s actual acquired writer
+before validating its predecessor. A foreign/busy refusal emits no synthetic
+release; stale/poisoned cleanup retains the original acquired notification through
+the enclosing fences. See [the acquisition record](../../docs/history/2026-09-21/actual-writer-acquisition.md).
+
+Fresh ordinary and admitted Storage opening acquires both native writer phases
+before constructing either cursor. One pair transition retains both original
+notifications through refusal and callee unwind; success transfers both guards
+without a wake. Admitted opening reserves the whole pair and identity first,
+checks both poison verdicts before policy callbacks, and remains inside the
+original pool refund scope. See [fresh pair acquisition](../../docs/history/2026-09-21/fresh-pair-acquisition.md).

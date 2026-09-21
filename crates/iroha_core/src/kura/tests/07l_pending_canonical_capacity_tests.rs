@@ -10,7 +10,7 @@ fn pending_canonical_capacity_fixture() -> (TempDir, Arc<Kura>) {
     kura.append_pending_block_for_bench(DummyBlocks::new().next());
     (temp_dir, kura)
 }
-fn pending_canonical_merge_capacity_fixture() -> (TempDir, Arc<Kura>, u64, HashOf<MergeLedgerEntry>)
+pub(in crate::kura) fn pending_canonical_merge_capacity_fixture() -> (TempDir, Arc<Kura>, u64, HashOf<MergeLedgerEntry>)
 {
     let temp_dir = TempDir::new().expect("pending merge capacity temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);

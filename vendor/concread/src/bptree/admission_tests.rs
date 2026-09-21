@@ -29,6 +29,159 @@ impl ClonePlanning<usize, usize> for ScalarPolicy {
 }
 
 #[test]
+fn acquired_admission_refusal_retains_actual_writer_and_deferred_release() {
+    use crate::release::ReleaseNotification;
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Waker},
+    };
+    let map = BptreeMap::<usize, usize, Prepaid<ScalarPolicy>>::try_new_with_node_custody(|_| {
+        Ok::<_, ()>(ScalarPolicy)
+    })
+    .unwrap();
+    let source = ReleaseNotification::default();
+    let mut wait = source.observe().wait_for_release();
+    let acquired = without_allocations(|| map.try_acquire_writer().unwrap());
+    let (acquired, (input, error)) = without_allocations(|| {
+        source
+            .poisoning_guard(acquired)
+            .try_map_preserving_release(|acquired| {
+                acquired
+                    .try_insert_admitted_with_footprint(7, 21, |existing, additional| {
+                        assert!(existing.bytes() > 0 && additional.bytes() > 0);
+                        Err::<ScalarPolicy, _>(17)
+                    })
+                    .map_err(|(acquired, input, error)| (acquired, (input, error)))
+            })
+            .err()
+            .expect("original admission refusal")
+    });
+    assert_eq!(input, (7, 21));
+    assert!(matches!(error, MapAdmissionError::Refused(17)));
+    assert!(map.try_acquire_writer().is_none());
+    assert!(Pin::new(&mut wait)
+        .poll(&mut Context::from_waker(Waker::noop()))
+        .is_pending());
+    let ((), release) = without_allocations(|| acquired.release_deferred(drop));
+    assert!(map.try_acquire_writer().is_some());
+    assert!(Pin::new(&mut wait)
+        .poll(&mut Context::from_waker(Waker::noop()))
+        .is_pending());
+    drop(release);
+    assert!(Pin::new(&mut wait)
+        .poll(&mut Context::from_waker(Waker::noop()))
+        .is_ready());
+    assert!(map.read().is_empty());
+}
+
+#[test]
+fn acquired_admission_busy_poison_and_unwind_preserve_real_custody() {
+    use crate::release::ReleaseNotification;
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Waker},
+    };
+    let map = BptreeMap::<usize, usize, Prepaid<ScalarPolicy>>::try_new_with_node_custody(|_| {
+        Ok::<_, ()>(ScalarPolicy)
+    })
+    .unwrap();
+    let source = ReleaseNotification::default();
+    let observation = source.observe();
+    let mut wait = observation.clone().wait_for_release();
+    let acquired = source.poisoning_guard(map.try_acquire_writer().unwrap());
+    assert!(without_allocations(|| map.try_acquire_writer()).is_none());
+    assert!(Pin::new(&mut wait)
+        .poll(&mut Context::from_waker(Waker::noop()))
+        .is_pending());
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = acquired.try_map_preserving_release(|acquired| {
+            acquired
+                .try_insert_admitted_with_footprint(7, 21, |_, _| -> Result<ScalarPolicy, ()> {
+                    panic!("admission callback failed while holding actual writer");
+                })
+                .map_err(|(acquired, input, error)| (acquired, (input, error)))
+        });
+    }))
+    .is_err());
+    assert!(map.is_poisoned() && observation.is_poisoned());
+    assert!(Pin::new(&mut wait)
+        .poll(&mut Context::from_waker(Waker::noop()))
+        .is_ready());
+    let acquired = without_allocations(|| map.try_acquire_writer().unwrap());
+    let (acquired, input, error) = without_allocations(|| {
+        acquired
+            .try_insert_admitted_with_footprint(7, 21, |_, _| -> Result<ScalarPolicy, ()> {
+                panic!("poison precedes admission");
+            })
+            .err()
+            .expect("retain the actual poisoned guard")
+    });
+    assert_eq!(input, (7, 21));
+    assert!(matches!(error, MapAdmissionError::Poisoned));
+    assert!(map.try_acquire_writer().is_none());
+    drop(acquired);
+    assert!(map.try_acquire_writer().is_some());
+}
+
+#[test]
+fn acquired_admission_success_and_planning_refusal_preserve_original_input() {
+    let map = BptreeMap::<usize, usize, Prepaid<ScalarPolicy>>::try_new_with_node_custody(|_| {
+        Ok::<_, ()>(ScalarPolicy)
+    })
+    .unwrap();
+    let acquired = map.try_acquire_writer().unwrap();
+    let (writer, previous) = acquired
+        .try_insert_admitted_with_footprint(7, 21, |_, _| Ok::<_, ()>(ScalarPolicy))
+        .unwrap_or_else(|_| panic!("complete original admission"));
+    assert_eq!(previous, None);
+    assert!(map.try_acquire_writer().is_none());
+    assert!(map.read().is_empty(), "successor remains private");
+    let pointer = writer.get(&7).map(std::ptr::from_ref);
+    let owned = writer.detach();
+    assert_eq!(owned.get(&7).map(std::ptr::from_ref), pointer);
+    map.try_write_owned(owned)
+        .unwrap_or_else(|_| panic!("same predecessor"))
+        .commit();
+    assert_eq!(map.read().get(&7), Some(&21));
+
+    let map =
+        BptreeMap::<Box<usize>, Box<usize>, Prepaid<UnknownPayload>>::try_new_with_node_custody(
+            |_| Ok::<_, ()>(UnknownPayload),
+        )
+        .unwrap();
+    let key = Box::new(7);
+    let value = Box::new(21);
+    let pointers = (std::ptr::from_ref(&*key), std::ptr::from_ref(&*value));
+    let acquired = map.try_acquire_writer().unwrap();
+    let (acquired, (key, value), error) = without_allocations(|| {
+        acquired
+            .insert_with_source(
+                key,
+                value,
+                |_, _| -> Result<UnknownPayload, MapAdmissionError<()>> {
+                    panic!("unsupported payload planning must precede admission");
+                },
+            )
+            .err()
+            .expect("original planning refusal")
+    });
+    assert!(matches!(
+        error,
+        MapAdmissionError::Planning(PlanningError::UnsupportedPayload)
+    ));
+    assert_eq!(
+        (std::ptr::from_ref(&*key), std::ptr::from_ref(&*value)),
+        pointers
+    );
+    assert!(map.try_acquire_writer().is_none());
+    drop(acquired);
+    assert!(map.try_acquire_writer().is_some());
+    assert!(map.read().is_empty());
+}
+
+#[test]
 fn demand_overflow_preserves_the_original_sum_and_zero_layout_needs_no_allocation() {
     let mut demand = AllocationDemand::new();
     demand.add_layout(Layout::new::<()>()).unwrap();

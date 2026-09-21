@@ -1044,7 +1044,7 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
         operations = tuple(map(_code, (
             "let _state_write_lock = state_write_lock.lock();",
             "block_hashes.detach().try_prepare_publication(",
-            ".map_err(|(_, _)| TransactionsBlockError::SnapshotObservationChanged)?;",
+            ".map_err(|(_, _, cleanup)| {\n                    hash_refusal_cleanup = Some(cleanup);\n                    TransactionsBlockError::SnapshotObservationChanged\n                })?;",
             "let _view_generation = state_ref.begin_state_view_write();",
             "canonical_runtime.commit();",
             "Some(prepared.publish(state_ref, &_view_generation, !replay_prevalidation))",

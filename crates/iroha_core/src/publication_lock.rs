@@ -35,6 +35,17 @@ impl<T> Drop for PhysicalPublicationGuard<'_, T> {
 }
 
 impl<T> PublicationGuard<'_, T> {
+    /// Unlock this original mutex into its exact source's retained release batch.
+    /// A foreign batch returns the original guard without unlocking or notifying.
+    pub(crate) fn try_release_into(
+        self,
+        batch: &mut concread::release::DeferredReleaseBatch,
+    ) -> Result<(), Self> {
+        self.inner
+            .try_release_into(batch, drop)
+            .map_err(|inner| Self { inner })
+    }
+
     /// Unlock the actual mutex and retain its original notification until the
     /// enclosing aggregate has released every other physical fence.
     pub(crate) fn release_deferred(self) -> concread::release::DeferredRelease {
@@ -70,6 +81,11 @@ impl<T> std::ops::DerefMut for PublicationGuard<'_, T> {
 }
 
 impl<T> PublicationMutex<T> {
+    /// An empty, allocation-free release batch bound to this actual mutex.
+    pub(crate) fn deferred_releases(&self) -> concread::release::DeferredReleaseBatch {
+        self.released.deferred_batch()
+    }
+
     /// Bind the original protected value and its release observation at creation.
     pub(crate) fn new(value: T) -> Self {
         Self {

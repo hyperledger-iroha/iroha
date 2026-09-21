@@ -478,6 +478,106 @@ fn paired_release_uses_actual_poison_and_unlocks_both_before_callback_unwind() {
 }
 
 #[test]
+fn observed_release_reports_existing_physical_poison_and_excludes_later_wake_panic() {
+    struct Probe {
+        lock: Arc<Mutex<()>>,
+        unavailable: AtomicBool,
+        calls: AtomicUsize,
+        panic: bool,
+    }
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            self.unavailable.store(
+                matches!(
+                    self.lock.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ),
+                Ordering::SeqCst,
+            );
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.panic, "wake after physical release");
+        }
+    }
+    for already_poisoned in [false, true] {
+        for panic_after_release in [false, true] {
+            let lock = Arc::new(Mutex::new(()));
+            if already_poisoned {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _held = lock.lock().unwrap();
+                    panic!("preexisting physical poison");
+                }));
+            }
+            let source = ReleaseNotification::default();
+            let before = source.observe();
+            let mut wait = before.clone().wait_for_release();
+            let probe = Arc::new(Probe {
+                lock: Arc::clone(&lock),
+                unavailable: AtomicBool::new(false),
+                calls: AtomicUsize::new(0),
+                panic: panic_after_release,
+            });
+            let waker = Waker::from(Arc::clone(&probe));
+            assert!(Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending());
+            let owner = source.poisoning_guard(lock.lock().unwrap_or_else(|p| p.into_inner()));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                owner.release_with_observed_poison(drop, || lock.is_poisoned());
+            }));
+            assert_eq!(result.is_err(), panic_after_release);
+            assert!(!probe.unavailable.load(Ordering::SeqCst));
+            assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(before.is_poisoned(), already_poisoned);
+            assert_eq!(lock.is_poisoned(), already_poisoned);
+            assert!(Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(&waker))
+                .is_ready());
+        }
+    }
+}
+
+#[test]
+fn pair_construction_transfers_both_original_guards_without_early_release() {
+    let first = Mutex::new(());
+    let second = Mutex::new(());
+    let source_a = ReleaseNotification::default();
+    let source_b = ReleaseNotification::default();
+    let a = source_a.poisoning_guard(first.lock().unwrap());
+    let b = source_b.poisoning_guard(second.lock().unwrap());
+    let before_a = source_a.observe();
+    let before_b = source_b.observe();
+    let wake = Arc::new(WakeCount::default());
+    let mut wait_a = before_a.clone().wait_for_release();
+    let mut wait_b = before_b.clone().wait_for_release();
+    assert!(poll(&mut wait_a, &wake).is_pending());
+    assert!(poll(&mut wait_b, &wake).is_pending());
+    let (a, b) = a
+        .try_map_pair_preserving_release(
+            b,
+            |a, b| Ok::<_, ()>(((a, 7), (b, 11))),
+            || panic!("successful construction releases neither guard"),
+        )
+        .unwrap();
+    assert_eq!(a.1, 7);
+    assert_eq!(b.1, 11);
+    assert!(first.try_lock().is_err());
+    assert!(second.try_lock().is_err());
+    assert_eq!(source_a.observe(), before_a);
+    assert_eq!(source_b.observe(), before_b);
+    assert_eq!(wake.0.load(Ordering::SeqCst), 0);
+    a.release_pair_with(
+        b,
+        |a, b| drop((a, b)),
+        || (first.is_poisoned(), second.is_poisoned()),
+    );
+    assert!(poll(&mut wait_a, &wake).is_ready());
+    assert!(poll(&mut wait_b, &wake).is_ready());
+    assert_eq!(wake.0.load(Ordering::SeqCst), 2);
+    assert!(!source_a.observe().is_poisoned());
+    assert!(!source_b.observe().is_poisoned());
+}
+
+#[test]
 fn deferred_release_keeps_original_wait_and_ignores_later_cleanup_unwind() {
     for panic_after in [false, true] {
         let source = ReleaseNotification::default();
@@ -536,4 +636,152 @@ fn fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup() {
     drop(release);
     assert!(poll(&mut wait, &wake).is_ready());
     assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn release_batch_empty_and_foreign_transfer_preserve_original_custody() {
+    let source = ReleaseNotification::default();
+    let foreign = ReleaseNotification::default();
+    let physical = Mutex::new(7_u64);
+    let mut wait = source.observe().wait_for_release();
+    let wake = Arc::new(WakeCount::default());
+    assert!(poll(&mut wait, &wake).is_pending());
+    drop(source.deferred_batch());
+    assert!(poll(&mut wait, &wake).is_pending());
+    let mut wrong = foreign.deferred_batch();
+    let guard = source.guard(physical.lock().unwrap());
+    let original = &**guard as *const u64;
+    let guard = guard
+        .try_release_into(&mut wrong, |_| -> () {
+            panic!("foreign transfer called release")
+        })
+        .err()
+        .expect("foreign batch returns original guard");
+    assert_eq!(&**guard as *const u64, original);
+    assert!(physical.try_lock().is_err());
+    drop(wrong);
+    assert_eq!(wake.0.load(Ordering::SeqCst), 0);
+    let mut exact = source.deferred_batch();
+    assert!(guard.try_release_into(&mut exact, drop).is_ok());
+    assert!(physical.try_lock().is_ok());
+    assert!(poll(&mut wait, &wake).is_pending());
+    drop(source);
+    drop(exact);
+    assert!(poll(&mut wait, &wake).is_ready());
+    assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+}
+
+#[cfg(feature = "maps")]
+#[test]
+fn release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes() {
+    use crate::internals::bptree::node::allocation_tests::without_allocations;
+    struct Reenter {
+        source: Arc<ReleaseNotification>,
+        physical: Arc<Mutex<()>>,
+        outer: Arc<Mutex<()>>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for Reenter {
+        fn wake(self: Arc<Self>) {
+            assert!(self.physical.try_lock().is_ok());
+            assert!(self.outer.try_lock().is_ok());
+            assert!(self.source.state.try_lock().is_ok());
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let source = Arc::new(ReleaseNotification::default());
+    let physical = Arc::new(Mutex::new(()));
+    // Initialize platform mutex storage before measuring release bookkeeping.
+    drop(physical.lock().unwrap());
+    let outer = Arc::new(Mutex::new(()));
+    let outer_guard = outer.lock().unwrap();
+    let mut batch = without_allocations(|| source.deferred_batch());
+    let mut first = source.observe().wait_for_release();
+    let callback = Arc::new(Reenter {
+        source: Arc::clone(&source),
+        physical: Arc::clone(&physical),
+        outer: Arc::clone(&outer),
+        wakes: AtomicUsize::new(0),
+    });
+    let waker = Waker::from(Arc::clone(&callback));
+    assert!(Pin::new(&mut first)
+        .poll(&mut Context::from_waker(&waker))
+        .is_pending());
+    let references = Arc::strong_count(&source.state);
+    for _ in 0..128 {
+        without_allocations(|| {
+            let guard = source.guard(physical.lock().unwrap());
+            assert!(guard.try_release_into(&mut batch, drop).is_ok());
+        });
+    }
+    assert_eq!(Arc::strong_count(&source.state), references);
+    assert_eq!(source.state.lock().unwrap().sequence, 0);
+    // Observation after a reacquisition still waits on this same deferred cut.
+    let guard = source.guard(physical.lock().unwrap());
+    let mut later = source.observe().wait_for_release();
+    let before_first_poll = source.observe();
+    let mut canceled = source.observe().wait_for_release();
+    for wait in [&mut later, &mut canceled] {
+        assert!(Pin::new(wait)
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending());
+    }
+    drop(canceled);
+    without_allocations(|| assert!(guard.try_release_into(&mut batch, drop).is_ok()));
+    assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
+    drop(outer_guard);
+    without_allocations(|| drop(batch));
+    assert_eq!(callback.wakes.load(Ordering::SeqCst), 2);
+    assert_eq!(source.state.lock().unwrap().sequence, 1);
+    for wait in [
+        &mut first,
+        &mut later,
+        &mut before_first_poll.wait_for_release(),
+    ] {
+        assert!(Pin::new(wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready());
+    }
+    let mut successor = source.observe().wait_for_release();
+    assert!(Pin::new(&mut successor)
+        .poll(&mut Context::from_waker(&waker))
+        .is_pending());
+    drop(source.guard(physical.lock().unwrap()));
+    assert!(Pin::new(&mut successor)
+        .poll(&mut Context::from_waker(Waker::noop()))
+        .is_ready());
+}
+
+#[test]
+fn release_batch_records_actual_physical_poison_without_later_cleanup_poison() {
+    for during_release in [false, true] {
+        let source = ReleaseNotification::default();
+        let physical = Mutex::new(());
+        let observation = source.observe();
+        let mut wait = observation.clone().wait_for_release();
+        let wake = Arc::new(WakeCount::default());
+        assert!(poll(&mut wait, &wake).is_pending());
+        let mut batch = source.deferred_batch();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let guard = source.poisoning_guard(physical.lock().unwrap());
+            let result = guard.try_release_into(&mut batch, |guard| {
+                assert!(!during_release, "physical release callback unwound");
+                drop(guard);
+            });
+            assert!(result.is_ok());
+        }));
+        assert_eq!(panic.is_err(), during_release);
+        assert_eq!(physical.is_poisoned(), during_release);
+        assert_eq!(wake.0.load(Ordering::SeqCst), 0);
+        assert!(poll(&mut wait, &wake).is_pending());
+        assert!(!observation.is_poisoned());
+        let later = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _batch = batch;
+            panic!("later aggregate cleanup unwound");
+        }));
+        assert!(later.is_err());
+        assert_eq!(observation.is_poisoned(), during_release);
+        assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+        assert!(poll(&mut wait, &wake).is_ready());
+    }
 }

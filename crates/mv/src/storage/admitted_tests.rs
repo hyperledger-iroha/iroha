@@ -16,6 +16,36 @@ use std::{
     task::{Context, Poll, Wake, Waker},
 };
 
+// Test-only single-map adapter: notifications follow an actual acquisition,
+// never a guessed MapAdmissionError category. Production uses its joint owner.
+fn acquire_test_writer<'a, K, V, M, T>(
+    notification: &'a ReleaseNotification,
+    map: &'a BptreeMap<K, V, M>,
+    acquire: impl FnOnce(
+        concread::bptree::BptreeMapWriterAcquisition<'a, K, V, M>,
+    ) -> Result<
+        T,
+        (
+            concread::bptree::BptreeMapWriterAcquisition<'a, K, V, M>,
+            MapAdmissionError<AdmittedStorageError>,
+        ),
+    >,
+) -> Result<ReleaseGuard<'a, T>, MapAdmissionError<AdmittedStorageError>>
+where
+    K: Key,
+    V: Value,
+    M: MapMode + NodeCloning<K, V>,
+{
+    let acquired = map.try_acquire_writer().ok_or(MapAdmissionError::Busy)?;
+    notification
+        .poisoning_guard(acquired)
+        .try_map_preserving_release(acquire)
+        .map_err(|(acquired, error)| {
+            drop(acquired);
+            error
+        })
+}
+
 struct Records {
     live: Mutex<Vec<(usize, bool, usize)>>,
     panic_on: AtomicUsize,
@@ -150,11 +180,14 @@ fn assert_healthy_contention<V: Copy + Send + Sync + 'static>(
             component: 0,
         })
     };
-    let held = admitted::acquire_writer(notification, || map.try_write_admitted(provider)).unwrap();
+    let held = acquire_test_writer(notification, map, |acquired| {
+        acquired.try_write_admitted(provider)
+    })
+    .unwrap();
     let wait = notification.observe();
     assert!(!wait.is_poisoned());
-    let refused = admitted::acquire_writer(notification, || {
-        map.try_write_admitted::<AdmittedStorageError>(|_| {
+    let refused = acquire_test_writer(notification, map, |acquired| {
+        acquired.try_write_admitted::<AdmittedStorageError>(|_| {
             panic!("held writer must refuse before admission")
         })
     });
@@ -173,7 +206,12 @@ fn assert_healthy_contention<V: Copy + Send + Sync + 'static>(
         future.as_mut().poll(&mut Context::from_waker(&waker)),
         Poll::Ready(())
     );
-    drop(admitted::acquire_writer(notification, || map.try_write_admitted(provider)).unwrap());
+    drop(
+        acquire_test_writer(notification, map, |acquired| {
+            acquired.try_write_admitted(provider)
+        })
+        .unwrap(),
+    );
 }
 
 #[test]
@@ -214,18 +252,16 @@ fn direct_and_reacquired_publication_install_whole_pair_before_charge_cleanup_pa
             let old_current = storage.blocks.read();
             let old_undo = storage.revert.read();
             let predecessor = storage.publication.capture();
-            let mut revert = admitted::acquire_writer(&storage.revert_released, || {
-                storage
-                    .revert
-                    .try_write_admitted(|demand| provider(0, demand))
-            })
-            .unwrap();
-            let mut blocks = admitted::acquire_writer(&storage.blocks_released, || {
-                storage
-                    .blocks
-                    .try_write_admitted(|demand| provider(0, demand))
-            })
-            .unwrap();
+            let mut revert =
+                acquire_test_writer(&storage.revert_released, &storage.revert, |acquired| {
+                    acquired.try_write_admitted(|demand| provider(0, demand))
+                })
+                .unwrap();
+            let mut blocks =
+                acquire_test_writer(&storage.blocks_released, &storage.blocks, |acquired| {
+                    acquired.try_write_admitted(|demand| provider(0, demand))
+                })
+                .unwrap();
             revert
                 .try_insert_admitted(7, Some(70), |demand| provider(2, demand))
                 .unwrap_or_else(|_| panic!("original undo edit"));
@@ -375,11 +411,11 @@ fn refused_admitted_acquisition_signals_only_the_original_released_writer() {
                         _ => unreachable!(),
                     })
                 };
-                let refused = admitted::acquire_writer(notification, || {
+                let refused = acquire_test_writer(notification, &storage.blocks, |acquired| {
                     if clear {
-                        storage.blocks.try_clear_admitted(&mut refuse)
+                        acquired.try_clear_admitted(&mut refuse)
                     } else {
-                        storage.blocks.try_write_admitted(&mut refuse)
+                        acquired.try_write_admitted(&mut refuse)
                     }
                 });
                 match (refuse_with, refused) {
@@ -877,14 +913,14 @@ fn admitted_replacement_contention_names_only_the_original_held_writer() {
                 ))
             };
             let undo = hold_undo.then(|| {
-                admitted::acquire_writer(&storage.revert_released, || {
-                    storage.revert.try_write_admitted(provider)
+                acquire_test_writer(&storage.revert_released, &storage.revert, |acquired| {
+                    acquired.try_write_admitted(provider)
                 })
                 .unwrap()
             });
             let current = (!hold_undo).then(|| {
-                admitted::acquire_writer(&storage.blocks_released, || {
-                    storage.blocks.try_write_admitted(provider)
+                acquire_test_writer(&storage.blocks_released, &storage.blocks, |acquired| {
+                    acquired.try_write_admitted(provider)
                 })
                 .unwrap()
             });
@@ -1270,3 +1306,6 @@ fn admitted_snapshot_capacity_and_planning_refusals_leave_source_reusable() {
     drop(source);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[path = "fresh_pair_acquisition_tests.rs"]
+mod fresh_pair_acquisition;

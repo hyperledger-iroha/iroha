@@ -1157,3 +1157,143 @@ fn map_abort_retains_original_notifications_until_the_entire_aggregate_unlocks()
     assert_eq!(values(&first), [(1, 10)]);
     assert_eq!(values(&second), [(1, 20)]);
 }
+
+#[test]
+fn acquired_map_refusal_never_fabricates_foreign_or_busy_release() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Waker},
+    };
+    let target: Storage<u64, u64> = [(1, 10)].into_iter().collect();
+    let foreign: Storage<u64, u64> = [(1, 10)].into_iter().collect();
+    let owned = foreign.blocks.write().detach();
+    let pointer = owned.get(&1).map(std::ptr::from_ref);
+    let mut wait = target.blocks_released.observe().wait_for_release();
+    let (owned, error, cleanup) =
+        physical::acquire_owned_writer(&target.blocks, &target.blocks_released, owned)
+            .err()
+            .unwrap();
+    assert_eq!(error, OwnedWriteError::Changed);
+    assert!(cleanup.is_none());
+    assert_eq!(owned.get(&1).map(std::ptr::from_ref), pointer);
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    drop(owned);
+    let owned = target.blocks.write().detach();
+    let held = target
+        .blocks_released
+        .poisoning_guard(target.blocks.write());
+    let (owned, error, cleanup) =
+        physical::acquire_owned_writer(&target.blocks, &target.blocks_released, owned)
+            .err()
+            .unwrap();
+    assert_eq!(error, OwnedWriteError::Busy);
+    assert!(cleanup.is_none());
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    drop(held);
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready()
+    );
+    let writer = physical::acquire_owned_writer(&target.blocks, &target.blocks_released, owned)
+        .unwrap_or_else(|_| panic!("original retry"));
+    assert_eq!(
+        writer.get(&1).map(std::ptr::from_ref),
+        Some(std::ptr::from_ref(target.blocks.read().get(&1).unwrap()))
+    );
+}
+
+#[test]
+fn stale_map_pair_refusal_defers_actual_releases_through_enclosing_fence() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Wake, Waker},
+    };
+    struct Probe {
+        target: Arc<Storage<u64, u64>>,
+        outer: Arc<std::sync::Mutex<()>>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            assert!(self.outer.try_lock().is_ok());
+            assert!(self.target.revert.try_write().is_some());
+            assert!(self.target.blocks.try_write().is_some());
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    for foreign in [false, true] {
+        let target = Arc::new([(1, 10)].into_iter().collect::<Storage<u64, u64>>());
+        let other: Storage<u64, u64> = [(1, 30)].into_iter().collect();
+        let mut journal = detach(target.block());
+        if foreign {
+            journal.blocks = other.blocks.write().detach();
+        }
+        let pointer = journal.blocks.get(&1).map(std::ptr::from_ref);
+        let outer = Arc::new(std::sync::Mutex::new(()));
+        let guard = outer.lock().unwrap();
+        let probe = Arc::new(Probe {
+            target: Arc::clone(&target),
+            outer: Arc::clone(&outer),
+            wakes: AtomicUsize::new(0),
+        });
+        let waker = Waker::from(Arc::clone(&probe));
+        let mut waits = None;
+        let (journal, error, cleanup) = journal
+            .try_prepare_publication(&target, |_, target| {
+                if !foreign {
+                    let mut writer = target.blocks.write();
+                    writer.insert(1, 20);
+                    writer.commit();
+                }
+                let mut observed = [
+                    target.revert_released.observe().wait_for_release(),
+                    target.blocks_released.observe().wait_for_release(),
+                ];
+                for wait in &mut observed {
+                    assert!(
+                        Pin::new(wait)
+                            .poll(&mut Context::from_waker(&waker))
+                            .is_pending()
+                    );
+                }
+                waits = Some(observed);
+                Ok::<_, ()>(())
+            })
+            .err()
+            .expect("actual current map changed after identity preflight");
+        assert_eq!(error, PublicationPreparationError::Changed);
+        assert_eq!(journal.blocks.get(&1).map(std::ptr::from_ref), pointer);
+        assert_eq!(probe.wakes.load(Ordering::SeqCst), 0);
+        assert!(target.revert.try_write().is_some());
+        assert!(target.blocks.try_write().is_some());
+        drop(guard);
+        drop(cleanup);
+        assert_eq!(
+            probe.wakes.load(Ordering::SeqCst),
+            if foreign { 1 } else { 2 }
+        );
+        let mut waits = waits.unwrap();
+        assert!(
+            Pin::new(&mut waits[0])
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+        );
+        assert_eq!(
+            Pin::new(&mut waits[1])
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready(),
+            !foreign
+        );
+    }
+}

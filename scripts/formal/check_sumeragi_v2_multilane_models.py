@@ -3447,29 +3447,64 @@ def _indexed_rust_binding_items(
 def _rust_impl_items(source: str, owner: str) -> tuple[str, ...]:
     """Extract every inherent or trait implementation for one exact owner."""
 
-    # Bind both inherent methods (`impl Owner`) and trait methods
-    # (`impl Trait for Owner`). The latter is required for capability-bearing
-    # implementations such as `CheckedReplayAuthorizationDomain::clone`;
-    # treating that method as an unscoped `fn clone` would allow an unrelated
-    # implementation in the same file to satisfy the binding.
-    # Retained ownership types have lifetime-parameterized inherent impls.
-    # Keep the self type exact: a similarly named owner or a trait argument
-    # mentioning Owner must not satisfy its method obligation. Rustfmt may wrap
-    # the parameters, self type and opening brace onto separate lines. Nested
-    # generic syntax remains unsupported and fails closed instead of guessing
-    # an owner.
-    generic = r"(?:<[^<>{}]*>)?"
-    exact_owner = rf"{re.escape(owner)}{generic}"
-    impl_re = re.compile(
-        rf"(?m)^[ \t]*impl{generic}\s+(?:"
-        rf"{exact_owner}|[^{{}};]+?\s+for\s+{exact_owner}"
-        rf")\s*(?=\{{)"
-    )
-    return tuple(
-        item
-        for declaration in impl_re.finditer(source)
-        if (item := _extract_braced_item(source, declaration)) is not None
-    )
+    qualification = owner.split(" for ")
+    if len(qualification) > 2 or any(not part for part in qualification):
+        return ()
+    required_trait = qualification[0] if len(qualification) == 2 else None
+    owner = qualification[-1]
+    # Find the self type before any where clause. Balanced generic arguments
+    # may themselves mention the owner; only the outer self type grants scope.
+    # Braced const expressions and malformed headers fail closed.
+    def boundaries(header: str) -> tuple[int, list[tuple[int, str]]] | None:
+        stack: list[str] = []
+        closes = {">": "<", ")": "(", "]": "["}
+        words: list[tuple[int, str]] = []
+        generic_end = 0
+        for token in re.finditer(r"->|[<>()\[\]]|\b(?:for|where)\b", header):
+            value = token.group()
+            if value == "->":
+                continue
+            if value in "<([":
+                stack.append(value)
+            elif value in closes:
+                if not stack or stack.pop() != closes[value]:
+                    return None
+                if not stack and header.startswith("<") and generic_end == 0:
+                    generic_end = token.end()
+            elif not stack:
+                words.append((token.start(), value))
+        return None if stack else (generic_end, words)
+
+    impl_re = re.compile(r"(?m)^[ \t]*impl\b[^{};]*?(?=\{)")
+    items = []
+    for declaration in impl_re.finditer(source):
+        header = declaration.group().strip().removeprefix("impl").strip()
+        parsed = boundaries(header)
+        if parsed is None:
+            continue
+        generic_end, words = parsed
+        where = next((position for position, word in words if word == "where"), len(header))
+        separators = [position for position, word in words if word == "for" and position < where]
+        if len(separators) > 1:
+            continue
+        if required_trait is not None and (
+            not separators or header[generic_end:separators[0]].strip() != required_trait
+        ):
+            continue
+        start = separators[0] + len("for") if separators else generic_end
+        self_type = header[start:where].strip()
+        if self_type != owner:
+            if not self_type.startswith(owner + "<"):
+                continue
+            arguments = self_type[len(owner):]
+            suffix = boundaries(arguments)
+            if suffix is None or suffix[0] != len(arguments):
+                continue
+        item = _extract_braced_item(source, declaration)
+        if item is not None:
+            items.append(item)
+    return tuple(items)
+
 
 
 @lru_cache(maxsize=256)

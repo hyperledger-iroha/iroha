@@ -909,7 +909,7 @@ def test_lifecycle_post_work_requires_original_generation_and_fences(tmp_path, m
         changed = item.replace(post, "", 1).replace("            hash_retirement = block_hashes.publish();",
             "            hash_retirement = block_hashes.publish();\n" + post, 1)
     elif mutation == "hash_prepare_refusal":
-        changed = item.replace(".map_err(|(_, _)| TransactionsBlockError::SnapshotObservationChanged)?;", ".unwrap();", 1)
+        changed = item.replace(".map_err(|(_, _, cleanup)| {\n                    hash_refusal_cleanup = Some(cleanup);\n                    TransactionsBlockError::SnapshotObservationChanged\n                })?;", ".unwrap();", 1)
     elif mutation == "hash_cleanup_before_commit_unlock":
         changed = item.replace("        drop(hash_retirement);", "", 1).replace(
             "        drop(_state_commit_lock);", "        drop(hash_retirement);\n        drop(_state_commit_lock);", 1)

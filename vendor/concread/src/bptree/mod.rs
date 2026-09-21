@@ -15,8 +15,9 @@ use crate::utils::MapCollector;
 pub use crate::internals::lincowcell::OwnedWriteError;
 use crate::internals::lincowcell::{
     LinCowCell, LinCowCellCommitRetirement, LinCowCellFamily, LinCowCellOwned,
-    LinCowCellPredecessor, LinCowCellPreparedCommit, LinCowCellPublished, LinCowCellReadTxn,
-    LinCowCellRetainedPredecessor, LinCowCellWriteTxn,
+    LinCowCellOwnedAcquisition, LinCowCellPredecessor, LinCowCellPreparedCommit,
+    LinCowCellPublished, LinCowCellReadTxn, LinCowCellRetainedPredecessor, LinCowCellWriteTxn,
+    LinCowCellWriterAcquisition,
 };
 
 mod admission;
@@ -190,6 +191,62 @@ where
     }
 }
 
+/// Actual original map writer before planning or admitting a successor.
+/// No mutable cursor or allocation exists until a closed admission succeeds.
+#[must_use = "admit a successor or release the original acquired map writer"]
+pub struct BptreeMapWriterAcquisition<'a, K, V, M = Untracked>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    inner: LinCowCellWriterAcquisition<
+        'a,
+        SuperBlock<K, V, M>,
+        CursorRead<K, V, M>,
+        CursorWrite<K, V, M>,
+        M::Charge,
+    >,
+}
+
+/// Actual original map writer awaiting predecessor validation.
+/// No mutable tree access or publication is possible before validation succeeds.
+#[must_use = "validate or abort the original acquired map writer"]
+pub struct BptreeMapOwnedAcquisition<'a, K, V, M = Untracked>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    inner: LinCowCellOwnedAcquisition<
+        'a,
+        SuperBlock<K, V, M>,
+        CursorRead<K, V, M>,
+        CursorWrite<K, V, M>,
+        M::Charge,
+    >,
+}
+impl<'a, K, V, M> BptreeMapOwnedAcquisition<'a, K, V, M>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Keep actual lock custody on stale or poisoned predecessor refusal.
+    pub fn validate(self) -> Result<BptreeMapWriteTxn<'a, K, V, M>, (Self, OwnedWriteError)> {
+        self.inner
+            .validate()
+            .map(|inner| BptreeMapWriteTxn { inner })
+            .map_err(|(inner, error)| (Self { inner }, error))
+    }
+    /// Unlock without changing the original private nodes or cursor allocation.
+    pub fn abort(self) -> BptreeMapOwned<K, V, M> {
+        BptreeMapOwned {
+            inner: self.inner.abort(),
+        }
+    }
+}
+
 /// The exact unpublished successor of a synchronous [`BptreeMap`].
 ///
 /// This move-only owner retains the original cursor allocation, working nodes,
@@ -322,6 +379,38 @@ where
             .map(|inner| BptreeMapReadTxn { inner })
     }
 
+    /// Wait for the actual writer without constructing a cursor or invoking a callback.
+    /// The returned owner retains poison so aggregate cleanup can bind it first.
+    pub fn acquire_writer(&self) -> BptreeMapWriterAcquisition<'_, K, V, M> {
+        BptreeMapWriterAcquisition {
+            inner: self.inner.acquire_writer(),
+        }
+    }
+
+    /// Acquire the actual writer before planning or invoking admission callbacks.
+    /// Only contention returns `None`; an acquired poisoned writer is retained
+    /// until admission rejects it, without invoking the caller's provider.
+    pub fn try_acquire_writer(&self) -> Option<BptreeMapWriterAcquisition<'_, K, V, M>> {
+        self.inner
+            .try_acquire_writer()
+            .map(|inner| BptreeMapWriterAcquisition { inner })
+    }
+
+    /// Acquire the original physical writer and retain it through validation.
+    /// Foreign roots and contention return without a physical release. Stale
+    /// predecessors and poison remain inside the returned acquired owner.
+    pub fn try_acquire_owned(
+        &self,
+        owned: BptreeMapOwned<K, V, M>,
+    ) -> Result<BptreeMapOwnedAcquisition<'_, K, V, M>, (BptreeMapOwned<K, V, M>, OwnedWriteError)>
+    {
+        owned.inner.as_ref().assert_operable();
+        self.inner
+            .try_acquire_owned(owned.inner)
+            .map(|inner| BptreeMapOwnedAcquisition { inner })
+            .map_err(|(inner, error)| (BptreeMapOwned { inner }, error))
+    }
+
     /// Reacquire the original writer without copying or allocating a successor.
     ///
     /// Both the physical map and its exact base reader generation must match.
@@ -331,11 +420,9 @@ where
         &self,
         owned: BptreeMapOwned<K, V, M>,
     ) -> Result<BptreeMapWriteTxn<'_, K, V, M>, (BptreeMapOwned<K, V, M>, OwnedWriteError)> {
-        owned.inner.as_ref().assert_operable();
-        self.inner
-            .try_write_owned(owned.inner)
-            .map(|inner| BptreeMapWriteTxn { inner })
-            .map_err(|(inner, error)| (BptreeMapOwned { inner }, error))
+        self.try_acquire_owned(owned)?
+            .validate()
+            .map_err(|(acquired, error)| (acquired.abort(), error))
     }
 
     /// Whether an unwind poisoned the map's original writer lock.
@@ -524,8 +611,32 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     /// Initiate a write transaction for the tree, exclusive to this
     /// writer, and concurrently to all existing reads.
     pub fn write(&self) -> BptreeMapWriteTxn<'_, K, V> {
-        let inner = self.inner.write();
-        BptreeMapWriteTxn { inner }
+        self.acquire_writer().write()
+    }
+}
+
+impl<K, V, M> BptreeMapWriterAcquisition<'_, K, V, M>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Whether this actual acquired writer was already poisoned.
+    pub fn is_poisoned(&self) -> bool {
+        self.inner.is_poisoned()
+    }
+}
+
+impl<'a, K, V> BptreeMapWriterAcquisition<'a, K, V>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    /// Construct the original untracked writer; poison panics before construction.
+    pub fn write(self) -> BptreeMapWriteTxn<'a, K, V> {
+        BptreeMapWriteTxn {
+            inner: self.inner.write_with(|_| ()),
+        }
     }
 }
 
@@ -1414,3 +1525,6 @@ mod tests {
         assert_eq!(vec, [(10, 11), (15, 16), (20, 21)]);
     }
 }
+
+#[cfg(test)]
+mod acquisition_tests;

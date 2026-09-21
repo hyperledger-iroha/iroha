@@ -1949,7 +1949,19 @@ MV_OWNERSHIP_STAGES = (
         'cell::charged_allocation_tests::startup_ordinary_and_revert_charges_follow_all_actual_generations',
         'cell::charged_allocation_tests::untouched_detached_publication_releases_only_unused_current_charge',
     )),
+    ('fresh Storage pair construction retains actual acquisition', (
+        'storage::admitted_tests::fresh_pair_acquisition::admitted_second_policy_refusal_releases_both_before_callbacks',
+        'storage::admitted_tests::fresh_pair_acquisition::admitted_second_policy_panic_releases_both_before_callbacks',
+        'storage::admitted_tests::fresh_pair_acquisition::ordinary_current_poison_releases_both_before_callbacks',
+        'storage::admitted_tests::fresh_pair_acquisition::current_busy_releases_only_acquired_undo',
+        'storage::admitted_tests::fresh_pair_acquisition::successful_pair_construction_emits_no_early_release',
+        'storage::admitted_tests::fresh_pair_acquisition::admitted_refusal_wake_panic_preserves_healthy_pair_and_surviving_waiters',
+        'storage::admitted_tests::fresh_pair_acquisition::admitted_undo_poison_precedes_busy_current_without_policy',
+        'storage::admitted_tests::fresh_pair_acquisition::ordinary_undo_poison_does_not_wait_for_current',
+    )),
     ('original Storage successor publication', (
+        'storage::publication_tests::acquired_map_refusal_never_fabricates_foreign_or_busy_release',
+        'storage::publication_tests::stale_map_pair_refusal_defers_actual_releases_through_enclosing_fence',
         'storage::admitted_tests::admitted_block_abandonment_unlocks_both_writers_before_native_wakes',
         'storage::publication_tests::abort_keeps_original_owner_available_after_another_component_refuses',
         'storage::publication_tests::busy_writers_return_same_journal_and_release_partial_acquisition',
@@ -2041,6 +2053,27 @@ MV_MAP_STAGES = (("original owned map successors across refusal and publication"
 # Native cutover owners run before process/network qualification. These checks
 # retain exact sources and resource obligations; they do not open live ingress.
 CORE_NATIVE_CONNECTION_STAGES = (
+    ('original successor admission and reader readiness', (
+        'state::block_hashes_admission::tests::successor_reader_contention_wakes_from_original_reader_release',
+        'state::block_hashes_admission::tests::successor_admission_signals_only_actual_writer_after_unlock',
+    )),
+    ('actual hash writer refusal custody', (
+        'state::block_hashes_publication::tests::stale_hash_refusal_retains_release_and_installation_until_outer_unlock',
+    )),
+    ('joint Kura partial and cold release ownership', (
+        'kura::publication_lease::tests::partial_kura_refusal_releases_every_acquired_fence_before_callbacks',
+        'kura::publication_lease::tests::full_and_partial_kura_abandonment_release_jointly_even_on_unwind',
+        'kura::publication_lease::tests::cold_kura_sidecar_wakes_after_joint_success_and_real_storage_refusal',
+        'kura::publication_lease::tests::repeated_cold_kura_lookups_retain_one_batch_through_outer_unwind',
+        'kura::publication_lease::tests::foreign_cold_batch_returns_original_guard_for_joint_cleanup',
+        'kura::tests::native_amx_live_custody_wrappers_unlock_together_before_callbacks',
+    )),
+    ('partial publication refusals release before notification', (
+        'queue::tests::lane_retirement_observer::refused_cut_retains_original_notifications_through_outer_fence',
+        'state::carrier_geometry_preparation::tests::queue_retirement_tests::route_refusal_retains_original_cut_cleanup_through_lifecycle',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::queue_publication_tests::state_fence_refusal_defers_callbacks_through_original_queue_and_kura',
+        'sumeragi::v2_apply::retirement_release_tests::autoscale_queue_scan_and_refusal_release_lifecycle_before_queue_wake',
+    )),
     ('native process transport and exact source recovery', (
         'state::tests::native_transport_production_poll_retries_real_actor_pressure_without_substitution',
         'state::tests::native_transport_production_poll_fences_closed_actor_without_losing_fanout',
@@ -2179,6 +2212,15 @@ MV_ADMITTED_MAP_STAGES = (
         'pair_callback_and_nested_clone_panics_preserve_both_published_roots_and_reclaim_private_storage',
         'pair_foreign_and_busy_roles_return_original_nested_inputs_without_readmission',
     )),
+    ('prepared map inputs and exact shared reservation', (
+        'prepared_checkpoint_cancel_and_exact_capacity_refusal_retain_original_input_and_root',
+        'paired_preparations_share_one_reservation_and_preserve_independent_checkpoint_rollback',
+        'dropping_prepared_writer_input_never_edits_or_clones_the_original_cursor',
+        'current_undo_and_touch_preparations_share_original_credit_and_abort_all_three_roots',
+        'admitted_optional_none_is_retained_without_value_copy_and_survives_sibling_abort',
+        'incoming_preimage_copy_unwind_reclaims_copies_and_poison_prevents_publication',
+        'copied_preimage_tracking_cleanup_panic_restores_original_parent_and_blocks_publication',
+    )),
     ('production Storage admission and original block custody', (
         'storage_custody::actual_storage_resets_first_none_and_some_between_blocks_and_aborts_parent',
         'storage_custody::actual_storage_joined_refusal_precedes_clone_and_exact_budget_retry_preserves_input',
@@ -2233,6 +2275,10 @@ MV_ADMITTED_MAP_STAGES = (
 )
 
 CONCREAD_STAGES = (
+    ('original map acquisition custody', (
+        'bptree::acquisition_tests::acquired_map_validation_retains_stale_and_poisoned_physical_writers',
+        'bptree::acquisition_tests::acquired_map_foreign_busy_success_and_unwind_preserve_original_custody',
+    )),
     ('native physical release ownership', (
         'release::tests::release_before_registration_is_retained_and_other_sources_do_not_wake',
         'release::tests::first_registered_wake_can_reenter_both_initialized_notification_locks',
@@ -2245,8 +2291,13 @@ CONCREAD_STAGES = (
         'release::tests::ownership_phase_transfer_unwind_releases_and_poisons_original_observation',
         'release::tests::physical_release_disarms_only_later_retirement_poisoning',
         'release::tests::paired_release_uses_actual_poison_and_unlocks_both_before_callback_unwind',
+        'release::tests::observed_release_reports_existing_physical_poison_and_excludes_later_wake_panic',
+        'release::tests::pair_construction_transfers_both_original_guards_without_early_release',
         'release::tests::deferred_release_keeps_original_wait_and_ignores_later_cleanup_unwind',
         'release::tests::fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup',
+        'release::tests::release_batch_empty_and_foreign_transfer_preserve_original_custody',
+        'release::tests::release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes',
+        'release::tests::release_batch_records_actual_physical_poison_without_later_cleanup_poison',
     )),
     ('actual reader mutex readiness', (
         'internals::lincowcell::identity_preparation_tests::reader_wait_survives_refused_writer_release_and_registration_races',
@@ -2255,6 +2306,9 @@ CONCREAD_STAGES = (
         'internals::lincowcell::identity_preparation_tests::reader_wake_unwind_preserves_physical_poison_and_original_commit',
     )),
     ('admitted B+ tree planning and retained edits', (
+        'bptree::admission::tests::acquired_admission_refusal_retains_actual_writer_and_deferred_release',
+        'bptree::admission::tests::acquired_admission_busy_poison_and_unwind_preserve_real_custody',
+        'bptree::admission::tests::acquired_admission_success_and_planning_refusal_preserve_original_input',
         'bptree::admission::tests::demand_overflow_preserves_the_original_sum_and_zero_layout_needs_no_allocation',
         'bptree::admission::tests::empty_map_plan_includes_both_shells_fixed_buffers_and_full_root_growth_bound',
         'bptree::admission::tests::exhausted_generation_refuses_before_admission_or_successor_allocation',
@@ -2290,6 +2344,15 @@ CONCREAD_STAGES = (
         'bptree::admission::tests::prepaid_current_footprint_preserves_parent_through_checkpoint_and_publication_abort',
         'bptree::admission::tests::prepaid_current_footprint_distinguishes_resident_floor_from_refundable_old_custody',
         'bptree::admission::tests::prepaid_reader_predecessor_retains_original_generation_without_allocating_and_rejects_aba',
+    )),
+    ('prepared B+ tree inputs and retained preimages', (
+        'bptree::admission::tests::prepared_writer_and_checkpoint_planning_refuse_without_copying_original_inputs',
+        'bptree::admission::tests::copied_key_planning_refusal_keeps_the_source_and_original_owned_value',
+        'bptree::admission::tests::optional_copy_planning_refusal_does_not_clone_sources_or_edit_either_guard',
+        'bptree::admission::tests::optional_none_is_an_existing_preimage_and_checkpoint_abort_restores_it',
+        'bptree::admission::tests::original_preparation_retains_key_and_preimage_through_dependent_copy_then_cancel',
+        'bptree::admission::tests::key_copy_cancel_returns_original_value_and_checkpoint_copy_uses_same_cursor',
+        'bptree::admission::tests::incoming_shared_mutable_preimage_refuses_when_its_borrow_cannot_freeze_copy_demand',
     )),
     ('admitted original B+ tree writer start', (
         'bptree::admission::tests::writer_start::start_plan_is_only_two_shells_and_empty_tracking_with_checked_generation',
@@ -3730,7 +3793,7 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
 def validate_mv_test_registration(root: Path) -> None:
     """Reject stale registered MV names before Cargo; native listing stays authoritative.
 
-    This is a bounded lexical guard for nine explicit, flat test modules, not a
+    This is a bounded lexical guard for ten explicit, flat test modules, not a
     Rust parser or a claim that the selected subset exhausts each module.
     The existing pure lexer runs from the same captured source as this gate.
     """
@@ -3743,6 +3806,7 @@ def validate_mv_test_registration(root: Path) -> None:
         ("storage::publication_tests::", "storage.rs", "storage/publication_tests.rs", "publication_tests"),
         ("storage::detached_tests::", "storage.rs", "storage/detached_tests.rs", "detached_tests"),
         ("storage::admitted_tests::", "storage.rs", "storage/admitted_tests.rs", "admitted_tests"),
+        ("storage::admitted_tests::fresh_pair_acquisition::", "storage/admitted_tests.rs", "storage/fresh_pair_acquisition_tests.rs", "fresh_pair_acquisition"),
         ("storage::touches::tests::", "storage/touches.rs", "storage/touches_tests.rs", "tests"),
     )
     try:

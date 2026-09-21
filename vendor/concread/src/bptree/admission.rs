@@ -3,7 +3,9 @@
 use super::*;
 use crate::internals::bptree::cursor::checked_next_generation;
 use crate::internals::bptree::node::{Branch, Leaf, Node};
-use crate::internals::lincowcell::{InitialCharges, WriterAdmission, WriterCharges, WriterLayouts};
+use crate::internals::lincowcell::{
+    InitialCharges, WriterAdmission, WriterAdmissionError, WriterCharges, WriterLayouts,
+};
 use crossbeam_utils::CachePadded;
 use std::alloc::Layout;
 
@@ -600,43 +602,16 @@ where
         &self,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
     ) -> Result<BptreeMapWriteTxn<'_, K, V, Prepaid<P>>, MapAdmissionError<E>> {
-        let acquired = self.inner.try_write_charged(|source, shells| {
-            let plan = plan_writer_start::<K, V, P>(source, shells)
-                .map_err(MapAdmissionError::Planning)?;
-            let mut provider = Prepaid(Some(
-                admit(plan.demand).map_err(MapAdmissionError::Refused)?,
-            ));
-            let first_charge = provider.take_node_charge(plan.tracking_layout);
-            let first = FixedTrackingBuffer::try_new(0, first_charge)
-                .unwrap_or_else(|_| unreachable!("planned empty first buffer layout"));
-            let last_charge = provider.take_node_charge(plan.tracking_layout);
-            let last = FixedTrackingBuffer::try_new(0, last_charge)
-                .unwrap_or_else(|_| unreachable!("planned empty retirement buffer layout"));
-            let charges = WriterCharges {
-                cursor: provider.take_node_charge(shells.cursor),
-                reader: provider.take_node_charge(shells.reader),
-            };
-            Ok(WriterAdmission {
-                charges,
-                input: (provider, first, last),
-            })
-        });
-        let mut writer = match acquired {
-            Ok(Some(writer)) => writer,
-            Ok(None) => {
-                return Err(if self.inner.is_poisoned() {
-                    MapAdmissionError::Poisoned
-                } else {
-                    MapAdmissionError::Busy
-                });
-            }
-            Err(error) => return Err(error),
+        let Some(acquired) = self.try_acquire_writer() else {
+            return Err(MapAdmissionError::Busy);
         };
-        // Seal this no-edit operation under the same panic discipline as an
-        // insertion: cleanup must succeed before the cursor becomes operable.
-        writer.as_mut().begin_admitted_edit();
-        writer.as_mut().finish_admitted_funding();
-        Ok(BptreeMapWriteTxn { inner: writer })
+        match acquired.try_write_admitted(admit) {
+            Ok(writer) => Ok(writer),
+            Err((acquired, error)) => {
+                drop(acquired);
+                Err(error)
+            }
+        }
     }
 }
 
@@ -684,49 +659,16 @@ where
         &self,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
     ) -> Result<BptreeMapWriteTxn<'_, K, V, Prepaid<P>>, MapAdmissionError<E>> {
-        let acquired = self.inner.try_write_charged(|source, shells| {
-            checked_next_generation(source.txid)
-                .ok_or(MapAdmissionError::Planning(PlanningError::Overflow))?;
-            // SAFETY: this exact source is retained under the original writer.
-            let mut plan = unsafe { plan_tree_clear::<K, V, P>(source.root, [(0, 0); 2]) }
-                .map_err(MapAdmissionError::Planning)?;
-            for layout in [shells.cursor, shells.reader] {
-                plan.demand
-                    .add_layout(layout)
-                    .map_err(MapAdmissionError::Planning)?;
-            }
-            let mut provider = admit(plan.demand).map_err(MapAdmissionError::Refused)?;
-            let first = allocate_tracking::<K, V, P>(plan.first, &mut provider)
-                .expect("one empty leaf requires original first-seen storage");
-            let last = allocate_tracking::<K, V, P>(plan.last, &mut provider)
-                .expect("every tree has an original root to retire");
-            let charges = WriterCharges {
-                cursor: provider.take_node_charge(shells.cursor),
-                reader: provider.take_node_charge(shells.reader),
-            };
-            Ok(WriterAdmission {
-                charges,
-                input: (Prepaid(Some(provider)), first, last),
-            })
-        });
-        let mut inner = match acquired {
-            Ok(Some(writer)) => writer,
-            Ok(None) => {
-                return Err(if self.inner.is_poisoned() {
-                    MapAdmissionError::Poisoned
-                } else {
-                    MapAdmissionError::Busy
-                })
-            }
-            Err(error) => return Err(error),
+        let Some(acquired) = self.try_acquire_writer() else {
+            return Err(MapAdmissionError::Busy);
         };
-        inner.as_mut().begin_admitted_edit();
-        inner
-            .as_mut()
-            .try_clear()
-            .expect("complete original clear plan");
-        inner.as_mut().finish_admitted_funding();
-        Ok(BptreeMapWriteTxn { inner })
+        match acquired.try_clear_admitted(admit) {
+            Ok(writer) => Ok(writer),
+            Err((acquired, error)) => {
+                drop(acquired);
+                Err(error)
+            }
+        }
     }
 
     /// Plan and execute one insertion, retaining its exact unpublished successor.
@@ -762,56 +704,16 @@ where
             AllocationDemand,
         ) -> Result<P, MapAdmissionError<E>>,
     ) -> Result<(BptreeMapOwned<K, V, Prepaid<P>>, Option<V>), ((K, V), MapAdmissionError<E>)> {
-        let mut input = Some((key, value));
-        let acquired = self.inner.try_write_charged(|source, shells| {
-            let plan =
-                plan_insert::<K, V, P>(source, &input.as_ref().expect("original input").0, shells)
-                    .map_err(MapAdmissionError::Planning)?;
-            let mut provider = Prepaid(Some(admit(source, plan.demand)?));
-            let first_charge = provider.take_node_charge(plan.first_layout);
-            let first = FixedTrackingBuffer::try_new(plan.first, first_charge)
-                .unwrap_or_else(|_| unreachable!("planned first buffer layout"));
-            let last_charge = provider.take_node_charge(plan.last_layout);
-            let last = FixedTrackingBuffer::try_new(plan.last, last_charge)
-                .unwrap_or_else(|_| unreachable!("planned retirement buffer layout"));
-            let charges = WriterCharges {
-                cursor: provider.take_node_charge(shells.cursor),
-                reader: provider.take_node_charge(shells.reader),
-            };
-            Ok(WriterAdmission {
-                charges,
-                input: (provider, first, last),
-            })
-        });
-        let mut writer = match acquired {
-            Ok(Some(writer)) => writer,
-            Ok(None) => {
-                return Err((
-                    input.take().expect("original refused input"),
-                    if self.inner.is_poisoned() {
-                        MapAdmissionError::Poisoned
-                    } else {
-                        MapAdmissionError::Busy
-                    },
-                ));
-            }
-            Err(error) => return Err((input.take().expect("original refused input"), error)),
+        let Some(acquired) = self.try_acquire_writer() else {
+            return Err(((key, value), MapAdmissionError::Busy));
         };
-        let (key, value) = input.take().expect("original admitted input");
-        writer.as_mut().begin_admitted_edit();
-        let previous = writer.as_mut().try_insert(key, value).unwrap_or_else(|_| {
-            unreachable!("complete fixed tracking bound planned under original writer")
-        });
-        // A further closed edit requires its own complete admission. Release the
-        // unused remainder now, before potentially long handoff waits;
-        // actual allocation charges remain attached to their original owners.
-        writer.as_mut().finish_admitted_funding();
-        Ok((
-            BptreeMapOwned {
-                inner: writer.detach(),
-            },
-            previous,
-        ))
+        match acquired.insert_with_source(key, value, admit) {
+            Ok((writer, previous)) => Ok((writer.detach(), previous)),
+            Err((acquired, input, error)) => {
+                drop(acquired);
+                Err((input, error))
+            }
+        }
     }
 
     /// Admit another insertion into the same original unpublished successor.
@@ -971,27 +873,8 @@ where
         admit: impl FnOnce(AllocationDemand, AllocationDemand) -> Result<P, E>,
     ) -> Result<(BptreeMapOwned<K, V, Prepaid<P>>, Option<V>), ((K, V), MapAdmissionError<E>)> {
         self.insert_with_source(key, value, |source, additional| {
-            let mut existing = AllocationDemand::new();
-            existing
-                .add_layout(MapCell::<K, V, Prepaid<P>>::initial_allocation_layouts().root)
-                .map_err(MapAdmissionError::Planning)?;
-            existing
-                .add_layout(MapCell::<K, V, Prepaid<P>>::reader_allocation_layout())
-                .map_err(MapAdmissionError::Planning)?;
-            let (leaves, branches) = source.node_counts();
-            let mut leaf = AllocationDemand::new();
-            leaf.add_layout(Layout::new::<CachePadded<Leaf<K, V, P::Charge>>>())
-                .map_err(MapAdmissionError::Planning)?;
-            let mut branch = AllocationDemand::new();
-            branch
-                .add_layout(Layout::new::<CachePadded<Branch<K, V, P::Charge>>>())
-                .map_err(MapAdmissionError::Planning)?;
-            existing
-                .add(leaf, leaves)
-                .map_err(MapAdmissionError::Planning)?;
-            existing
-                .add(branch, branches)
-                .map_err(MapAdmissionError::Planning)?;
+            let existing =
+                current_footprint::<K, V, P>(source).map_err(MapAdmissionError::Planning)?;
             admit(existing, additional).map_err(MapAdmissionError::Refused)
         })
     }
@@ -1806,3 +1689,226 @@ where
 #[cfg(all(test, not(feature = "dhat-heap"), not(miri)))]
 #[path = "admission_tests.rs"]
 mod tests;
+
+impl<'a, K, V, P> BptreeMapWriterAcquisition<'a, K, V, Prepaid<P>>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    fn insert_with_source<E>(
+        self,
+        key: K,
+        value: V,
+        admit: impl FnOnce(
+            &SuperBlock<K, V, Prepaid<P>>,
+            AllocationDemand,
+        ) -> Result<P, MapAdmissionError<E>>,
+    ) -> Result<
+        (BptreeMapWriteTxn<'a, K, V, Prepaid<P>>, Option<V>),
+        (Self, (K, V), MapAdmissionError<E>),
+    > {
+        let mut input = Some((key, value));
+        let acquired = self.inner.try_write_charged(|source, shells| {
+            let plan =
+                plan_insert::<K, V, P>(source, &input.as_ref().expect("original input").0, shells)
+                    .map_err(MapAdmissionError::Planning)?;
+            let mut provider = Prepaid(Some(admit(source, plan.demand)?));
+            let first_charge = provider.take_node_charge(plan.first_layout);
+            let first = FixedTrackingBuffer::try_new(plan.first, first_charge)
+                .unwrap_or_else(|_| unreachable!("planned first buffer layout"));
+            let last_charge = provider.take_node_charge(plan.last_layout);
+            let last = FixedTrackingBuffer::try_new(plan.last, last_charge)
+                .unwrap_or_else(|_| unreachable!("planned retirement buffer layout"));
+            let charges = WriterCharges {
+                cursor: provider.take_node_charge(shells.cursor),
+                reader: provider.take_node_charge(shells.reader),
+            };
+            Ok(WriterAdmission {
+                charges,
+                input: (provider, first, last),
+            })
+        });
+        let mut writer = match acquired {
+            Ok(writer) => writer,
+            Err((inner, error)) => {
+                let error = match error {
+                    WriterAdmissionError::Poisoned => MapAdmissionError::Poisoned,
+                    WriterAdmissionError::Refused(error) => error,
+                };
+                return Err((
+                    Self { inner },
+                    input.take().expect("original refused input"),
+                    error,
+                ));
+            }
+        };
+        let (key, value) = input.take().expect("original admitted input");
+        writer.as_mut().begin_admitted_edit();
+        let previous = writer.as_mut().try_insert(key, value).unwrap_or_else(|_| {
+            unreachable!("complete fixed tracking bound planned under original writer")
+        });
+        // A further closed edit requires its own complete admission. Release the
+        // unused remainder now, before potentially long handoff waits;
+        // actual allocation charges remain attached to their original owners.
+        writer.as_mut().finish_admitted_funding();
+        Ok((BptreeMapWriteTxn { inner: writer }, previous))
+    }
+}
+
+fn current_footprint<K, V, P>(
+    source: &SuperBlock<K, V, Prepaid<P>>,
+) -> Result<AllocationDemand, PlanningError>
+where
+    K: Copy + Ord + Debug + Send + Sync + 'static,
+    V: Copy + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    let mut existing = AllocationDemand::new();
+    existing.add_layout(MapCell::<K, V, Prepaid<P>>::initial_allocation_layouts().root)?;
+    existing.add_layout(MapCell::<K, V, Prepaid<P>>::reader_allocation_layout())?;
+    let (leaves, branches) = source.node_counts();
+    let mut leaf = AllocationDemand::new();
+    leaf.add_layout(Layout::new::<CachePadded<Leaf<K, V, P::Charge>>>())?;
+    let mut branch = AllocationDemand::new();
+    branch.add_layout(Layout::new::<CachePadded<Branch<K, V, P::Charge>>>())?;
+    existing.add(leaf, leaves)?;
+    existing.add(branch, branches)?;
+    Ok(existing)
+}
+
+impl<'a, K, V, P> BptreeMapWriterAcquisition<'a, K, V, Prepaid<P>>
+where
+    K: Copy + Ord + Debug + Send + Sync + 'static,
+    V: Copy + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    /// Admit one fixed-size insertion while retaining the actual acquired writer.
+    /// Both footprint and successor demand come from this guard's original tree.
+    /// Refusal returns the same guard and input without allocating or editing;
+    /// success retains the writer until the caller detaches or publishes it.
+    /// Enclose callbacks and cleanup in the original refund-deferral scope.
+    pub fn try_insert_admitted_with_footprint<E>(
+        self,
+        key: K,
+        value: V,
+        admit: impl FnOnce(AllocationDemand, AllocationDemand) -> Result<P, E>,
+    ) -> Result<
+        (BptreeMapWriteTxn<'a, K, V, Prepaid<P>>, Option<V>),
+        (Self, (K, V), MapAdmissionError<E>),
+    > {
+        self.insert_with_source(key, value, |source, additional| {
+            let existing =
+                current_footprint::<K, V, P>(source).map_err(MapAdmissionError::Planning)?;
+            admit(existing, additional).map_err(MapAdmissionError::Refused)
+        })
+    }
+}
+
+impl<'a, K, V, P> BptreeMapWriterAcquisition<'a, K, V, Prepaid<P>>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: NodeCloning<K, V>,
+{
+    /// Use the original admission engine under this actual writer acquisition.
+    /// Refusal retains the same lock; callers own refund deferral and pair cleanup.
+    pub fn try_write_admitted<E>(
+        self,
+        admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
+    ) -> Result<BptreeMapWriteTxn<'a, K, V, Prepaid<P>>, (Self, MapAdmissionError<E>)> {
+        let acquired = self.inner.try_write_charged(|source, shells| {
+            let plan = plan_writer_start::<K, V, P>(source, shells)
+                .map_err(MapAdmissionError::Planning)?;
+            let mut provider = Prepaid(Some(
+                admit(plan.demand).map_err(MapAdmissionError::Refused)?,
+            ));
+            let first_charge = provider.take_node_charge(plan.tracking_layout);
+            let first = FixedTrackingBuffer::try_new(0, first_charge)
+                .unwrap_or_else(|_| unreachable!("planned empty first buffer layout"));
+            let last_charge = provider.take_node_charge(plan.tracking_layout);
+            let last = FixedTrackingBuffer::try_new(0, last_charge)
+                .unwrap_or_else(|_| unreachable!("planned empty retirement buffer layout"));
+            let charges = WriterCharges {
+                cursor: provider.take_node_charge(shells.cursor),
+                reader: provider.take_node_charge(shells.reader),
+            };
+            Ok(WriterAdmission {
+                charges,
+                input: (provider, first, last),
+            })
+        });
+        let mut writer = match acquired {
+            Ok(writer) => writer,
+            Err((inner, error)) => {
+                let error = match error {
+                    WriterAdmissionError::Poisoned => MapAdmissionError::Poisoned,
+                    WriterAdmissionError::Refused(error) => error,
+                };
+                return Err((Self { inner }, error));
+            }
+        };
+        // Seal this no-edit operation under the same panic discipline as an
+        // insertion: cleanup must succeed before the cursor becomes operable.
+        writer.as_mut().begin_admitted_edit();
+        writer.as_mut().finish_admitted_funding();
+        Ok(BptreeMapWriteTxn { inner: writer })
+    }
+}
+
+impl<'a, K, V, P> BptreeMapWriterAcquisition<'a, K, V, Prepaid<P>>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    /// Use the original admission engine under this actual writer acquisition.
+    /// Refusal retains the same lock; callers own refund deferral and pair cleanup.
+    pub fn try_clear_admitted<E>(
+        self,
+        admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
+    ) -> Result<BptreeMapWriteTxn<'a, K, V, Prepaid<P>>, (Self, MapAdmissionError<E>)> {
+        let acquired = self.inner.try_write_charged(|source, shells| {
+            checked_next_generation(source.txid)
+                .ok_or(MapAdmissionError::Planning(PlanningError::Overflow))?;
+            // SAFETY: this exact source is retained under the original writer.
+            let mut plan = unsafe { plan_tree_clear::<K, V, P>(source.root, [(0, 0); 2]) }
+                .map_err(MapAdmissionError::Planning)?;
+            for layout in [shells.cursor, shells.reader] {
+                plan.demand
+                    .add_layout(layout)
+                    .map_err(MapAdmissionError::Planning)?;
+            }
+            let mut provider = admit(plan.demand).map_err(MapAdmissionError::Refused)?;
+            let first = allocate_tracking::<K, V, P>(plan.first, &mut provider)
+                .expect("one empty leaf requires original first-seen storage");
+            let last = allocate_tracking::<K, V, P>(plan.last, &mut provider)
+                .expect("every tree has an original root to retire");
+            let charges = WriterCharges {
+                cursor: provider.take_node_charge(shells.cursor),
+                reader: provider.take_node_charge(shells.reader),
+            };
+            Ok(WriterAdmission {
+                charges,
+                input: (Prepaid(Some(provider)), first, last),
+            })
+        });
+        let mut inner = match acquired {
+            Ok(writer) => writer,
+            Err((inner, error)) => {
+                let error = match error {
+                    WriterAdmissionError::Poisoned => MapAdmissionError::Poisoned,
+                    WriterAdmissionError::Refused(error) => error,
+                };
+                return Err((Self { inner }, error));
+            }
+        };
+        inner.as_mut().begin_admitted_edit();
+        inner
+            .as_mut()
+            .try_clear()
+            .expect("complete original clear plan");
+        inner.as_mut().finish_admitted_funding();
+        Ok(BptreeMapWriteTxn { inner })
+    }
+}

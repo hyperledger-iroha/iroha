@@ -622,7 +622,8 @@ mod carrier_checkpoint;
 mod publication_lease;
 pub(crate) use carrier_checkpoint::KuraWsvCheckpointReceipt;
 pub(crate) use publication_lease::{
-    KuraArchiveCaptureAuthenticationError, KuraPublicationLease, KuraPublicationPreparationError,
+    KuraArchiveCaptureAuthenticationError, KuraPublicationCleanup, KuraPublicationLease,
+    KuraPublicationPreparationError,
 };
 
 /// The interface of Kura subsystem.
@@ -11454,11 +11455,27 @@ impl Kura {
         hash: HashOf<MergeLedgerEntry>,
         sidecar: PublicationGuard<'_>,
     ) -> Result<Option<MergeLedgerEntry>> {
+        let pending = self.pending_merge_entry_by_hash_under_sidecar_guard(hash)?;
+        drop(sidecar);
+        self.merge_entry_by_hash_after_sidecar(hash, pending)
+    }
+
+    /// Read the exact pending entry while the caller retains its sidecar fence.
+    fn pending_merge_entry_by_hash_under_sidecar_guard(
+        &self,
+        hash: HashOf<MergeLedgerEntry>,
+    ) -> Result<Option<MergeLedgerEntry>> {
         self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
-        let path = self.pending_merge_entry_path(hash);
-        let pending = self.read_pending_merge_entry_path(&path, Some(hash))?;
-        drop(sidecar);
+        self.read_pending_merge_entry_path(&self.pending_merge_entry_path(hash), Some(hash))
+    }
+
+    /// Consult committed storage only after physically releasing sidecar.
+    fn merge_entry_by_hash_after_sidecar(
+        &self,
+        hash: HashOf<MergeLedgerEntry>,
+        pending: Option<MergeLedgerEntry>,
+    ) -> Result<Option<MergeLedgerEntry>> {
         self.ensure_prune_recovery_not_required()?;
         if pending.is_some() {
             return Ok(pending);

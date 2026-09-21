@@ -3050,3 +3050,53 @@ fn native_amx_empty_prepublication_requires_current_durable_finality() {
         );
     }
 }
+
+#[test]
+fn native_amx_live_custody_wrappers_unlock_together_before_callbacks() {
+    use std::{future::Future, pin::Pin, sync::atomic::AtomicUsize, task::{Context, Wake, Waker}};
+    struct Reenter {
+        kura: Arc<Kura>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for Reenter {
+        fn wake(self: Arc<Self>) {
+            for lock in [&self.kura.prune_lock, &self.kura.canonical_chain_lock,
+                         &self.kura.lane_geometry_lock, &self.kura.sidecar_lock] {
+                assert!(lock.try_lock_or_wait().is_ok(), "live custody still holds a sibling fence");
+            }
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let fixture = native_amx_publication_capacity_fixture();
+    fixture.kura.store_block(Arc::clone(&fixture.block)).unwrap();
+    let receipt = fixture.kura.store_v2_finality_artifact(&fixture.finality).unwrap();
+    let token = fixture.kura.prepublish_native_amx_participant_application_evidence(&fixture.block, None).unwrap();
+    let frontiers = crate::state::State::native_amx_participant_frontier_markers(&fixture.block).unwrap();
+    let files = snapshot_regular_files_recursively(&fixture.kura.store_root);
+    for (archive, invalid) in [(false, false), (false, true), (true, true)] {
+        let sidecar = fixture.kura.sidecar_lock.lock();
+        let mut wait = fixture.kura.sidecar_lock.try_lock_or_wait().err().unwrap().wait_for_release();
+        let initial = sidecar.release_deferred();
+        let callback = Arc::new(Reenter { kura: Arc::clone(&fixture.kura), wakes: AtomicUsize::new(0) });
+        let waker = Waker::from(Arc::clone(&callback));
+        assert!(Pin::new(&mut wait).poll(&mut Context::from_waker(&waker)).is_pending());
+        let passed = if archive {
+            fixture.kura.authenticate_archive_capture(
+                fixture.finality.height_context.network_id.clone(),
+                fixture.block.header().height().get(),
+                [0; 32], 0, &receipt,
+            ).is_ok()
+        } else {
+            fixture.kura.reauthenticate_native_amx_prepublication(
+                &token, &fixture.block, &fixture.manifest, &fixture.finality,
+                if invalid { &frontiers[..2] } else { &frontiers },
+            ).is_ok()
+        };
+        assert_eq!(passed, !invalid);
+        assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
+        assert!(Pin::new(&mut wait).poll(&mut Context::from_waker(Waker::noop())).is_ready());
+        drop(wait);
+        drop(initial);
+    }
+    assert_eq!(snapshot_regular_files_recursively(&fixture.kura.store_root), files);
+}
