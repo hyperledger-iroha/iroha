@@ -425,3 +425,54 @@ State acquisition, disposal and funding still need their enclosing ownership.
 A failed clone retains its original conservative charge; this test does not
 claim that outer-layout charges fund nested payloads. The production retained
 validator, Native cutover and all overall release goals remain open.
+
+## Python captured-content and bounded-parser integration
+
+The sole wheel verifier now owns one installed-byte relation used by both live
+file custody and captured artifact replay. Content results contain no physical
+file seals or execution authority. The dependency verifier consumes those exact
+content results; no duplicate RECORD/direct-URL algorithm or compatibility entry
+point remains. The execution ZIP codec and nine-operation command catalog also
+have one shared owner for production and subsequent artifact replay.
+
+All **1,814 combined Python tests pass**, with zero failures, errors, skips or
+source drift, in 81.03 seconds including driver overhead. Exact source identities,
+commands and results are in
+`target/first-release-python-parent-validation-20260921-2/`; source inventory
+SHA-256 is `02ad6353bda600257f6a9f07b339067678bb6d5ce1b1dd2117ecf19855fd80e0`.
+This supersedes the earlier 1,606-case component run. The original wheel harness
+and all 80 byte-versus-path comparisons remain intact.
+
+The archive preflight walks fixed headers before all three untrusted `ZipFile`
+constructors, bounding actual directory records and raw names before allocation.
+It rejects a reproduced ZIP64 locator in a permitted member comment that caused
+a classic one-member directory to allocate 66 entries. Existing wheel member
+extra/comment coverage remains accepted. The reviewed patch and reproduction are
+in `target/first-release-python-archive-preflight-20260921/` and
+`target/first-release-python-zip-admission-review/`. These are finite parser
+bounds, not aggregate allocation funding or maximum-host qualification.
+
+Native ABI and symbol-output subprocesses now have bounded stdout/stderr and
+deadlines. The applied revision preserves the outer process group so its timeout
+also contains the nested probe. The first draft created an escaping inner session;
+it was rejected before integration and its reproduction remains in
+`target/first-release-native-bounded-probe-review-20260921/`. Revision 2 includes
+real nested timeout/cancellation and TERM-ignore controls. Windows API controls
+are synthetic; actual Windows execution remains open.
+
+A current-source static replay again matches all 15 original dependency wheels,
+1,302 dependency rows, both native/SDK inventories (10 + 60 files), and the full
+1,380-file earlier offline installation. No subprocess or native/SDK import runs
+during this replay. Results and unchanged source hashes are in
+`target/first-release-python-installed-content-current-20260921/evidence/`.
+Those historical component artifacts and locally chosen pins do not qualify the
+release candidate. The initial archive test failure, where `ZipInfo` sanitized a
+NUL before fixture encoding, is preserved; the corrected test mutates actual ZIP
+headers and passes.
+
+Automation validation, changed shell syntax, retired codec guard and
+`git diff --check` pass. Workspace formatting already passed after the final Cell
+patch. The source-budget guard still reports **276 findings**; no ceiling was
+raised. TODO: implement the consuming original-index Python adapter and the
+signed aggregate joins, then execute final native-backed cases and required
+platforms against the matching immutable candidate. All overall goals stay open.

@@ -25,7 +25,7 @@ fn prepare<'target>(
 ) -> PreparedBlockHashes<'target, ()> {
     journal
         .try_prepare_publication(owner, |_, _| Ok::<_, &str>(()))
-        .unwrap_or_else(|(_, error)| panic!("hash publication preparation: {error:?}"))
+        .unwrap_or_else(|(_, error, _)| panic!("hash publication preparation: {error:?}"))
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn readers_writers_and_installation_refusal_preserve_retry_custody() {
     let journal = detached(&owner, false, &[2]);
     let pointer = journal.get(0).map(std::ptr::from_ref);
     let writer = prepare(detached(&owner, false, &[]), &owner);
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&owner, |_, _| -> Result<(), &str> {
             panic!("busy writer is observed before admission")
         })
@@ -112,7 +112,7 @@ fn readers_writers_and_installation_refusal_preserve_retry_custody() {
     assert!(matches!(error, PublicationPreparationError::Busy(_)));
     drop(writer);
     let reader = owner.view();
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&owner, |_, target| {
             assert!(
                 target.writer_available(),
@@ -165,7 +165,7 @@ fn hash_prepared_writer_release_before_wait_registration_is_not_lost() {
         let first = detached(&owner, false, &[2]);
         let second = detached(&owner, false, &[3]);
         let prepared = prepare(first, &owner);
-        let (second, error) = second
+        let (second, error, _cleanup) = second
             .try_prepare_publication(&owner, |_, _| Ok::<_, ()>(()))
             .err()
             .expect("writer excludes observation");
@@ -221,14 +221,14 @@ fn equal_bytes_in_another_owner_or_after_aba_never_authorize_publication() {
     let foreign = BlockHashes::new(vec![hash(1)]);
     let journal = detached(&owner, false, &[2]);
     let pointer = journal.get(0).map(std::ptr::from_ref);
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&foreign, |_, _| -> Result<(), &str> {
             panic!("reject foreign owner before admission")
         })
         .err()
         .expect("foreign owner");
     assert!(matches!(error, PublicationPreparationError::Changed));
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&owner, |_, target| {
             for value in [3, 1] {
                 let mut block = target.block_and_revert();
@@ -314,7 +314,7 @@ fn late_hash_refusal_releases_prepared_membership_before_exact_retry() {
         .unwrap_or_else(|_| panic!("membership prepare"));
     let hash_journal = detached(&hashes, false, &[2]);
     let blocker = prepare(detached(&hashes, false, &[]), &hashes);
-    let (hash_journal, error) = hash_journal
+    let (hash_journal, error, _cleanup) = hash_journal
         .try_prepare_publication(&hashes, |_, _| Ok::<_, &str>(()))
         .err()
         .expect("late busy hash component");
@@ -346,7 +346,7 @@ fn changed_after_admission_signals_the_writer_released_during_refusal() {
     let owner = BlockHashes::new(vec![hash(1)]);
     let journal = detached(&owner, false, &[2]);
     let mut observation = None;
-    let (_, error) = journal
+    let (_, error, _cleanup) = journal
         .try_prepare_publication(&owner, |_, target| {
             target.block().commit();
             observation = Some(target.released.observe());
@@ -356,6 +356,12 @@ fn changed_after_admission_signals_the_writer_released_during_refusal() {
         .expect("changed base");
     assert!(matches!(error, PublicationPreparationError::Changed));
     let mut wait = observation.unwrap().wait_for_release();
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    drop(_cleanup);
     assert!(
         Pin::new(&mut wait)
             .poll(&mut Context::from_waker(Waker::noop()))
@@ -422,7 +428,7 @@ fn hash_reader_refusal_waits_on_the_original_reader_mutex() {
     let held = prepare(detached(&owner, false, &[]), &owner);
     let expected = owner.map().unwrap().observe_reader_release();
     let writer_release = owner.released.observe();
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&owner, |_, _| -> Result<(), ()> {
             panic!("reader contention precedes admission");
         })
@@ -454,4 +460,98 @@ fn hash_reader_refusal_waits_on_the_original_reader_mutex() {
     drop(first);
     prepare(journal, &owner).publish();
     assert!(owner.view().iter().copied().eq([hash(1), hash(2)]));
+}
+
+#[test]
+fn stale_hash_refusal_retains_release_and_installation_until_outer_unlock() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Context, Wake, Waker},
+    };
+    struct Probe {
+        hashes: Arc<BlockHashes>,
+        outer: Arc<crate::publication_lock::PublicationMutex>,
+        wakes: AtomicUsize,
+        refunds: AtomicUsize,
+    }
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            assert!(
+                self.outer.try_lock_or_wait().is_ok(),
+                "outer fence remains held"
+            );
+            assert!(
+                self.hashes.writer_available(),
+                "original hash writer remains held"
+            );
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    struct Installation(Arc<Probe>);
+    impl Drop for Installation {
+        fn drop(&mut self) {
+            assert!(self.0.outer.try_lock_or_wait().is_ok());
+            assert!(self.0.hashes.writer_available());
+            self.0.refunds.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    for unwind in [false, true] {
+        let owner = Arc::new(BlockHashes::new(vec![hash(1)]));
+        let outer = Arc::new(crate::publication_lock::PublicationMutex::default());
+        let guard = outer.lock();
+        let probe = Arc::new(Probe {
+            hashes: Arc::clone(&owner),
+            outer: Arc::clone(&outer),
+            wakes: AtomicUsize::new(0),
+            refunds: AtomicUsize::new(0),
+        });
+        let journal = detached(&owner, false, &[2]);
+        let pointer = journal.get(0).map(std::ptr::from_ref);
+        let mut wait = None;
+        let (journal, error, cleanup) = journal
+            .try_prepare_publication(&owner, |_, target| {
+                target.block().commit();
+                let mut observation = target.released.observe().wait_for_release();
+                let waker = Waker::from(Arc::clone(&probe));
+                assert!(
+                    Pin::new(&mut observation)
+                        .poll(&mut Context::from_waker(&waker))
+                        .is_pending()
+                );
+                wait = Some(observation);
+                Ok::<_, ()>(Installation(Arc::clone(&probe)))
+            })
+            .err()
+            .expect("actual stale predecessor");
+        assert_eq!(error, PublicationPreparationError::Changed);
+        assert_eq!(journal.get(0).map(std::ptr::from_ref), pointer);
+        assert!(owner.writer_available());
+        assert_eq!(probe.wakes.load(Ordering::SeqCst), 0);
+        assert_eq!(probe.refunds.load(Ordering::SeqCst), 0);
+        if unwind {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let _cleanup = cleanup;
+                    let _outer = guard;
+                    panic!("abandon retained hash refusal");
+                }))
+                .is_err()
+            );
+        } else {
+            drop(guard);
+            drop(cleanup);
+        }
+        assert_eq!(probe.wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.refunds.load(Ordering::SeqCst), 1);
+        assert!(
+            Pin::new(&mut wait.unwrap())
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+        );
+    }
 }

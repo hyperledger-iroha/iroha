@@ -183,6 +183,47 @@ fn poll(wait: &mut concread::release::ReleaseFuture) -> Poll<()> {
 }
 
 #[test]
+fn retirement_diagnostics_preserve_the_refusal_details_and_release_wait() {
+    let lock = crate::publication_lock::PublicationMutex::<()>::default();
+    let held = lock.lock();
+    let wait = lock.try_lock_or_wait().err().unwrap();
+    let error = CarrierQueueRetirementError::Busy {
+        field: "lane_reservation_transition_lock",
+        wait,
+    };
+    let diagnostic = format!("{error:?}");
+    assert!(diagnostic.contains("lane_reservation_transition_lock"));
+    assert!(diagnostic.contains("ReleaseWait"));
+    let CarrierQueueRetirementError::Busy { wait, .. } = error else {
+        unreachable!()
+    };
+    let mut wait = wait.wait_for_release();
+    assert!(poll(&mut wait).is_pending());
+    drop(held);
+    assert!(poll(&mut wait).is_ready());
+
+    for (error, expected) in [
+        (CarrierQueueRetirementError::Missing, "Missing"),
+        (CarrierQueueRetirementError::ForeignState, "ForeignState"),
+        (CarrierQueueRetirementError::ForeignQueue, "ForeignQueue"),
+        (
+            CarrierQueueRetirementError::Unavailable(
+                crate::queue::QueueLaneRetirementUnavailable::DurabilityFault,
+            ),
+            "Unavailable(DurabilityFault)",
+        ),
+        (
+            CarrierQueueRetirementError::Geometry(LaneLifecycleError::Storage(
+                "missing predecessor".to_owned(),
+            )),
+            "Geometry(Storage(\"missing predecessor\"))",
+        ),
+    ] {
+        assert_eq!(format!("{error:?}"), expected);
+    }
+}
+
+#[test]
 fn pending_queue_work_releases_without_applying_the_blocked_carrier() {
     let (mut state, _) = fixture(false);
     let (queue, clock) = crate::queue::tests::carrier_retirement_queue_fixture(&mut state);
@@ -209,6 +250,16 @@ fn pending_queue_work_releases_without_applying_the_blocked_carrier() {
     .unwrap();
     drop(lifecycle);
     drop(cleanup);
+    let diagnostic = format!("{refused:?}");
+    for detail in [
+        "Pending",
+        "lane:",
+        "dataspace:",
+        "incarnation:",
+        "ReleaseWait",
+    ] {
+        assert!(diagnostic.contains(detail), "{diagnostic}");
+    }
     let CarrierQueueRetirementError::Pending {
         lane,
         dataspace,
@@ -399,4 +450,71 @@ fn original_queue_cut_completes_retirement_storage_without_publishing_state() {
         drop(proof);
         drop(queue.try_lock_lane_retirement_observer().unwrap());
     }
+}
+
+#[test]
+fn route_refusal_retains_original_cut_cleanup_through_lifecycle() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Reenter {
+        state: Arc<State>,
+        queue: Arc<Queue>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for Reenter {
+        fn wake(self: Arc<Self>) {
+            assert!(self.state.try_lock_lane_lifecycle_work_admission().is_ok());
+            assert!(
+                self.queue
+                    .try_lock_lane_retirement_observer()
+                    .unwrap()
+                    .try_into_cut()
+                    .is_ok()
+            );
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let (state, mut geometry) = fixture(false);
+    let state: Arc<State> = state.into();
+    let queue = Arc::new(queue());
+    geometry
+        ._pending
+        .as_mut()
+        .unwrap()
+        .catalog_update
+        .previous_lane_incarnations
+        .remove(&LaneId::new(1));
+    let source = OriginalCarrierQueue::for_test(&state, &queue);
+    let observer = source.try_observe().unwrap();
+    let lifecycle = state.try_lock_lane_lifecycle_work_admission().unwrap();
+    let mut wait = source.try_observe().err().unwrap().wait_for_release();
+    let callback = Arc::new(Reenter {
+        state: Arc::clone(&state),
+        queue: Arc::clone(&queue),
+        wakes: AtomicUsize::new(0),
+    });
+    let waker = Waker::from(Arc::clone(&callback));
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    let (error, cleanup) = CarrierQueueRetirement::try_new(
+        &state,
+        &geometry,
+        header(),
+        &source,
+        observer.try_into_cut().unwrap(),
+    )
+    .err()
+    .expect("malformed exact predecessor");
+    assert!(matches!(error, CarrierQueueRetirementError::Geometry(_)));
+    assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
+    drop(lifecycle);
+    drop(cleanup);
+    assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready()
+    );
 }

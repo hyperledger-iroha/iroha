@@ -16,11 +16,12 @@ MAX_MEMBERS = 20000
 MAX_MEMBER_BYTES = verifier.MAX_MEMBER_BYTES
 MAX_PAYLOAD_BYTES = 768 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
+_MAX_NAME_BYTES = 1024
 
 
 def _name(value: object) -> str:
     name = _path(value, absolute=False)
-    if len(name.encode("utf-8")) > 1024:
+    if len(name.encode("utf-8")) > _MAX_NAME_BYTES:
         raise ArtifactError("Python execution member name exceeds its bound")
     return name
 
@@ -58,6 +59,10 @@ def archive_members(raw: bytes) -> dict[str, bytes]:
     if type(raw) is not bytes or not 0 < len(raw) <= MAX_ARCHIVE_BYTES:
         raise ArtifactError("Python execution ZIP byte bound")
     try:
+        verifier.preflight_zip_directory(
+            raw, max_members=MAX_MEMBERS, max_name_bytes=_MAX_NAME_BYTES,
+            allow_member_extra=False, allow_member_comments=False,
+        )
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             entries = archive.infolist()
             if not 0 < len(entries) <= MAX_MEMBERS:

@@ -196,28 +196,6 @@ fn writer_error(
     }
 }
 
-// An ordinary refusal can release a raw writer before any guard is returned.
-// Signal only those releases; contention and poison never acquired authority.
-pub(super) fn acquire_writer<T>(
-    notification: &ReleaseNotification,
-    acquire: impl FnOnce() -> Result<T, MapAdmissionError<AdmittedStorageError>>,
-) -> Result<ReleaseGuard<'_, T>, MapAdmissionError<AdmittedStorageError>> {
-    match notification.with_acquisition_unwind_notification(acquire) {
-        Ok(writer) => Ok(notification.poisoning_guard(writer)),
-        Err(error) => {
-            if matches!(
-                error,
-                MapAdmissionError::Planning(_)
-                    | MapAdmissionError::Refused(_)
-                    | MapAdmissionError::Changed
-            ) {
-                drop(notification.guard(()));
-            }
-            Err(error)
-        }
-    }
-}
-
 struct AdmittedWriters<'a, K: Key, V: Value, P>
 where
     P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
@@ -454,18 +432,55 @@ where
         let identity =
             NextPublication::allocation_demand().map_err(AdmittedStorageError::Planning)?;
         let (current, undo, identity) = reserve_owners(budget, current, undo, identity)?;
-        let wait = self.revert_released.observe();
-        let revert = acquire_writer(&self.revert_released, || {
-            self.revert
-                .try_write_admitted(|demand| policy::<P>(budget, undo, demand))
-        })
-        .map_err(|error| writer_error(error, StorageRole::Undo, wait))?;
-        let wait = self.blocks_released.observe();
-        let blocks = acquire_writer(&self.blocks_released, || {
-            self.blocks
-                .try_write_admitted(|demand| policy::<P>(budget, current, demand))
-        })
-        .map_err(|error| writer_error(error, StorageRole::Current, wait))?;
+        let undo_wait = self.revert_released.observe();
+        let revert = self.revert.try_acquire_writer().ok_or_else(|| {
+            writer_error(
+                MapAdmissionError::Busy,
+                StorageRole::Undo,
+                undo_wait.clone(),
+            )
+        })?;
+        let revert = self.revert_released.poisoning_guard(revert);
+        if revert.is_poisoned() {
+            revert.release_with_observed_poison(drop, || self.revert.is_poisoned());
+            return Err(AdmittedStorageError::Poisoned {
+                role: StorageRole::Undo,
+            });
+        }
+        let current_wait = self.blocks_released.observe();
+        let blocks = self.blocks.try_acquire_writer().ok_or_else(|| {
+            writer_error(
+                MapAdmissionError::Busy,
+                StorageRole::Current,
+                current_wait.clone(),
+            )
+        })?;
+        let blocks = self.blocks_released.poisoning_guard(blocks);
+        let (revert, blocks) = revert.try_map_pair_preserving_release(
+            blocks,
+            |revert, blocks| {
+                // Both actual poison checks precede either cursor allocation.
+                if blocks.is_poisoned() {
+                    return Err(AdmittedStorageError::Poisoned {
+                        role: StorageRole::Current,
+                    });
+                }
+                let revert = revert
+                    .try_write_admitted(|demand| policy::<P>(budget, undo, demand))
+                    .map_err(|(acquired, error)| {
+                        drop(acquired);
+                        writer_error(error, StorageRole::Undo, undo_wait)
+                    })?;
+                let blocks = blocks
+                    .try_write_admitted(|demand| policy::<P>(budget, current, demand))
+                    .map_err(|(acquired, error)| {
+                        drop(acquired);
+                        writer_error(error, StorageRole::Current, current_wait)
+                    })?;
+                Ok((revert, blocks))
+            },
+            || (self.revert.is_poisoned(), self.blocks.is_poisoned()),
+        )?;
         // Refused/poisoned acquisition must not allocate an unused identity.
         // Its original reservation already exists; both writers now belong to
         // this opening, before reset, replacement copying or user execution.

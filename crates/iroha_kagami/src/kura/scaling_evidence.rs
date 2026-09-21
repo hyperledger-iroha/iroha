@@ -14,9 +14,6 @@
 pub(crate) mod command;
 pub(crate) mod export;
 
-#[cfg(test)]
-mod fixture;
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use color_eyre::eyre::{Result, ensure, eyre};

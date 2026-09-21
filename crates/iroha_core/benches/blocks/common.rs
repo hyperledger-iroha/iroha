@@ -26,7 +26,6 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
-use mv::storage::StorageReadOnly as _;
 use std::{
     num::{NonZeroU16, NonZeroU64},
     sync::Arc,

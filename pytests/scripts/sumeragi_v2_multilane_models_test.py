@@ -3589,3 +3589,55 @@ print(module.source_manifest_sha256(root))
             assert digest() != original, f"changed helper not bound: {relative}"
         finally:
             source.write_bytes(before)
+
+
+@pytest.mark.parametrize("header", [
+    "impl<T> Owner<T> where T: Trait<Input<T>>",
+    "impl<T: Trait<Other<T>>> Owner<T, Prepaid<T>> where T: Clone",
+    "impl<T> Trait<Nested<T>> for Owner<T, Prepaid<T>>",
+    "impl Owner<Wrapper<Nested<u8>>>",
+    "impl Owner<fn(u8) -> u16>",
+    "impl<T> Trait<T> for Owner<T> where T: Send + Sync",
+    "impl<'a, K, V, M> Owner<'a, K, V, M>\nwhere K: Clone, M: NodeCloning<K, V>,",
+])
+def test_rust_method_owner_retains_identity_before_where_clause(header):
+    checker = load_checker()
+    source = header + " {\n    fn acquire() { original_guard(); }\n}"
+    (item,) = checker._extract_rust_binding_items(source, "method", "Owner::acquire")
+    assert "original_guard()" in item
+    for foreign in ("Other", "OwnerSuffix"):
+        decoy = header.replace("Owner<", foreign + "<") + " {\n    fn acquire() { wrong_guard(); }\n}"
+        assert checker._extract_rust_binding_items(decoy, "method", "Owner::acquire") == ()
+
+
+@pytest.mark.parametrize("header", [
+    "impl<T> Other<T> where T: Trait<Owner<T>>",
+    "impl<T> Other<Owner<T>>",
+    "impl<T> Trait<Owner<Prepaid<T>>> for Other<T>",
+    "impl<T> Owner<Prepaid<T>",
+    "impl<T> Other<T> where T: Fn() -> Owner<T>",
+    "impl<T> Owner<T>Other<T>",
+    "impl<T> Trait<Owner<T>> for Other<T> where T: Send",
+    "impl<T> OwnerSuffix<T> where T: Trait<Owner<T>>",
+    "impl<T> Other<T> where T: Trait<Owner<T>>; impl Unrelated",
+])
+def test_rust_method_owner_cannot_be_supplied_by_where_bound(header):
+    checker = load_checker()
+    source = header + " {\n    fn acquire() { wrong_guard(); }\n}"
+    assert checker._extract_rust_binding_items(source, "method", "Owner::acquire") == ()
+
+
+@pytest.mark.parametrize("header,accepted", [
+    ("impl Drop for Owner", True),
+    ("impl<T> Drop for Owner<Prepaid<T>> where T: Send", True),
+    ("impl Owner", False),
+    ("impl OtherTrait for Owner", False),
+    ("impl Drop for Other<Owner>", False),
+    ("impl Trait<Drop> for Owner", False),
+    ("impl<T> Other<T> where T: Drop", False),
+])
+def test_rust_method_owner_qualified_trait_is_exact(header, accepted):
+    checker = load_checker()
+    source = header + " {\n    fn drop(&mut self) { original_guard(); }\n}"
+    items = checker._extract_rust_binding_items(source, "method", "Drop for Owner::drop")
+    assert len(items) == int(accepted)

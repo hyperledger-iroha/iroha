@@ -121,8 +121,8 @@ def require_storage_borrowed_iterators(source: str) -> None:
             "match&self.blocks{ViewInner::Txn(txn)=>txn.range(bounds),ViewInner::Snapshot(snapshot)=>snapshot.range(bounds),}",
         ),
         "Block": (
-            "self.assert_operable();self.blocks.iter()",
-            "self.assert_operable();self.blocks.range(bounds)",
+            "self.assert_operable();self.writers.as_ref().blocks.iter()",
+            "self.assert_operable();self.writers.as_ref().blocks.range(bounds)",
         ),
         "Transaction": ("self.current().iter()", "self.current().range(bounds)"),
     }
@@ -649,7 +649,7 @@ def require_parliament_commit_publication(state: str) -> None:
     writer_order = (
         "let_state_write_lock=state_write_lock.lock();",
         "letblock_hashes=block_hashes.detach().try_prepare_publication(",
-        ".map_err(|(_,_)|TransactionsBlockError::SnapshotObservationChanged)?;",
+        ".map_err(|(_,_,cleanup)|{hash_refusal_cleanup=Some(cleanup);TransactionsBlockError::SnapshotObservationChanged})?;",
         "let_view_generation=state_ref.begin_state_view_write();",
         "transactions.publish();", "world.commit();", "hash_retirement=block_hashes.publish();",
     )

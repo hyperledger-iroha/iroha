@@ -183,7 +183,7 @@ impl BlockHashes {
     ) -> Result<BlockHashesBlock<'_>, BlockHashAdmissionError> {
         self.budget.with_deferred_refund_notifications(|_| {
             let map = self.map().ok_or(BlockHashAdmissionError::ReadOnly)?;
-            let wait = self.released.observe();
+            let wait = map.observe_reader_release();
             let view = self.try_view().map_err(|error| match error {
                 concread::bptree::OwnedWriteError::Busy => {
                     BlockHashAdmissionError::Busy(wait.clone())
@@ -204,19 +204,28 @@ impl BlockHashes {
             };
             drop(view);
             let wait = self.released.observe();
-            let result = map.try_insert_admitted_with_footprint(
-                prefix,
-                HashOf::from_untyped_unchecked(Hash::prehashed([0; 32])),
-                |existing, additional| self.admit_successor(existing, additional),
-            );
-            if !matches!(
-                result,
-                Err((_, MapAdmissionError::Busy | MapAdmissionError::Poisoned))
-            ) {
-                drop(self.released.guard(()));
-            }
-            let (work, _) =
-                result.map_err(|(_, error)| self.admission_error(error, wait.clone()))?;
+            let acquired = map
+                .try_acquire_writer()
+                .ok_or_else(|| BlockHashAdmissionError::Busy(wait.clone()))?;
+            let writer = match self
+                .released
+                .poisoning_guard(acquired)
+                .try_map_preserving_release(|acquired| {
+                    acquired
+                        .try_insert_admitted_with_footprint(
+                            prefix,
+                            HashOf::from_untyped_unchecked(Hash::prehashed([0; 32])),
+                            |existing, additional| self.admit_successor(existing, additional),
+                        )
+                        .map_err(|(acquired, input, error)| (acquired, (input, error)))
+                }) {
+                Ok(writer) => writer,
+                Err((acquired, (_, error))) => {
+                    drop(acquired);
+                    return Err(self.admission_error(error, wait));
+                }
+            };
+            let (work, _) = writer.release_with(|(writer, previous)| (writer.detach(), previous));
             if !predecessor.matches(&work.predecessor()) {
                 return Err(BlockHashAdmissionError::Changed(wait));
             }

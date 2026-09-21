@@ -6,13 +6,14 @@ use crate::{
 };
 
 /// Original service identity, not a drain assertion or publication permit.
-/// Only the Apply service can construct this capability in production.
+/// Currently constructed only by publication tests pending Apply integration.
 pub(crate) struct OriginalCarrierQueue<'service> {
     state: &'service State,
     queue: &'service Queue,
 }
 
 impl<'service> OriginalCarrierQueue<'service> {
+    #[cfg(test)]
     pub(super) fn new(state: &'service State, queue: &'service Queue) -> Self {
         Self { state, queue }
     }

@@ -66,7 +66,7 @@ use sorafs_manifest::pop_credentials::{
     POP_COMMITMENT_ROOT_VERSION_V1, POP_CREDENTIAL_TREE_DEPTH_V1, POP_CREDENTIAL_VERSION_V1,
     POP_REVOCATION_LIST_VERSION_V1, POP_REVOCATION_TREE_DEPTH_V1, PopCommitmentRootV1,
     PopCredentialAttributeV1, PopCredentialMerklePathV1, PopCredentialV1, PopEligibilityClassV1,
-    PopMembershipProofV1, PopMembershipWitnessV1, PopRevocationListV1,
+    PopMembershipPresentationV1, PopMembershipProofV1, PopMembershipWitnessV1, PopRevocationListV1,
     PopRevocationNonMembershipPathV1, PopSignatureAlgorithmV1, PopSignatureV1,
     build_pop_revocation_non_membership_path_v1, derive_pop_holder_commitment_v1,
     pop_commitment_root_signature_digest_v1, pop_credential_leaf_v1,
@@ -326,9 +326,11 @@ impl PopMaterial {
                 credential_path: self.credential_path.clone(),
                 revocation_path: self.revocation_path.clone(),
             },
-            challenge,
-            verifier_context,
-            presentation_binding,
+            PopMembershipPresentationV1 {
+                challenge_digest: challenge,
+                verifier_context,
+                presentation_binding_digest: presentation_binding,
+            },
             now_epoch,
         )
         .expect("create challenge-bound moderation PoP proof")

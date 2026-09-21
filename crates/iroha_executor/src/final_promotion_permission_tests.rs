@@ -133,7 +133,7 @@ fn final_promotion_exact_holders_can_grant_and_revoke_without_capability_expansi
     );
     let context = Context {
         authority: authority.clone(),
-        curr_block: BlockHeader::new(NonZeroU64::new(2).expect("height"), None, None, None, 0, 0),
+        curr_block: BlockHeader::new(NonZeroU64::new(2).expect("height"), None, None, 0, 0),
     };
     for capability in [Capability::Manage, Capability::Operate, Capability::Check] {
         let exact = token(capability, "production-primary");

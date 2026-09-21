@@ -738,10 +738,10 @@ def test_terminal_carrier_requires_its_actual_durable_execution_witness(fixture,
     ("QUEUE_OWNER", "fn lane_has_pending_route_work", "!reservation_owned_hashes.contains(entry.key())", "true"),
     ("PUBLICATION_MUTEX", "fn wrap", "self.released.guard(PhysicalPublicationGuard", "self.released.poisoning_guard(PhysicalPublicationGuard"),
     ("PUBLICATION_MUTEX", "fn try_lock_or_wait", "self.released.observe()", "other.released.observe()"),
-    ("WITNESS_LEASE", "fn try_publication_lease", "_canonical: canonical,", "_canonical: prune,"),
+    ("WITNESS_LEASE", "fn try_publication_lease", 'fences.canonical = Some(acquire("canonical_chain_lock", &self.canonical_chain_lock)?);', 'fences.canonical = Some(acquire("canonical_chain_lock", &self.prune_lock)?);'),
     ("WITNESS_LEASE", "fn pending_canonical_bytes", "self.pending_canonical_bytes", "0"),
     ("WITNESS_LEASE", "fn try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards", "self.sidecar_lock.try_lock_or_wait()", "other.sidecar_lock.try_lock_or_wait()"),
-    ("WITNESS_LEASE", "fn try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards", "self.merge_entry_by_hash_with_sidecar_guard(hash, sidecar)", "self.merge_entry_by_hash(hash)"),
+    ("WITNESS_LEASE", "fn try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards", "self.merge_entry_by_hash_after_sidecar(hash, pending)", "self.merge_entry_by_hash(hash)"),
     ("RAW_GEOMETRY", "fn begin_raw_geometry_attempt", "kura.durable_mutation_authorized()?;", "// no durable authority"),
     ("RAW_GEOMETRY", "fn begin_raw_geometry_attempt", "kura.validate_certified_lane_drain_frontier_under_publication_lease(", "kura.unchecked_frontier("),
     ("RAW_GEOMETRY", "fn begin_raw_geometry_attempt", "if observed != journal", "if false"),
@@ -834,7 +834,7 @@ def test_geometry_retirement_admission_precedes_retained_writer_transfer(fixture
     ("fn try_into_cut", 'field: "push_remove_lock",', 'field: "lane_reservations",'),
     ("fn try_into_cut", 'field: "lane_reservations",', 'field: "push_remove_lock",'),
     ("fn try_into_cut", "wait,", "wait: other_wait,"),
-    ("fn try_into_cut", "})?;", '}).expect("invalid refusal") ;'),
+    ("fn try_into_cut", "released: [None, None, Some(self.release_deferred())]", "released: [None, None, None]"),
     ("fn try_into_cut", "_mutation: mutation,", "_mutation: other_mutation,"),
     ("fn try_into_cut", "observer: self,", "observer: other_observer,"),
     ("struct QueueRetirementBusy", "pub(crate) wait: concread::release::ReleaseWait,", "pub(crate) wait: concread::release::ReleaseWait, retained: PublicationGuard<'static>,"),
@@ -894,8 +894,8 @@ def test_geometry_pending_capacity_snapshot_precedes_inner_fences(fixture):
     root, helper, checker, _ = fixture
     path = root / checker.native_preparation_contract.WITNESS_LEASE
     anchor = "fn try_publication_lease"
-    snapshot = "let pending_canonical_bytes =\n            self.try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;"
-    geometry = 'let geometry = acquire("lane_geometry_lock", &self.lane_geometry_lock)?;'
+    snapshot = "let pending_canonical_bytes = self\n            .try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards(&mut fences)?;"
+    geometry = 'fences.geometry = Some(acquire("lane_geometry_lock", &self.lane_geometry_lock)?);'
     helper.replace_once_after(path, anchor, snapshot, "")
     helper.replace_once_after(path, anchor, geometry, geometry + "\n" + snapshot)
     assert any("reorders executable relation" in error for error in validate(fixture))
@@ -973,7 +973,7 @@ def test_retained_descriptor_and_cut_lifetimes_reject_early_release(fixture, mut
         path = root / contract.VALIDATION_CUSTODY
         field = "    _descriptor_admission: [AllocationCharge; 2],"
         helper.replace_once_after(path, "struct RetainedBodyValidationService", field, "")
-        helper.replace_once_after(path, "struct RetainedBodyValidationService", "    validator: P,", field + "\n    validator: P,")
+        helper.replace_once_after(path, "struct RetainedBodyValidationService", "    candidates: Vec<Candidate<P::Owner>>,", field + "\n    candidates: Vec<Candidate<P::Owner>>,")
     else:
         path = root / contract.PHYSICAL_CARRIER
         helper.replace_once_after(path, "fn release_for_completion", "let queue = queue.map(CarrierQueueRetirement::release_deferred);", "")
@@ -1010,13 +1010,13 @@ def test_native_preparation_ledger_tokens_match_exact_reviewed_items(fixture):
     pytest.param("STATE", "fn observe_current", "self.work.try_matches_current(map)", "Ok(true)", id="original-advisory-predecessor"),
     pytest.param("STATE", "fn observe_current", "self.work.try_matches_current(map)", "drop(target.released.guard(())); self.work.try_matches_current(map)", id="advisory-release-not-busy-self-wake"),
     pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "let wait = map.observe_reader_release();\n        match self.observe_current(target)", "let wait = target.released.observe();\n        match self.observe_current(target)", id="advisory-waits-for-actual-reader"),
-    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "let wait = map.observe_reader_release();\n        let prepared = match writer.try_prepare_commit()", "let wait = target.released.observe();\n        let prepared = match writer.try_prepare_commit()", id="commit-preparation-cannot-wake-itself"),
-    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "map.try_write_owned(work)", "other.try_write_owned(work)", id="original-final-reacquisition"),
-    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "if error == OwnedWriteError::Changed", "if false", id="changed-release-notification"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "let wait = map.observe_reader_release();\n        let prepared = match writer.try_map_preserving_release(|writer| writer.try_prepare_commit())", "let wait = target.released.observe();\n        let prepared = match writer.try_map_preserving_release(|writer| writer.try_prepare_commit())", id="commit-preparation-cannot-wake-itself"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "map.try_acquire_owned(work)", "other.try_acquire_owned(work)", id="original-final-reacquisition"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "cleanup._release = Some(released);", "cleanup._release = None;", id="changed-release-notification"),
     pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "writer.try_prepare_commit()", "Ok(writer.prepare_commit())", id="nonblocking-reader-acquisition"),
     pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "owner: NativeLaneStateOwner(map.family())", "owner: NativeLaneStateOwner(other.family())", id="original-published-family"),
     pytest.param("HASH_PUBLICATION", "fn state_owner", "self.owner.clone()", "other.owner.clone()", id="publication-family-handoff"),
-    pytest.param("HASH_PUBLICATION", "fn abort", "prepared.abort().detach()", "other.abort().detach()", id="abort-original-work"),
+    pytest.param("HASH_PUBLICATION", "fn abort", "prepared.abort_retaining()", "other.abort_retaining()", id="abort-original-work"),
     pytest.param("HASH_PUBLICATION", "fn publish", "committed_height.store(height, Ordering::Release)", "committed_height.store(0, Ordering::Release)", id="exact-published-height"),
     pytest.param("HASH_PUBLICATION", "fn publish", "_retirement: retirement", "_retirement: { drop(retirement); unreachable!() }", id="retain-physical-cleanup"),
     pytest.param("PREFIX", "fn prepare_world_effects", ".eq([state._curr_block.hash()])", ".eq([])", id="exact-single-carrier-suffix"),
@@ -1031,8 +1031,8 @@ def test_shared_history_preserves_original_identity_and_refusal(fixture, owner, 
 
 
 @pytest.mark.parametrize("owner,anchor,first,second", [
-    ("HASH_PUBLICATION", "fn abort", "let work = writer.detach();", "let ((), writer) = notification.release_deferred(drop);"),
-    ("HASH_PUBLICATION", "fn publish", "let published = prepared.publish();", "committed_height.store(height, Ordering::Release);"),
+    ("HASH_PUBLICATION", "fn abort", "let (writer, reader) = prepared.abort_retaining();", "(writer.detach(), reader)"),
+    ("HASH_PUBLICATION", "fn publish", "let published = prepared.map_preserving_release(|prepared| prepared.publish());", "committed_height.store(height, Ordering::Release);"),
     ("TERMINAL_CARRIER", "fn publish", "let hash_retirement;", "let AcquiredCarrierParticipants {"),
     ("TERMINAL_CARRIER", "fn publish", "drop(commit);", "drop(hash_retirement);"),
 ])
@@ -1094,8 +1094,8 @@ def test_shared_history_cleanup_and_publication_order(fixture, owner, anchor, fi
     pytest.param("HASH_ADMISSION", "fn try_next_block", "view.len().saturating_sub(1)", "view.len()", id="replacement-tip-overwrite"),
     pytest.param("HASH_ADMISSION", "fn try_next_block", "view.predecessor().retain()", "other.predecessor().retain()", id="pinned-reader-predecessor"),
     pytest.param("HASH_ADMISSION", "fn try_next_block", "self.admit_successor(existing, additional)", "self.admit(additional)", id="no-permanent-capacity-wait"),
-    pytest.param("HASH_ADMISSION", "fn try_next_block", "MapAdmissionError::Busy | MapAdmissionError::Poisoned", "MapAdmissionError::Busy", id="poison-does-not-invent-unlock"),
-    pytest.param("HASH_ADMISSION", "fn try_next_block", "drop(self.released.guard(()));", "", id="refused-acquisition-release-wake"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", ".poisoning_guard(acquired)", ".guard(acquired)", id="actual-successor-poison-notification"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", "drop(acquired);", "std::mem::forget(acquired);", id="refused-acquisition-release-wake"),
     pytest.param("HASH_ADMISSION", "fn try_next_block", "!predecessor.matches(&work.predecessor())", "false", id="reject-concurrent-reader-aba"),
     pytest.param("HASH_ADMISSION", "fn try_next_block", "reserved_tip: Some(prefix)", "reserved_tip: None", id="hide-original-prepaid-tip"),
     pytest.param("HASH_ADMISSION", "fn try_next_block", "fixture_edits: false", "fixture_edits: true", id="no-postexecution-admission"),
@@ -1129,7 +1129,7 @@ def test_prepaid_history_order_refuses_before_authority_or_new_allocation(fixtur
         helper.replace_once_after(path, "fn admit_successor", "let required =", "let admitted = self.admit(additional);\n        let required =")
     elif move == "publish-before-tip-check":
         path = root / c.HASH_PUBLICATION
-        guard = "if self.reserved_tip.is_some() {\n            return Err((self, mv::PublicationPreparationError::Changed));\n        }"
+        guard = "if self.reserved_tip.is_some() {\n            return Err((self, mv::PublicationPreparationError::Changed, cleanup));\n        }"
         helper.replace_once_after(path, "fn try_prepare_publication", guard, "")
         helper.replace_once_after(path, "fn try_prepare_publication", "let height = self.len();", guard + "\n        let height = self.len();")
     else:
@@ -1263,7 +1263,7 @@ def test_retained_descriptor_admission_precedes_allocation_and_outlives_vectors(
 
 @pytest.mark.parametrize("owner,anchor,old,new", [
     ("PUBLICATION_MUTEX", "fn release_deferred", "self.inner.release_deferred(drop).1", "other.release_deferred(drop).1"),
-    ("KURA", "fn release_deferred", "_prune.release_deferred()", "other.release_deferred()"),
+    ("KURA", "fn take_cleanup", "self.prune.take().map(PublicationGuard::release_deferred)", "None"),
     ("QUEUE_OWNER", "fn release_deferred", "reservations.release_deferred()", "other.release_deferred()"),
     ("CARRIER_QUEUE", "fn release_deferred", "_routes: routes", "_routes: Vec::new()"),
     ("TERMINAL_CARRIER", "fn publish(", "membership_retirement = transactions.publish();", "transactions.publish();"),
@@ -1339,3 +1339,346 @@ def test_aggregate_abandonment_retains_joint_release_and_original_capacity(fixtu
                                   f"let {first} = {first}.abort();", f"drop((admission, installation)); let {first} = {first}.abort();")
     errors = validate(fixture)
     assert any("executable relation" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("cut", ["state", "queue"])
+def test_partial_fence_refusal_retains_original_cleanup_until_all_fences_release(fixture, cut):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.PHYSICAL_CARRIER
+    anchor = f"Err((error, {cut}_retirement)) =>"
+    helper.replace_once_after(path, anchor, "let kura_retirement = kura.release_deferred();",
+                              f"drop({cut}_retirement); let kura_retirement = kura.release_deferred();")
+    assert any("executable relation" in error for error in validate(fixture))
+
+
+def test_autoscale_queue_refusal_retains_cleanup_through_lifecycle(fixture):
+    root, helper, checker, _ = fixture
+    helper.swap_ordered_once_after(root / checker.native_preparation_contract.APPLY,
+                                  "fn try_validate_autoscale_retirement_queue_binding", "drop(lifecycle_guard);", "drop(cleanup);")
+    assert any("executable relation" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("path,anchor,old,new", [
+    ('crates/iroha_core/src/kura/publication_lease.rs', 'fn take_cleanup', 'self.sidecar.take().map(PublicationGuard::release_deferred)', 'self.sidecar.take().map(|guard| { drop(guard); panic!() })'),
+    ('crates/iroha_core/src/kura/publication_lease.rs', 'fn take_cleanup', '_cold_sidecar: self.cold_sidecar.take()', '_cold_sidecar: None'),
+    ('crates/iroha_core/src/kura/publication_lease.rs', 'fn release_cold_sidecar', 'self.sidecar = Some(sidecar);', 'drop(sidecar);'),
+    ('crates/iroha_core/src/kura/publication_lease.rs', 'fn drop(&mut self)', 'drop(self.take_cleanup());', 'drop(self.sidecar.take());'),
+    ('crates/iroha_core/src/kura/publication_lease.rs', 'fn try_pending_canonical_capacity_bytes_under_prune_and_canonical_guards', 'fences.release_cold_sidecar()?;', 'drop(fences.sidecar.take());'),
+    ('crates/iroha_core/src/kura/publication_lease.rs', 'fn try_publication_lease', 'let mut fences = AcquiredKuraPublicationFences::new(self);', 'let mut fences = AcquiredKuraPublicationFences::new(other);'),
+    ('crates/iroha_core/src/kura/publication_lease.rs', 'fn authenticate_archive_capture', 'fences.canonical = Some(self.canonical_chain_lock.lock());', 'fences.canonical = Some(other.canonical_chain_lock.lock());'),
+    ('vendor/concread/src/release.rs', 'fn deferred_batch', 'released: false', 'released: true'),
+    ('vendor/concread/src/release.rs', 'fn try_release_into<R>', 'if !Arc::ptr_eq(&self.notification.state, &batch.notification.state)', 'if false'),
+    ('vendor/concread/src/release.rs', 'fn try_release_into<R>', 'return Err(self);', 'drop(self); panic!();'),
+    ('vendor/concread/src/release.rs', 'fn try_release_into<R>', 'self.batch.released = true;', 'self.batch.released = false;'),
+    ('vendor/concread/src/release.rs', 'fn try_release_into<R>', 'self.poison_on_unwind && std::thread::panicking()', 'false'),
+    ('vendor/concread/src/release.rs', 'fn try_release_into<R>', 'let result = release(inner);\n        drop(record);', 'drop(record);\n        let result = release(inner);'),
+    ('vendor/concread/src/release.rs', 'impl Drop for DeferredReleaseBatch', 'if self.released', 'if true'),
+    ('crates/iroha_core/src/publication_lock.rs', 'fn try_release_into', '.try_release_into(batch, drop)', '.try_release_into(other, drop)'),
+    ('crates/iroha_core/src/kura.rs', 'fn merge_entry_by_hash_after_sidecar', 'self.ensure_prune_recovery_not_required()?;', '// bypass prune refusal'),
+])
+def test_kura_joint_release_requires_original_physical_ownership(fixture, path, anchor, old, new):
+    root, helper, _, _ = fixture
+    helper.replace_once_after(root / path, anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("path,anchor,old,new", [
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'fn try_acquire_owned', 'if !Shared::ptr_eq(&self.write, &owned.root)', 'if false', id='foreign-before-acquisition'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'fn try_acquire_owned', '(error.into_inner(), true)', '(error.into_inner(), false)', id='poison-keeps-real-guard'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'fn validate(', 'return Err((self, OwnedWriteError::Changed));', 'drop(self); panic!();', id='stale-keeps-custody'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'fn validate(', '!Shared::ptr_eq(&self.guard.current, &self.owned.base)', 'false', id='exact-original-predecessor'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'fn abort(self)', 'drop(guard);', 'let _retained = guard;', id='abort-unlocks-first'),
+    pytest.param('vendor/concread/src/bptree/mod.rs', 'fn try_acquire_owned', 'try_acquire_owned(owned.inner)', 'try_acquire_owned(other.inner)', id='original-map-root'),
+    pytest.param('crates/mv/src/storage/physical.rs', 'fn acquire_owned_writer', '(owned, error, None)', '(owned, error, Some(released.guard(()).release_deferred(drop).1))', id='no-phantom-release'),
+    pytest.param('crates/mv/src/storage/physical.rs', 'fn acquire_owned_writer', '.poisoning_guard(acquired)', '.poisoning_guard(())', id='bind-actual-acquisition'),
+    pytest.param('crates/iroha_core/src/state/block_hashes_publication.rs', 'fn try_prepare_publication', 'cleanup._installation = Some(installation);', 'drop(installation);', id='hash-cleanup-retains-installation'),
+    pytest.param('crates/iroha_core/src/state/block_hashes_publication.rs', 'fn try_prepare_publication', 'cleanup._release = Some(released);', 'drop(released);', id='hash-refusal-keeps-signal'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'Err((block_hashes, cause, hash_retirement))', 'drop(fences.release_for_completion());', 'drop(hash_retirement); drop(fences.release_for_completion());', id='aggregate-fences-before-hash-cleanup'),
+    pytest.param('crates/iroha_core/src/state.rs', 'fn commit_inner(', 'hash_refusal_cleanup = Some(cleanup);', 'drop(cleanup);', id='ordinary-state-keeps-cleanup'),
+])
+def test_acquired_writer_retains_actual_guard_and_cleanup(fixture, path, anchor, old, new):
+    root, helper, _, _ = fixture
+    helper.replace_once_after(root / path, anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("path,anchor,old,new", [
+    pytest.param('crates/iroha_core/src/state/block_hashes_admission.rs', 'fn try_next_block', 'let wait = map.observe_reader_release();', 'let wait = self.released.observe();', id='reader-only-release-wakes-successor'),
+    pytest.param('crates/iroha_core/src/state/block_hashes_admission.rs', 'fn try_next_block', '.poisoning_guard(acquired)', '.poisoning_guard(())', id='actual-successor-guard-before-callback'),
+    pytest.param('crates/iroha_core/src/state/block_hashes_admission.rs', 'fn try_next_block', 'writer.release_with(|(writer, previous)| (writer.detach(), previous))', 'writer.map_preserving_release(|(writer, previous)| (writer.detach(), previous))', id='detachment-releases-original-notification'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'fn try_acquire_writer', '(error.into_inner(), true)', '(error.into_inner(), false)', id='acquired-poison-retained'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'fn try_write_charged', 'if self.poisoned', 'if false', id='poison-before-admission'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'fn try_write_charged', 'return Err((self, WriterAdmissionError::Refused(error)))', 'panic!("lost original acquisition")', id='refusal-retains-original-guard'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'fn try_write_charged', 'caller.create_writer(guard, admission)', 'other.create_writer(guard, admission)', id='original-construction-owner'),
+    pytest.param('vendor/concread/src/bptree/admission.rs', 'fn current_footprint', 'source.node_counts()', '(0, 0)', id='exact-permanent-footprint'),
+    pytest.param('vendor/concread/src/bptree/admission.rs', 'fn insert_with_source<E>(\n        self,', 'WriterAdmissionError::Poisoned => MapAdmissionError::Poisoned', 'WriterAdmissionError::Poisoned => MapAdmissionError::Busy', id='poison-is-never-retryable-contention'),
+    pytest.param('vendor/concread/src/bptree/admission.rs', 'fn insert_with_source<E>(\n        self,', 'BptreeMapWriteTxn { inner: writer }', 'BptreeMapWriteTxn { inner: other }', id='same-writer-after-admission'),
+])
+def test_successor_admission_retains_original_acquisition_and_release(fixture, path, anchor, old, new):
+    root, helper, _, _ = fixture
+    helper.replace_once_after(root / path, anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    pytest.param('LinCowCell::acquire_writer', '(error.into_inner(), true)', '(error.into_inner(), false)', id='blocking-retains-poison'),
+    pytest.param('LinCowCellWriterAcquisition::is_poisoned', 'self.poisoned', 'false', id='actual-acquired-poison'),
+    pytest.param('LinCowCellWriterAcquisition::write_with', 'input: input(data)', 'input: panic!("skip original input")', id='original-input-construction'),
+    pytest.param('LinCowCell::write_with', 'self.acquire_writer().write_with(input)', 'self.try_acquire_writer().expect("busy").write_with(input)', id='blocking-cell-delegates-acquisition'),
+    pytest.param('BptreeMap::acquire_writer', 'self.inner.acquire_writer()', 'self.inner.try_acquire_writer().expect("busy")', id='blocking-map-delegates-acquisition'),
+    pytest.param('BptreeMapWriterAcquisition::is_poisoned', 'self.inner.is_poisoned()', 'false', id='map-forwards-original-poison'),
+    pytest.param('BptreeMapWriterAcquisition::write', 'self.inner.write_with(|_| ())', 'self.inner.write_with(|_| panic!("lost original input"))', id='same-acquired-untracked-cursor'),
+    pytest.param('BptreeMap::write', 'self.acquire_writer().write()', 'self.try_acquire_writer().expect("busy").write()', id='ordinary-map-delegates-acquisition'),
+    pytest.param('BptreeMap::try_write_admitted', 'acquired.try_write_admitted(admit)', '{ drop(acquired); self.try_acquire_writer().expect("reacquire").try_write_admitted(admit) }', id='start-never-reacquires'),
+    pytest.param('BptreeMap::try_clear_admitted', 'acquired.try_clear_admitted(admit)', '{ drop(acquired); self.try_acquire_writer().expect("reacquire").try_clear_admitted(admit) }', id='clear-never-reacquires'),
+    pytest.param('BptreeMapWriterAcquisition::try_write_admitted', 'return Err((Self { inner }, error));', 'drop(inner); panic!("lost refused acquisition");', id='start-refusal-retains-lock'),
+    pytest.param('BptreeMapWriterAcquisition::try_clear_admitted', 'return Err((Self { inner }, error));', 'drop(inner); panic!("lost refused acquisition");', id='clear-refusal-retains-lock'),
+    pytest.param('BptreeMapWriterAcquisition::try_write_admitted', 'writer.as_mut().finish_admitted_funding();', '// original unused funding was not sealed', id='start-funding-cleanup-before-return'),
+    pytest.param('BptreeMapWriterAcquisition::try_clear_admitted', 'inner.as_mut().finish_admitted_funding();', '// unused original funding was not sealed', id='clear-funding-cleanup-before-return'),
+    pytest.param('ReleaseGuard::try_map_pair_preserving_release', 'signals.armed = false;', '// successful ownership transfer still signals', id='success-does-not-wake'),
+    pytest.param('ReleaseGuard::try_map_pair_preserving_release', 'let _first = std::mem::ManuallyDrop::new(self);', 'let _first = self;', id='original-first-notification-transferred'),
+    pytest.param('ReleaseGuard::try_map_pair_preserving_release', 'let _second = std::mem::ManuallyDrop::new(other);', 'let _second = other;', id='original-second-notification-transferred'),
+    pytest.param('ReleaseGuard::try_map_pair_preserving_release', 'match consume(first, second) {', 'signals.first.released(false);\n        match consume(first, second) {', id='no-callback-before-callee-unwind'),
+    pytest.param('ReleaseGuard::try_map_pair_preserving_release', 'notification: _second.notification', 'notification: _first.notification', id='second-source-is-original'),
+    pytest.param('ReleaseGuard::try_map_pair_preserving_release', 'poisoned: second,', 'poisoned: std::thread::panicking(),', id='second-uses-physical-verdict'),
+    pytest.param('ReleaseGuard::try_map_pair_preserving_release', 'let second = Signal {\n                    notification: self.second,\n                    poisoned: second,\n                };', 'drop(first);\n                let second = Signal {\n                    notification: self.second,\n                    poisoned: (self.observe_poison)().1,\n                };\n                let first = ();', id='both-verdicts-before-first-wake'),
+    pytest.param('ReleaseGuard::release_pair_with', '|first, second| Err(consume(first, second))', '|first, second| { drop(first); drop(second); panic!("skip release custody") }', id='release-uses-same-transition-engine'),
+    pytest.param('BlockAcquisitionSlot::initialize', '.poisoning_guard(target.revert.acquire_writer())', '.poisoning_guard(target.revert.write())', id='ordinary-both-raw-before-first-conversion'),
+    pytest.param('BlockAcquisitionSlot::initialize', '    fn initialize(&mut self, mode: BlockMode) {\n        assert!(!self.started, "original storage acquisition is one-shot");\n        self.started = true;\n        let target = self.target;\n        let AcquisitionPhase::Pending { undo, current } = &mut self.phase else {\n            panic!("original pending acquisition");\n        };\n        *undo = WriterPhase::Raw(\n            target\n                .revert_released\n                .poisoning_guard(target.revert.acquire_writer()),\n        );\n        assert!(!undo.is_poisoned(), "original undo writer is poisoned");\n        *current = WriterPhase::Raw(\n            target\n                .blocks_released\n                .poisoning_guard(target.blocks.acquire_writer()),\n        );\n        assert!(\n            !current.is_poisoned(),\n            "original storage writer is poisoned"\n        );\n        let raw = undo.take_raw();\n        *undo = WriterPhase::Writer(\n            match raw\n                .try_map_preserving_release_into(\n                    &mut self.undo_release,\n                    |undo| Ok::<_, (_, std::convert::Infallible)>(undo.write()),\n                    || target.revert.is_poisoned(),\n                )\n                .unwrap_or_else(|_| unreachable!("original undo release source"))\n            {\n                Ok(writer) => writer,\n                Err((_, never)) => match never {},\n            },\n        );\n        let raw = current.take_raw();\n        *current = WriterPhase::Writer(\n            match raw\n                .try_map_preserving_release_into(\n                    &mut self.current_release,\n                    |current| Ok::<_, (_, std::convert::Infallible)>(current.write()),\n                    || target.blocks.is_poisoned(),\n                )\n                .unwrap_or_else(|_| unreachable!("original current release source"))\n            {\n                Ok(writer) => writer,\n                Err((_, never)) => match never {},\n            },\n        );\n        // The caller slot owns completed writers before identity lookup and all\n        // reset/replacement operations that may invoke arbitrary payload code.\n        let predecessor = target.publication.capture();\n        let writers = StorageWriters::new(target, undo.take_writer(), current.take_writer());\n        self.phase = AcquisitionPhase::Block(Block::new(\n            writers,\n            mode == BlockMode::Replace,\n            predecessor,\n            mode,\n        ));\n        let AcquisitionPhase::Block(block) = &mut self.phase else {\n            unreachable!("original storage block");\n        };\n        block.failed = true;\n        let OriginalWriters { revert, blocks } = block.writers.as_mut();\n        if mode == BlockMode::Replace {\n            for (key, value) in revert.iter() {\n                match value {\n                    None => blocks.remove(key),\n                    Some(value) => blocks.insert(key.clone(), value.clone()),\n                };\n            }\n        }\n        revert.clear();\n        block.failed = false;\n        self.complete = true;\n    }', '    fn initialize(&mut self, mode: BlockMode) {\n        assert!(!self.started, "original storage acquisition is one-shot");\n        self.started = true;\n        let target = self.target;\n        let AcquisitionPhase::Pending { undo, current } = &mut self.phase else {\n            panic!("original pending acquisition");\n        };\n        *current = WriterPhase::Raw(\n            target\n                .blocks_released\n                .poisoning_guard(target.blocks.acquire_writer()),\n        );\n        assert!(\n            !current.is_poisoned(),\n            "original storage writer is poisoned"\n        );\n        *undo = WriterPhase::Raw(\n            target\n                .revert_released\n                .poisoning_guard(target.revert.acquire_writer()),\n        );\n        assert!(!undo.is_poisoned(), "original undo writer is poisoned");\n        let raw = undo.take_raw();\n        *undo = WriterPhase::Writer(\n            match raw\n                .try_map_preserving_release_into(\n                    &mut self.undo_release,\n                    |undo| Ok::<_, (_, std::convert::Infallible)>(undo.write()),\n                    || target.revert.is_poisoned(),\n                )\n                .unwrap_or_else(|_| unreachable!("original undo release source"))\n            {\n                Ok(writer) => writer,\n                Err((_, never)) => match never {},\n            },\n        );\n        let raw = current.take_raw();\n        *current = WriterPhase::Writer(\n            match raw\n                .try_map_preserving_release_into(\n                    &mut self.current_release,\n                    |current| Ok::<_, (_, std::convert::Infallible)>(current.write()),\n                    || target.blocks.is_poisoned(),\n                )\n                .unwrap_or_else(|_| unreachable!("original current release source"))\n            {\n                Ok(writer) => writer,\n                Err((_, never)) => match never {},\n            },\n        );\n        // The caller slot owns completed writers before identity lookup and all\n        // reset/replacement operations that may invoke arbitrary payload code.\n        let predecessor = target.publication.capture();\n        let writers = StorageWriters::new(target, undo.take_writer(), current.take_writer());\n        self.phase = AcquisitionPhase::Block(Block::new(\n            writers,\n            mode == BlockMode::Replace,\n            predecessor,\n            mode,\n        ));\n        let AcquisitionPhase::Block(block) = &mut self.phase else {\n            unreachable!("original storage block");\n        };\n        block.failed = true;\n        let OriginalWriters { revert, blocks } = block.writers.as_mut();\n        if mode == BlockMode::Replace {\n            for (key, value) in revert.iter() {\n                match value {\n                    None => blocks.remove(key),\n                    Some(value) => blocks.insert(key.clone(), value.clone()),\n                };\n            }\n        }\n        revert.clear();\n        block.failed = false;\n        self.complete = true;\n    }', id='ordinary-undo-before-current'),
+    pytest.param('BlockAcquisitionSlot::initialize', '!current.is_poisoned()', 'true', id='ordinary-checks-current-poison'),
+    pytest.param('WriterPhase::release', '|| target.is_poisoned(),', '|| std::thread::panicking(),', id='ordinary-actual-poison-pair'),
+    pytest.param('BlockAcquisitionSlot::initialize', '    fn initialize(&mut self, mode: BlockMode) {\n        assert!(!self.started, "original storage acquisition is one-shot");\n        self.started = true;\n        let target = self.target;\n        let AcquisitionPhase::Pending { undo, current } = &mut self.phase else {\n            panic!("original pending acquisition");\n        };\n        *undo = WriterPhase::Raw(\n            target\n                .revert_released\n                .poisoning_guard(target.revert.acquire_writer()),\n        );\n        assert!(!undo.is_poisoned(), "original undo writer is poisoned");\n        *current = WriterPhase::Raw(\n            target\n                .blocks_released\n                .poisoning_guard(target.blocks.acquire_writer()),\n        );\n        assert!(\n            !current.is_poisoned(),\n            "original storage writer is poisoned"\n        );\n        let raw = undo.take_raw();\n        *undo = WriterPhase::Writer(\n            match raw\n                .try_map_preserving_release_into(\n                    &mut self.undo_release,\n                    |undo| Ok::<_, (_, std::convert::Infallible)>(undo.write()),\n                    || target.revert.is_poisoned(),\n                )\n                .unwrap_or_else(|_| unreachable!("original undo release source"))\n            {\n                Ok(writer) => writer,\n                Err((_, never)) => match never {},\n            },\n        );\n        let raw = current.take_raw();\n        *current = WriterPhase::Writer(\n            match raw\n                .try_map_preserving_release_into(\n                    &mut self.current_release,\n                    |current| Ok::<_, (_, std::convert::Infallible)>(current.write()),\n                    || target.blocks.is_poisoned(),\n                )\n                .unwrap_or_else(|_| unreachable!("original current release source"))\n            {\n                Ok(writer) => writer,\n                Err((_, never)) => match never {},\n            },\n        );\n        // The caller slot owns completed writers before identity lookup and all\n        // reset/replacement operations that may invoke arbitrary payload code.\n        let predecessor = target.publication.capture();\n        let writers = StorageWriters::new(target, undo.take_writer(), current.take_writer());\n        self.phase = AcquisitionPhase::Block(Block::new(\n            writers,\n            mode == BlockMode::Replace,\n            predecessor,\n            mode,\n        ));\n        let AcquisitionPhase::Block(block) = &mut self.phase else {\n            unreachable!("original storage block");\n        };\n        block.failed = true;\n        let OriginalWriters { revert, blocks } = block.writers.as_mut();\n        if mode == BlockMode::Replace {\n            for (key, value) in revert.iter() {\n                match value {\n                    None => blocks.remove(key),\n                    Some(value) => blocks.insert(key.clone(), value.clone()),\n                };\n            }\n        }\n        revert.clear();\n        block.failed = false;\n        self.complete = true;\n    }', '    fn initialize(&mut self, mode: BlockMode) {\n        assert!(!self.started, "original storage acquisition is one-shot");\n        self.started = true;\n        let target = self.target;\n        let AcquisitionPhase::Pending { undo, current } = &mut self.phase else {\n            panic!("original pending acquisition");\n        };\n        let predecessor = target.publication.capture();\n        *undo = WriterPhase::Raw(\n            target\n                .revert_released\n                .poisoning_guard(target.revert.acquire_writer()),\n        );\n        assert!(!undo.is_poisoned(), "original undo writer is poisoned");\n        *current = WriterPhase::Raw(\n            target\n                .blocks_released\n                .poisoning_guard(target.blocks.acquire_writer()),\n        );\n        assert!(\n            !current.is_poisoned(),\n            "original storage writer is poisoned"\n        );\n        let raw = undo.take_raw();\n        *undo = WriterPhase::Writer(\n            match raw\n                .try_map_preserving_release_into(\n                    &mut self.undo_release,\n                    |undo| Ok::<_, (_, std::convert::Infallible)>(undo.write()),\n                    || target.revert.is_poisoned(),\n                )\n                .unwrap_or_else(|_| unreachable!("original undo release source"))\n            {\n                Ok(writer) => writer,\n                Err((_, never)) => match never {},\n            },\n        );\n        let raw = current.take_raw();\n        *current = WriterPhase::Writer(\n            match raw\n                .try_map_preserving_release_into(\n                    &mut self.current_release,\n                    |current| Ok::<_, (_, std::convert::Infallible)>(current.write()),\n                    || target.blocks.is_poisoned(),\n                )\n                .unwrap_or_else(|_| unreachable!("original current release source"))\n            {\n                Ok(writer) => writer,\n                Err((_, never)) => match never {},\n            },\n        );\n        // The caller slot owns completed writers before identity lookup and all\n        // reset/replacement operations that may invoke arbitrary payload code.\n        let writers = StorageWriters::new(target, undo.take_writer(), current.take_writer());\n        self.phase = AcquisitionPhase::Block(Block::new(\n            writers,\n            mode == BlockMode::Replace,\n            predecessor,\n            mode,\n        ));\n        let AcquisitionPhase::Block(block) = &mut self.phase else {\n            unreachable!("original storage block");\n        };\n        block.failed = true;\n        let OriginalWriters { revert, blocks } = block.writers.as_mut();\n        if mode == BlockMode::Replace {\n            for (key, value) in revert.iter() {\n                match value {\n                    None => blocks.remove(key),\n                    Some(value) => blocks.insert(key.clone(), value.clone()),\n                };\n            }\n        }\n        revert.clear();\n        block.failed = false;\n        self.complete = true;\n    }', id='ordinary-capture-after-pair'),
+    pytest.param('BlockAcquisitionSlot::initialize', '    fn initialize(&mut self, mode: BlockMode) {\n        assert!(!self.started, "original storage acquisition is one-shot");\n        self.started = true;\n        let target = self.target;\n        let AcquisitionPhase::Pending { undo, current } = &mut self.phase else {\n            panic!("original pending acquisition");\n        };\n        *undo = WriterPhase::Raw(\n            target\n                .revert_released\n                .poisoning_guard(target.revert.acquire_writer()),\n        );\n        assert!(!undo.is_poisoned(), "original undo writer is poisoned");\n        *current = WriterPhase::Raw(\n            target\n                .blocks_released\n                .poisoning_guard(target.blocks.acquire_writer()),\n        );\n        assert!(\n            !current.is_poisoned(),\n            "original storage writer is poisoned"\n        );\n        let raw = undo.take_raw();\n        *undo = WriterPhase::Writer(\n            match raw\n                .try_map_preserving_release_into(\n                    &mut self.undo_release,\n                    |undo| Ok::<_, (_, std::convert::Infallible)>(undo.write()),\n                    || target.revert.is_poisoned(),\n                )\n                .unwrap_or_else(|_| unreachable!("original undo release source"))\n            {\n                Ok(writer) => writer,\n                Err((_, never)) => match never {},\n            },\n        );\n        let raw = current.take_raw();\n        *current = WriterPhase::Writer(\n            match raw\n                .try_map_preserving_release_into(\n                    &mut self.current_release,\n                    |current| Ok::<_, (_, std::convert::Infallible)>(current.write()),\n                    || target.blocks.is_poisoned(),\n                )\n                .unwrap_or_else(|_| unreachable!("original current release source"))\n            {\n                Ok(writer) => writer,\n                Err((_, never)) => match never {},\n            },\n        );\n        // The caller slot owns completed writers before identity lookup and all\n        // reset/replacement operations that may invoke arbitrary payload code.\n        let predecessor = target.publication.capture();\n        let writers = StorageWriters::new(target, undo.take_writer(), current.take_writer());\n        self.phase = AcquisitionPhase::Block(Block::new(\n            writers,\n            mode == BlockMode::Replace,\n            predecessor,\n            mode,\n        ));\n        let AcquisitionPhase::Block(block) = &mut self.phase else {\n            unreachable!("original storage block");\n        };\n        block.failed = true;\n        let OriginalWriters { revert, blocks } = block.writers.as_mut();\n        if mode == BlockMode::Replace {\n            for (key, value) in revert.iter() {\n                match value {\n                    None => blocks.remove(key),\n                    Some(value) => blocks.insert(key.clone(), value.clone()),\n                };\n            }\n        }\n        revert.clear();\n        block.failed = false;\n        self.complete = true;\n    }', '    fn initialize(&mut self, mode: BlockMode) {\n        assert!(!self.started, "original storage acquisition is one-shot");\n        self.started = true;\n        let target = self.target;\n        let AcquisitionPhase::Pending { undo, current } = &mut self.phase else {\n            panic!("original pending acquisition");\n        };\n        *undo = WriterPhase::Raw(\n            target\n                .revert_released\n                .poisoning_guard(target.revert.acquire_writer()),\n        );\n        assert!(!undo.is_poisoned(), "original undo writer is poisoned");\n        let predecessor = target.publication.capture();\n        *current = WriterPhase::Raw(\n            target\n                .blocks_released\n                .poisoning_guard(target.blocks.acquire_writer()),\n        );\n        assert!(\n            !current.is_poisoned(),\n            "original storage writer is poisoned"\n        );\n        let raw = undo.take_raw();\n        *undo = WriterPhase::Writer(\n            match raw\n                .try_map_preserving_release_into(\n                    &mut self.undo_release,\n                    |undo| Ok::<_, (_, std::convert::Infallible)>(undo.write()),\n                    || target.revert.is_poisoned(),\n                )\n                .unwrap_or_else(|_| unreachable!("original undo release source"))\n            {\n                Ok(writer) => writer,\n                Err((_, never)) => match never {},\n            },\n        );\n        let raw = current.take_raw();\n        *current = WriterPhase::Writer(\n            match raw\n                .try_map_preserving_release_into(\n                    &mut self.current_release,\n                    |current| Ok::<_, (_, std::convert::Infallible)>(current.write()),\n                    || target.blocks.is_poisoned(),\n                )\n                .unwrap_or_else(|_| unreachable!("original current release source"))\n            {\n                Ok(writer) => writer,\n                Err((_, never)) => match never {},\n            },\n        );\n        // The caller slot owns completed writers before identity lookup and all\n        // reset/replacement operations that may invoke arbitrary payload code.\n        let writers = StorageWriters::new(target, undo.take_writer(), current.take_writer());\n        self.phase = AcquisitionPhase::Block(Block::new(\n            writers,\n            mode == BlockMode::Replace,\n            predecessor,\n            mode,\n        ));\n        let AcquisitionPhase::Block(block) = &mut self.phase else {\n            unreachable!("original storage block");\n        };\n        block.failed = true;\n        let OriginalWriters { revert, blocks } = block.writers.as_mut();\n        if mode == BlockMode::Replace {\n            for (key, value) in revert.iter() {\n                match value {\n                    None => blocks.remove(key),\n                    Some(value) => blocks.insert(key.clone(), value.clone()),\n                };\n            }\n        }\n        revert.clear();\n        block.failed = false;\n        self.complete = true;\n    }', id='replacement-capture-after-pair'),
+    pytest.param('Storage::open_admitted_writers', 'let revert = self.revert_released.poisoning_guard(revert);', 'let revert = self.revert_released.poisoning_guard(());', id='admitted-binds-actual-undo'),
+    pytest.param('Storage::open_admitted_writers', 'let blocks = self.blocks_released.poisoning_guard(blocks);', 'let blocks = self.blocks_released.poisoning_guard(());', id='admitted-binds-actual-current'),
+    pytest.param('Storage::open_admitted_writers', 'if blocks.is_poisoned()', 'if false', id='both-poison-before-first-policy'),
+    pytest.param('Storage::open_admitted_writers', 'let (current, undo, identity) = reserve_owners(budget, current, undo, identity)?;', 'let (current, undo, identity) = reserve_owners(budget, undo, current, identity)?;', id='original-component-demands'),
+    pytest.param('Storage::open_admitted_writers', 'let writers = StorageWriters::new(self, revert, blocks);\n        let next = NextPublication::from_admission(identity);', 'let next = NextPublication::from_admission(identity);\n        let writers = StorageWriters::new(self, revert, blocks);', id='identity-after-complete-custody'),
+    pytest.param('ReleaseGuard::release_with_observed_poison', 'let result = consume(inner);\n        drop(signal);', 'drop(signal);\n        let result = consume(inner);', id='single-release-after-physical-unlock'),
+    pytest.param('ReleaseGuard::release_with_observed_poison', 'self.notification.released((self.observe_poison)());', 'self.notification.released(std::thread::panicking());', id='single-release-preserves-native-poison'),
+    pytest.param('ReleaseGuard::release_with_observed_poison', 'let _transferred = std::mem::ManuallyDrop::new(self);', 'let _transferred = self;', id='single-original-notification-only'),
+    pytest.param('BlockAcquisitionSlot::initialize', '!undo.is_poisoned()', 'true', id='ordinary-undo-poison-before-wait'),
+    pytest.param('Storage::open_admitted_writers', 'if revert.is_poisoned()', 'if false', id='admitted-undo-poison-before-busy'),
+    pytest.param('Storage::open_admitted_writers', 'revert.release_with_observed_poison(drop, || self.revert.is_poisoned());', 'revert.release_with(drop);', id='admitted-refusal-preserves-actual-poison'),
+    pytest.param('Storage::open_admitted_writers', 'if revert.is_poisoned() {\n            revert.release_with_observed_poison(drop, || self.revert.is_poisoned());\n            return Err(AdmittedStorageError::Poisoned {\n                role: StorageRole::Undo,\n            });\n        }\n        let current_wait = self.blocks_released.observe();\n        let blocks = self.blocks.try_acquire_writer().ok_or_else(|| {\n            writer_error(\n                MapAdmissionError::Busy,\n                StorageRole::Current,\n                current_wait.clone(),\n            )\n        })?;\n        let blocks = self.blocks_released.poisoning_guard(blocks);\n', 'let current_wait = self.blocks_released.observe();\n        let blocks = self.blocks.try_acquire_writer().ok_or_else(|| {\n            writer_error(\n                MapAdmissionError::Busy,\n                StorageRole::Current,\n                current_wait.clone(),\n            )\n        })?;\n        let blocks = self.blocks_released.poisoning_guard(blocks);\n        if revert.is_poisoned() {\n            revert.release_with_observed_poison(drop, || self.revert.is_poisoned());\n            return Err(AdmittedStorageError::Poisoned {\n                role: StorageRole::Undo,\n            });\n        }\n', id='admitted-complete-refusal-precedes-current-acquisition'),
+])
+def test_fresh_pair_acquisition_requires_original_joint_custody(fixture, symbol, old, new):
+    root, _, checker, _ = fixture
+    rows = [row for row in checker.native_preparation_contract.FRESH_PAIR_ACQUISITION_BINDINGS
+            if row[2] == symbol]
+    assert len(rows) == 1
+    path, kind, _, _ = rows[0]
+    target = root / path
+    source = target.read_text()
+    items = checker._extract_rust_binding_items(source, kind, symbol)
+    assert len(items) == 1
+    item = items[0]
+    assert item.count(old) == 1, (symbol, old)
+    assert old != new
+    # Restrict the mutation to this exact impl, even where another owner's
+    # delegation has identical source text (for example is_poisoned).
+    owners = [owner for owner in checker._rust_impl_items(source, symbol.rsplit("::", 1)[0])
+              if item in owner]
+    assert len(owners) == 1
+    owner = owners[0]
+    assert source.count(owner) == 1
+    target.write_text(source.replace(owner, owner.replace(item, item.replace(old, new, 1), 1), 1))
+    errors = validate(fixture)
+    assert any(f"{symbol} missing executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    pytest.param('EbrCell::acquire_writer', '.unwrap_or_else(|poison| poison.into_inner())', '.unwrap()', id='blocking-raw-retains-poison'),
+    pytest.param('EbrCell::try_acquire_writer', 'Err(TryLockError::Poisoned(poison)) => poison.into_inner(),', 'Err(TryLockError::Poisoned(_)) => return None,', id='nonblocking-poison-is-acquired'),
+    pytest.param('EbrCellWriterAcquisition::is_poisoned', 'self.caller.is_poisoned()', 'false', id='actual-raw-poison'),
+    pytest.param('EbrCellWriterAcquisition::try_clone_charged', 'if self.is_poisoned()', 'if false', id='poison-before-admission'),
+    pytest.param('EbrCellWriterAcquisition::try_clone_charged', 'unsafe { epoch::unprotected() }', '&epoch::pin()', id='exclusive-load-does-not-run-collector'),
+    pytest.param('EbrCellWriterAcquisition::try_clone_charged', 'EbrCell::<T, Charge>::allocation_layout()', 'Layout::new::<T>()', id='exact-original-generation-layout'),
+    pytest.param('EbrCellWriterAcquisition::try_clone_charged', 'let charge = match admit', 'let _speculative = current.value.clone();\n        let charge = match admit', id='admit-before-any-clone'),
+    pytest.param('EbrCellWriterAcquisition::try_clone_charged', 'Err(error) => return Err((self, EbrCellWriterAdmissionError::Refused(error))),', 'Err(error) => { drop(self); panic!("lost original refusal owner"); },', id='refusal-retains-raw-owner'),
+    pytest.param('EbrCellWriterAcquisition::try_clone_charged', '    pub fn try_clone_charged<E>(\n        self,\n        admit: impl FnOnce(&T, Layout) -> Result<Charge, E>,\n    ) -> Result<(Self, EbrCellOwned<T, Charge>), (Self, EbrCellWriterAdmissionError<E>)> {\n        if self.is_poisoned() {\n            return Err((self, EbrCellWriterAdmissionError::Poisoned));\n        }\n        // SAFETY: this original writer excludes replacement, and its borrowed\n        // cell excludes destruction. The active allocation therefore cannot be\n        // unlinked while admission and cloning run; no collector pin is needed.\n        let current = self\n            .caller\n            .active\n            .load(Acquire, unsafe { epoch::unprotected() });\n        let current = unsafe { current.deref() };\n        let charge = match admit(&current.value, EbrCell::<T, Charge>::allocation_layout()) {\n            Ok(charge) => ManuallyDrop::new(charge),\n            Err(error) => return Err((self, EbrCellWriterAdmissionError::Refused(error))),\n        };\n        let allocation = Owned::new(Allocation {\n            value: current.value.clone(),\n            charge,\n        });\n        Ok((\n            self,\n            EbrCellOwned {\n                data: Some(allocation),\n            },\n        ))\n    }', '    pub fn try_clone_charged<E>(\n        self,\n        admit: impl FnOnce(&T, Layout) -> Result<Charge, E>,\n    ) -> Result<(Self, EbrCellOwned<T, Charge>), (Self, EbrCellWriterAdmissionError<E>)> {\n        if self.is_poisoned() {\n            return Err((self, EbrCellWriterAdmissionError::Poisoned));\n        }\n        // SAFETY: this original writer excludes replacement, and its borrowed\n        // cell excludes destruction. The active allocation therefore cannot be\n        // unlinked while admission and cloning run; no collector pin is needed.\n        let current = self\n            .caller\n            .active\n            .load(Acquire, unsafe { epoch::unprotected() });\n        let current = unsafe { current.deref() };\n        let charge = match admit(&current.value, EbrCell::<T, Charge>::allocation_layout()) {\n            Ok(charge) => charge,\n            Err(error) => return Err((self, EbrCellWriterAdmissionError::Refused(error))),\n        };\n        let allocation = Owned::new(Allocation {\n            value: current.value.clone(),\n            charge: ManuallyDrop::new(charge),\n        });\n        Ok((\n            self,\n            EbrCellOwned {\n                data: Some(allocation),\n            },\n        ))\n    }', id='partial-clone-retains-charge'),
+    pytest.param('EbrCellWriterAcquisition::try_clone_charged', 'value: current.value.clone(),', 'value: { let _duplicate = current.value.clone(); current.value.clone() },', id='clone-exactly-once'),
+    pytest.param('EbrCellWriterAcquisition::try_write_owned', 'if self.is_poisoned()', 'if false', id='attachment-preserves-poison'),
+    pytest.param('EbrCellWriterAcquisition::install_owned', 'data: owned.data.take(),', 'data: None,', id='attachment-takes-original-allocation'),
+    pytest.param('EbrCellWriteTxn::drop', 'drop(self._guard.take());', '// physical guard retained until after payload destruction', id='native-abort-unlocks-before-reclaim'),
+    pytest.param('EbrCellWriteTxn::detach', 'data: self.data.take(),', 'data: None,', id='native-detach-retains-allocation'),
+    pytest.param('EbrCell::write_from_guard', 'match acquired.try_clone_charged(admit)', 'match acquired.try_clone_charged(|_, _| panic!("lost original admission"))', id='native-singleton-shares-clone-kernel'),
+    pytest.param('EbrCell::write_charged', 'self.write_from_guard(self.write.lock().unwrap(), admit)', 'self.write_from_guard(self.write.lock().unwrap(), |_, _| panic!("lost original admission"))', id='blocking-singleton-preserves-admission'),
+    pytest.param('EbrCell::try_write_charged', 'self.write_from_guard(mguard, admit).map(Some)', 'self.write_from_guard(mguard, |_, _| panic!("lost original admission")).map(Some)', id='try-singleton-preserves-admission'),
+    pytest.param('EbrCell::try_write_owned', 'drop(acquired);', 'std::mem::forget(acquired);', id='owned-refusal-unlocks-before-return'),
+    pytest.param('BlockAcquisitionSlot::release', '                let target = self.target;', '                drop(pending.undo_value.take());\n                let target = self.target;', id='completed-undo-retirement-after-pair-unlock'),
+    pytest.param('BlockAcquisitionSlot::release', '                let target = self.target;', '                drop(pending.current_charge.take());\n                let target = self.target;', id='partial-abort-keeps-unused-charge'),
+    pytest.param('BlockAcquisitionSlot::initialize_writers', '!pending\n                .revert\n                .as_ref()\n                .expect("original undo")\n                .is_poisoned()', 'true', id='first-known-poison-before-current-wait'),
+    pytest.param('BlockAcquisitionSlot::release', 'target.revert.is_poisoned()', 'std::thread::panicking()', id='first-poison-uses-observed-verdict'),
+    pytest.param('BlockAcquisitionSlot::initialize_writers', '!pending\n                .blocks\n                .as_ref()\n                .expect("original current")\n                .is_poisoned()', 'true', id='known-current-poison-before-clones'),
+    pytest.param('BlockAcquisitionSlot::initialize_writers', 'pending.blocks = Some(\n            target\n                .blocks_released\n                .poisoning_guard(target.blocks.acquire_writer()),\n        );', 'drop(target.blocks_released.poisoning_guard(target.blocks.acquire_writer()));', id='constructor-retains-current-raw'),
+    pytest.param('BlockAcquisitionSlot::initialize_writers', 'Ok(undo) => pending.revert = Some(undo),', 'Ok(undo) => drop(undo),', id='undo-raw-survives-current-clone'),
+    pytest.param('BlockAcquisitionSlot::initialize_writers', 'Ok((undo, value)) => {\n                        *undo_value = Some(value);', 'Ok((undo, value)) => {\n                        drop(value);', id='completed-undo-survives-current-clone'),
+    pytest.param('BlockAcquisitionSlot::initialize_writers', 'let undo_charge = &mut pending.undo_charge;', 'drop(pending.current_charge.take());\n        let undo_charge = &mut pending.undo_charge;', id='unused-current-charge-stays-outside-undo-callee'),
+    pytest.param('BlockAcquisitionSlot::release', '    fn release(&mut self) {\n        self.complete = false;\n        self.started = true;\n        match &mut self.phase {\n            AcquisitionPhase::Empty => {}\n            AcquisitionPhase::Block(block) => crate::BlockRetirement::release_writers(block),\n            AcquisitionPhase::Writers(writers) => writers.release(),\n            AcquisitionPhase::Pending(pending) => {\n                let target = self.target;\n                if let Some(current) = pending.blocks.take() {\n                    current\n                        .try_release_into_observed(&mut self.current_release, drop, || {\n                            target.blocks.is_poisoned()\n                        })\n                        .unwrap_or_else(|_| unreachable!("original current release source"));\n                }\n                if let Some(undo) = pending.revert.take() {\n                    undo.try_release_into_observed(&mut self.undo_release, drop, || {\n                        target.revert.is_poisoned()\n                    })\n                    .unwrap_or_else(|_| unreachable!("original undo release source"));\n                }\n            }\n        }\n    }', '    fn release(&mut self) {\n        self.complete = false;\n        self.started = true;\n        match &mut self.phase {\n            AcquisitionPhase::Empty => {}\n            AcquisitionPhase::Block(block) => crate::BlockRetirement::release_writers(block),\n            AcquisitionPhase::Writers(writers) => writers.release(),\n            AcquisitionPhase::Pending(pending) => {\n                let target = self.target;\n                if let Some(current) = pending.blocks.take() {\n                    current\n                        .try_release_into_observed(&mut self.current_release, drop, || {\n                            std::thread::panicking()\n                        })\n                        .unwrap_or_else(|_| unreachable!("original current release source"));\n                }\n                if let Some(undo) = pending.revert.take() {\n                    undo.try_release_into_observed(&mut self.undo_release, drop, || {\n                        std::thread::panicking()\n                    })\n                    .unwrap_or_else(|_| unreachable!("original undo release source"));\n                }\n            }\n        }\n    }', id='both-native-poison-verdicts'),
+    pytest.param('CellWriters::detach_retaining', 'let (revert, undo_release) = revert.release_deferred(|writer| writer.detach());', 'let (revert, undo_release) = revert.release_deferred(|writer| writer.detach());\n        drop(revert);\n        let revert = panic!("lost original undo");', id='detach-keeps-both-owned-generations'),
+    pytest.param('CellWriters::release', 'let (undo, undo_release) = revert.release_deferred(|writer| writer.detach());', 'let (undo, undo_release) = revert.release_deferred(|writer| writer.detach());\n        drop(undo);\n        let undo = panic!("original undo prematurely reclaimed");', id='abandon-keeps-undo-until-current-unlock'),
+    pytest.param('ReleaseGuard::release_deferred', 'let poisoned = self.poison_on_unwind && std::thread::panicking();', 'let poisoned = false;', id='abandon-reports-physical-verdict'),
+    pytest.param('Cell::acquire_charged_writers', 'CellWriters::acquire(self, charges)', '{ drop(charges); panic!("lost original charges") }', id='cell-common-constructor-delegates-pair'),
+    pytest.param('BlockAcquisitionSlot::initialize', 'self.initialize_writers();\n        let predecessor = self.target.publication.capture();', 'let predecessor = self.target.publication.capture();\n        self.initialize_writers();', id='block_charged-captures-after-pair'),
+    pytest.param('BlockAcquisitionSlot::initialize', 'self.initialize_writers();\n        let predecessor = self.target.publication.capture();', 'let predecessor = self.target.publication.capture();\n        self.initialize_writers();', id='block_and_revert_charged-captures-after-pair'),
+    pytest.param('Cell::current_replacement_charged', 'writers: self.acquire_charged_writers(charges),', 'writers: { drop(charges); panic!("lost same-cut pair") },', id='replacement-keeps-original-current-undo-pair'),
+    pytest.param('CurrentReplacement::publish', 'publish_pair(writers, publication, NextPublication::new(), true, false);', 'publish_pair(writers, publication, NextPublication::new(), true, true);', id='current-replacement-preserves-undo-publication'),
+    pytest.param('Block::commit', 'publish_pair(writers, publication, NextPublication::new(), dirty, true);', 'publish_pair(writers, publication, NextPublication::new(), dirty, false);', id='untouched-block-still-publishes-clear-undo'),
+    pytest.param('Block::try_detach', 'crate::BlockCapture::try_capture(&mut slot, admit)?;', 'crate::BlockCapture::try_capture(&mut slot, admit).unwrap_or_else(|_| panic!("lost refusal"));', id='detach-admission-errors-propagate'),
+    pytest.param('Block::try_detach', 'let (journal, cleanup) = crate::BlockCapture::into_detached(slot);', 'drop(slot);\n            let (journal, cleanup) = panic!("lost detached generations");', id='detach-does-not-destroy-originals'),
+    pytest.param('publish_pair', "fn publish_pair<'a, V: Value, Charge: Send + Sync + 'static>(\n    writers: CellWriters<'a, V, Charge>,\n    publication: &Publication,\n    next: NextPublication,\n    publish_current: bool,\n    publish_undo: bool,\n) {\n    let retirement = publication.publish_retaining(\n        next,\n        || {\n            // Retain the complete joint owner until the fallible identity-lock\n            // acquisition above succeeds. Native preparation and publication\n            // below neither allocate nor execute payload or collector callbacks.\n            let OriginalCellWriters { revert, blocks } = writers.into_original();\n            let (blocks, unchanged_blocks) = if publish_current {\n                (\n                    Some(blocks.map_preserving_release(|writer| writer.prepare_commit())),\n                    None,\n                )\n            } else {\n                (None, Some(blocks))\n            };\n            let (revert, unchanged_revert) = if publish_undo {\n                (\n                    Some(revert.map_preserving_release(|writer| writer.prepare_commit())),\n                    None,\n                )\n            } else {\n                (None, Some(revert))\n            };\n            let blocks =\n                blocks.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));\n            let revert =\n                revert.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));\n            (blocks, revert, unchanged_blocks, unchanged_revert)\n        },\n        |(blocks, revert, unchanged_blocks, unchanged_revert)| {\n            let blocks =\n                blocks.map(|writer| writer.release_retaining(|published| published.release()));\n            let revert =\n                revert.map(|writer| writer.release_retaining(|published| published.release()));\n            let unchanged_blocks =\n                unchanged_blocks.map(|writer| writer.release_retaining(|writer| writer.detach()));\n            let unchanged_revert =\n                unchanged_revert.map(|writer| writer.release_retaining(|writer| writer.detach()));\n            (blocks, revert, unchanged_blocks, unchanged_revert)\n        },\n    );\n    drop(retirement);\n}", "fn publish_pair<'a, V: Value, Charge: Send + Sync + 'static>(\n    writers: CellWriters<'a, V, Charge>,\n    publication: &Publication,\n    next: NextPublication,\n    publish_current: bool,\n    publish_undo: bool,\n) {\n    let OriginalCellWriters { revert, blocks } = writers.into_original();\n    let retirement = publication.publish_retaining(\n        next,\n        || {\n            // Retain the complete joint owner until the fallible identity-lock\n            // acquisition above succeeds. Native preparation and publication\n            // below neither allocate nor execute payload or collector callbacks.\n            \n            let (blocks, unchanged_blocks) = if publish_current {\n                (\n                    Some(blocks.map_preserving_release(|writer| writer.prepare_commit())),\n                    None,\n                )\n            } else {\n                (None, Some(blocks))\n            };\n            let (revert, unchanged_revert) = if publish_undo {\n                (\n                    Some(revert.map_preserving_release(|writer| writer.prepare_commit())),\n                    None,\n                )\n            } else {\n                (None, Some(revert))\n            };\n            let blocks =\n                blocks.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));\n            let revert =\n                revert.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));\n            (blocks, revert, unchanged_blocks, unchanged_revert)\n        },\n        |(blocks, revert, unchanged_blocks, unchanged_revert)| {\n            let blocks =\n                blocks.map(|writer| writer.release_retaining(|published| published.release()));\n            let revert =\n                revert.map(|writer| writer.release_retaining(|published| published.release()));\n            let unchanged_blocks =\n                unchanged_blocks.map(|writer| writer.release_retaining(|writer| writer.detach()));\n            let unchanged_revert =\n                unchanged_revert.map(|writer| writer.release_retaining(|writer| writer.detach()));\n            (blocks, revert, unchanged_blocks, unchanged_revert)\n        },\n    );\n    drop(retirement);\n}", id='identity-lock-before-pair-extraction'),
+    pytest.param('Publication::publish_retaining', 'let mut version = self.lock_version();\n        let published = publish();', 'let published = publish();\n        let mut version = self.lock_version();', id='native-publication-after-identity-lock'),
+    pytest.param('Publication::publish_retaining', 'retired_version = std::mem::replace(&mut **version, next.0);\n        let retirement = release(published);', 'let retirement = release(published);\n        retired_version = std::mem::replace(&mut **version, next.0);', id='identity-rotates-before-native-release'),
+])
+def test_ebr_fresh_pair_acquisition_requires_original_joint_custody(fixture, symbol, old, new):
+    root, _, checker, _ = fixture
+    rows = [row for row in checker.native_preparation_contract.EBR_PAIR_ACQUISITION_BINDINGS
+            if row[2] == symbol]
+    assert len(rows) == 1
+    path, kind, _, _ = rows[0]
+    target = root / path
+    source = target.read_text()
+    items = checker._extract_rust_binding_items(source, kind, symbol)
+    assert len(items) == 1
+    item = items[0]
+    assert item.count(old) == 1, (symbol, old)
+    assert checker.native_preparation_contract._code(old) != checker.native_preparation_contract._code(new)
+    if kind == "method":
+        owners = [owner for owner in checker._rust_impl_items(source, symbol.rsplit("::", 1)[0])
+                  if item in owner]
+        assert len(owners) == 1
+        owner = owners[0]
+    else:
+        owner = item
+    assert source.count(owner) == 1
+    target.write_text(source.replace(owner, owner.replace(item, item.replace(old, new, 1), 1), 1))
+    errors = validate(fixture)
+    assert any(f"{symbol} missing executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_map_preserving_release_into', '!Arc::ptr_eq(&self.notification.state, &batch.notification.state)', 'false', id='callee-unwind-keeps-exact-native-source'),
+    pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_map_preserving_release_into', 'let transferred = std::mem::ManuallyDrop::new(self);', 'let transferred = self;', id='callee-unwind-does-not-run-local-notifier'),
+    pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_map_preserving_release_into', 'let result = consume(inner);\n        record.armed = false;', 'record.armed = false;\n        let result = consume(inner);', id='callee-unwind-record-remains-armed'),
+    pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_map_preserving_release_into', 'record.armed = false;\n        drop(record);', 'drop(record);', id='normal-phase-transfer-does-not-release'),
+    pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_map_preserving_release_into', 'self.batch.poisoned |= (self.observe_poison)();', 'self.batch.poisoned |= std::thread::panicking();', id='callee-unwind-native-poison-only'),
+    pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_release_into_observed', '!Arc::ptr_eq(&self.notification.state, &batch.notification.state)', 'false', id='retirement-does-not-rebind-source'),
+    pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_release_into_observed', 'let result = release(inner);\n        drop(record);', 'drop(record);\n        let result = release(inner);', id='physical-release-before-observed-verdict'),
+    pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_release_into_observed', 'self.batch.poisoned |= (self.observe_poison)();', 'self.batch.poisoned = false;', id='known-poison-survives-normal-retirement'),
+    pytest.param('vendor/concread/src/bptree/mod.rs', 'method', 'BptreeMapWriteTxn::abort_retaining', '_inner: self.inner.detach(),', '_inner: { self.inner.as_ref().len(); self.inner.detach() },', id='failed-map-cursor-can-retire-without-read'),
+    pytest.param('vendor/concread/src/bptree/mod.rs', 'struct', 'BptreeMapAbandonment', '    _inner:', '    pub inner:', id='map-retirement-grants-no-public-owner-access'),
+    pytest.param('crates/mv/src/cell/acquisition.rs', 'method', 'BlockAcquisitionSlot::new', 'undo_charge: Some(undo),', 'undo_charge: { drop(undo); None },', id='caller-slot-keeps-original-unused-charge'),
+    pytest.param('crates/mv/src/cell/acquisition.rs', 'method', 'BlockAcquisitionSlot::initialize', 'let AcquisitionPhase::Block(block) = &mut self.phase else {', 'let mut escaped = std::mem::replace(&mut self.phase, AcquisitionPhase::Empty);\n        let AcquisitionPhase::Block(block) = &mut escaped else {', id='cell-reset-remains-in-caller-slot'),
+    pytest.param('crates/mv/src/cell/acquisition.rs', 'method', 'BlockAcquisitionSlot::release', 'AcquisitionPhase::Block(block) => crate::BlockRetirement::release_writers(block),', 'AcquisitionPhase::Block(block) => { let _ = block; },', id='cell-slot-retires-completed-block'),
+    pytest.param('crates/mv/src/cell/acquisition.rs', 'method', 'BlockAcquisitionSlot::release', 'AcquisitionPhase::Writers(writers) => writers.release(),', 'AcquisitionPhase::Writers(writers) => { let _ = writers; },', id='cell-slot-retires-completed-pair-before-capture'),
+    pytest.param('crates/mv/src/cell/acquisition.rs', 'method', 'BlockAcquisitionSlot::into_block', 'self.complete,', 'true,', id='partial-cell-cannot-transfer'),
+    pytest.param('crates/mv/src/cell/acquisition.rs', 'method', 'BlockAcquisitionSlot::drop', 'crate::BlockAcquisition::release(self);', 'let _ = self;', id='default-cell-slot-drop-releases-before-fields'),
+    pytest.param('crates/mv/src/cell/acquisition.rs', 'method', 'CellWriters::drop', 'self.release();', 'let _ = self;', id='default-cell-pair-drop-shares-retirement'),
+    pytest.param('crates/mv/src/cell/acquisition.rs', 'enum', 'CellWriterState', '        _undo: EbrCellOwned<Option<V>, C>,\n        _current: EbrCellOwned<V, C>,\n        _undo_release: DeferredRelease,\n        _current_release: DeferredRelease,', '        _undo_release: DeferredRelease,\n        _current_release: DeferredRelease,\n        _undo: EbrCellOwned<Option<V>, C>,\n        _current: EbrCellOwned<V, C>,', id='cell-cleanup-before-original-notifications'),
+    pytest.param('crates/mv/src/cell.rs', 'method', 'Cell::block_charged', 'crate::BlockAcquisition::initialize(&mut slot, BlockMode::Ordinary);', 'crate::BlockAcquisition::initialize(&mut slot, BlockMode::Replace);', id='ordinary-cell-uses-one-mode-aware-kernel'),
+    pytest.param('crates/mv/src/cell.rs', 'method', 'Cell::block_and_revert_charged', 'crate::BlockAcquisition::initialize(&mut slot, BlockMode::Replace);', 'crate::BlockAcquisition::initialize(&mut slot, BlockMode::Ordinary);', id='replacement-cell-uses-one-mode-aware-kernel'),
+    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::initialize', '&mut self.current_release,', '&mut self.undo_release,', id='map-callee-current-source-is-original'),
+    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::initialize', 'let AcquisitionPhase::Block(block) = &mut self.phase else {', 'let mut escaped = std::mem::replace(&mut self.phase, AcquisitionPhase::Empty);\n        let AcquisitionPhase::Block(block) = &mut escaped else {', id='map-replacement-prefix-remains-in-slot'),
+    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::initialize', 'block.failed = true;', 'block.failed = false;', id='map-reset-and-replay-arm-logical-failure'),
+    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::initialize', 'revert.clear();\n        block.failed = false;', 'block.failed = false;\n        revert.clear();', id='map-clear-finishes-before-disarming'),
+    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'WriterPhase::release', '*self = Self::Retired(retirement);', 'drop(retirement);', id='map-retains-cursor-after-physical-release'),
+    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::into_block', 'self.complete,', 'true,', id='partial-map-cannot-transfer'),
+    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::drop', 'crate::BlockAcquisition::release(self);', 'let _ = self;', id='default-map-slot-drop-releases-before-fields'),
+    pytest.param('crates/mv/src/storage.rs', 'method', 'StorageWriters::release', 'let (blocks, blocks_release) = blocks.release_deferred(|writer| writer.abort_retaining());', 'let (blocks, blocks_release) = blocks.release_deferred(|writer| writer.abort_retaining());\n        drop(blocks);\n        let blocks = panic!("premature original current destruction");', id='map-retirement-retains-current-through-undo-unlock'),
+    pytest.param('crates/mv/src/storage.rs', 'method', 'StorageWriters::drop', 'self.release();', 'let _ = self;', id='default-map-pair-drop-shares-retirement'),
+    pytest.param('crates/mv/src/storage.rs', 'enum', 'StorageWriterState', '        _blocks: BptreeMapAbandonment<K, V, M>,\n        _revert: BptreeMapAbandonment<K, Option<V>, M>,\n        _blocks_release: concread::release::DeferredRelease,\n        _revert_release: concread::release::DeferredRelease,', '        _blocks_release: concread::release::DeferredRelease,\n        _revert_release: concread::release::DeferredRelease,\n        _blocks: BptreeMapAbandonment<K, V, M>,\n        _revert: BptreeMapAbandonment<K, Option<V>, M>,', id='map-cleanup-before-original-notifications'),
+    pytest.param('crates/mv/src/storage.rs', 'method', 'Storage::block', 'crate::BlockAcquisition::initialize(&mut slot, BlockMode::Ordinary);', 'crate::BlockAcquisition::initialize(&mut slot, BlockMode::Replace);', id='ordinary-map-uses-one-mode-aware-kernel'),
+    pytest.param('crates/mv/src/storage.rs', 'method', 'Storage::block_and_revert', 'crate::BlockAcquisition::initialize(&mut slot, BlockMode::Replace);', 'crate::BlockAcquisition::initialize(&mut slot, BlockMode::Ordinary);', id='replacement-map-uses-one-mode-aware-kernel'),
+    pytest.param('crates/mv/src/storage.rs', 'method', 'Block::release_writers', 'self.writers.release();', 'let _ = &self.writers;', id='map-complete-block-retires-original-pair'),
+    pytest.param('crates/mv/src/cell.rs', 'method', 'Block::release_writers', 'self.writers.release();', 'let _ = &self.writers;', id='cell-complete-block-retires-original-pair'),
+ ])
+def test_aggregate_acquisition_requires_retained_caller_slots(fixture, path, kind, symbol, old, new):
+    root, _, checker, _ = fixture
+    rows = [row for row in checker.native_preparation_contract.PREPARATION_OWNER_BINDINGS
+            if row[:3] == (path, kind, symbol)]
+    assert len(rows) == 1
+    target = root / path
+    source = target.read_text()
+    items = checker._extract_rust_binding_items(source, kind, symbol)
+    assert len(items) == 1
+    item = items[0]
+    assert item.count(old) == 1, (symbol, old)
+    assert checker.native_preparation_contract._code(old) != checker.native_preparation_contract._code(new)
+    if kind == "method":
+        owners = [owner for owner in checker._rust_impl_items(source, symbol.rsplit("::", 1)[0])
+                  if item in owner]
+        assert len(owners) == 1
+        owner = owners[0]
+    else:
+        owner = item
+    assert source.count(owner) == 1
+    target.write_text(source.replace(owner, owner.replace(item, item.replace(old, new, 1), 1), 1))
+    errors = validate(fixture)
+    assert any(f"{symbol} missing executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('crates/mv/src/capture.rs', 'struct', 'CaptureCleanup', '    undo: Option<DeferredRelease>,', '    undo: Option<ReleaseNotification>,', id='cleanup-retains-original-event-not-new-source'),
+    pytest.param('crates/mv/src/capture.rs', 'method', 'CaptureCleanup::new', 'current: Some(current),', 'current: None,', id='cleanup-keeps-current-release'),
+    pytest.param('crates/mv/src/capture.rs', 'method', 'CaptureCleanup::new', 'undo: Some(undo),', 'undo: None,', id='cleanup-keeps-undo-release'),
+    pytest.param('crates/mv/src/capture.rs', 'method', 'CaptureCleanup::drop', 'drop(self.undo.take());', 'std::mem::forget(self.undo.take());', id='cleanup-signals-remaining-undo'),
+    pytest.param('crates/mv/src/cell/capture.rs', 'struct', 'BlockCaptureSlot', '    cleanup: CaptureCleanup,', '    cleanup: ReleaseNotification,', id='cell-slot-holds-original-cleanup'),
+    pytest.param('crates/mv/src/cell/capture.rs', 'enum', 'CapturePhase', '        block: Block<', '        block: OtherBlock<', id='cell-attached-original-not-reconstruction'),
+    pytest.param('crates/mv/src/cell/capture.rs', 'method', 'Block::capture_slot', 'block: self,', 'block: { drop(self); panic!("rebuilt original") },', id='cell-slot-inert-original-move'),
+    pytest.param('crates/mv/src/cell/capture.rs', 'method', 'BlockCaptureSlot::try_capture', 'assert!(!self.started,', 'assert!(true,', id='cell-capture-is-terminal-after-attempt'),
+    pytest.param('crates/mv/src/cell/capture.rs', 'method', 'BlockCaptureSlot::try_capture', '*retained = Some(admit(block)?);', 'let _ = admit(block)?;', id='cell-admission-remains-in-attached-phase'),
+    pytest.param('crates/mv/src/cell/capture.rs', 'method', 'BlockCaptureSlot::release', 'block.release_writers();', 'let _ = block;', id='cell-release-physical-before-slot-cleanup'),
+    pytest.param('crates/mv/src/cell/capture.rs', 'method', 'BlockCaptureSlot::into_detached', 'self.phase = original;', 'drop(original);', id='cell-failed-transfer-retains-slot-on-unwind'),
+    pytest.param('crates/mv/src/cell/capture.rs', 'method', 'BlockCaptureSlot::drop', 'self.release();', 'let _ = self;', id='cell-default-drop-uses-terminal-release'),
+    pytest.param('crates/mv/src/storage/capture.rs', 'struct', 'BlockCaptureSlot', '    cleanup: CaptureCleanup,', '    cleanup: ReleaseNotification,', id='map-slot-holds-original-cleanup'),
+    pytest.param('crates/mv/src/storage/capture.rs', 'enum', 'CapturePhase', '        block: Block<', '        block: OtherBlock<', id='map-attached-original-not-reconstruction'),
+    pytest.param('crates/mv/src/storage/capture.rs', 'method', 'Block::capture_slot', 'block: self,', 'block: { drop(self); panic!("rebuilt original") },', id='map-slot-inert-original-move'),
+    pytest.param('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::try_capture', 'assert!(!self.started,', 'assert!(true,', id='map-capture-is-terminal-after-attempt'),
+    pytest.param('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::try_capture', '*retained = Some(admit(block)?);', 'let _ = admit(block)?;', id='map-admission-remains-in-attached-phase'),
+    pytest.param('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::release', 'block.release_writers();', 'let _ = block;', id='map-release-physical-before-slot-cleanup'),
+    pytest.param('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::into_detached', 'self.phase = original;', 'drop(original);', id='map-failed-transfer-retains-slot-on-unwind'),
+    pytest.param('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::drop', 'self.release();', 'let _ = self;', id='map-default-drop-uses-terminal-release'),
+    pytest.param('crates/mv/src/cell/capture.rs', 'method', 'BlockCaptureSlot::try_capture', 'block.writers.as_ref();', '// accept cleanup-only abandonment', id='cell-precheck-rejects-retired-authority'),
+    pytest.param('crates/mv/src/cell/capture.rs', 'method', 'BlockCaptureSlot::try_capture', '*retained = Some(admit(block)?);\n        let next = NextPublication::new();', 'let next = NextPublication::new();\n        *retained = Some(admit(block)?);', id='cell-admission-before-identity-allocation'),
+    pytest.param('crates/mv/src/cell/capture.rs', 'method', 'BlockCaptureSlot::try_capture', 'let (revert, blocks, cleanup) = writers.detach_retaining();', 'let (revert, blocks, cleanup) = writers.detach_retaining();\n        drop(cleanup);\n        let cleanup = CaptureCleanup::default();', id='cell-cleanup-stays-in-caller-until-siblings-release'),
+    pytest.param('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::try_capture', 'block.assert_operable();', '// omit current and undo fail-closed flags', id='map-precheck-before-capture-transfer'),
+    pytest.param('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::capture_admitted', '*retained = Some(admission);\n        block.assert_operable();', 'block.assert_operable();\n        *retained = Some(admission);', id='prepaid-already-owned-credit-before-fallible-check'),
+    pytest.param('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::finish_capture', 'let (blocks, revert, cleanup) = detach_pair_retaining(blocks, revert);', 'let (blocks, revert, cleanup) = detach_pair_retaining(blocks, revert);\n        drop(cleanup);\n        let cleanup = CaptureCleanup::default();', id='map-cleanup-remains-in-caller'),
+    pytest.param('crates/mv/src/cell/acquisition.rs', 'method', 'CellWriters::detach_retaining', 'let (blocks, current_release) = blocks.release_deferred(|writer| writer.detach());', 'drop(undo_release);\n        let (blocks, current_release) = blocks.release_deferred(|writer| writer.detach());\n        let undo_release = panic!("lost deferred undo");', id='cell-both-unlock-before-first-signal'),
+    pytest.param('crates/mv/src/storage.rs', 'fn', 'detach_pair_retaining', 'let (revert, undo_release) = revert.release_deferred(|writer| writer.detach());', 'drop(current_release);\n    let (revert, undo_release) = revert.release_deferred(|writer| writer.detach());\n    let current_release = panic!("lost deferred current");', id='map-both-unlock-before-first-signal'),
+    pytest.param('crates/mv/src/storage.rs', 'method', 'Block::detach_owned', 'slot.capture_admitted(admission);', 'drop(admission);\n            slot.capture_admitted(panic!("lost prepaid admission"));', id='prepaid-capture-delegates-original-admission'),
+    pytest.param('crates/mv/src/storage.rs', 'method', 'Block::try_detach', 'crate::BlockCapture::try_capture(&mut slot, admit)?;', 'let _ = crate::BlockCapture::try_capture(&mut slot, admit);', id='map-standalone-refusal-propagates'),
+])
+def test_capture_slots_require_original_caller_custody(fixture, path, kind, symbol, old, new):
+    root, _, checker, _ = fixture
+    rows = [row for row in checker.native_preparation_contract.PREPARATION_OWNER_BINDINGS
+            if row[:3] == (path, kind, symbol)]
+    assert len(rows) == 1
+    target = root / path
+    source = target.read_text()
+    items = checker._extract_rust_binding_items(source, kind, symbol)
+    assert len(items) == 1
+    item = items[0]
+    assert item.count(old) == 1, (symbol, old)
+    if kind == "method":
+        owners = [owner for owner in checker._rust_impl_items(source, symbol.rsplit("::", 1)[0])
+                  if item in owner]
+        assert len(owners) == 1
+        owner = owners[0]
+    else:
+        owner = item
+    assert source.count(owner) == 1
+    target.write_text(source.replace(owner, owner.replace(item, item.replace(old, new, 1), 1), 1))
+    errors = validate(fixture)
+    assert any(f"{symbol} missing executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors

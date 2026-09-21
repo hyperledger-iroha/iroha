@@ -316,6 +316,118 @@ pub struct LinCowCellOwned<T, R, U, Charge = Untracked> {
     root: Shared<Mutex<WriteState<T, R, Charge>>, Charge>,
 }
 
+/// Original physical writer before admission or successor construction.
+/// No cursor allocation or caller callback runs while acquiring this owner.
+#[must_use = "admit a successor or release the original acquired writer"]
+pub struct LinCowCellWriterAcquisition<'a, T, R, U, Charge = Untracked> {
+    guard: MutexGuard<'a, WriteState<T, R, Charge>>,
+    caller: &'a LinCowCell<T, R, U, Charge>,
+    poisoned: bool,
+}
+
+/// Refusal while retaining the actual writer acquired before admission.
+#[derive(Debug)]
+pub enum WriterAdmissionError<E> {
+    /// An earlier unwind poisoned the acquired writer; admission was not called.
+    Poisoned,
+    /// Planning or admission refused before successor construction.
+    Refused(E),
+}
+
+impl<'a, T, R, U, Charge> LinCowCellWriterAcquisition<'a, T, R, U, Charge>
+where
+    T: LinCowCellCapable<R, U>,
+{
+    /// Whether the acquired original writer was already poisoned.
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned
+    }
+
+    /// Admit the original shells and construct one successor under this guard.
+    /// Refusal returns this exact guard; unwind unlocks before caller notification.
+    /// Caller-owned refund deferral must surround construction and writer cleanup.
+    pub fn try_write_charged<E>(
+        self,
+        admit: impl FnOnce(&T, WriterLayouts) -> Result<WriterAdmission<Charge, T::WriterInput>, E>,
+    ) -> Result<LinCowCellWriteTxn<'a, T, R, U, Charge>, (Self, WriterAdmissionError<E>)> {
+        if self.poisoned {
+            return Err((self, WriterAdmissionError::Poisoned));
+        }
+        let admission = match admit(
+            &self.guard.data,
+            LinCowCell::<T, R, U, Charge>::writer_allocation_layouts(),
+        ) {
+            Ok(admission) => admission,
+            Err(error) => return Err((self, WriterAdmissionError::Refused(error))),
+        };
+        let Self { guard, caller, .. } = self;
+        Ok(caller.create_writer(guard, admission))
+    }
+}
+
+/// Actual writer-lock custody before validating a retained predecessor.
+///
+/// A successful acquisition always owns the physical mutex, including a
+/// previously poisoned mutex. Validation cannot discard that ownership on
+/// refusal. Field order unlocks before private work or its charges are dropped.
+#[must_use = "validate or abort the original acquired writer"]
+pub struct LinCowCellOwnedAcquisition<'a, T, R, U, Charge = Untracked> {
+    guard: MutexGuard<'a, WriteState<T, R, Charge>>,
+    owned: LinCowCellOwned<T, R, U, Charge>,
+    caller: &'a LinCowCell<T, R, U, Charge>,
+    poisoned: bool,
+}
+
+impl<T, R, U, Charge> std::fmt::Debug for LinCowCellOwnedAcquisition<'_, T, R, U, Charge> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LinCowCellOwnedAcquisition")
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a, T, R, U, Charge> LinCowCellOwnedAcquisition<'a, T, R, U, Charge> {
+    /// Validate the same physical root and reader while retaining its lock.
+    /// A stale or poisoned refusal returns this exact acquired owner.
+    pub fn validate(
+        self,
+    ) -> Result<LinCowCellWriteTxn<'a, T, R, U, Charge>, (Self, OwnedWriteError)> {
+        if self.poisoned {
+            return Err((self, OwnedWriteError::Poisoned));
+        }
+        if !Shared::ptr_eq(&self.guard.current, &self.owned.base) {
+            return Err((self, OwnedWriteError::Changed));
+        }
+        let Self {
+            guard,
+            owned,
+            caller,
+            ..
+        } = self;
+        let LinCowCellOwned {
+            work,
+            next,
+            base,
+            root,
+        } = owned;
+        // The same root remains borrowed through caller throughout this handoff.
+        drop(root);
+        Ok(LinCowCellWriteTxn {
+            caller,
+            guard,
+            work,
+            next,
+            base,
+        })
+    }
+
+    /// Unlock and return the unchanged private generation, without publishing it.
+    pub fn abort(self) -> LinCowCellOwned<T, R, U, Charge> {
+        let Self { guard, owned, .. } = self;
+        drop(guard);
+        owned
+    }
+}
+
 /// Why an original unpublished writer could not be reacquired.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OwnedWriteError {
@@ -509,11 +621,49 @@ where
         &self,
         admit: impl FnOnce(&T, WriterLayouts) -> Result<WriterAdmission<Charge, T::WriterInput>, E>,
     ) -> Result<Option<LinCowCellWriteTxn<'_, T, R, U, Charge>>, E> {
-        let Ok(guard) = self.write.try_lock() else {
+        let Some(acquired) = self.try_acquire_writer() else {
             return Ok(None);
         };
-        let admission = admit(&guard.data, Self::writer_allocation_layouts())?;
-        Ok(Some(self.create_writer(guard, admission)))
+        match acquired.try_write_charged(admit) {
+            Ok(writer) => Ok(Some(writer)),
+            Err((acquired, error)) => {
+                drop(acquired);
+                match error {
+                    WriterAdmissionError::Poisoned => Ok(None),
+                    WriterAdmissionError::Refused(error) => Err(error),
+                }
+            }
+        }
+    }
+
+    /// Wait for the original mutex without constructing a cursor or invoking a callback.
+    /// Poison remains in the actual acquired owner until construction rejects it.
+    pub fn acquire_writer(&self) -> LinCowCellWriterAcquisition<'_, T, R, U, Charge> {
+        let (guard, poisoned) = match self.write.lock() {
+            Ok(guard) => (guard, false),
+            Err(error) => (error.into_inner(), true),
+        };
+        LinCowCellWriterAcquisition {
+            guard,
+            caller: self,
+            poisoned,
+        }
+    }
+
+    /// Acquire the original mutex before planning, admission or construction.
+    /// Only contention returns `None`. Poison remains in the acquired owner and
+    /// is rejected before admission; callers can bind its real release first.
+    pub fn try_acquire_writer(&self) -> Option<LinCowCellWriterAcquisition<'_, T, R, U, Charge>> {
+        let (guard, poisoned) = match self.write.try_lock() {
+            Ok(guard) => (guard, false),
+            Err(TryLockError::WouldBlock) => return None,
+            Err(TryLockError::Poisoned(error)) => (error.into_inner(), true),
+        };
+        Some(LinCowCellWriterAcquisition {
+            guard,
+            caller: self,
+            poisoned,
+        })
     }
 
     fn create_writer<'a>(
@@ -540,10 +690,39 @@ where
         }
     }
 
-    /// Reacquire only the original writer lock without copying or allocating.
+    /// Acquire the exact original writer without validating or releasing it.
     ///
-    /// Unlike a fully owned EBR value, a linear COW writer contains pointers to
-    /// its base tree. Both the physical root and exact base must still match.
+    /// Foreign roots and contention return without acquiring a mutex. Stale
+    /// generations and poison are checked by the returned original acquisition.
+    /// Aggregate callers can bind that actual guard to their release source
+    /// before validation, then retain refusal cleanup through enclosing fences.
+    pub fn try_acquire_owned(
+        &self,
+        owned: LinCowCellOwned<T, R, U, Charge>,
+    ) -> Result<
+        LinCowCellOwnedAcquisition<'_, T, R, U, Charge>,
+        (LinCowCellOwned<T, R, U, Charge>, OwnedWriteError),
+    > {
+        if !Shared::ptr_eq(&self.write, &owned.root) {
+            return Err((owned, OwnedWriteError::Changed));
+        }
+        let (guard, poisoned) = match self.write.try_lock() {
+            Ok(guard) => (guard, false),
+            Err(TryLockError::WouldBlock) => return Err((owned, OwnedWriteError::Busy)),
+            Err(TryLockError::Poisoned(error)) => (error.into_inner(), true),
+        };
+        Ok(LinCowCellOwnedAcquisition {
+            guard,
+            owned,
+            caller: self,
+            poisoned,
+        })
+    }
+
+    /// Adopt an original writer for a single-owner operation.
+    ///
+    /// This composes acquisition and validation, unlocking on refusal. Aggregate
+    /// publishers use `try_acquire_owned` to retain actual refusal custody.
     pub fn try_write_owned(
         &self,
         owned: LinCowCellOwned<T, R, U, Charge>,
@@ -551,32 +730,9 @@ where
         LinCowCellWriteTxn<'_, T, R, U, Charge>,
         (LinCowCellOwned<T, R, U, Charge>, OwnedWriteError),
     > {
-        if !Shared::ptr_eq(&self.write, &owned.root) {
-            return Err((owned, OwnedWriteError::Changed));
-        }
-        let guard = match self.write.try_lock() {
-            Ok(guard) => guard,
-            Err(TryLockError::WouldBlock) => return Err((owned, OwnedWriteError::Busy)),
-            Err(TryLockError::Poisoned(_)) => return Err((owned, OwnedWriteError::Poisoned)),
-        };
-        if !Shared::ptr_eq(&guard.current, &owned.base) {
-            return Err((owned, OwnedWriteError::Changed));
-        }
-        let LinCowCellOwned {
-            work,
-            next,
-            base,
-            root,
-        } = owned;
-        // The returned transaction borrows this same root through its caller.
-        drop(root);
-        Ok(LinCowCellWriteTxn {
-            caller: self,
-            work,
-            next,
-            base,
-            guard,
-        })
+        self.try_acquire_owned(owned)?
+            .validate()
+            .map_err(|(acquired, error)| (acquired.abort(), error))
     }
 
     /// Whether the original writer mutex is poisoned.
@@ -916,6 +1072,34 @@ impl<T, R, U, Charge> AsMut<U> for LinCowCellWriteTxn<'_, T, R, U, Charge> {
     }
 }
 
+impl<'a, T, R, U> LinCowCellWriterAcquisition<'a, T, R, U, Untracked>
+where
+    T: LinCowCellCapable<R, U>,
+{
+    /// Construct an untracked successor while retaining this exact acquired lock.
+    /// Poison panics before invoking the input constructor.
+    pub fn write_with(
+        self,
+        input: impl FnOnce(&T) -> T::WriterInput,
+    ) -> LinCowCellWriteTxn<'a, T, R, U> {
+        match self.try_write_charged(|data, _| {
+            Ok::<_, std::convert::Infallible>(WriterAdmission {
+                charges: WriterCharges {
+                    cursor: Untracked,
+                    reader: Untracked,
+                },
+                input: input(data),
+            })
+        }) {
+            Ok(writer) => writer,
+            Err((_acquired, WriterAdmissionError::Poisoned)) => {
+                panic!("original writer is poisoned")
+            }
+            Err((_, WriterAdmissionError::Refused(never))) => match never {},
+        }
+    }
+}
+
 impl<T, R, U> LinCowCell<T, R, U, Untracked>
 where
     T: LinCowCellCapable<R, U>,
@@ -936,16 +1120,7 @@ where
         &self,
         input: impl FnOnce(&T) -> T::WriterInput,
     ) -> LinCowCellWriteTxn<'_, T, R, U> {
-        self.write_charged(|data, _| {
-            Ok::<_, std::convert::Infallible>(WriterAdmission {
-                charges: WriterCharges {
-                    cursor: Untracked,
-                    reader: Untracked,
-                },
-                input: input(data),
-            })
-        })
-        .unwrap_or_else(|never| match never {})
+        self.acquire_writer().write_with(input)
     }
 
     /// Try an unaccounted writer, constructing its input only after locking.

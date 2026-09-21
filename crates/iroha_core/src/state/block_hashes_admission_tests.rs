@@ -41,6 +41,125 @@ fn publish(mut block: BlockHashesBlock<'_>, value: u8) {
 }
 
 #[test]
+fn successor_reader_contention_wakes_from_original_reader_release() {
+    let owner = empty(1024 * 1024);
+    let map = owner.map().unwrap();
+    let held = map
+        .try_write_admitted(|demand| {
+            owner
+                .budget
+                .try_reserve_bytes(demand.bytes())
+                .map(BlockHashPolicy)
+        })
+        .unwrap()
+        .prepare_commit();
+    let expected = map.observe_reader_release();
+    let writer_release = owner.released.observe();
+    let mut writer_wait = std::pin::pin!(writer_release.clone().wait_for_release());
+    let error = match owner.try_next_block(false) {
+        Err(error) => error,
+        Ok(_) => panic!("actual reader mutex is held"),
+    };
+    let BlockHashAdmissionError::Busy(wait) = error else {
+        panic!("reader contention must retain its original wait");
+    };
+    assert_eq!(wait, expected);
+    assert_ne!(wait, writer_release);
+    let mut wait = std::pin::pin!(wait.wait_for_release());
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    assert!(writer_wait.as_mut().poll(&mut context).is_pending());
+    drop(held);
+    assert!(wait.as_mut().poll(&mut context).is_ready());
+    assert!(
+        writer_wait.as_mut().poll(&mut context).is_pending(),
+        "no Core writer release was needed"
+    );
+    publish(owner.try_next_block(false).unwrap(), 1);
+    assert_eq!(owner.view().last(), Some(&hash(1)));
+}
+
+#[test]
+fn successor_admission_signals_only_actual_writer_after_unlock() {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::Wake,
+    };
+    struct CheckUnlocked {
+        owner: Arc<BlockHashes>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for CheckUnlocked {
+        fn wake(self: Arc<Self>) {
+            let _actual = self
+                .owner
+                .map()
+                .unwrap()
+                .try_acquire_writer()
+                .expect("successor notification ran while writer remained locked");
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let owner = Arc::new(empty(1024 * 1024));
+    let counter = Arc::new(CheckUnlocked {
+        owner: Arc::clone(&owner),
+        wakes: AtomicUsize::new(0),
+    });
+    let waker = Waker::from(Arc::clone(&counter));
+    let mut context = Context::from_waker(&waker);
+    let mut wait = std::pin::pin!(owner.released.observe().wait_for_release());
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    let held = owner
+        .released
+        .poisoning_guard(owner.map().unwrap().try_acquire_writer().unwrap());
+    assert!(matches!(
+        owner.try_next_block(false),
+        Err(BlockHashAdmissionError::Busy(_))
+    ));
+    assert_eq!(
+        counter.wakes.load(Ordering::SeqCst),
+        0,
+        "contention does not fabricate a release"
+    );
+    drop(held);
+    assert_eq!(counter.wakes.load(Ordering::SeqCst), 1);
+
+    let occupied = owner
+        .budget
+        .try_reserve_bytes(owner.budget.limit_bytes() - owner.budget.reserved_bytes())
+        .unwrap();
+    let mut wait = std::pin::pin!(owner.released.observe().wait_for_release());
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    assert!(matches!(
+        owner.try_next_block(false),
+        Err(BlockHashAdmissionError::Capacity(
+            AllocationRefusal::Capacity { .. }
+        ))
+    ));
+    assert_eq!(
+        counter.wakes.load(Ordering::SeqCst),
+        2,
+        "admission refusal releases its real writer"
+    );
+    assert!(owner.view().is_empty());
+    drop(occupied);
+
+    let mut wait = std::pin::pin!(owner.released.observe().wait_for_release());
+    assert!(wait.as_mut().poll(&mut context).is_pending());
+    let block = owner.try_next_block(false).unwrap();
+    assert_eq!(
+        counter.wakes.load(Ordering::SeqCst),
+        3,
+        "successful detachment releases its real writer"
+    );
+    assert!(owner.view().is_empty());
+    publish(block, 1);
+}
+
+#[test]
 fn current_tree_plus_successor_is_a_permanent_bound_not_a_refund_wait() {
     let calibration = empty(1024 * 1024);
     let (existing, additional) = demand(&calibration, false);
@@ -127,7 +246,7 @@ fn reserved_tip_is_hidden_and_cannot_publish_before_final_hash_staging() {
         );
         assert!(!block.has_pending());
         let unfinished = block.detach();
-        let (unfinished, refusal) = unfinished
+        let (unfinished, refusal, _cleanup) = unfinished
             .try_prepare_publication(&owner, |_, _| -> Result<(), ()> {
                 panic!("unfinished hash must refuse before installation admission")
             })

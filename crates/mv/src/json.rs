@@ -624,13 +624,12 @@ where
     Charge: Send + Sync + 'static,
 {
     fn json_serialize(&self, out: &mut String) {
-        let (revert, blocks) = self.snapshot_values();
         out.push('{');
         out.push_str("\"revert\":");
-        JsonSerialize::json_serialize(revert, out);
+        JsonSerialize::json_serialize(self.original_undo(), out);
         out.push(',');
         out.push_str("\"blocks\":");
-        JsonSerialize::json_serialize(blocks, out);
+        JsonSerialize::json_serialize(self.get(), out);
         out.push('}');
     }
 }

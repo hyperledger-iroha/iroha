@@ -280,7 +280,7 @@ fn already_poisoned_second_writer_refunds_unused_and_abandoned_charges() {
         assert!(catch_unwind(AssertUnwindSafe(|| abandon(&cell, charges(&budget), mode))).is_err());
         assert_eq!(
             control.calls.each_ref().map(|count| count.load(SeqCst)),
-            [0, 1]
+            [0, 0]
         );
         assert_signals(&cell, &observed, waits, &wakers, [1, 1], 3);
         assert_eq!(budget.reserved_bytes(), pair);
@@ -290,7 +290,7 @@ fn already_poisoned_second_writer_refunds_unused_and_abandoned_charges() {
 }
 
 #[test]
-fn first_clone_unwind_does_not_announce_an_unattempted_second_acquisition() {
+fn first_clone_unwind_releases_both_preacquired_writers() {
     let (cell, control) = seeded(CellAllocationCharges::untracked());
     let original = pointers(&cell);
     let predecessor = cell.publication.capture();
@@ -305,7 +305,8 @@ fn first_clone_unwind_does_not_announce_an_unattempted_second_acquisition() {
         control.calls.each_ref().map(|count| count.load(SeqCst)),
         [0, 1]
     );
-    assert_signals(&cell, &observed, waits, &wakers, [1, 0], 2);
+    // Both physical writers are acquired before the first payload clone.
+    assert_signals(&cell, &observed, waits, &wakers, [1, 1], 3);
     assert_original(&cell, original);
     assert!(predecessor.matches(&cell.publication));
 }

@@ -1847,16 +1847,6 @@ mod tests {
     fn assert_no_ledger_reads(keys: &[String]) {
         assert!(keys.is_empty(), "unexpected ledger reads in {keys:?}");
     }
-    fn assert_conservative_ledger_read(read_keys: &[String], write_keys: &[String]) {
-        assert!(
-            read_keys.iter().any(|key| key == GLOBAL_WILDCARD_KEY),
-            "unresolved ledger reads must carry the global read wildcard: {read_keys:?}"
-        );
-        assert!(
-            write_keys.iter().all(|key| key != GLOBAL_WILDCARD_KEY),
-            "read-only host operations must not claim a global write: {write_keys:?}"
-        );
-    }
     fn unresolved_world_access(instr: &ir::Instr) -> (AccessSets, IndexSet<String>) {
         let IrAccessClass::Ledger(access) = classify_ir_access(instr) else {
             panic!("expected ledger access for {instr:?}");

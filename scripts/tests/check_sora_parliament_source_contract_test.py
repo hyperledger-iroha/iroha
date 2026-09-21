@@ -409,7 +409,14 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(mutat
     elif mutation == "geometry_refusal":
         changed = commit.replace("return Err(TransactionsBlockError::from(err));", "", 1)
     elif mutation == "hash_prepare_refusal":
-        changed = commit.replace(".map_err(|(_, _)| TransactionsBlockError::SnapshotObservationChanged)?;", ".unwrap();", 1)
+        anchor = (
+            ".map_err(|(_, _, cleanup)| {\n"
+            "                    hash_refusal_cleanup = Some(cleanup);\n"
+            "                    TransactionsBlockError::SnapshotObservationChanged\n"
+            "                })?;"
+        )
+        assert commit.count(anchor) == 1
+        changed = commit.replace(anchor, ".unwrap();", 1)
     elif mutation == "hash_cleanup_before_commit_unlock":
         changed = commit.replace("        drop(hash_retirement);", "", 1).replace(
             "        drop(_state_commit_lock);", "        drop(hash_retirement);\n        drop(_state_commit_lock);", 1)
@@ -574,7 +581,7 @@ def test_borrowed_storage_iterators_reject_family_and_allocation_escape(
     start, end = _storage_iterator_implementation(source, owner)
     implementation = source[start:end]
     if mutation == "boxed_delegate":
-        receiver = {"View": "txn", "Block": "self.blocks", "Transaction": "self.current()"}[owner]
+        receiver = {"View": "txn", "Block": "self.writers.as_ref().blocks", "Transaction": "self.current()"}[owner]
         call = f"{receiver}.iter()" if family == "Iter" else f"{receiver}.range(bounds)"
         assert implementation.count(call) == 1
         changed = implementation.replace(call, f"Box::new({call})", 1)
@@ -599,7 +606,7 @@ def test_borrowed_storage_iterators_reject_other_generation_or_order(owner: str)
     source = guard.read(STORAGE_PATH)
     start, end = _storage_iterator_implementation(source, owner)
     implementation = source[start:end]
-    call = {"View": "snapshot.range(bounds)", "Block": "self.blocks.range(bounds)",
+    call = {"View": "snapshot.range(bounds)", "Block": "self.writers.as_ref().blocks.range(bounds)",
             "Transaction": "self.current().range(bounds)"}[owner]
     assert implementation.count(call) == 1
     changed = implementation.replace(call, f"{call}.rev()", 1)

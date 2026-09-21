@@ -226,3 +226,36 @@ shells. A retained carrier releases its State/Queue/Kura fences before retiring
 World/runtime refusal cleanup. This covers returned errors; panic propagation
 during acquisition, earlier Kura/State/Queue probes and successor acquisitions
 still require enclosing ownership.
+
+Map publication binds release observations to Concread’s actual acquired writer
+before validating its predecessor. A foreign/busy refusal emits no synthetic
+release; stale/poisoned cleanup retains the original acquired notification through
+the enclosing fences. See [the acquisition record](../../docs/history/2026-09-21/actual-writer-acquisition.md).
+
+Fresh ordinary and admitted Storage opening acquires both native writer phases
+before constructing either cursor. One pair transition retains both original
+notifications through refusal and callee unwind; success transfers both guards
+without a wake. Admitted opening reserves the whole pair and identity first,
+checks both poison verdicts before policy callbacks, and remains inside the
+original pool refund scope. See [fresh pair acquisition](../../docs/history/2026-09-21/fresh-pair-acquisition.md).
+
+Cell opening acquires both original EBR writers before cloning either value. A
+partial pair retains completed generations and unused charges until both guards
+release; the complete pair keeps joint ownership through Block and
+CurrentReplacement abandonment, detachment and publication-lock acquisition.
+Known undo poison rejects before waiting for current; known current poison
+rejects before either payload clone. Abandoned private payloads are destroyed
+after both writers unlock, so a destructor panic cannot poison those released
+writers. Canonical current/undo
+JSON fields are unchanged. See the [Cell custody record](../../docs/history/2026-09-21/cell-pair-custody.md)
+for measured scope and remaining aggregate boundaries.
+
+Aggregates construct every `BlockAcquisitionSlot` before initializing any field.
+`BlockAcquisition::initialize` stores each actual acquisition and completed
+private generation in that caller-owned slot before further fallible work.
+`BlockAcquisition::release` and `BlockRetirement::release_writers` unlock without
+reclaiming retained values or notifying. Release all siblings first, then drop
+their slots/blocks. Explicit retirement is terminal: it does not create detached
+publication authority and cannot resume a failed edit. Ordinary standalone
+constructors use this same kernel. World capture/commit and enclosing State
+transfers still need their own aggregate lifecycle integration.

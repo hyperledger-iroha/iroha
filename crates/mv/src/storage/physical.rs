@@ -7,6 +7,31 @@ use concread::{
     release::DeferredRelease,
 };
 
+/// Join notifications only to an actually acquired original physical writer.
+pub(super) fn acquire_owned_writer<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>>(
+    map: &'a BptreeMap<K, V, M>,
+    released: &'a ReleaseNotification,
+    owned: BptreeMapOwned<K, V, M>,
+) -> Result<
+    ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>,
+    (
+        BptreeMapOwned<K, V, M>,
+        OwnedWriteError,
+        Option<DeferredRelease>,
+    ),
+> {
+    let acquired = map
+        .try_acquire_owned(owned)
+        .map_err(|(owned, error)| (owned, error, None))?;
+    released
+        .poisoning_guard(acquired)
+        .try_map_preserving_release(|acquired| acquired.validate())
+        .map_err(|(acquired, error)| {
+            let (owned, notification) = acquired.release_deferred(|acquired| acquired.abort());
+            (owned, error, Some(notification))
+        })
+}
+
 enum MapStage<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> {
     Writer(ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>),
     Prepared(ReleaseGuard<'a, BptreeMapPreparedCommit<'a, K, V, M>>),

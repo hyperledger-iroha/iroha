@@ -2766,6 +2766,7 @@ def test_cli_release_gate_runs_supply_chain_and_topology_adversarial_suites() ->
         "scripts/tests/sorafs_sdk_artifact_index_test.py",
         "scripts/tests/python_wheel_byte_owner_test.py",
         "scripts/tests/python_installed_content_owner_test.py",
+        "scripts/tests/python_zip_directory_admission_test.py",
         "scripts/tests/sorafs_python_child_runner_test.py",
         "scripts/tests/sorafs_python_consumer_artifact_test.py",
         "scripts/tests/build_sorafs_python_consumer_artifact_test.py",

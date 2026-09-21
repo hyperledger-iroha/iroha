@@ -9,7 +9,6 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::block::SignedBlock;
 use std::{
     fs,
-    io::Write as _,
     os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _, symlink},
     panic::{AssertUnwindSafe, catch_unwind},
 };

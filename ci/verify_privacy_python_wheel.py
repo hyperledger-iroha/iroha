@@ -69,6 +69,7 @@ READ_CHUNK_BYTES = 1024 * 1024
 ALLOWED_COMPRESSION = frozenset((zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED))
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _EOCD = struct.Struct("<4s4H2LH")
+_CENTRAL_DIRECTORY_HEADER = struct.Struct("<4s6H3L5H2L")
 _LOCAL_FILE_HEADER = struct.Struct("<4s5H3L2H")
 _DATA_DESCRIPTOR = struct.Struct("<4s3L")
 _DATA_DESCRIPTOR_WITHOUT_SIGNATURE = struct.Struct("<3L")
@@ -520,6 +521,73 @@ def _metadata_identity(payload: bytes, owner: WheelOwner) -> tuple[str, str]:
     return names[0], version
 
 
+def preflight_zip_directory(
+    payload: bytes,
+    *,
+    max_members: int,
+    max_name_bytes: int,
+    allow_member_extra: bool,
+    allow_member_comments: bool,
+) -> None:
+    """Bound the original central directory before ZipFile allocates its inventory.
+
+    Callers first enforce their whole-original byte limit. This fixed-header walk
+    allocates no directory or member collection and does not extract or replace
+    the existing ZIP/RECORD parser. It bounds actual records, raw central names and variable
+    extents rather than trusting only the end-record count, which ZipFile ignores
+    while constructing its full inventory. Wheel profiles preserve member extras
+    and comments, including their bounded Unicode metadata; downstream canonical
+    name checks remain necessary. The canonical execution writer permits neither.
+    """
+    if (type(payload) is not bytes or type(max_members) is not int
+            or not 0 < max_members <= 0xFFFF or type(max_name_bytes) is not int
+            or not 0 < max_name_bytes <= 0xFFFF or type(allow_member_extra) is not bool
+            or type(allow_member_comments) is not bool):
+        _fail("ZIP directory requires immutable original bytes and bounded policy")
+    if len(payload) < _EOCD.size:
+        raise zipfile.BadZipFile("ZIP has no complete canonical end record")
+    end = len(payload) - _EOCD.size
+    signature, disk, central_disk, disk_count, count, size, offset, comment = _EOCD.unpack_from(payload, end)
+    if signature != b"PK\x05\x06":
+        raise zipfile.BadZipFile("ZIP contains data outside its canonical ZIP records")
+    # ZipFile probes this exact suffix even with unsaturated classic fields.
+    # A locator embedded in a permitted final-member comment can redirect its
+    # eager parser to a different directory than the one admitted below.
+    if end >= 20 and payload[end - 20:end - 16] == b"PK\x06\x07":
+        _fail("ZIP must not contain a ZIP64 directory alias")
+    if comment != 0:
+        _fail("ZIP must have one canonical un-commented ZIP end record")
+    if disk != 0 or central_disk != 0 or disk_count != count:
+        _fail("ZIP must not use split or spanned ZIP records")
+    if not 0 < count <= max_members:
+        _fail(f"archive member bound: requires between one and {max_members} members")
+    if offset + size != end:
+        _fail("ZIP must not contain a prepended payload or data outside its canonical ZIP records")
+    maximum_record = (_CENTRAL_DIRECTORY_HEADER.size + max_name_bytes
+                      + (0xFFFF if allow_member_extra else 0)
+                      + (0xFFFF if allow_member_comments else 0))
+    if not count * _CENTRAL_DIRECTORY_HEADER.size <= size <= max_members * maximum_record:
+        _fail("ZIP central-directory byte bound")
+    position, observed = offset, 0
+    while position < end:
+        if observed >= count or observed >= max_members or position + _CENTRAL_DIRECTORY_HEADER.size > end:
+            _fail("ZIP central-directory member count or extent differs")
+        header = _CENTRAL_DIRECTORY_HEADER.unpack_from(payload, position)
+        name_size, extra_size, comment_size, start_disk = header[10:14]
+        if header[0] != b"PK\x01\x02" or start_disk != 0:
+            _fail("ZIP central record is not a single-disk file header")
+        if not 0 < name_size <= max_name_bytes:
+            _fail("ZIP member exceeds its path-length bound")
+        if (not allow_member_extra and extra_size != 0) or (not allow_member_comments and comment_size != 0):
+            _fail("ZIP member extra or comment differs from its canonical policy")
+        position += _CENTRAL_DIRECTORY_HEADER.size + name_size + extra_size + comment_size
+        if position > end:
+            _fail("ZIP central record exceeds its original directory")
+        observed += 1
+    if position != end or observed != count:
+        _fail("ZIP central-directory member count or extent differs")
+
+
 def _assert_canonical_zip_envelope(
     payload: bytes, wheel: zipfile.ZipFile, infos: Sequence[zipfile.ZipInfo]
 ) -> None:
@@ -747,6 +815,11 @@ def parse_wheel_bytes(
     }
 
     try:
+        preflight_zip_directory(
+            payload, max_members=MAX_ARCHIVE_MEMBERS,
+            max_name_bytes=MAX_MEMBER_NAME_BYTES,
+            allow_member_extra=True, allow_member_comments=True,
+        )
         with zipfile.ZipFile(io.BytesIO(payload), "r") as wheel:
             infos = wheel.infolist()
             if not infos or len(infos) > MAX_ARCHIVE_MEMBERS:

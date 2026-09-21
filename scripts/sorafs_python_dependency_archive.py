@@ -97,6 +97,11 @@ def parse_dependency_wheel(raw: bytes, *, wheel: DependencyWheel) -> DependencyA
              "dependency original bytes differ from independent manifest pin")
     dist = wheel.module.replace("-", "_") + "-" + wheel.version + ".dist-info"
     try:
+        verifier.preflight_zip_directory(
+            raw, max_members=MAX_MEMBERS,
+            max_name_bytes=verifier.MAX_MEMBER_NAME_BYTES,
+            allow_member_extra=True, allow_member_comments=True,
+        )
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             infos = archive.infolist()
             _require(0 < len(infos) <= MAX_MEMBERS, "dependency archive member bound")
@@ -166,6 +171,6 @@ def parse_dependency_wheel(raw: bytes, *, wheel: DependencyWheel) -> DependencyA
             entry = (verifier._read_member_bytes(archive, names[entry_name], label="dependency entry points")
                      if entry_name in names else None)
             scripts = _console_scripts(entry, wheel.module)
-    except (zipfile.BadZipFile, configparser.Error, NotImplementedError) as error:
+    except (verifier.VerificationError, zipfile.BadZipFile, configparser.Error, NotImplementedError) as error:
         raise ArtifactError("dependency archive is not a valid bounded wheel: " + str(error)) from error
     return DependencyArchive(raw, wheel, dist, members, scripts)

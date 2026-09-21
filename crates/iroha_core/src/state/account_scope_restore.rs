@@ -138,9 +138,9 @@ fn index_with_history(
 /// Validate both authoritative cuts before replacing either derived owner.
 pub(super) fn rebuild(world: &mut World) -> Result<(), String> {
     let (current, previous, mut touched) = {
-        let accounts = world.accounts.history();
-        let aliases = world.account_aliases.history();
-        let bindings = world.uaid_dataspaces.history();
+        let accounts = world.0.accounts.history();
+        let aliases = world.0.account_aliases.history();
+        let bindings = world.0.uaid_dataspaces.history();
         let current = directory(
             accounts.current().iter(),
             aliases.current().iter(),

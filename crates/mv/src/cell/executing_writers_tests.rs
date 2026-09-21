@@ -233,7 +233,7 @@ impl Drop for Payload {
 }
 
 #[test]
-fn private_payload_unwind_freezes_both_physical_poison_verdicts_before_native_wakes() {
+fn private_payload_unwind_after_unlock_keeps_both_writers_healthy_before_native_wakes() {
     for fault_id in [1, 2] {
         let fault = Arc::new(AtomicUsize::new(0));
         let cell = Arc::new(Cell::new(Payload {
@@ -252,9 +252,11 @@ fn private_payload_unwind_freezes_both_physical_poison_verdicts_before_native_wa
         );
         assert_eq!(fault.load(SeqCst), 0);
         assert_released(&probe, waits);
+        // Private payload destruction follows physical release, so its panic
+        // cannot poison either already-unlocked writer.
         assert_eq!(
             (cell.revert.is_poisoned(), cell.blocks.is_poisoned()),
-            (fault_id == 1, true)
+            (false, false)
         );
         assert_eq!(cell.view().id, 1);
         assert!(cell.predecessor_view().is_none());
@@ -311,20 +313,23 @@ fn reset_revert_and_same_cut_payload_failure_keep_joint_custody_before_return() 
 fn paired_writer_codec_borrows_the_same_original_undo_and_current_values() {
     let cell = Cell::new(10_u64);
     let mut block = cell.block();
-    assert_eq!(block.snapshot_values(), (&None, &10));
+    assert_eq!((block.original_undo(), block.get()), (&None, &10));
     assert_eq!(
         norito::json::to_json(&block).unwrap(),
         r#"{"revert":null,"blocks":10}"#
     );
     *block.get_mut() = 20;
-    assert_eq!(block.snapshot_values(), (&Some(10), &20));
+    assert_eq!((block.original_undo(), block.get()), (&Some(10), &20));
     assert_eq!(
         norito::json::to_json(&block).unwrap(),
         r#"{"revert":10,"blocks":20}"#
     );
     block.commit();
     let replacement = cell.block_and_revert();
-    assert_eq!(replacement.snapshot_values(), (&None, &10));
+    assert_eq!(
+        (replacement.original_undo(), replacement.get()),
+        (&None, &10)
+    );
     assert_eq!(
         norito::json::to_json(&replacement).unwrap(),
         r#"{"revert":null,"blocks":10}"#

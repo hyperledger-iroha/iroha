@@ -10,10 +10,11 @@ use core::convert::Infallible;
 
 use super::{
     Cell, CellBlock, Storage, StorageBlock, TriggerSet, TriggerSetBlock, World, WorldBlock,
+    WorldBlockFields,
 };
 use crate::smartcontracts::isi::triggers::set::{DetachError, DetachedSet};
 use iroha_data_model::{events::EventBox, nexus::DataSpaceCatalog};
-use mv::{BlockMode, Key, Value};
+use mv::{BlockCapture, BlockMode, Key, Value};
 
 #[path = "world_publication.rs"]
 pub(in crate::state) mod publication;
@@ -169,13 +170,20 @@ trait RetainedWorldField: Send + Sync {
 trait CaptureWorldField: Sized {
     type Target;
     type Retained: RetainedWorldField + 'static;
+    type Capture: WorldCaptureSlot<Target = Self::Target, Retained = Self::Retained>;
 
     fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>>;
-    fn capture(
-        self,
-        name: &'static str,
-        target: fn(&World) -> &Self::Target,
-    ) -> Result<Self::Retained, CaptureError<Infallible>>;
+    fn into_capture(self) -> Self::Capture;
+}
+
+trait WorldCaptureSlot: Sized {
+    type Target;
+    type Retained: RetainedWorldField + 'static;
+
+    fn capture(&mut self) -> Result<(), CaptureError<Infallible>>;
+    fn release(&mut self);
+    // Only after every field captured: all physical writers are already free.
+    fn retain(self, name: &'static str, target: fn(&World) -> &Self::Target) -> Self::Retained;
 }
 
 struct RetainedStorage<K: Key, V: Value> {
@@ -214,26 +222,39 @@ impl<K: Key, V: Value> RetainedWorldField for RetainedStorage<K, V> {
     }
 }
 
-impl<K: Key, V: Value> CaptureWorldField for StorageBlock<'_, K, V> {
+impl<'a, K: Key, V: Value> CaptureWorldField for StorageBlock<'a, K, V> {
     type Target = Storage<K, V>;
     type Retained = RetainedStorage<K, V>;
+    type Capture = mv::storage::BlockCaptureSlot<'a, K, V, ()>;
     fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>> {
         Ok(self.mode())
     }
-    fn capture(
-        self,
-        name: &'static str,
-        target: fn(&World) -> &Self::Target,
-    ) -> Result<Self::Retained, CaptureError<Infallible>> {
-        let journal = match self.try_detach(|_| Ok::<(), Infallible>(())) {
-            Ok(journal) => journal,
+    fn into_capture(self) -> Self::Capture {
+        self.capture_slot()
+    }
+}
+
+impl<K: Key, V: Value> WorldCaptureSlot for mv::storage::BlockCaptureSlot<'_, K, V, ()> {
+    type Target = Storage<K, V>;
+    type Retained = RetainedStorage<K, V>;
+    fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {
+        match self.try_capture(|_| Ok::<(), Infallible>(())) {
+            Ok(()) => Ok(()),
             Err(impossible) => match impossible {},
-        };
-        Ok(RetainedStorage {
+        }
+    }
+    fn release(&mut self) {
+        BlockCapture::release(self);
+    }
+    fn retain(self, name: &'static str, target: fn(&World) -> &Self::Target) -> Self::Retained {
+        let (journal, cleanup) = self.into_detached();
+        let retained = RetainedStorage {
             name,
             journal: Some(journal),
             target,
-        })
+        };
+        drop(cleanup);
+        retained
     }
 }
 
@@ -273,26 +294,39 @@ impl<V: Value> RetainedWorldField for RetainedCell<V> {
     }
 }
 
-impl<V: Value> CaptureWorldField for CellBlock<'_, V> {
+impl<'a, V: Value> CaptureWorldField for CellBlock<'a, V> {
     type Target = Cell<V>;
     type Retained = RetainedCell<V>;
+    type Capture = mv::cell::BlockCaptureSlot<'a, V, ()>;
     fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>> {
         Ok(self.mode())
     }
-    fn capture(
-        self,
-        name: &'static str,
-        target: fn(&World) -> &Self::Target,
-    ) -> Result<Self::Retained, CaptureError<Infallible>> {
-        let journal = match self.try_detach(|_| Ok::<(), Infallible>(())) {
-            Ok(journal) => journal,
+    fn into_capture(self) -> Self::Capture {
+        self.capture_slot()
+    }
+}
+
+impl<V: Value> WorldCaptureSlot for mv::cell::BlockCaptureSlot<'_, V, ()> {
+    type Target = Cell<V>;
+    type Retained = RetainedCell<V>;
+    fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {
+        match self.try_capture(|_| Ok::<(), Infallible>(())) {
+            Ok(()) => Ok(()),
             Err(impossible) => match impossible {},
-        };
-        Ok(RetainedCell {
+        }
+    }
+    fn release(&mut self) {
+        BlockCapture::release(self);
+    }
+    fn retain(self, name: &'static str, target: fn(&World) -> &Self::Target) -> Self::Retained {
+        let (journal, cleanup) = self.into_detached();
+        let retained = RetainedCell {
             name,
             journal: Some(journal),
             target,
-        })
+        };
+        drop(cleanup);
+        retained
     }
 }
 
@@ -347,26 +381,83 @@ impl RetainedWorldField for RetainedTriggers {
     }
 }
 
-impl CaptureWorldField for TriggerSetBlock<'_> {
+impl<'a> CaptureWorldField for TriggerSetBlock<'a> {
     type Target = TriggerSet;
     type Retained = RetainedTriggers;
+    type Capture = crate::smartcontracts::isi::triggers::set::SetBlockCapture<'a, ()>;
     fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>> {
         TriggerSetBlock::capture_mode(self).map_err(trigger_error)
     }
-    fn capture(
-        self,
-        name: &'static str,
-        target: fn(&World) -> &Self::Target,
-    ) -> Result<Self::Retained, CaptureError<Infallible>> {
-        let journal = self
-            .try_detach(|_| Ok::<(), Infallible>(()))
-            .map_err(trigger_error)?;
-        Ok(RetainedTriggers {
+    fn into_capture(self) -> Self::Capture {
+        self.capture_slot()
+    }
+}
+
+impl WorldCaptureSlot for crate::smartcontracts::isi::triggers::set::SetBlockCapture<'_, ()> {
+    type Target = TriggerSet;
+    type Retained = RetainedTriggers;
+    fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {
+        self.try_capture(|_| Ok::<(), Infallible>(()))
+            .map_err(trigger_error)
+    }
+    fn release(&mut self) {
+        Self::release(self);
+    }
+    fn retain(self, name: &'static str, target: fn(&World) -> &Self::Target) -> Self::Retained {
+        let (journal, cleanup) = self.into_detached();
+        let retained = RetainedTriggers {
             name,
             journal: Some(journal),
             target,
-        })
+        };
+        drop(cleanup);
+        retained
     }
+}
+
+macro_rules! declare_world_capture {
+    (; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {
+        #[allow(non_camel_case_types)]
+        struct WorldCapture<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*> {
+            $($prefix: Option<$prefix>,)* $($privacy: Option<$privacy>,)* $($suffix: Option<$suffix>,)*
+        }
+        #[allow(non_camel_case_types)]
+        impl<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*>
+            WorldCapture<$($prefix,)* $($privacy,)* $($suffix,)*>
+        {
+            fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {
+                $(self.$prefix.as_mut().expect("original World capture slot").capture()?;)*
+                $(self.$privacy.as_mut().expect("original World capture slot").capture()?;)*
+                $(self.$suffix.as_mut().expect("original World capture slot").capture()?;)*
+                Ok(())
+            }
+        }
+        #[allow(non_camel_case_types)]
+        impl<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*>
+            Drop for WorldCapture<$($prefix,)* $($privacy,)* $($suffix,)*>
+        {
+            fn drop(&mut self) {
+                $(if let Some(field) = self.$prefix.as_mut() { field.release(); })*
+                $(if let Some(field) = self.$privacy.as_mut() { field.release(); })*
+                $(if let Some(field) = self.$suffix.as_mut() { field.release(); })*
+            }
+        }
+    };
+}
+
+with_world_overlay_fields!(declare_world_capture);
+
+// Borrow the original block and caller slots rather than passing another
+// complete World owner by value through a deep retained-validation call stack.
+#[inline(never)]
+fn fill_world_capture(fill: impl FnOnce()) {
+    fill()
+}
+
+// Wrapper construction temporaries do not overlap native capture work.
+#[inline(never)]
+fn finish_world_capture<R>(finish: impl FnOnce() -> R) -> R {
+    finish()
 }
 
 macro_rules! capture_world_fields {
@@ -378,18 +469,39 @@ macro_rules! capture_world_fields {
         $(check_mode!($original, mode, $suffix);)*
         // No wrapper/vector/delta allocation or value copy precedes this call.
         let admission = $admit(&$original).map_err(CaptureError::Admission)?;
-        let WorldBlock {
-            dataspace_catalog,
-            $($prefix,)* $($privacy,)* $($suffix,)*
-            external_event_buf,
-        } = $original;
+        // These payloads and their admission outlive the capture aggregate on
+        // unwind: release every original writer before either can be destroyed.
+        let mut extras = None;
+        let mut pending = WorldCapture {
+            $($prefix: None,)* $($privacy: None,)* $($suffix: None,)*
+        };
+        fill_world_capture(|| {
+            // Inert moves only after extraction. The closure borrows both
+            // original owners; its transfer temporaries leave before capture.
+            let WorldBlockFields {
+                dataspace_catalog,
+                $($prefix,)* $($privacy,)* $($suffix,)*
+                external_event_buf,
+            } = $original.fields.take().expect("original World block fields");
+            $(pending.$prefix = Some($prefix.into_capture());)*
+            $(pending.$privacy = Some($privacy.into_capture());)*
+            $(pending.$suffix = Some($suffix.into_capture());)*
+            extras = Some((dataspace_catalog, external_event_buf));
+        });
+        pending.capture().map_err(widen_error)?;
+        // All sibling writers are now free. Original notifications can be
+        // retired while materializing the admitted journal wrappers.
         const FIELD_COUNT: usize = [
             $(stringify!($prefix),)* $(stringify!($privacy),)* $(stringify!($suffix),)*
         ].len();
-        let mut fields: Vec<Box<dyn RetainedWorldField>> = Vec::with_capacity(FIELD_COUNT);
-        $(retain_field!(fields, $prefix);)*
-        $(retain_field!(fields, $privacy);)*
-        $(retain_field!(fields, $suffix);)*
+        let fields = finish_world_capture(|| {
+            let mut fields: Vec<Box<dyn RetainedWorldField>> = Vec::with_capacity(FIELD_COUNT);
+            $(retain_field!(fields, pending, $prefix);)*
+            $(retain_field!(fields, pending, $privacy);)*
+            $(retain_field!(fields, pending, $suffix);)*
+            fields
+        });
+        let (dataspace_catalog, external_event_buf) = extras.take().expect("original World extras");
         Ok(DetachedWorld { mode, fields, dataspace_catalog, external_event_buf, admission })
     }};
 }
@@ -408,10 +520,13 @@ macro_rules! check_mode {
 }
 
 macro_rules! retain_field {
-    ($fields:ident, $field:ident) => {
+    ($fields:ident, $pending:ident, $field:ident) => {
         $fields.push(Box::new(
-            CaptureWorldField::capture($field, stringify!($field), |target: &World| &target.$field)
-                .map_err(widen_error)?,
+            $pending
+                .$field
+                .take()
+                .expect("original World capture slot")
+                .retain(stringify!($field), |target: &World| &target.$field),
         ));
     };
 }
@@ -425,7 +540,7 @@ impl WorldBlock<'_> {
     /// Refusal drops all original writers without publication. Success moves
     /// extras and the original MV current/undo allocations without cloning them.
     pub(in crate::state) fn try_detach_journals<Admission, E>(
-        self,
+        mut self,
         admit: impl FnOnce(&Self) -> Result<Admission, E>,
     ) -> Result<DetachedWorld<Admission>, CaptureError<E>> {
         with_world_overlay_fields!(capture_world_fields, self, admit)

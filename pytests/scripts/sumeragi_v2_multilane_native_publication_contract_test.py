@@ -182,8 +182,8 @@ def test_native_publication_source_cap_parity_is_checked(captured, path, old, ne
 @pytest.mark.parametrize("symbol,old,new", [
     ("NativeAmxParticipantApplicationPrepublicationToken", "    original_kura:", "    pub original_kura:"),
     ("NativeAmxParticipantApplicationPrepublicationToken::from_plan", "            original_kura,", "            original_kura: other_identity,"),
-    ("Kura::reauthenticate_native_amx_prepublication", "        drop(sidecar);", "        // drop(sidecar);"),
-    ("Kura::reauthenticate_native_amx_prepublication", "let canonical = self.canonical_chain_lock.lock();", "let canonical = other.canonical_chain_lock.lock();"),
+    ("Kura::reauthenticate_native_amx_prepublication", "        drop(fences);", "        // drop(fences);"),
+    ("Kura::reauthenticate_native_amx_prepublication", "fences.canonical = Some(self.canonical_chain_lock.lock());", "fences.canonical = Some(other.canonical_chain_lock.lock());"),
     ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "if !token.original_kura.matches(self)", "if false"),
     ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "if !token.authenticates_state_frontiers(block, manifest, finality, frontiers)", "if false"),
     ("Kura::reauthenticate_native_amx_prepublication_under_publication_guards", "token.application_block_height,", "other_height,"),
@@ -213,8 +213,8 @@ def test_native_participant_custody_checks_actual_lock_and_state_staging_order(c
     original = captured[3]
     cases = (
         ("Kura::reauthenticate_native_amx_prepublication",
-         "        let canonical = self.canonical_chain_lock.lock();\n        let geometry = self.lane_geometry_lock.lock();",
-         "        let geometry = self.lane_geometry_lock.lock();\n        let canonical = self.canonical_chain_lock.lock();"),
+         "        fences.canonical = Some(self.canonical_chain_lock.lock());\n        fences.geometry = Some(self.lane_geometry_lock.lock());",
+         "        fences.geometry = Some(self.lane_geometry_lock.lock());\n        fences.canonical = Some(self.canonical_chain_lock.lock());"),
         ("V2ApplyService::validate_and_apply",
          "        if let Some(token) = native_amx_prepublication.as_ref() {",
          "        state_block.authorize_execution_output_publication(&committed_block, &witness)?;\n        if let Some(token) = native_amx_prepublication.as_ref() {"),

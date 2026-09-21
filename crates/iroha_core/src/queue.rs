@@ -4162,7 +4162,9 @@ impl<'queue> QueueLaneRetirementObserver<'queue> {
                         field: "push_remove_lock",
                         wait,
                     },
-                    QueueRetirementCleanup([None, None, Some(self.release_deferred())]),
+                    QueueRetirementCleanup {
+                        released: [None, None, Some(self.release_deferred())],
+                    },
                 ));
             }
         };
@@ -4176,7 +4178,9 @@ impl<'queue> QueueLaneRetirementObserver<'queue> {
                         field: "lane_reservations",
                         wait,
                     },
-                    QueueRetirementCleanup([None, Some(mutation), Some(transition)]),
+                    QueueRetirementCleanup {
+                        released: [None, Some(mutation), Some(transition)],
+                    },
                 ));
             }
         };
@@ -4212,9 +4216,9 @@ impl<'queue> QueueLaneRetirementObserver<'queue> {
 /// Original notifications from a refused Queue cut, after physical unlock.
 /// The caller retains this through every enclosing State/Kura fence.
 #[must_use = "retain Queue refusal cleanup through its enclosing fences"]
-pub(crate) struct QueueRetirementCleanup(
-    pub(crate) [Option<concread::release::DeferredRelease>; 3],
-);
+pub(crate) struct QueueRetirementCleanup {
+    pub(crate) released: [Option<concread::release::DeferredRelease>; 3],
+}
 
 impl std::fmt::Debug for QueueRetirementCleanup {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -4222,7 +4226,11 @@ impl std::fmt::Debug for QueueRetirementCleanup {
             .debug_struct("QueueRetirementCleanup")
             .field(
                 "released_fences",
-                &self.0.iter().filter(|release| release.is_some()).count(),
+                &self
+                    .released
+                    .iter()
+                    .filter(|release| release.is_some())
+                    .count(),
             )
             .finish()
     }

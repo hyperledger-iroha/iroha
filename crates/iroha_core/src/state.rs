@@ -1254,7 +1254,7 @@ impl<T: MvValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
 // from that inventory.
 macro_rules! with_world_overlay_fields {
     ($callback:ident $(, $arg:tt)*) => {
-        $callback!(
+        $callback! {
             $($arg),*;
             [
             parameters,
@@ -1540,7 +1540,7 @@ macro_rules! with_world_overlay_fields {
             merge_hint_roots,
             merge_global_state_root,
             ]
-        )
+        }
     };
 }
 use crate::publication_lock::{PublicationGuard, PublicationMutex};
@@ -1558,28 +1558,20 @@ mod world_commit;
 mod world_journals;
 pub(crate) mod world_projection;
 
-macro_rules! build_world_block_from_fields {
-    (
-        $state:expr,
-        $method:ident;
-        [$($prefix:ident,)*]
-        [$($privacy:ident,)*]
-        [$($suffix:ident,)*]
-    ) => {
-        WorldBlock {
-            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
-            $($prefix: $state.$prefix.$method(),)*
-            $($privacy: $state.$privacy.$method(),)*
-            $($suffix: $state.$suffix.$method(),)*
-            external_event_buf: Vec::new(),
-        }
-    };
+#[macro_use]
+/// Exercise actual World capture while retaining journals through a test observation.
+#[cfg(test)]
+pub(crate) fn inspect_trigger_world_capture_for_testing(
+    original: WorldBlock<'_>,
+    inspect: impl FnOnce(),
+) {
+    let journals = original.try_detach_journals(|_| Ok::<(), ()>(())).unwrap();
+    inspect();
+    drop(journals);
 }
-macro_rules! build_world_block {
-    ($state:expr, $method:ident) => {
-        with_world_overlay_fields!(build_world_block_from_fields, $state, $method)
-    };
-}
+
+mod world_acquisition;
+
 macro_rules! build_world_transaction_from_fields {
     (
         $state:expr,
@@ -1590,26 +1582,28 @@ macro_rules! build_world_transaction_from_fields {
         [$($prefix:ident,)*]
         [$($privacy:ident,)*]
         [$($suffix:ident,)*]
-    ) => {
+    ) => {{
+        let authorization_identities = axt_authorization_identities($state);
+        let fields = $state.fields.as_mut().expect("original World block fields");
         Box::new(WorldTransaction {
-            dataspace_catalog: $state.dataspace_catalog.clone(),
-            axt_last_authorization_identities: axt_authorization_identities($state),
+            dataspace_catalog: fields.dataspace_catalog.clone(),
+            axt_last_authorization_identities: authorization_identities,
             axt_authorization_transitioned: BTreeSet::new(),
-            $($prefix: $state.$prefix.transaction(),)*
-            $($privacy: $state.$privacy.transaction(),)*
-            $($suffix: $state.$suffix.transaction(),)*
+            $($prefix: fields.$prefix.transaction(),)*
+            $($privacy: fields.$privacy.transaction(),)*
+            $($suffix: fields.$suffix.transaction(),)*
             axt_lane_config: $axt_lane_config,
             axt_current_slot: $axt_current_slot,
             axt_lane_map: $axt_lane_map,
             current_dataspace_id: None,
-            external_event_sink: &mut $state.external_event_buf,
-            dataspace_catalog_sink: &mut $state.dataspace_catalog,
+            external_event_sink: &mut fields.external_event_buf,
+            dataspace_catalog_sink: &mut fields.dataspace_catalog,
             external_event_buf: Vec::new(),
             #[cfg(feature = "telemetry")]
             telemetry: $telemetry,
             internal_event_buf: Vec::new(),
         })
-    };
+    }};
 }
 macro_rules! build_world_transaction {
     (
@@ -2091,7 +2085,7 @@ impl BlockHashesBlock<'_> {
         let prepared = self
             .detach()
             .try_prepare_publication(target, |_, _| Ok::<_, std::convert::Infallible>(()))
-            .unwrap_or_else(|(_, error)| panic!("test hash publication refused: {error:?}"));
+            .unwrap_or_else(|(_, error, _)| panic!("test hash publication refused: {error:?}"));
         drop(prepared.publish());
     }
 }
@@ -2103,9 +2097,11 @@ pub(crate) struct DetachedBlockHashes {
     reserved_tip: Option<usize>,
 }
 impl DetachedBlockHashes {
+    #[cfg(test)]
     pub(crate) fn mode(&self) -> mv::BlockMode {
         self.mode
     }
+    #[cfg(test)]
     pub(crate) fn prefix(&self) -> BlockHashRange<'_> {
         BlockHashRange {
             source: self,
@@ -2113,6 +2109,7 @@ impl DetachedBlockHashes {
             end: self.visible_len,
         }
     }
+    #[cfg(test)]
     pub(crate) fn pending(&self) -> BlockHashRange<'_> {
         BlockHashRange {
             source: self,
@@ -2120,6 +2117,7 @@ impl DetachedBlockHashes {
             end: self.len(),
         }
     }
+    #[cfg(test)]
     pub(crate) fn matches_current(&self, target: &BlockHashes) -> bool {
         self.observe_current(target) == Ok(true)
     }
@@ -2132,6 +2130,7 @@ impl DetachedBlockHashes {
         };
         self.work.try_matches_current(map)
     }
+    #[cfg(test)]
     pub(crate) fn matches_block_predecessor(&self, block: &BlockHashesBlock<'_>) -> bool {
         self.mode == block.mode
             && self
@@ -5411,8 +5410,47 @@ enum ParliamentTimedOvnResourceReservationErrorV1 {
 
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
+///
+/// Storage fields retain one heap allocation across construction, state handoff
+/// and snapshot restoration. Moving a world never moves its complete collection
+/// of storage owners through nested stack frames.
+#[derive(Default)]
+pub struct World(Box<WorldData>);
+
+impl std::ops::Deref for World {
+    type Target = WorldData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for World {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl json::FastJsonWrite for World {
+    fn json_object_field_order() -> Option<&'static [&'static str]> {
+        <WorldData as json::FastJsonWrite>::json_object_field_order()
+    }
+
+    fn write_json(&self, output: &mut String) {
+        self.0.write_json(output);
+    }
+
+    fn write_json_to(
+        &self,
+        output: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.write_json_to(output)
+    }
+}
+
+/// Heap-owned storage fields of [`World`], serialized in canonical schema order.
 #[derive(Default, JsonSerialize)]
-pub struct World {
+pub struct WorldData {
     /// Iroha on-chain parameters.
     pub(crate) parameters: Cell<Parameters>,
     /// Identifications of discovered peers.
@@ -6155,9 +6193,51 @@ pub struct World {
     /// Included for formal correctness, although used only below the block level.
     external_event_buf: Cell<Vec<EventBox>>,
 }
-/// Struct for block's aggregated changes
-#[derive(JsonSerialize)]
+/// One World execution owner, including joint release of every field writer.
 pub struct WorldBlock<'world> {
+    fields: Option<WorldBlockFields<'world>>,
+}
+
+impl<'world> std::ops::Deref for WorldBlock<'world> {
+    type Target = WorldBlockFields<'world>;
+
+    fn deref(&self) -> &Self::Target {
+        self.fields.as_ref().expect("original World block fields")
+    }
+}
+
+impl std::ops::DerefMut for WorldBlock<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.fields.as_mut().expect("original World block fields")
+    }
+}
+
+impl json::FastJsonWrite for WorldBlock<'_> {
+    fn json_object_field_order() -> Option<&'static [&'static str]> {
+        <WorldBlockFields<'_> as json::FastJsonWrite>::json_object_field_order()
+    }
+
+    fn write_json(&self, output: &mut String) {
+        self.fields
+            .as_ref()
+            .expect("original World block fields")
+            .write_json(output);
+    }
+
+    fn write_json_to(
+        &self,
+        output: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.fields
+            .as_ref()
+            .expect("original World block fields")
+            .write_json_to(output)
+    }
+}
+
+/// Original typed World journals, serialized in canonical field order.
+#[derive(JsonSerialize)]
+pub struct WorldBlockFields<'world> {
     /// Dataspace alias catalog used to qualify domain-backed aliases.
     #[norito(skip)]
     pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
@@ -12799,7 +12879,7 @@ mod view_lock_contention_log_tests {
 ///
 /// Merge-ledger finality plumbing is specified in `specs/merge_ledger.md`.
 /// The lane/global reduction metadata exposed by the merge ledger is stored in
-/// [`World::merge_hint_roots`] and [`World::merge_global_state_root`] so queries can
+/// [`WorldData::merge_hint_roots`] and [`WorldData::merge_global_state_root`] so queries can
 /// surface the latest committee commitments.
 pub struct State {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
@@ -20392,7 +20472,7 @@ impl World {
             .map(IntoKeyValue::into_key_value)
             .collect();
         let nfts = nfts.into_iter().map(IntoKeyValue::into_key_value).collect();
-        let mut world = Self {
+        let mut world = Self(Box::new(WorldData {
             domains,
             domains_by_owner: Storage::default(),
             kaigi_relay_registry: Storage::default(),
@@ -20465,8 +20545,8 @@ impl World {
             governance_last_unlock_sweep_height: Cell::default(),
             governance_unlock_stats: Cell::default(),
             parliament_attempts: Storage::default(),
-            ..Self::new()
-        };
+            ..WorldData::default()
+        }));
         world
             .validate_numeric_asset_invariants()
             .expect("invalid numeric asset state in world constructor");
@@ -21500,11 +21580,11 @@ impl World {
     }
     /// Create struct to apply block's changes
     pub fn block(&self) -> WorldBlock<'_> {
-        build_world_block!(self, block)
+        build_world_block!(self, mv::BlockMode::Ordinary)
     }
     /// Create struct to apply block's changes while reverting changes made in the latest block
     pub fn block_and_revert(&self) -> WorldBlock<'_> {
-        build_world_block!(self, block_and_revert)
+        build_world_block!(self, mv::BlockMode::Replace)
     }
     /// Create a point-in-time view of this world.
     pub fn view(&self) -> WorldView<'_> {
@@ -23855,7 +23935,7 @@ impl<'world> WorldBlock<'world> {
     #[allow(clippy::too_many_lines)]
     pub fn commit(self) {
         // NOTE: intentionally destruct self not to forget commit some fields
-        let Self {
+        let WorldBlockFields {
             // Runtime-only alias context; the canonical stores below carry all
             // persisted effects.
             dataspace_catalog: _,
@@ -24139,7 +24219,7 @@ impl<'world> WorldBlock<'world> {
             merge_global_state_root,
             // Always drop at the block level.
             external_event_buf: _,
-        } = self;
+        } = self.into_fields();
         // IMPORTANT!!! Commit fields in reverse order, this way consistent results are insured
         executor_data_model.commit();
         executor.commit();
@@ -55903,6 +55983,7 @@ impl<'state> StateBlock<'state> {
         };
         let merge_runtime_effects = self.merge_execution_runtime_effects();
         // Outlive the component writers and commit fence, including unwind.
+        let mut hash_refusal_cleanup = None;
         let membership_retirement;
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
@@ -56349,7 +56430,10 @@ impl<'state> StateBlock<'state> {
                 .try_prepare_publication(&state_ref.block_hashes, |_, _| {
                     Ok::<_, std::convert::Infallible>(())
                 })
-                .map_err(|(_, _)| TransactionsBlockError::SnapshotObservationChanged)?;
+                .map_err(|(_, _, cleanup)| {
+                    hash_refusal_cleanup = Some(cleanup);
+                    TransactionsBlockError::SnapshotObservationChanged
+                })?;
             let _view_generation = state_ref.begin_state_view_write();
             let state_write_lock_hold_start = Instant::now();
             let tx_commit_start = Instant::now();
@@ -56563,6 +56647,7 @@ impl<'state> StateBlock<'state> {
             }
         }
         drop(_state_commit_lock);
+        drop(hash_refusal_cleanup);
         drop(membership_retirement);
         drop(hash_retirement);
         Ok(())
