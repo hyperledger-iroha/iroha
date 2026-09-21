@@ -15,7 +15,7 @@ use iroha_data_model::{
     account::{Account, AccountAddress},
     asset::{AssetDefinition, AssetDefinitionId},
     domain::Domain,
-    isi::{InstructionBox, Log},
+    isi::InstructionBox,
     parameter::TransactionParameters,
     prelude::*,
     sns::{NameControllerV1, NameRecordV1},
@@ -26,6 +26,7 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
+use mv::storage::StorageReadOnly as _;
 use std::{
     num::{NonZeroU16, NonZeroU64},
     sync::Arc,
@@ -73,8 +74,13 @@ pub fn create_block<'a>(
         .commit(topology)
         .unpack(|_| {})
         .unwrap();
-    // Verify that transactions are valid (non-fatal in release benches)
-    debug_assert_eq!(block.as_ref().failed_outputs().count(), 0);
+    {
+        let failed_outputs = block.as_ref().failed_outputs().collect::<Vec<_>>();
+        assert!(
+            failed_outputs.is_empty(),
+            "benchmark transactions must execute successfully: {failed_outputs:?}"
+        );
+    }
     (block, state_block)
 }
 fn domain_for_index(domains: &[DomainId], total_items: usize, index: usize) -> Option<&DomainId> {
@@ -123,20 +129,17 @@ pub fn populate_state(
     for account_id in accounts {
         let account = Account::new(account_id.clone());
         instructions.push(Register::account(account).into());
-        let can_unregister_account = Grant::account_permission(
-            CanUnregisterAccount {
-                account: account_id.clone(),
-            },
-            owner_id.clone(),
-        );
-        instructions.push(can_unregister_account.into());
     }
     for (index, asset_definition_id) in asset_definitions.iter().enumerate() {
         let asset_definition = AssetDefinition::numeric(
             asset_definition_id.clone(),
             generated_asset_definition_name(domains.len(), asset_definitions.len(), index),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(
+                domain_for_index(domains, asset_definitions.len(), index)
+                    .expect("benchmark asset has a declared owning domain")
+                    .clone(),
+            ),
         );
         instructions.push(Register::asset_definition(asset_definition).into());
         let can_unregister_asset_definition = Grant::account_permission(
@@ -232,7 +235,7 @@ pub fn restore_every_nth(
                         asset_index,
                     ),
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(domain_id.clone()),
                 );
                 instructions.push(Register::asset_definition(asset_definition).into());
             }
@@ -240,11 +243,7 @@ pub fn restore_every_nth(
     }
     instructions
 }
-pub fn build_state(
-    rt: &tokio::runtime::Handle,
-    account_id: &AccountId,
-    account_private_key: &PrivateKey,
-) -> State {
+pub fn build_state(rt: &tokio::runtime::Handle, account_id: &AccountId) -> State {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query_handle = {
         let _guard = rt.enter();
@@ -253,7 +252,10 @@ pub fn build_state(
     let domain_id: DomainId =
         DomainId::try_new("bench", "universal").expect("valid bench domain id");
     let domain = Domain::new(domain_id.clone()).build(account_id);
-    let state = State::try_new(
+    // Install the fixture's authenticated lane markers and fee-free execution
+    // policy before publishing genesis. A plain production constructor expects
+    // its caller to supply those startup inputs and funded fee accounts.
+    let state = State::new_for_testing(
         World::with(
             [domain],
             [Account::new(account_id.clone()).build(account_id)],
@@ -261,43 +263,19 @@ pub fn build_state(
         ),
         Arc::clone(&kura),
         query_handle,
-        #[cfg(feature = "telemetry")]
-        <_>::default(),
-    )
-    .expect("benchmark State startup must validate");
+    );
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     {
-        let network_id = *state.network_id_ref();
-        let transaction = TransactionBuilder::new(
-            network_id,
-            account_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, "init".to_string())])
-        .sign(account_private_key);
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.view();
-            let params = state_view.world.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let crypto_cfg = state.crypto();
-        let unverified_block = BlockBuilder::new(vec![
-            AcceptedTransaction::accept(
-                transaction,
-                &network_id,
-                max_clock_drift,
-                tx_limits,
-                crypto_cfg.as_ref(),
-            )
-            .unwrap(),
-        ])
-        .chain(0, state.view().latest_block().as_deref())
-        .sign(account_private_key)
-        .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header());
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).expect("positive genesis height"),
+            None,
+            None,
+            0,
+            0,
+        ));
         state_block.world.parameters.transaction = TransactionParameters::with_max_signatures(
             NonZeroU64::MAX,
             NonZeroU64::MAX,
@@ -310,6 +288,21 @@ pub fn build_state(
         state_block.world.parameters.executor.memory =
             NonZeroU64::new(iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES)
                 .expect("ABI heap window is non-zero");
+        // The larger fixture registers 1,000 accounts and asset definitions.
+        // Retain metering with an explicit allowance for that measured workload.
+        state_block
+            .world
+            .parameters
+            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                iroha_data_model::parameter::CustomParameter::new(
+                    iroha_data_model::parameter::CustomParameterId::new(
+                        "ivm_gas_limit_per_block"
+                            .parse()
+                            .expect("gas parameter name"),
+                    ),
+                    iroha_primitives::json::Json::new(64_000_000_u64),
+                ),
+            ));
         let mut state_transaction = state_block.transaction();
         let path_to_executor =
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/executor.to");
@@ -321,21 +314,41 @@ pub fn build_state(
             let _ = Upgrade::new(executor).execute(account_id, &mut state_transaction);
         }
         state_transaction.apply();
-        let committed_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {})
-            .commit_unchecked()
-            .unpack(|_| {});
-        let _ = state_block.apply_without_execution(&committed_block, Vec::new());
-        state_block.commit().unwrap();
-        let block_arc = Arc::new(committed_block.into());
-        kura.store_block(block_arc)
-            .expect("store block in bench setup");
+        state_block
+            .commit_world_overlay_for_testing()
+            .expect("install initial benchmark parameters and executor");
     }
     state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish authenticated benchmark predecessor");
+    state
 }
-/// Bootstrap synthetic benchmark domains and their active SNS leases in state.
-pub fn seed_benchmark_domains(state: &mut State, domains: &[DomainId], owner_id: &AccountId) {
+/// Bootstrap benchmark domains, SNS leases and exact account-removal permissions.
+///
+/// Universal accounts do not give their registrant ownership. The fixture supplies
+/// explicit removal authority before measuring account registration and deletion.
+pub fn seed_benchmark_domains(
+    state: &mut State,
+    domains: &[DomainId],
+    accounts: &[AccountId],
+    owner_id: &AccountId,
+) {
+    let mut permissions = state
+        .world
+        .account_permissions_mut_for_testing()
+        .view()
+        .get(owner_id)
+        .cloned()
+        .unwrap_or_default();
+    permissions.extend(accounts.iter().map(|account| {
+        Permission::from(CanUnregisterAccount {
+            account: account.clone(),
+        })
+    }));
+    state
+        .world
+        .account_permissions_mut_for_testing()
+        .insert(owner_id.clone(), permissions);
     let address =
         AccountAddress::from_account_id(owner_id).expect("benchmark owner id is addressable");
     for domain_id in domains {
@@ -400,7 +413,7 @@ mod tests {
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         // Should not panic even if executor bytecode is missing or invalid
-        let state = build_state(rt.handle(), &account_id, keypair.private_key());
+        let state = build_state(rt.handle(), &account_id);
         let view = state.view();
         assert_eq!(view.height(), 1);
         assert!(view.latest_block().is_some());
@@ -410,9 +423,9 @@ mod tests {
         let rt = Runtime::new().unwrap();
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let mut state = build_state(rt.handle(), &account_id, keypair.private_key());
+        let mut state = build_state(rt.handle(), &account_id);
         let (domain_ids, account_ids, asset_definition_ids) = generate_ids(1, 1, 1);
-        seed_benchmark_domains(&mut state, &domain_ids, &account_id);
+        seed_benchmark_domains(&mut state, &domain_ids, &account_ids, &account_id);
         let (peer_public_key, peer_private_key) =
             KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
         let topology = Topology::new(vec![PeerId::new(peer_public_key)]);

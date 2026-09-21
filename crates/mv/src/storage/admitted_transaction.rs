@@ -16,28 +16,36 @@ use concread::bptree::{
 };
 
 // Keep this as the LAST Transaction field, after both checkpoints and touches.
-// On ordinary abort it observes successful cleanup; on an earlier destructor's
-// unwind it poisons the original parent even if the caller catches that panic.
+// Transaction::drop records whether unwinding began before field cleanup. The
+// original checkpoints can still roll back a failed ordinary child. A new cleanup
+// panic poisons the parent; an already armed edit/apply failure stays sticky.
 pub(super) struct ParentFailure<'block> {
     failed: &'block mut bool,
+    unwind_before_cleanup: bool,
 }
 impl<'block> ParentFailure<'block> {
-    fn new(failed: &'block mut bool) -> Self {
-        Self { failed }
+    pub(super) fn new(failed: &'block mut bool) -> Self {
+        Self {
+            failed,
+            unwind_before_cleanup: false,
+        }
     }
-    fn arm(&mut self) {
+    pub(super) fn begin_cleanup(&mut self) {
+        self.unwind_before_cleanup = std::thread::panicking();
+    }
+    pub(super) fn arm(&mut self) {
         *self.failed = true;
     }
-    fn resolve(&mut self) {
+    pub(super) fn resolve(&mut self) {
         *self.failed = false;
     }
-    fn is_failed(&self) -> bool {
+    pub(super) fn is_failed(&self) -> bool {
         *self.failed
     }
 }
 impl Drop for ParentFailure<'_> {
     fn drop(&mut self) {
-        if std::thread::panicking() {
+        if std::thread::panicking() && !self.unwind_before_cleanup {
             *self.failed = true;
         }
     }
@@ -156,7 +164,7 @@ where
             .len();
     }
 
-    fn arm(&mut self) {
+    pub(super) fn arm(&mut self) {
         self.failed = true;
         self.parent_failure
             .as_mut()
@@ -164,7 +172,7 @@ where
             .arm();
     }
 
-    fn resolve(&mut self) {
+    pub(super) fn resolve(&mut self) {
         self.failed = false;
         self.parent_failure
             .as_mut()
@@ -348,15 +356,19 @@ where
             &mut self.touched,
             TransactionTouches::Admitted(SortedTouches::new()),
         ));
-        self.blocks
+        let current_retirement = self
+            .blocks
             .take()
             .expect("original current checkpoint")
-            .apply();
-        self.revert
+            .apply_retaining();
+        let undo_retirement = self
+            .revert
             .take()
             .expect("original undo checkpoint")
-            .apply();
+            .apply_retaining();
         *self.parent_dirty = self.dirty;
+        drop(current_retirement);
+        drop(undo_retirement);
         self.resolve();
     }
 }

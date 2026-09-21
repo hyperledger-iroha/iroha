@@ -2,6 +2,8 @@
 #![allow(clippy::disallowed_types)]
 mod archive_capture;
 mod archive_index;
+#[cfg(test)]
+mod fixture_write_tests;
 pub use archive_capture::ArchiveCaptureWait;
 pub mod cursor;
 pub mod index_status;
@@ -20,13 +22,10 @@ pub mod stream_token_custody;
 use crate::state::{WorldReadOnly, WorldStateSnapshot};
 use iroha_data_model::block::consensus::EvidenceRecord;
 use mv::storage::StorageReadOnly;
+#[cfg(any(test, feature = "iroha-core-tests"))]
 use std::{
     convert::TryFrom,
     num::{NonZeroU64, NonZeroUsize},
-    sync::{
-        OnceLock,
-        atomic::{AtomicUsize, Ordering},
-    },
 };
 /// Return the number of persisted evidence entries currently stored in WSV.
 pub fn evidence_count(state: &impl WorldStateSnapshot) -> usize {
@@ -94,12 +93,7 @@ mod tests {
         assert_eq!(third_u64.get(), 2);
     }
 }
-fn next_test_block_height() -> NonZeroUsize {
-    static NEXT_HEIGHT: OnceLock<AtomicUsize> = OnceLock::new();
-    let next = NEXT_HEIGHT.get_or_init(|| AtomicUsize::new(0));
-    let height = next.fetch_add(1, Ordering::SeqCst).saturating_add(1);
-    NonZeroUsize::new(height).expect("height non-zero")
-}
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn next_height_for_state(state: &mut crate::state::State) -> (NonZeroUsize, NonZeroU64) {
     let next = state.transactions.latest_height().saturating_add(1);
     let nz_usize = NonZeroUsize::new(next).expect("height non-zero");
@@ -107,23 +101,18 @@ fn next_height_for_state(state: &mut crate::state::State) -> (NonZeroUsize, NonZ
         NonZeroU64::new(u64::try_from(next).expect("height fits u64")).expect("height non-zero");
     (nz_usize, nz_u64)
 }
-// --- Test utilities (non-consensus; for integration tests) ---
+// Query fixtures publish only World changes. They create neither finalized
+// block hashes nor transaction membership, and publication failures are fatal.
 /// Insert a verifying key record directly into WSV for tests.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn insert_verifying_key_record_for_test(
     state: &mut crate::state::State,
     id: iroha_data_model::proof::VerifyingKeyId,
     rec: iroha_data_model::proof::VerifyingKeyRecord,
 ) {
     let circuit_key = (rec.circuit_id.clone(), rec.version);
-    let height = next_test_block_height();
-    let height_u64 = u64::try_from(usize::from(height)).expect("height fits in u64");
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(height_u64).expect("height non-zero"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let (_, height_u64) = next_height_for_state(state);
+    let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world.verifying_keys.insert(id.clone(), rec);
@@ -132,13 +121,13 @@ pub fn insert_verifying_key_record_for_test(
     }
     stx.apply();
     block
-        .transactions
-        .insert_block(std::collections::HashSet::new(), height);
-    let _ = block.commit();
+        .commit_world_overlay_for_testing()
+        .expect("commit query fixture world overlay");
 }
 /// Insert a consensus evidence record directly into WSV for tests.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn insert_evidence_record_for_test(state: &mut crate::state::State, record: EvidenceRecord) {
-    let (height, height_u64) = next_height_for_state(state);
+    let (_, height_u64) = next_height_for_state(state);
     let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -146,25 +135,18 @@ pub fn insert_evidence_record_for_test(state: &mut crate::state::State, record: 
     stx.world.consensus_evidence.insert(key, record);
     stx.apply();
     block
-        .transactions
-        .insert_block(std::collections::HashSet::new(), height);
-    let _ = block.commit();
+        .commit_world_overlay_for_testing()
+        .expect("commit query fixture world overlay");
 }
 /// Insert a contract instance record directly into WSV for tests.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn insert_contract_instance_for_test(
     state: &mut crate::state::State,
     contract_address: iroha_data_model::smart_contract::ContractAddress,
     code_hash: iroha_crypto::Hash,
 ) {
-    let height = next_test_block_height();
-    let height_u64 = u64::try_from(usize::from(height)).expect("height fits in u64");
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(height_u64).expect("height non-zero"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let (_, height_u64) = next_height_for_state(state);
+    let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world
@@ -172,29 +154,29 @@ pub fn insert_contract_instance_for_test(
         .insert(contract_address, code_hash);
     stx.apply();
     block
-        .transactions
-        .insert_block(std::collections::HashSet::new(), height);
-    let _ = block.commit();
+        .commit_world_overlay_for_testing()
+        .expect("commit query fixture world overlay");
 }
 /// Insert a proof record directly into WSV for tests.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn insert_proof_record_for_test(
     state: &mut crate::state::State,
     id: iroha_data_model::proof::ProofId,
     mut rec: iroha_data_model::proof::ProofRecord,
 ) {
     rec.id = id;
-    let (height, height_u64) = next_height_for_state(state);
+    let (_, height_u64) = next_height_for_state(state);
     let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world.insert_proof_record(rec);
     stx.apply();
     block
-        .transactions
-        .insert_block(std::collections::HashSet::new(), height);
-    block.commit().expect("commit test proof record block");
+        .commit_world_overlay_for_testing()
+        .expect("commit query fixture proof record");
 }
 /// Insert proof TLV tags directly into WSV indexes for tests.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn insert_proof_tags_for_test(
     state: &mut crate::state::State,
     id: iroha_data_model::proof::ProofId,
@@ -202,7 +184,7 @@ pub fn insert_proof_tags_for_test(
 ) {
     tags.sort_unstable();
     tags.dedup();
-    let (height, height_u64) = next_height_for_state(state);
+    let (_, height_u64) = next_height_for_state(state);
     let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -223,18 +205,17 @@ pub fn insert_proof_tags_for_test(
     }
     stx.apply();
     block
-        .transactions
-        .insert_block(std::collections::HashSet::new(), height);
-    block.commit().expect("commit test proof tag block");
+        .commit_world_overlay_for_testing()
+        .expect("commit query fixture proof tags");
 }
 /// Insert a governance proposal record for tests.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn insert_gov_proposal_for_test(
     state: &mut crate::state::State,
     id: [u8; 32],
     rec: crate::state::GovernanceProposalRecord,
 ) {
-    use std::collections::HashSet;
-    let (next_height, next_height_u64) = next_height_for_state(state);
+    let (_, next_height_u64) = next_height_for_state(state);
     let header = iroha_data_model::block::BlockHeader::new(next_height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -242,38 +223,41 @@ pub fn insert_gov_proposal_for_test(
         .put_governance_proposal(id, rec)
         .expect("query-test proposal must satisfy first-release JSON bounds");
     stx.apply();
-    block.transactions.insert_block(HashSet::new(), next_height);
-    block.commit().expect("commit test block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit query fixture governance overlay");
 }
 /// Insert a governance referendum record for tests.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn insert_gov_referendum_for_test(
     state: &mut crate::state::State,
     id: String,
     rec: crate::state::GovernanceReferendumRecord,
 ) {
-    use std::collections::HashSet;
-    let (next_height, next_height_u64) = next_height_for_state(state);
+    let (_, next_height_u64) = next_height_for_state(state);
     let header = iroha_data_model::block::BlockHeader::new(next_height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world.governance_referenda.insert(id, rec);
     stx.apply();
-    block.transactions.insert_block(HashSet::new(), next_height);
-    block.commit().expect("commit test block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit query fixture governance overlay");
 }
 /// Insert governance locks for a referendum for tests.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub fn insert_gov_locks_for_test(
     state: &mut crate::state::State,
     id: String,
     locks: crate::state::GovernanceLocksForReferendum,
 ) {
-    use std::collections::HashSet;
-    let (next_height, next_height_u64) = next_height_for_state(state);
+    let (_, next_height_u64) = next_height_for_state(state);
     let header = iroha_data_model::block::BlockHeader::new(next_height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world.put_governance_locks(id, locks);
     stx.apply();
-    block.transactions.insert_block(HashSet::new(), next_height);
-    block.commit().expect("commit test block");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit query fixture governance overlay");
 }

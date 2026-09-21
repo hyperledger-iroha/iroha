@@ -90,13 +90,6 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     // Build a NewBlock with both transactions
     let tx1 = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
     let tx2 = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
-    let new_block = iroha_core::block::BlockBuilder::new_with_time_source(
-        vec![tx1.clone(), tx2.clone()],
-        block_time_source(),
-    )
-    .chain(0, None)
-    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
-    .unpack(|_| {});
     // Run sequential apply
     let world_seq = build_world();
     let mut state_seq = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
@@ -170,17 +163,30 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         amx_per_syscall_ns: iroha_config::parameters::defaults::pipeline::AMX_PER_SYSCALL_NS,
     };
     state_seq.set_pipeline(cfg_seq);
+    let genesis = state_seq
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish sequential genesis");
+    let new_block = iroha_core::block::BlockBuilder::new_with_time_source(
+        vec![tx1.clone(), tx2.clone()],
+        block_time_source(),
+    )
+    .chain(0, Some(&genesis))
+    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
+    .unpack(|_| {});
+
     let mut sb_seq = state_seq.block(new_block.header());
     let vb_seq = new_block
         .clone()
         .validate_and_record_transactions(&mut sb_seq)
         .unpack(|_| {});
-    sb_seq.commit().unwrap();
+    state_seq
+        .commit_executed_block_for_testing(sb_seq, vb_seq.clone().commit_unchecked().unpack(|_| {}))
+        .expect("publish sequential effects");
     // Run parallel-apply (skeleton path)
     let world_par = build_world();
     let mut state_par = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
         world_par,
-        kura,
+        iroha_core::kura::Kura::blank_kura_for_testing(),
         query,
         ChainId::from("chain"),
         network_id,
@@ -249,11 +255,17 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         amx_per_syscall_ns: iroha_config::parameters::defaults::pipeline::AMX_PER_SYSCALL_NS,
     };
     state_par.set_pipeline(cfg_par);
+    let parallel_genesis = state_par
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish parallel genesis");
+    assert_eq!(parallel_genesis.hash(), genesis.hash());
     let mut sb_par = state_par.block(new_block.header());
     let vb_par = new_block
         .validate_and_record_transactions(&mut sb_par)
         .unpack(|_| {});
-    sb_par.commit().unwrap();
+    state_par
+        .commit_executed_block_for_testing(sb_par, vb_par.clone().commit_unchecked().unpack(|_| {}))
+        .expect("publish parallel effects");
     // Compare results order and kinds
     let seq_ok: Vec<_> = vb_seq
         .as_ref()
@@ -357,6 +369,9 @@ fn run_block_and_events(
     let mut cfg = state.view().pipeline().clone();
     cfg.parallel_apply = parallel_apply;
     state.set_pipeline(cfg);
+    let genesis = state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish parity genesis");
     // Build a signed block from txs
     let block: SignedBlock = {
         let accepted: Vec<_> = txs
@@ -364,7 +379,7 @@ fn run_block_and_events(
             .map(|tx| iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
             .collect();
         BlockBuilder::new_with_time_source(accepted, block_time_source())
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(0, Some(&genesis))
             .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
             .unpack(|_| {})
             .into()
@@ -378,8 +393,9 @@ fn run_block_and_events(
         "parity fixture transactions failed: {errors:?}"
     );
     let cb = vb.commit_unchecked().unpack(|_| {});
-    let events = sb.apply_without_execution(&cb, Vec::new());
-    sb.commit().expect("commit parity fixture state");
+    let events = state
+        .commit_executed_block_for_testing(sb, cb)
+        .expect("commit parity fixture state");
     (events, state)
 }
 // event_list_json moved to snapshot helpers; removed.

@@ -396,7 +396,7 @@ state_test! { sync state_block_axt_policy_snapshot_reads_block_scope
     let_row! { entry = AxtPolicyEntry { manifest_root: [0x66; 32], target_lane: LaneId::new(2), active_handle_era: 5, next_handle_counter: 4, current_slot: 99, } };
     {
         let_row! { lane_catalog = LaneCatalog::new( nonzero!(3_u32), vec![LaneConfig { id: entry.target_lane, dataspace_id: dsid, alias: "block-scope-axt".into(), ..LaneConfig::default() }], ) .expect("block-scope AXT lane catalog") };
-        install_test_nexus_lane_catalog(state.nexus.get_mut(), lane_catalog);
+        configure_axt_fixture_lane_catalog(&mut state, lane_catalog);
     }
     let mut block = state.block(header);
     block.world.axt_policies.insert(dsid, entry);
@@ -443,7 +443,7 @@ state_test! { sync axt_replay_ledger_overlay_applies
         Some(record)
     );
 }
-state_test! { sync ordinary_block_apply_defers_axt_replay_pruning_until_commit
+state_test! { sync ordinary_block_seals_axt_replay_pruning_before_atomic_commit
     let dsid = DataSpaceId::new(42);
     let lane = LaneId::new(0);
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
@@ -455,6 +455,7 @@ state_test! { sync ordinary_block_apply_defers_axt_replay_pruning_until_commit
     state
         .set_nexus(nexus)
         .expect("apply Nexus config for replay ledger pruning test");
+    state.seed_genesis_for_testing().expect("publish actual genesis before replay pruning");
     let key = AxtHandleReplayKey::from_parts(
         dsid,
         axt_replay_incarnation_for_test(0xAB),
@@ -478,22 +479,22 @@ state_test! { sync ordinary_block_apply_defers_axt_replay_pruning_until_commit
     let mut state_block = state.block(signed.header());
     let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
     let committed = valid.commit_unchecked().unpack(|_| {});
-    let _ = state_block.apply_without_execution(&committed, Vec::new());
-    assert_eq!(
-        state_block.world.axt_replay_ledger.get(&key).cloned(),
-        Some(stale),
-        "ordinary block apply should leave AXT replay pruning to commit"
-    );
-    // The recovery checkpoint must describe commit's final surface without
-    // moving replay pruning ahead of the existing commit boundary.
-    let staged_bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(&state_block);
-    let staged_hash = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
-    assert_eq!(
-        staged_hash,
-        iroha_crypto::Hash::new(&staged_bytes),
-        "staged checkpoint streaming hash must match its canonical bytes"
-    );
-    state_block.commit().expect("ordinary block should commit");
+    let mut staged_snapshot = None;
+    state.commit_executed_block_with_precommit_for_testing(state_block, committed, |staged| {
+        assert_eq!(
+            state.world.axt_replay_ledger.view().get(&key).cloned(),
+            Some(stale),
+            "preparing the sealed overlay must not mutate committed replay state"
+        );
+        assert!(staged.world.axt_replay_ledger.get(&key).is_none(),
+            "the final publication seal includes deterministic replay pruning");
+        let bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(staged);
+        let hash = crate::snapshot::canonical_staged_state_snapshot_hash(staged);
+        assert_eq!(hash, iroha_crypto::Hash::new(&bytes),
+            "staged checkpoint streaming hash matches its canonical bytes");
+        staged_snapshot = Some((bytes, hash));
+    }).expect("publish actual outputs and commit deferred replay pruning");
+    let (staged_bytes, staged_hash) = staged_snapshot.expect("authorized precommit observation");
     assert!(
         state.world.axt_replay_ledger.view().get(&key).is_none(),
         "ordinary block commit should prune expired AXT replay entries"
@@ -542,6 +543,7 @@ state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    state.seed_genesis_for_testing().expect("publish genesis before ordinary DA carrier");
     let authorization = crate::da::signed_test_ingest_authorization(
         *state.network_id_ref(), &owner_keypair, LaneId::SINGLE, 1, 0, 1,
     );
@@ -554,13 +556,14 @@ state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying
     );
     let signer = crate::state::checked_keypair();
     let_row! { signed: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
-        .chain(0, None)
+        .chain(0, state.view().latest_block().as_deref())
         .with_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])))
         .sign(signer.private_key()).unpack(|_| {}).into() };
     let mut block = state.block(signed.header());
     let valid = ValidBlock::validate_unchecked(signed, &mut block).unpack(|_| {});
     let committed = valid.commit_unchecked().unpack(|_| {});
-    let _ = block.apply_without_execution(&committed, Vec::new());
+    let mut observed = None;
+    state.commit_executed_block_with_precommit_for_testing(block, committed, |block| {
     let writes = block.pending_da_pin_intents.as_ref()
         .expect("real block application stages its quota bundle").quota_writes.clone();
     assert!(!writes.is_empty(), "signed nonempty DA bundle must charge quota");
@@ -572,12 +575,15 @@ state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying
         .expect("unprojected contract storage");
     let projected_storage = block.json_serialize_committed_smart_contract_state()
         .expect("pending quota charges require an exact projection");
-    let staged_bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(&block);
-    let staged_hash = crate::snapshot::canonical_staged_state_snapshot_hash(&block);
+    let staged_bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(block);
+    let staged_hash = crate::snapshot::canonical_staged_state_snapshot_hash(block);
     assert_eq!(staged_hash, Hash::new(&staged_bytes));
     assert_eq!(norito::json::to_json(&block.world.smart_contract_state)
         .expect("unchanged contract storage"), before_storage);
-    block.commit().expect("ordinary DA block commits its deferred quota");
+        observed = Some((writes, projected_storage, staged_bytes, staged_hash));
+    }).expect("ordinary DA block commits its actual outputs and deferred quota");
+    let (writes, projected_storage, staged_bytes, staged_hash) = observed
+        .expect("authorized precommit quota observation");
     assert_eq!(projected_storage, norito::json::to_json(&state.world.smart_contract_state)
         .expect("committed contract storage including exact undo"));
     for (key, value) in &writes {
@@ -687,4 +693,78 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
         Some(1_000),
         "AXT expiry must use the authenticated tip anchor, never height 5 or a stale cached prefix header"
     );
+}
+
+state_test! { consensus_stack axt_post_validation_envelope_replacement_cannot_publish_world_state
+    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+
+    let mut state = blank_test_state();
+    let mut nexus = state.nexus_snapshot();
+    nexus.fees.base_fee = Quantity::zero();
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    state.set_nexus(nexus).expect("install the fixture fee policy");
+    let parent = state
+        .seed_genesis_for_testing()
+        .expect("publish the genuine predecessor");
+    let retained_hash = state.latest_block_hash_fast();
+    let transaction = TransactionBuilder::new(
+        *state.network_id_ref(),
+        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([iroha_data_model::isi::Log::new(
+        iroha_data_model::level::Level::INFO,
+        "validate the AXT envelope source".to_owned(),
+    )])
+    .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+    let mut signed: SignedBlock = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(
+        Cow::Owned(transaction),
+    )])
+    .chain(0, Some(&parent))
+    .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+    .unpack(|_| {})
+    .into();
+    let mut staged = state.block(signed.header());
+    ValidBlock::execute_block_outputs_for_test(&mut signed, &mut staged, None)
+        .expect("execute and seal the genuine source");
+    assert!(signed.output_error(0).is_none());
+    let outputs = signed.execution_outputs().to_vec();
+    let snapshot = signed.axt_policy_snapshot().cloned().unwrap_or_default();
+    let envelope = AxtEnvelopeRecord {
+        binding: AxtBinding::new([0xB7; 32]),
+        lane: LaneId::SINGLE,
+        descriptor: AxtDescriptor {
+            dsids: vec![DataSpaceId::UNIVERSAL],
+            touches: Vec::new(),
+        },
+        touches: Vec::new(),
+        proofs: Vec::new(),
+        handles: Vec::new(),
+        commit_height: 2,
+    };
+    signed
+        .set_execution_outputs(
+            outputs,
+            signed.committed_fragment_count().unwrap_or(0),
+            Default::default(),
+            vec![envelope],
+            snapshot,
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+        .expect("structurally attach a post-validation envelope");
+    let committed = ValidBlock::new_unverified_for_tests(signed)
+        .commit_unchecked()
+        .unpack(|_| {});
+    let error = state
+        .commit_executed_block_for_testing(staged, committed)
+        .expect_err("replacement envelopes cannot reuse the original execution seal");
+    assert_eq!(error, "execution output attachment changed after its seal");
+    assert_eq!(state.latest_block_hash_fast(), retained_hash);
+    assert_eq!(state.committed_height(), 1);
+    assert!(state.world.axt_replay_ledger.view().is_empty());
+    assert!(state.kura.v2_finality_artifact(2).unwrap().is_none());
 }

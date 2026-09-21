@@ -919,8 +919,8 @@ CONTROLS = [{'id': 'NS001',
   'path': 'crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
   'kind': 'method',
   'symbol': 'ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura',
-  'old': 'if include_lane_lifecycle {',
-  'new': 'if false {',
+  'old': '} else if include_lane_lifecycle {',
+  'new': '} else if false {',
   'reason': 'Fixture uses lifecycle-backed Kura when requested.'},
  {'id': 'NS099',
   'path': 'crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
@@ -951,6 +951,17 @@ def test_rehashed_native_settlement_owner_guards_fail_closed(tmp_path, contract,
     paths = {path for path, _, _, _ in bindings}
     paths.add(FIXTURE)
     paths.add(native.NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE.as_posix())
+    # The shared predicate also authenticates its delegated canonical-history
+    # regressions. Copy their actual declared providers and reviewed includes
+    # before establishing the positive baseline for each semantic mutation.
+    paths.update(str(relative) for relative in native.NATIVE_MERGE_MANIFEST_SOURCE_RELATIVES
+                 if relative.suffix == ".rs")
+    from sumeragi_v2_multilane_reviewed_rust_source import _expanded_source_manifest_paths
+    closure_errors = []
+    paths = _expanded_source_manifest_paths({Path(path) for path in paths},
+                                           root=ROOT, errors=closure_errors)
+    assert closure_errors == [], closure_errors
+    paths = {relative.as_posix() for relative in paths}
     for relative in paths:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)

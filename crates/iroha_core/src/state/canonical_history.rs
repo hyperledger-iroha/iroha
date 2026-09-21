@@ -57,11 +57,11 @@ pub(super) fn committed_block_from_kura(
 #[derive(Clone, Copy)]
 pub struct CanonicalHistorySource<'a> {
     kura: &'a Kura,
-    block_hashes: &'a [HashOf<BlockHeader>],
+    block_hashes: &'a dyn super::BlockHashRead,
 }
 
 impl<'a> CanonicalHistorySource<'a> {
-    pub(super) fn new(kura: &'a Kura, block_hashes: &'a [HashOf<BlockHeader>]) -> Self {
+    pub(super) fn new(kura: &'a Kura, block_hashes: &'a dyn super::BlockHashRead) -> Self {
         Self { kura, block_hashes }
     }
 
@@ -187,7 +187,7 @@ impl<'a> CanonicalHistorySource<'a> {
         height: NonZeroUsize,
         before_read: impl FnOnce(u64) -> Result<(), QueryExecutionFail>,
     ) -> Result<Arc<SignedBlock>, QueryExecutionFail> {
-        Self::new(kura, hashes).executed_block(height, before_read)
+        CanonicalHistorySource::new(kura, &hashes).executed_block(height, before_read)
     }
 
     /// Iterate every committed slot from `start` through this source's tip.

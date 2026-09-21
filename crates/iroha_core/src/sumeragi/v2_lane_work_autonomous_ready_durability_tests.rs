@@ -2041,15 +2041,30 @@ fn autonomous_producer_retries_after_predecessor_application_receipt_arrives() {
     let dataspace_id = DataSpaceId::new(7);
     let kura =
         locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY);
-    let (mut parent, keys) = fixture_at_height_inner_with_kura_and_local_index(
+    let (parent, keys) = fixture_at_height_inner_with_initial_lane(
         wire::ConsensusMode::Permissioned,
         1,
         true,
+        default_lane_work_test_limits(),
         Arc::clone(&kura),
         None,
         false,
+        wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        },
+        Some(LaneConfig {
+            id: lane_id,
+            dataspace_id,
+            alias: "independent-lane".to_owned(),
+            ..LaneConfig::default()
+        }),
+        None,
     );
-    enable_single_custom_lane_nexus(&mut parent, &keys, lane_id, dataspace_id);
     let (mut predecessor_block, provisional_proposal) =
         planned_lane_candidate_block_for_route_at_view(&parent, &keys, 0, lane_id, dataspace_id);
     let predecessor_ownership = ownership_from_proposal(&provisional_proposal);

@@ -9,7 +9,7 @@ use super::*;
 /// Additional new/retired pointers for a path with this many branch levels.
 /// Path and one sibling per level contribute at most 2h+1 new nodes. Retiring
 /// those originals, h merged nodes and one demoted root needs at most 3h+2.
-/// A root leaf only clones/retires itself, including an absent-key removal.
+/// A populated root leaf only clones/retires itself; absent removal needs no slots.
 /// The planner and executor use this same checked bound.
 pub(crate) fn remove_tracking_slots(height: usize) -> Option<[usize; 2]> {
     if height == 0 {
@@ -22,16 +22,13 @@ pub(crate) fn remove_tracking_slots(height: usize) -> Option<[usize; 2]> {
 }
 
 impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M> {
-    /// Preserve canonical clone/shrink/absent behavior in either original mode.
-    /// Refusal precedes node allocation/mutation; the caller keeps failure armed
-    /// through owned-input, provider and checkpoint cleanup even after success.
+    /// Remove with the original provider after membership and tracking preflight.
+    /// An absent key does not clone or allocate, even with empty fixed buffers.
+    /// As with `try_insert`, the caller retains the edit-failure scope until
+    /// every mutation and unused-funding destructor has completed.
     pub(crate) fn try_remove(&mut self, k: &K) -> Result<Option<V>, ()> {
-        assert!(
-            self.edit_failed,
-            "removal must remain guarded through cleanup"
-        );
-        if !self.remove_tracking_fits(k) {
-            return Err(());
+        if !self.remove_tracking_fits(k)? {
+            return Ok(None);
         }
         let r = match clone_and_remove(
             self.root,
@@ -47,7 +44,7 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M>
                 res
             }
             CRRemoveState::Shrink(res) => {
-                if self_meta!(self.root).is_leaf() {
+                if self_meta_shared!(self.root).is_leaf() {
                     // No action - we have an empty tree.
                     res
                 } else {
@@ -64,7 +61,7 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M>
                 }
             }
             CRRemoveState::CloneShrink(res, mut nnode) => {
-                if self_meta!(nnode).is_leaf() {
+                if self_meta_shared!(nnode).is_leaf() {
                     // The tree is empty, but we cloned the root to get here.
                     mem::swap(&mut self.root, &mut nnode);
                     res
@@ -88,34 +85,44 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M>
         Ok(r)
     }
 
-    fn remove_tracking_fits(&self, key: &K) -> bool {
-        let first = self.first_seen.remaining_capacity();
-        let last = self
-            .last_seen
-            .as_ref()
-            .expect("original retirement buffer")
-            .remaining_capacity();
-        if first.is_none() && last.is_none() {
-            return true;
-        }
+    fn remove_tracking_fits(&self, key: &K) -> Result<bool, ()> {
+        // Read the original path without taking mutable aliases to shared nodes.
+        // Membership is checked before any clone or fixed-buffer requirement.
         let mut node = self.root;
-        let mut height = 0usize;
+        let mut branches = 0usize;
         while !self_meta_shared!(node).is_leaf() {
-            let Some(next) = height.checked_add(1) else {
-                return false;
-            };
-            if next >= usize::BITS as usize {
-                return false;
+            branches = branches.checked_add(1).ok_or(())?;
+            if branches >= usize::BITS as usize {
+                return Err(());
             }
-            height = next;
             let branch = branch_ref_shared!(node, K, V, M::Charge);
             node = branch.get_idx_unchecked(branch.locate_node(key));
         }
-        let Some([new, retired]) = remove_tracking_slots(height) else {
-            return false;
-        };
-        first.is_none_or(|remaining| remaining >= new)
-            && last.is_none_or(|remaining| remaining >= retired)
+        if leaf_ref_shared!(node, K, V, M::Charge)
+            .get_ref(key)
+            .is_none()
+        {
+            return Ok(false);
+        }
+        // At most b+1 original path nodes and b adjacent siblings are cloned.
+        // Each clone retires its source; each of b rebalances can additionally
+        // retire one merged node, and root demotion retires one final branch.
+        // Removal never splits or allocates another kind of node.
+        let [new_required, retired_required] = remove_tracking_slots(branches).ok_or(())?;
+        if self
+            .first_seen
+            .remaining_capacity()
+            .is_some_and(|n| n < new_required)
+            || self
+                .last_seen
+                .as_ref()
+                .expect("original retirement buffer")
+                .remaining_capacity()
+                .is_some_and(|n| n < retired_required)
+        {
+            return Err(());
+        }
+        Ok(true)
     }
 }
 

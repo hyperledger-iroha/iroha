@@ -24,8 +24,8 @@ fn opaque_asset_transfer_with_universal_and_private_account_scope_uses_default_r
         vec![InstructionBox::from(transfer)],
     );
     let mut state = blank_state();
-    state.nexus.write().dataspace_catalog = dataspace_catalog;
-    state.nexus.write().lane_catalog = lane_catalog;
+    state.set_dataspace_catalog_for_testing(dataspace_catalog);
+    install_router_lane_catalog(&mut state, lane_catalog);
     let sender = Account::new(sender_id.clone())
         .with_uaid(Some(uaid))
         .build(&sender_id);
@@ -133,8 +133,8 @@ fn scoped_permission_route_remains_coordinator_with_other_private_targets() {
             .expect("permission route should coordinate the native AMX plan"),
         expected,
     );
-    let state = blank_state();
-    install_router_nexus(&state, &router);
+    let mut state = blank_state();
+    install_router_nexus(&mut state, &router);
     assert_eq!(
         router
             .try_route_plan_with_state(&tx, &state)
@@ -314,8 +314,8 @@ fn strict_scoped_permission_decision_apis_match_full_plan_rejection() {
         Err(expected_error())
     );
 
-    let state = blank_state();
-    install_router_nexus(&state, &router);
+    let mut state = blank_state();
+    install_router_nexus(&mut state, &router);
     let state_view = state.view();
     assert_eq!(
         router.try_route_with_view(&tx, &state_view),
@@ -382,11 +382,11 @@ fn explicit_universal_target_is_not_rewritten_by_authority_account_rule() {
             DomainId::try_new("universal-write", "universal").expect("domain id"),
         )))],
     );
-    let state = state_with_account_scope_entries(
+    let mut state = state_with_account_scope_entries(
         &[(authority_id, account_scope_entry(private_dataspace))],
         dataspace_catalog.clone(),
     );
-    install_router_nexus(&state, &router);
+    install_router_nexus(&mut state, &router);
     let expected_error = RoutingResolveError::LaneDataspaceMismatch {
         lane_id: private_lane,
         lane_dataspace_id: private_dataspace,
@@ -458,8 +458,8 @@ fn opaque_asset_transfer_with_multiple_private_account_bindings_uses_default_rou
         vec![InstructionBox::from(transfer)],
     );
     let mut state = blank_state();
-    state.nexus.write().dataspace_catalog = dataspace_catalog;
-    state.nexus.write().lane_catalog = lane_catalog;
+    state.set_dataspace_catalog_for_testing(dataspace_catalog);
+    install_router_lane_catalog(&mut state, lane_catalog);
     let sender = Account::new(sender_id.clone())
         .with_uaid(Some(uaid))
         .build(&sender_id);
@@ -619,8 +619,8 @@ fn mixed_native_and_contract_batch_preserves_all_dataspace_targets() {
             .expect("mixed batch must retain native and contract targets"),
         expected
     );
-    let state = blank_state();
-    install_router_nexus(&state, &router);
+    let mut state = blank_state();
+    install_router_nexus(&mut state, &router);
     let state_view = state.view();
     assert_eq!(
         evaluate_policy_plan_with_catalog_and_world(
@@ -681,8 +681,8 @@ fn account_permission_and_contract_batch_preserves_all_dataspace_targets() {
     );
     let mut holder_scope = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
     holder_scope.ensure_dataspace(holder_dataspace);
-    let state = state_with_account_scope_entries(&[(holder_id, holder_scope)], catalog.clone());
-    install_router_nexus(&state, &router);
+    let mut state = state_with_account_scope_entries(&[(holder_id, holder_scope)], catalog.clone());
+    install_router_nexus(&mut state, &router);
     let expected = RoutingPlan::native_amx(
         RoutingDecision::new(LaneId::new(2), holder_dataspace),
         vec![
@@ -812,8 +812,8 @@ fn primary_alias_compare_and_set_across_dataspaces_builds_native_amx_plan() {
             .expect("alias ordering must not change the native AMX route"),
         expected_plan
     );
-    let state = blank_state();
-    install_router_nexus(&state, &router);
+    let mut state = blank_state();
+    install_router_nexus(&mut state, &router);
     assert_eq!(
         router
             .try_route_plan_with_view(&tx, &state.view())
@@ -1493,7 +1493,7 @@ fn account_rule_takes_precedence_over_transfer_destination_rule() {
         vec![InstructionBox::from(bank_transfer)],
     );
     let catalog = DataSpaceCatalog::default();
-    let state = state_with_account_aliases(
+    let mut state = state_with_account_aliases(
         &[
             (
                 uae_sender_id.clone(),
@@ -1510,7 +1510,7 @@ fn account_rule_takes_precedence_over_transfer_destination_rule() {
         ],
         catalog,
     );
-    install_router_nexus(&state, &router);
+    install_router_nexus(&mut state, &router);
     let uae_decision = router
         .try_route_with_view(&uae_tx, &state.view())
         .expect("UAE routing should resolve");
@@ -1559,7 +1559,7 @@ fn matches_dataspace_root_account_alias_scope_rule() {
             "paynet_domain_alias_match",
         )],
     );
-    let state = state_with_account_aliases(
+    let mut state = state_with_account_aliases(
         &[
             (
                 dataspace_id.clone(),
@@ -1572,7 +1572,7 @@ fn matches_dataspace_root_account_alias_scope_rule() {
         ],
         catalog,
     );
-    install_router_nexus(&state, &router);
+    install_router_nexus(&mut state, &router);
     assert_eq!(
         router
             .try_route_with_view(&dataspace_tx, &state.view())
@@ -1624,18 +1624,17 @@ fn try_route_with_view_resolves_against_same_state_catalog_snapshot() {
             "state_catalog_route",
         )],
     );
-    let state = state_with_account_aliases(
+    let mut state = state_with_account_aliases(
         &[(
             authority_id.clone(),
             account_alias("operator@paynet", &catalog),
         )],
         catalog,
     );
-    {
-        let mut nexus = state.nexus.write();
-        nexus.routing_policy = router.policy.as_ref().clone();
-        nexus.lane_catalog = state_lane_catalog;
-    }
+    let mut nexus = state.nexus_snapshot();
+    nexus.routing_policy = router.policy.as_ref().clone();
+    nexus.lane_catalog = state_lane_catalog;
+    replace_router_fixture_nexus(&mut state, nexus);
     let decision = router
         .try_route_with_view(&tx, &state.view())
         .expect("state-aware routing must resolve against the same state catalogs it matched");
@@ -2268,12 +2267,12 @@ fn multisig_boxed_bilateral_settlement_retains_three_participants() {
         dataspace_catalog.clone(),
         full_lane_catalog.clone(),
     );
-    let state = state_with_asset_definitions(
+    let mut state = state_with_asset_definitions(
         definitions(),
         dataspace_catalog.clone(),
         full_lane_catalog.clone(),
     );
-    install_router_nexus(&state, &router);
+    install_router_nexus(&mut state, &router);
     let expected = RoutingPlan::native_amx(
         RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
         vec![
@@ -2362,12 +2361,12 @@ fn multisig_boxed_bilateral_settlement_retains_three_participants() {
         dataspace_catalog.clone(),
         missing_lane_catalog.clone(),
     );
-    let missing_lane_state = state_with_asset_definitions(
+    let mut missing_lane_state = state_with_asset_definitions(
         definitions(),
         dataspace_catalog.clone(),
         missing_lane_catalog.clone(),
     );
-    install_router_nexus(&missing_lane_state, &missing_lane_router);
+    install_router_nexus(&mut missing_lane_state, &missing_lane_router);
     let expected_error = RoutingResolveError::NoLaneForDataspace {
         dataspace_id: auxiliary_dataspace,
     };

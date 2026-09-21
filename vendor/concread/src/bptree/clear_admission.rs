@@ -3,46 +3,6 @@
 use super::*;
 use crate::internals::bptree::cursor::{CheckpointBuffers, CursorCheckpoint};
 
-/// Refusal before an admitted reset changes its original private cursor.
-#[derive(Debug)]
-pub enum ClearAdmissionError<E> {
-    /// A checked generation, node count or concrete allocation layout overflowed.
-    Planning(PlanningError),
-    /// The caller refused the one complete reset demand.
-    Refused(E),
-}
-
-struct ClearPlan {
-    demand: AllocationDemand,
-    nodes: usize,
-    first: Option<TrackingGrowth>,
-    last: Option<TrackingGrowth>,
-}
-
-fn plan_clear<K, V, P>(cursor: &CursorWrite<K, V, Prepaid<P>>) -> Result<ClearPlan, PlanningError>
-where
-    K: Clone + Ord + Debug,
-    V: Clone,
-    P: NodeCloning<K, V>,
-{
-    cursor.assert_operable();
-    checked_next_generation(cursor.get_txid()).ok_or(PlanningError::Overflow)?;
-    let nodes = cursor
-        .admitted_clear_node_count()
-        .ok_or(PlanningError::Overflow)?;
-    let mut demand = AllocationDemand::new();
-    demand.add_layout(Layout::new::<CachePadded<Leaf<K, V, P::Charge>>>())?;
-    let [(first_len, first_capacity), (last_len, last_capacity)] = cursor.admitted_tracking();
-    let first = plan_tracking_growth::<K, V, P>(first_len, first_capacity, 1, &mut demand)?;
-    let last = plan_tracking_growth::<K, V, P>(last_len, last_capacity, nodes, &mut demand)?;
-    Ok(ClearPlan {
-        demand,
-        nodes,
-        first,
-        last,
-    })
-}
-
 // A caught panic can retain the physical writer. This guard outlives its child
 // checkpoint, including both unused-provider and saved-buffer destructors.
 struct Reset<'a, K: Clone + Ord + Debug, V: Clone, P: NodeCloning<K, V>> {
@@ -61,7 +21,7 @@ fn clear_admitted<K, V, P, E>(
     cursor: &mut CursorWrite<K, V, Prepaid<P>>,
     parent: Option<&mut CheckpointBuffers<K, V, Prepaid<P>>>,
     admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-) -> Result<(), ClearAdmissionError<E>>
+) -> Result<(), MapAdmissionError<E>>
 where
     K: Clone + Ord + Debug,
     V: Clone,
@@ -75,14 +35,14 @@ where
         Ok(plan) => plan,
         Err(error) => {
             reset.resolved = true;
-            return Err(ClearAdmissionError::Planning(error));
+            return Err(MapAdmissionError::Planning(error));
         }
     };
     let mut provider = match admit(plan.demand) {
         Ok(provider) => provider,
         Err(error) => {
             reset.resolved = true;
-            return Err(ClearAdmissionError::Refused(error));
+            return Err(MapAdmissionError::Refused(error));
         }
     };
     {
@@ -93,7 +53,7 @@ where
         let last = allocate_tracking::<K, V, P>(plan.last, &mut provider);
         cursor.begin_admitted_edit();
         cursor.resume_admitted_funding(provider, first, last, Some(saved));
-        cursor.clear_admitted_root(plan.nodes);
+        cursor.try_clear().expect("complete original clear plan");
         cursor.finish_admitted_funding();
         checkpoint.apply();
     }
@@ -123,7 +83,7 @@ where
     pub fn try_clear_admitted<E>(
         &mut self,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<(), ClearAdmissionError<E>> {
+    ) -> Result<(), MapAdmissionError<E>> {
         clear_admitted(self.inner.as_mut(), None, admit)
     }
 }
@@ -146,7 +106,7 @@ where
     pub fn try_clear_admitted<E>(
         &mut self,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<(), ClearAdmissionError<E>> {
+    ) -> Result<(), MapAdmissionError<E>> {
         let (cursor, parent) = self.inner.joined_edit_parts();
         clear_admitted(cursor, Some(parent), admit)
     }

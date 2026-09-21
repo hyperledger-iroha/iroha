@@ -100,7 +100,7 @@ impl<'storage, K: Key, V: Value> History<'storage, K, V> {
 
 struct BeforeBlockIter<'a, K: Key, V: Value> {
     current: Peekable<Iter<'a, K, V>>,
-    revert: Peekable<concread::internals::bptree::iter::Iter<'a, K, Option<V>>>,
+    revert: Peekable<Iter<'a, K, Option<V>>>,
 }
 
 impl<'a, K: Key, V: Value> Iterator for BeforeBlockIter<'a, K, V> {

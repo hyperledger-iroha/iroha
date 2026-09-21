@@ -315,7 +315,7 @@ impl AllocationReservation {
     /// No pool CAS, allocation, refund or notification occurs. Both remainders
     /// retain the same original pool and together own exactly the previous sum.
     /// A refused partition leaves the original owner unchanged.
-    pub fn try_partition(&mut self, bytes: usize) -> Result<Self, InsufficientReservation> {
+    pub fn try_partition_bytes(&mut self, bytes: usize) -> Result<Self, InsufficientReservation> {
         if bytes > self.remaining {
             return Err(InsufficientReservation {
                 requested_bytes: bytes,
@@ -365,10 +365,10 @@ impl Drop for AllocationReservation {
     }
 }
 
-/// An attempted allocation exceeds this owner's remaining prepaid demand.
+/// An allocation or component partition exceeds this owner's prepaid remainder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InsufficientReservation {
-    /// Exact requested layout size.
+    /// Requested allocation layout size or checked component layout sum.
     pub requested_bytes: usize,
     /// Original prepaid remainder, unchanged by refusal.
     pub remaining_bytes: usize,

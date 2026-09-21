@@ -373,8 +373,7 @@ where
         ));
     }
     let root = leaf.cast::<Node<usize, V, Charge>>();
-    Node::make_ro_raw(root);
-    let source = SuperBlock::<usize, V, Prepaid<Policy>> { root, size, txid };
+    let source = SuperBlock::<usize, V, Prepaid<Policy>>::from_leaf_test(root, size, txid);
     let charges = InitialCharges {
         root: provider.take_node_charge(layouts.root),
         reader: provider.take_node_charge(layouts.reader),
@@ -610,11 +609,8 @@ fn callback_clone_and_remainder_drop_panics_poison_both_without_publication() {
         let undo_refused = without_allocations(|| {
             undo.try_write_admitted::<()>(|_| panic!("undo poisoned before callback"))
         });
-        assert!(matches!(
-            current_refused,
-            Err(InsertAdmissionError::Poisoned)
-        ));
-        assert!(matches!(undo_refused, Err(InsertAdmissionError::Poisoned)));
+        assert!(matches!(current_refused, Err(MapAdmissionError::Poisoned)));
+        assert!(matches!(undo_refused, Err(MapAdmissionError::Poisoned)));
         drop((current_refused, undo_refused));
         drop((current, undo));
         assert_eq!(pool.used.get(), 0);

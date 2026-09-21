@@ -55,8 +55,8 @@ fn signed_retirement_and_replacement_publish_once_under_original_service_queue_c
             crate::state::World::default(),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
-            state.chain_id.clone(),
-            state.network_id,
+            state.chain_id_ref().clone(),
+            *state.network_id_ref(),
         ));
         assert_eq!(foreign.chain_id, state.chain_id);
         assert_eq!(foreign.network_id, state.network_id);

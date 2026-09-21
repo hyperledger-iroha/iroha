@@ -5940,6 +5940,9 @@ pub struct Kura {
     pub max_disk_usage_bytes: Bytes,
     /// Number of recent blocks kept in memory.
     pub blocks_in_memory: NonZeroUsize,
+    /// Finite requested-allocation limit for State's shared block-hash generations.
+    /// Includes unpublished successors and generations retained by readers.
+    pub block_hash_history_bytes: Bytes,
     /// Number of recent lane-history entries retained alongside the block store.
     pub lane_history_retention: NonZeroUsize,
     /// Authenticated replica-advert retention, expiry, and refresh policy.

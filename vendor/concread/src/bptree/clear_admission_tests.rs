@@ -15,7 +15,9 @@ fn clear_exact_limit_and_refusal_preserve_original_checkpoint_allocations() {
     let original = (identity(writer.inner.as_ref()), pool.used.get());
     let mut parent = writer.checkpoint().unwrap();
     let before = identity(parent.inner.as_ref());
-    let nodes = without_allocations(|| parent.inner.as_ref().admitted_clear_node_count().unwrap());
+    let nodes = without_allocations(|| {
+        unsafe { Node::tree_node_count(parent.inner.as_ref().get_root()) }.unwrap()
+    });
     assert!(nodes > 1, "exercise actual branch retirement");
     let mut demanded = None;
     let result = without_allocations(|| {
@@ -24,7 +26,7 @@ fn clear_exact_limit_and_refusal_preserve_original_checkpoint_allocations() {
             Err::<Policy, _>(())
         })
     });
-    assert!(matches!(result, Err(ClearAdmissionError::Refused(()))));
+    assert!(matches!(result, Err(MapAdmissionError::Refused(()))));
     assert_eq!(identity(parent.inner.as_ref()), before);
     let demand = demanded.unwrap();
     let used = pool.used.get();
@@ -37,7 +39,7 @@ fn clear_exact_limit_and_refusal_preserve_original_checkpoint_allocations() {
             pool.reserve(d)
         })
     });
-    assert!(matches!(result, Err(ClearAdmissionError::Refused(()))));
+    assert!(matches!(result, Err(MapAdmissionError::Refused(()))));
     assert_eq!(identity(parent.inner.as_ref()), before);
     assert_eq!(pool.used.get(), used);
     assert_eq!(pool.takes.get(), takes);
@@ -91,7 +93,7 @@ fn clear_publication_retains_actual_old_reader_preimages_and_charges() {
     let old = map.read();
     let old_root = old.inner.as_ref().get_root();
     let mut writer = map.try_write_admitted(|d| pool.reserve(d)).unwrap();
-    let nodes = writer.inner.as_ref().admitted_clear_node_count().unwrap();
+    let nodes = unsafe { Node::tree_node_count(writer.inner.as_ref().get_root()) }.unwrap();
     let clones = pool.clones.get();
     writer.try_clear_admitted(|d| pool.reserve(d)).unwrap();
     assert_eq!(writer.inner.as_ref().admitted_tracking()[1].0, nodes);
@@ -177,7 +179,7 @@ fn clear_generation_refusal_precedes_callback_and_preserves_writer_and_parent() 
             });
             assert!(matches!(
                 result,
-                Err(ClearAdmissionError::Planning(PlanningError::Overflow))
+                Err(MapAdmissionError::Planning(PlanningError::Overflow))
             ));
             assert_eq!(identity(parent.inner.as_ref()), before);
             without_allocations(|| drop(parent));
@@ -188,7 +190,7 @@ fn clear_generation_refusal_precedes_callback_and_preserves_writer_and_parent() 
             });
             assert!(matches!(
                 result,
-                Err(ClearAdmissionError::Planning(PlanningError::Overflow))
+                Err(MapAdmissionError::Planning(PlanningError::Overflow))
             ));
             assert_eq!(identity(writer.inner.as_ref()), before);
         }

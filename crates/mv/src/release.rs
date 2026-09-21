@@ -263,7 +263,39 @@ pub struct ReleaseGuard<'owner, T> {
     poison_on_unwind: bool,
 }
 
-impl<T> ReleaseGuard<'_, T> {
+impl<'owner, T> ReleaseGuard<'owner, T> {
+    /// Transfer the original release notification across an ownership phase.
+    /// No notification or old-owner destructor runs after a successful transfer.
+    /// An unwind still drops the consumed physical owner before signaling.
+    pub(crate) fn map_preserving_release<R>(
+        mut self,
+        consume: impl FnOnce(T) -> R,
+    ) -> ReleaseGuard<'owner, R> {
+        let inner = consume(self.inner.take().expect("owned release guard"));
+        let result = ReleaseGuard {
+            inner: Some(inner),
+            notification: self.notification,
+            poison_on_unwind: self.poison_on_unwind,
+        };
+        // The empty predecessor owns no allocation or physical guard. Its
+        // notification has moved to result and must not run at this transition.
+        let _transferred = std::mem::ManuallyDrop::new(self);
+        result
+    }
+
+    /// Release the physical owner while retaining cleanup and its notification.
+    /// The callback must return only owners whose destruction cannot poison the
+    /// released physical lock. A callback unwind retains the original poisoning
+    /// behavior; a later cleanup unwind must not poison an already healthy lock.
+    pub(crate) fn release_retaining<R>(
+        self,
+        release: impl FnOnce(T) -> R,
+    ) -> ReleaseGuard<'owner, R> {
+        let mut retirement = self.map_preserving_release(release);
+        retirement.poison_on_unwind = false;
+        retirement
+    }
+
     /// Consume a guard through its commit operation, then notify after it returns.
     /// Unwinding also releases the guard before notification.
     pub(crate) fn release_with<R>(mut self, consume: impl FnOnce(T) -> R) -> R {

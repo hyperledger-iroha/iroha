@@ -158,7 +158,8 @@ CURRENT_REVIEWED_INCLUDE_COMPONENTS = (
     )),
     ("crates/iroha_core/src/block.rs", (
         ("block/replay_proposal_authority_tests.rs", "authenticated_replay_authority_rejects_different_proposal_wire_and_state_prefix"),
-        ("block/parallel_account_profile_tests.rs", "parallel_account_profile_rejects_foreign_permission_payloads"),
+        ("block/parallel_account_profile_tests.rs", "account_profile_validation_rejects_foreign_permission_payloads"),
+        ("block/public_contract_creation_fee_tests.rs", "public_contract_artifact_stages_pay_fees_without_management_grants"),
     )),
     ("crates/iroha_core/src/sumeragi/v2_lane_work.rs", (
         ("tests/v2_lane_work_ordinary_dispatch.rs", "ordinary_lane_consumer_retains_exact_commit_under_real_actor_backpressure"),
@@ -365,13 +366,19 @@ def canonical_models() -> list[dict]:
     ("symbol", "old", "new"),
     [
         (None, None, None),
+        ("build_merge_execution_candidate_for_consensus", "deterministic_start_work_pending(&application_block_header)?", "deterministic_start_work_pending(&application_block_header).ok().flatten()"),
+        ("build_merge_execution_candidate_for_consensus", ".map_err(StateBlockStartError::History)", ".or_else(|_| Ok(None))"),
+        ("select_merge_execution_candidate_for_consensus", "        )?;", "        ).unwrap_or(None);"),
+        ("select_merge_execution_candidate_prefix", "build_batch(midpoint)?", "build_batch(midpoint).unwrap_or(None)"),
+        ("build_merge_execution_batch_from_source_prefix", "Err(MergeLedgerCommitError::BlockHashAdmission(error)) => return Err(error),", "Err(MergeLedgerCommitError::BlockHashAdmission(_)) => return Ok(None),"),
+
         (
-            "build_merge_execution_candidate_for_consensus",
+            "select_merge_execution_candidate_for_consensus",
             "if descriptor.validator_set != authoritative",
             "if false",
         ),
         (
-            "build_merge_execution_candidate_for_consensus",
+            "select_merge_execution_candidate_for_consensus",
             "consensus.is_current(self).then_some(selected).flatten()",
             "selected",
         ),
@@ -381,7 +388,7 @@ def canonical_models() -> list[dict]:
             "true",
         ),
     ],
-    ids=("current", "historical-committee", "final-generation", "whole-candidate-budget"),
+    ids=("current", "probe-refusal", "selector-refusal", "prefix-refusal", "trial-refusal", "scratch-refusal", "historical-committee", "final-generation", "whole-candidate-budget"),
 )
 def test_merge_candidate_builder_source_contract(
     tmp_path: Path, symbol: str | None, old: str | None, new: str | None
@@ -394,16 +401,18 @@ def test_merge_candidate_builder_source_contract(
         model for model in canonical_models()
         if model["module"] == "SumeragiV2AutonomousReservationCarrier"
     )
-    # Exercise the ordinary model validator with just the two reviewed owners.
+    # Exercise the complete original wrapper/selector/prefix/scratch owner chain.
     # Other production bindings have their own source/negative-control suites.
     model["production_symbols"] = [
         binding for binding in model["production_symbols"]
         if binding["symbol"] in (
             "build_merge_execution_candidate_for_consensus",
+            "select_merge_execution_candidate_for_consensus",
             "select_merge_execution_candidate_prefix",
+            "build_merge_execution_batch_from_source_prefix",
         )
     ]
-    assert len(model["production_symbols"]) == 2
+    assert len(model["production_symbols"]) == 4
     if symbol is not None:
         assert old is not None and new is not None
         replace_once_after(path, f"fn {symbol}(", old, new)

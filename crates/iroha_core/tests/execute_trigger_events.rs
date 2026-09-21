@@ -83,6 +83,9 @@ fn register_trigger(
     trigger_id: &TriggerId,
     asset_id: &AssetId,
 ) -> (iroha_core::block::CommittedBlock, usize) {
+    let genesis = state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish fixture genesis");
     let register_trigger = Register::trigger(Trigger::new(
         trigger_id.clone(),
         Action::new(
@@ -109,7 +112,7 @@ fn register_trigger(
         BlockBuilder::new(vec![iroha_core::tx::AcceptedTransaction::new_unchecked(
             Cow::Owned(register_tx),
         )])
-        .chain(0, None)
+        .chain(0, Some(&genesis))
         .sign(ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     let mut register_state_block = state.block(register_block.header());
@@ -122,10 +125,9 @@ fn register_trigger(
         "register trigger transaction rejected during execution: {:?}",
         committed_register.as_ref().output_error(0)
     );
-    let _ = register_state_block.apply_without_execution(&committed_register, Vec::new());
     let fragment_count = register_state_block.committed_fragment_count();
-    register_state_block
-        .commit()
+    state
+        .commit_executed_block_for_testing(register_state_block, committed_register.clone())
         .expect("register block commits");
     (committed_register, fragment_count)
 }
@@ -165,9 +167,10 @@ fn execute_trigger(
         .as_ref()
         .output_error(0)
         .map(|error| format!("{error:?}"));
-    let events = execute_state_block.apply_without_execution(&committed_execute, Vec::new());
     let fragment_count = execute_state_block.committed_fragment_count();
-    execute_state_block.commit().expect("execute block commits");
+    let events = state
+        .commit_executed_block_for_testing(execute_state_block, committed_execute)
+        .expect("execute block commits");
     (events, fragment_count, execute_error)
 }
 fn assert_trigger_registered(state: &State, trigger_id: &TriggerId, asset_id: &AssetId) {

@@ -78,7 +78,7 @@ pub(crate) fn install_manifest(state: &State) {
                 dataspace: lane.dataspace_id,
                 visibility: lane.visibility,
                 storage: lane.storage,
-                governance: Some("parliament".to_owned()),
+                governance: lane.governance.clone(),
                 manifest_path: Some("/test-fixtures/lane-authority.json".into()),
                 governance_rules: Some(rules),
                 privacy_commitments: Vec::new(),

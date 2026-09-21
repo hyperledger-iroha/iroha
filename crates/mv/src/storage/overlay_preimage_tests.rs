@@ -278,3 +278,98 @@ fn applied_delta_reconstructs_storage_from_original_values_across_many_transacti
         );
     }
 }
+
+#[test]
+fn touched_key_cleanup_panic_forbids_parent_publication_on_abort_and_apply() {
+    #[derive(Debug, Default)]
+    struct Cleanup {
+        next: AtomicUsize,
+        panic_on: AtomicUsize,
+    }
+    #[derive(Debug)]
+    struct CleanupKey {
+        order: u64,
+        instance: usize,
+        cleanup: Arc<Cleanup>,
+    }
+    impl CleanupKey {
+        fn new(order: u64, cleanup: &Arc<Cleanup>) -> Self {
+            Self {
+                order,
+                instance: cleanup.next.fetch_add(1, Ordering::SeqCst),
+                cleanup: Arc::clone(cleanup),
+            }
+        }
+    }
+    impl Clone for CleanupKey {
+        fn clone(&self) -> Self {
+            Self::new(self.order, &self.cleanup)
+        }
+    }
+    impl PartialEq for CleanupKey {
+        fn eq(&self, other: &Self) -> bool {
+            self.order == other.order
+        }
+    }
+    impl Eq for CleanupKey {}
+    impl PartialOrd for CleanupKey {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for CleanupKey {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.order.cmp(&other.order)
+        }
+    }
+    impl Borrow<u64> for CleanupKey {
+        fn borrow(&self) -> &u64 {
+            &self.order
+        }
+    }
+    impl Drop for CleanupKey {
+        fn drop(&mut self) {
+            assert!(
+                self.cleanup
+                    .panic_on
+                    .compare_exchange(
+                        self.instance,
+                        usize::MAX,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_err(),
+                "injected original touched-key cleanup panic"
+            );
+        }
+    }
+
+    for apply in [false, true] {
+        let cleanup = Arc::new(Cleanup {
+            next: AtomicUsize::new(0),
+            panic_on: AtomicUsize::new(usize::MAX),
+        });
+        let storage: Storage<_, _> = [(CleanupKey::new(1, &cleanup), 10)].into_iter().collect();
+        let mut block = storage.block();
+        let mut sibling = block.transaction();
+        sibling.insert(CleanupKey::new(1, &cleanup), 11);
+        sibling.apply();
+        let mut transaction = block.transaction();
+        transaction.insert(CleanupKey::new(2, &cleanup), 20);
+        let touch = transaction.touched_entries().next().unwrap().key.instance;
+        cleanup.panic_on.store(touch, Ordering::SeqCst);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            if apply {
+                transaction.apply();
+            } else {
+                drop(transaction);
+            }
+        }));
+        assert!(result.is_err());
+        assert_eq!(cleanup.panic_on.load(Ordering::SeqCst), usize::MAX);
+        assert!(catch_unwind(AssertUnwindSafe(|| block.get(&1))).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| block.commit())).is_err());
+        assert_eq!(storage.view().get(&1), Some(&10));
+        assert_eq!(storage.view().get(&2), None);
+    }
+}

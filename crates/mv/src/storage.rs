@@ -5,7 +5,7 @@ use crate::{
 };
 use concread::bptree::{
     BptreeMap, BptreeMapCheckpoint, BptreeMapOwned, BptreeMapReadSnapshot, BptreeMapReadTxn,
-    BptreeMapWriteTxn, MapMode, NodeCloning, OwnedWriteError, Untracked,
+    BptreeMapWriteTxn, Iter, MapMode, NodeCloning, OwnedWriteError, RangeIter, Untracked,
 };
 use std::{borrow::Borrow, collections::BTreeSet, ops::RangeBounds};
 /// Original Concread mode for both current values and first undo preimages.
@@ -76,8 +76,16 @@ impl<K: Key, V: Value> Storage<K, V> {
                 .with_acquisition_unwind_notification(|| self.blocks.write()),
         );
         let prev_value = blocks.insert(key, value);
-        self.publication
-            .publish(|| blocks.release_with(|guard| guard.commit()));
+        let next = NextPublication::new();
+        let prepared = blocks.map_preserving_release(|writer| writer.prepare_commit());
+        let retirement = self.publication.publish_retaining(
+            next,
+            || prepared.map_preserving_release(|prepared| prepared.publish()),
+            |published| published.release_retaining(|published| published.release()),
+        );
+        // The current-only change and its identity are visible before any old
+        // payload can unwind or signal a retry. The undo tree is untouched.
+        drop(retirement);
         prev_value
     }
     /// Create block to aggregate updates and revert changes created in the latest block
@@ -124,6 +132,9 @@ mod touches;
 
 #[path = "storage/admitted.rs"]
 mod admitted;
+#[cfg(test)]
+#[path = "storage/admitted_tests.rs"]
+mod admitted_tests;
 pub use admitted::{AdmittedBlockError, AdmittedStorageError, AdmittedStoragePolicy, StorageRole};
 
 impl<K: Key, V: Value> Default for Storage<K, V> {
@@ -144,6 +155,14 @@ impl<K: Key, V: Value> FromIterator<(K, V)> for Storage<K, V> {
     }
 }
 pub trait StorageReadOnly<K: Key, V: Value> {
+    /// Borrowed entries in canonical order, retaining traversal state inline.
+    type Iter<'a>: DoubleEndedIterator<Item = (&'a K, &'a V)> + ExactSizeIterator
+    where
+        Self: 'a;
+    /// Borrowed bounded traversal, with no heap allocation for the iterator.
+    type RangeIter<'a>: DoubleEndedIterator<Item = (&'a K, &'a V)>
+    where
+        Self: 'a;
     /// Read entry from the storage
     fn get<Q>(&self, key: &Q) -> Option<&V>
     where
@@ -160,9 +179,9 @@ pub trait StorageReadOnly<K: Key, V: Value> {
             .filter(|(candidate, _)| *candidate == key)
     }
     /// Iterate over all entries in the storage
-    fn iter(&self) -> Iter<'_, K, V>;
+    fn iter(&self) -> Self::Iter<'_>;
     /// Iterate over range of entries in the storage
-    fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> RangeIter<'_, K, V>
+    fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> Self::RangeIter<'_>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized;
@@ -223,7 +242,15 @@ mod view {
             }
         }
     }
-    impl<K: Key, V: Value> StorageReadOnly<K, V> for View<'_, K, V> {
+    impl<K: Key, V: Value, M: StorageMode<K, V>> StorageReadOnly<K, V> for View<'_, K, V, M> {
+        type Iter<'a>
+            = Iter<'a, K, V, M::Charge>
+        where
+            Self: 'a;
+        type RangeIter<'a>
+            = RangeIter<'a, K, V, M::Charge>
+        where
+            Self: 'a;
         fn get<Q>(&self, key: &Q) -> Option<&V>
         where
             K: Ord + Borrow<Q>,
@@ -234,24 +261,20 @@ mod view {
                 ViewInner::Snapshot(snapshot) => snapshot.get(key),
             }
         }
-        fn iter(&self) -> Iter<'_, K, V> {
-            Iter {
-                iter: match &self.blocks {
-                    ViewInner::Txn(txn) => Box::new(txn.iter()),
-                    ViewInner::Snapshot(snapshot) => Box::new(snapshot.iter()),
-                },
+        fn iter(&self) -> Self::Iter<'_> {
+            match &self.blocks {
+                ViewInner::Txn(txn) => txn.iter(),
+                ViewInner::Snapshot(snapshot) => snapshot.iter(),
             }
         }
-        fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> RangeIter<'_, K, V>
+        fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> Self::RangeIter<'_>
         where
             K: Borrow<Q>,
             Q: Ord + ?Sized,
         {
-            RangeIter {
-                iter: match &self.blocks {
-                    ViewInner::Txn(txn) => Box::new(txn.range(bounds)),
-                    ViewInner::Snapshot(snapshot) => Box::new(snapshot.range(bounds)),
-                },
+            match &self.blocks {
+                ViewInner::Txn(txn) => txn.range(bounds),
+                ViewInner::Snapshot(snapshot) => snapshot.range(bounds),
             }
         }
         fn first_key_value(&self) -> Option<(&K, &V)> {
@@ -317,7 +340,7 @@ struct DetachedMetadata<Admission> {
     admission: Admission,
 }
 
-impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
+impl<K: Key, V: Value, Admission, M: StorageMode<K, V>> Detached<K, V, Admission, M> {
     /// Return the actual original block's acquisition mode.
     pub fn mode(&self) -> BlockMode {
         self.metadata.mode
@@ -347,12 +370,12 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
 
     /// Observe equality with the original published current/undo pair.
     /// This momentary observation grants no publication authority.
-    pub fn matches_current(&self, storage: &Storage<K, V>) -> bool {
+    pub fn matches_current(&self, storage: &Storage<K, V, M>) -> bool {
         self.metadata.predecessor.matches(&storage.publication)
     }
 
     /// Compare exact original owner/version and mode with an acquired block.
-    pub fn matches_block_predecessor(&self, block: &Block<'_, K, V>) -> bool {
+    pub fn matches_block_predecessor(&self, block: &Block<'_, K, V, M>) -> bool {
         self.metadata.mode == block.mode && self.metadata.predecessor.same_as(&block.predecessor)
     }
 
@@ -369,10 +392,10 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
     /// responsibility; prepare every component before publishing the first one.
     pub fn try_prepare_publication<'target, Installation, E>(
         self,
-        target: &'target Storage<K, V>,
-        admit: impl FnOnce(&Self, &Storage<K, V>) -> Result<Installation, E>,
+        target: &'target Storage<K, V, M>,
+        admit: impl FnOnce(&Self, &Storage<K, V, M>) -> Result<Installation, E>,
     ) -> PublicationPreparationResult<
-        PreparedPublication<'target, K, V, Admission, Installation>,
+        PreparedPublication<'target, K, V, Admission, Installation, M>,
         Self,
         E,
     > {
@@ -401,7 +424,12 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
                         PublicationPreparationError::after_failed_acquisition(wait)
                     }
                     OwnedWriteError::Poisoned => PublicationPreparationError::Poisoned,
-                    OwnedWriteError::Changed => PublicationPreparationError::Changed,
+                    OwnedWriteError::Changed => {
+                        // A stale base can be rejected after taking and releasing
+                        // the raw writer, before any wrapper is returned.
+                        drop(target.revert_released.guard(()));
+                        PublicationPreparationError::Changed
+                    }
                 };
                 return Err((
                     Self {
@@ -422,7 +450,10 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
                         PublicationPreparationError::after_failed_acquisition(wait)
                     }
                     OwnedWriteError::Poisoned => PublicationPreparationError::Poisoned,
-                    OwnedWriteError::Changed => PublicationPreparationError::Changed,
+                    OwnedWriteError::Changed => {
+                        drop(target.blocks_released.guard(()));
+                        PublicationPreparationError::Changed
+                    }
                 };
                 let revert = revert.release_with(|writer| writer.detach());
                 return Err((
@@ -472,11 +503,11 @@ pub struct PreparedPublication<
     installation: Installation,
 }
 
-impl<K: Key, V: Value, Admission, Installation>
-    PreparedPublication<'_, K, V, Admission, Installation>
+impl<K: Key, V: Value, Admission, Installation, M: StorageMode<K, V>>
+    PreparedPublication<'_, K, V, Admission, Installation, M>
 {
     /// Release physical writers and return the exact original successors.
-    pub fn abort(self) -> Detached<K, V, Admission> {
+    pub fn abort(self) -> Detached<K, V, Admission, M> {
         let Self {
             revert,
             blocks,
@@ -515,14 +546,48 @@ impl<K: Key, V: Value, Admission, Installation>
             next,
             admission,
         } = metadata;
-        publication.publish_prepared(next, || {
-            if dirty {
-                blocks.release_with(|guard| guard.commit());
-            }
-            revert.release_with(|guard| guard.commit());
-        });
+        publish_pair(blocks, revert, publication, next, dirty);
         (admission, installation)
     }
+}
+
+// Prepare every fallible lock/invariant check before the first map transfers
+// node custody. Both physical writers survive through the pair identity change;
+// charged cursor, old-reader and notification cleanup run only after unlocking.
+fn publish_pair<'a, K: Key, V: Value, M: StorageMode<K, V>>(
+    blocks: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>,
+    revert: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, Option<V>, M>>,
+    publication: &Publication,
+    next: NextPublication,
+    dirty: bool,
+) {
+    let (blocks, unchanged) = if dirty {
+        (
+            Some(blocks.map_preserving_release(|writer| writer.prepare_commit())),
+            None,
+        )
+    } else {
+        (None, Some(blocks))
+    };
+    let revert = revert.map_preserving_release(|writer| writer.prepare_commit());
+    let retirement = publication.publish_retaining(
+        next,
+        || {
+            let blocks =
+                blocks.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));
+            let revert = revert.map_preserving_release(|prepared| prepared.publish());
+            (blocks, revert)
+        },
+        |(blocks, revert)| {
+            let blocks =
+                blocks.map(|writer| writer.release_retaining(|published| published.release()));
+            let revert = revert.release_retaining(|published| published.release());
+            let unchanged =
+                unchanged.map(|writer| writer.release_retaining(|writer| writer.detach()));
+            (blocks, revert, unchanged)
+        },
+    );
+    drop(retirement);
 }
 
 #[cfg(test)]
@@ -543,8 +608,8 @@ mod block {
         pub(super) predecessor: CapturedPublication,
         pub(super) mode: BlockMode,
     }
-    impl<'store, K: Key, V: Value> Block<'store, K, V> {
-        fn assert_operable(&self) {
+    impl<'store, K: Key, V: Value, M: StorageMode<K, V>> Block<'store, K, V, M> {
+        pub(super) fn assert_operable(&self) {
             assert!(!self.failed, "block edit unwound; abandon the block");
             // A child checkpoint can poison only one cursor while restoring
             // its root. Check the complete pair before either can publish.
@@ -560,10 +625,55 @@ mod block {
 
         /// Check the original storage owner without reading values or taking locks.
         /// This observation grants no mutation or publication authority.
-        pub fn belongs_to(&self, storage: &Storage<K, V>) -> bool {
+        pub fn belongs_to(&self, storage: &Storage<K, V, M>) -> bool {
             self.predecessor.belongs_to(&storage.publication)
         }
 
+        /// Read the value that existed before this block's first mutation of `key`.
+        ///
+        /// The block undo log retains the first pre-block value across direct
+        /// mutations and applied child transactions. An undo entry containing
+        /// `None` means the key was absent before the block; an untouched key is
+        /// read from the current map.
+        pub fn get_before_block(&self, key: &K) -> Option<&V> {
+            self.assert_operable();
+            match self.revert.get(key) {
+                Some(previous) => previous.as_ref(),
+                None => self.get(key),
+            }
+        }
+        /// Visit this block's touched keys with their exact pre-block and current values.
+        ///
+        /// Entries are ordered by `K::Ord`, independent of mutation order. The
+        /// iterator borrows the undo journal and current storage without cloning
+        /// keys/values or allocating another change list. Aborted transactions
+        /// contribute no entries; applied transactions retain the first block
+        /// preimage. No-op touches remain visible, including absent-to-absent.
+        /// For `block_and_revert`, the preimage starts after the prior block was
+        /// reverted, just like [`Self::get_before_block`].
+        pub fn touched_entries(
+            &self,
+        ) -> impl DoubleEndedIterator<Item = TouchedEntry<'_, K, V>> + ExactSizeIterator {
+            self.assert_operable();
+            self.revert.iter().map(|(key, before)| TouchedEntry {
+                key,
+                before: before.as_ref(),
+                after: self.get(key),
+            })
+        }
+
+        /// Return the actual acquisition mode, including an untouched replacement.
+        pub fn mode(&self) -> BlockMode {
+            self.mode
+        }
+
+        /// Return whether this block has staged any storage mutation.
+        pub fn is_dirty(&self) -> bool {
+            self.assert_operable();
+            self.dirty
+        }
+    }
+    impl<'store, K: Key, V: Value> Block<'store, K, V> {
         pub(super) fn new(
             revert: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, Option<V>>>,
             blocks: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, V>>,
@@ -583,20 +693,14 @@ mod block {
                 mode,
             }
         }
-        /// Create transaction for the block
-        pub fn transaction(&mut self) -> Transaction<'_, K, V> {
+        /// Retain both original parent roots, refusing generation exhaustion.
+        pub fn try_transaction(
+            &mut self,
+        ) -> Result<Transaction<'_, K, V>, concread::bptree::PlanningError> {
             self.assert_operable();
-            // The Untracked API retains its infallible contract; the prepaid
-            // insertion API returns this generation refusal before admission.
-            let blocks = self
-                .blocks
-                .checkpoint()
-                .expect("current checkpoint generation exhausted");
-            let revert = self
-                .revert
-                .checkpoint()
-                .expect("undo checkpoint generation exhausted");
-            Transaction {
+            let blocks = self.blocks.checkpoint()?;
+            let revert = self.revert.checkpoint()?;
+            Ok(Transaction {
                 blocks: Some(blocks),
                 revert: Some(revert),
                 touched: TransactionTouches::Untracked(BTreeSet::new()),
@@ -604,8 +708,10 @@ mod block {
                 parent_dirty: &mut self.dirty,
                 failed: false,
                 allocation: None,
-                parent_failure: None,
-            }
+                parent_failure: Some(super::admitted_transaction::ParentFailure::new(
+                    &mut self.failed,
+                )),
+            })
         }
         /// Apply aggregated changes to the storage
         pub fn commit(self) {
@@ -620,14 +726,7 @@ mod block {
                 predecessor: _,
                 mode: _,
             } = self;
-            publication.publish(|| {
-                // Commit fields in the inverse order. Even an untouched block
-                // publishes its clear-undo transition and changes pair identity.
-                if dirty {
-                    blocks.release_with(|guard| guard.commit());
-                }
-                revert.release_with(|guard| guard.commit());
-            });
+            publish_pair(blocks, revert, publication, NextPublication::new(), dirty);
         }
 
         /// Admit capture metadata, then retain the exact original successors.
@@ -675,47 +774,13 @@ mod block {
             self.assert_operable();
             &self.revert
         }
-        /// Read the value that existed before this block's first mutation of `key`.
-        ///
-        /// The block undo log retains the first pre-block value across direct
-        /// mutations and applied child transactions. An undo entry containing
-        /// `None` means the key was absent before the block; an untouched key is
-        /// read from the current map.
-        pub fn get_before_block(&self, key: &K) -> Option<&V> {
-            match self.revert_map().get(key) {
-                Some(previous) => previous.as_ref(),
-                None => self.get(key),
-            }
-        }
-        /// Visit this block's touched keys with their exact pre-block and current values.
-        ///
-        /// Entries are ordered by `K::Ord`, independent of mutation order. The
-        /// iterator borrows the undo journal and current storage without cloning
-        /// keys/values or allocating another change list. Aborted transactions
-        /// contribute no entries; applied transactions retain the first block
-        /// preimage. No-op touches remain visible, including absent-to-absent.
-        /// For `block_and_revert`, the preimage starts after the prior block was
-        /// reverted, just like [`Self::get_before_block`].
-        pub fn touched_entries(
-            &self,
-        ) -> impl DoubleEndedIterator<Item = TouchedEntry<'_, K, V>> + ExactSizeIterator {
-            self.assert_operable();
-            self.revert.iter().map(|(key, before)| TouchedEntry {
-                key,
-                before: before.as_ref(),
-                after: self.get(key),
-            })
+        /// Create transaction for the block.
+        pub fn transaction(&mut self) -> Transaction<'_, K, V> {
+            // TODO: propagate generation exhaustion through State admission.
+            self.try_transaction()
+                .expect("transaction checkpoint generation exhausted")
         }
 
-        /// Return the actual acquisition mode, including an untouched replacement.
-        pub fn mode(&self) -> BlockMode {
-            self.mode
-        }
-
-        /// Return whether this block has staged any storage mutation.
-        pub fn is_dirty(&self) -> bool {
-            self.dirty
-        }
         /// Get mutable access to the value stored in
         pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
             self.assert_operable();
@@ -764,7 +829,15 @@ mod block {
             prev_value
         }
     }
-    impl<K: Key, V: Value> StorageReadOnly<K, V> for Block<'_, K, V> {
+    impl<K: Key, V: Value, M: StorageMode<K, V>> StorageReadOnly<K, V> for Block<'_, K, V, M> {
+        type Iter<'a>
+            = Iter<'a, K, V, M::Charge>
+        where
+            Self: 'a;
+        type RangeIter<'a>
+            = RangeIter<'a, K, V, M::Charge>
+        where
+            Self: 'a;
         fn get<Q>(&self, key: &Q) -> Option<&V>
         where
             K: Borrow<Q>,
@@ -773,21 +846,17 @@ mod block {
             self.assert_operable();
             self.blocks.get(key)
         }
-        fn iter(&self) -> Iter<'_, K, V> {
+        fn iter(&self) -> Self::Iter<'_> {
             self.assert_operable();
-            Iter {
-                iter: Box::new(self.blocks.iter()),
-            }
+            self.blocks.iter()
         }
-        fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> RangeIter<'_, K, V>
+        fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> Self::RangeIter<'_>
         where
             K: Borrow<Q>,
             Q: Ord + ?Sized,
         {
             self.assert_operable();
-            RangeIter {
-                iter: Box::new(self.blocks.range(bounds)),
-            }
+            self.blocks.range(bounds)
         }
         fn first_key_value(&self) -> Option<(&K, &V)> {
             self.assert_operable();
@@ -819,6 +888,18 @@ mod block {
         // LAST: both original checkpoints and all local touch keys/buffers must
         // finish rollback/apply cleanup before this parent-failure guard drops.
         pub(super) parent_failure: Option<super::admitted_transaction::ParentFailure<'block>>,
+    }
+
+    impl<K: Key, V: Value, M: StorageMode<K, V>> Drop for Transaction<'_, K, V, M> {
+        fn drop(&mut self) {
+            // This runs before automatic checkpoint and touched-key destruction.
+            // Existing unwind, including refusal to apply a failed ordinary
+            // child, can roll back under both checkpoints. New cleanup failures
+            // must poison the parent; already armed failures remain sticky.
+            if let Some(parent) = self.parent_failure.as_mut() {
+                parent.begin_cleanup();
+            }
+        }
     }
 
     pub(super) enum TransactionTouches<K: Key> {
@@ -859,19 +940,31 @@ mod block {
             }
         }
     }
-    impl<K: Key, V: Value> Transaction<'_, K, V> {
-        fn assert_operable(&self) {
+    impl<K: Key, V: Value, M: StorageMode<K, V>> Transaction<'_, K, V, M> {
+        pub(super) fn assert_operable(&self) {
             assert!(
                 !self.failed,
                 "transaction edit unwound; abort the transaction"
             );
+            assert!(
+                !self
+                    .parent_failure
+                    .as_ref()
+                    .is_some_and(|parent| parent.is_failed()),
+                "parent block is unusable"
+            );
         }
 
-        fn current(&self) -> &BptreeMapCheckpoint<'_, K, V> {
+        pub(super) fn current(&self) -> &BptreeMapCheckpoint<'_, K, V, M> {
             self.assert_operable();
             self.blocks.as_ref().expect("live transaction current root")
         }
-
+        /// Create a read-only view into this private transaction state.
+        pub fn view(&self) -> View<'_, K, V, M> {
+            View::from_snapshot(self.current().to_snapshot())
+        }
+    }
+    impl<K: Key, V: Value> Transaction<'_, K, V> {
         fn record_touch(&mut self, key: &K) {
             self.touched.untracked_mut().insert(key.clone());
             let revert = self.revert.as_mut().expect("live transaction undo root");
@@ -884,11 +977,6 @@ mod block {
                     .cloned();
                 revert.insert(key.clone(), before);
             }
-        }
-
-        /// Create a read-only view into this private transaction state.
-        pub fn view(&self) -> View<'_, K, V> {
-            View::from_snapshot(self.current().to_snapshot())
         }
 
         /// Borrow the original block-start value, including applied siblings.
@@ -928,8 +1016,9 @@ mod block {
         /// Keep both private successors and their first preimages in the block.
         pub fn apply(mut self) {
             self.assert_operable();
-            // Check both cursors before consuming either checkpoint. Untracked
-            // checkpoint apply has no displaced charged buffers or callbacks.
+            // Every destructor runs while rollback is available or aggregate
+            // failure remains armed. Neither retained apply transfers nor
+            // updating parent metadata runs user destruction.
             self.blocks
                 .as_ref()
                 .expect("live transaction current root")
@@ -938,23 +1027,31 @@ mod block {
                 .as_ref()
                 .expect("live transaction undo root")
                 .len();
-            // A touched-key destructor must unwind while both rollback guards
-            // are still armed, never after only part of the transaction applies.
+            // Arm the aggregate before any touched-key destructor can unwind.
+            // Both rollback guards still retain the original parent roots.
+            self.parent_failure.as_mut().expect("original parent").arm();
             drop(core::mem::replace(
                 &mut self.touched,
                 TransactionTouches::Untracked(BTreeSet::new()),
             ));
-            self.blocks
+            let current_retirement = self
+                .blocks
                 .take()
                 .expect("live transaction current root")
-                .apply();
-            self.revert
+                .apply_retaining();
+            let undo_retirement = self
+                .revert
                 .take()
                 .expect("live transaction undo root")
-                .apply();
+                .apply_retaining();
             *self.parent_dirty = self.dirty;
+            drop(current_retirement);
+            drop(undo_retirement);
+            self.parent_failure
+                .as_mut()
+                .expect("original parent")
+                .resolve();
         }
-
         /// Mutably borrow a present value while retaining its original preimages.
         pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
             self.assert_operable();
@@ -1004,7 +1101,15 @@ mod block {
             previous
         }
     }
-    impl<K: Key, V: Value> StorageReadOnly<K, V> for Transaction<'_, K, V> {
+    impl<K: Key, V: Value, M: StorageMode<K, V>> StorageReadOnly<K, V> for Transaction<'_, K, V, M> {
+        type Iter<'a>
+            = Iter<'a, K, V, M::Charge>
+        where
+            Self: 'a;
+        type RangeIter<'a>
+            = RangeIter<'a, K, V, M::Charge>
+        where
+            Self: 'a;
         fn get<Q>(&self, key: &Q) -> Option<&V>
         where
             K: Borrow<Q>,
@@ -1012,19 +1117,15 @@ mod block {
         {
             self.current().get(key)
         }
-        fn iter(&self) -> Iter<'_, K, V> {
-            Iter {
-                iter: Box::new(self.current().iter()),
-            }
+        fn iter(&self) -> Self::Iter<'_> {
+            self.current().iter()
         }
-        fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> RangeIter<'_, K, V>
+        fn range<Q>(&self, bounds: impl RangeBounds<Q>) -> Self::RangeIter<'_>
         where
             K: Borrow<Q>,
             Q: Ord + ?Sized,
         {
-            RangeIter {
-                iter: Box::new(self.current().range(bounds)),
-            }
+            self.current().range(bounds)
         }
         fn first_key_value(&self) -> Option<(&K, &V)> {
             self.current().first_key_value()
@@ -1040,35 +1141,6 @@ mod block {
 pub use block::{Block, Transaction};
 #[path = "storage/admitted_transaction.rs"]
 mod admitted_transaction;
-mod iter {
-    use super::*;
-    /// Iterate over entries in block, view or transaction
-    pub struct Iter<'slf, K: Key, V: Value> {
-        pub(crate) iter: Box<dyn Iterator<Item = (&'slf K, &'slf V)> + 'slf>,
-    }
-    /// Iterate over range of entries in block, view or transaction
-    pub struct RangeIter<'slf, K: Key, V: Value> {
-        pub(crate) iter: Box<dyn DoubleEndedIterator<Item = (&'slf K, &'slf V)> + 'slf>,
-    }
-    impl<'slf, K: Key, V: Value> Iterator for Iter<'slf, K, V> {
-        type Item = (&'slf K, &'slf V);
-        fn next(&mut self) -> Option<Self::Item> {
-            self.iter.next()
-        }
-    }
-    impl<'slf, K: Key, V: Value> Iterator for RangeIter<'slf, K, V> {
-        type Item = (&'slf K, &'slf V);
-        fn next(&mut self) -> Option<Self::Item> {
-            self.iter.next()
-        }
-    }
-    impl<'slf, K: Key, V: Value> DoubleEndedIterator for RangeIter<'slf, K, V> {
-        fn next_back(&mut self) -> Option<Self::Item> {
-            self.iter.next_back()
-        }
-    }
-}
-pub use iter::{Iter, RangeIter};
 #[cfg(test)]
 mod tests {
     use super::*;

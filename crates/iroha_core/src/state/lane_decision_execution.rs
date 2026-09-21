@@ -295,6 +295,7 @@ impl State {
                 finish_scope(overlay, result, scope)
             },
         )
+        .map_err(super::MergeLedgerCommitError::from)
     }
 }
 

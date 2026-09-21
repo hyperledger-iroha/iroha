@@ -1,7 +1,7 @@
 //! Complete deletion demand for the original removal engine and undo insertion.
 
 use super::*;
-use crate::internals::bptree::cursor::{remove_tracking_slots, CursorCheckpoint};
+use crate::internals::bptree::cursor::CursorCheckpoint;
 
 #[path = "borrowed_delete.rs"]
 mod borrowed_delete;
@@ -19,109 +19,6 @@ struct RemovePlan {
     current: EditPlan,
     undo: Option<EditPlan>,
     demand: AllocationDemand,
-}
-
-// SAFETY: each inspected node is immutable and retained by the original cursor.
-// Count copies without allocating, cloning payloads or retaining tree pointers.
-unsafe fn plan_node_copy<K, V, P>(
-    node: *mut Node<K, V, P::Charge>,
-    demand: &mut AllocationDemand,
-    separator: &mut AllocationDemand,
-) -> Result<(), PlanningError>
-where
-    K: Clone + Ord + Debug,
-    V: Clone,
-    P: ClonePlanning<K, V>,
-{
-    if unsafe { &*node }.is_leaf() {
-        let leaf = unsafe { &*node.cast::<Leaf<K, V, P::Charge>>() };
-        demand.add_layout(Layout::new::<CachePadded<Leaf<K, V, P::Charge>>>())?;
-        for index in 0..leaf.count() {
-            let (key, value) = leaf
-                .get_kv_idx_checked(index)
-                .expect("initialized leaf prefix");
-            let copied = key_demand::<K, V, P>(key)?;
-            demand.add(copied, 1)?;
-            separator.include_max(copied);
-            P::plan_value(value, demand)?;
-        }
-    } else {
-        let branch = unsafe { &*node.cast::<Branch<K, V, P::Charge>>() };
-        demand.add_layout(Layout::new::<CachePadded<Branch<K, V, P::Charge>>>())?;
-        for index in 0..branch.count() {
-            let copied = key_demand::<K, V, P>(branch.key_at(index))?;
-            demand.add(copied, 1)?;
-            separator.include_max(copied);
-        }
-        // A repair may move a child whose minimum was not an old separator.
-        for index in 0..=branch.count() {
-            let minimum = unsafe { &*Node::min_raw(branch.get_idx_unchecked(index)) };
-            separator.include_max(key_demand::<K, V, P>(minimum)?);
-        }
-    }
-    Ok(())
-}
-
-fn plan_remove<K, V, P>(
-    cursor: &CursorWrite<K, V, Prepaid<P>>,
-    key: &K,
-) -> Result<EditPlan, PlanningError>
-where
-    K: Clone + Ord + Debug,
-    V: Clone,
-    P: ClonePlanning<K, V>,
-{
-    cursor.assert_operable();
-    let mut demand = AllocationDemand::new();
-    let mut separator = AllocationDemand::new();
-    let mut height = 0usize;
-    let mut node = cursor.get_root();
-    loop {
-        // SAFETY: exclusive cursor retains the entire original tree. Each path
-        // node and the canonical adjacent sibling are considered once per level.
-        unsafe { plan_node_copy::<K, V, P>(node, &mut demand, &mut separator)? };
-        if unsafe { &*node }.is_leaf() {
-            break;
-        }
-        height = height.checked_add(1).ok_or(PlanningError::Overflow)?;
-        if height >= usize::BITS as usize {
-            return Err(PlanningError::Overflow);
-        }
-        let branch = unsafe { &*node.cast::<Branch<K, V, P::Charge>>() };
-        let selected = branch.locate_node(key);
-        let sibling = if selected == 0 { 1 } else { selected - 1 };
-        unsafe {
-            plan_node_copy::<K, V, P>(
-                branch.get_idx_unchecked(sibling),
-                &mut demand,
-                &mut separator,
-            )?;
-        }
-        node = branch.get_idx_unchecked(selected);
-    }
-    // Same canonical deletion: a leaf merge needs no separator clone. Reserve
-    // one conservative leaf-level rekey plus two per higher repair level.
-    let repairs = if height == 0 {
-        0
-    } else {
-        height
-            .checked_mul(2)
-            .and_then(|n| n.checked_sub(1))
-            .ok_or(PlanningError::Overflow)?
-    };
-    demand.add(separator, repairs)?;
-    let [first_required, last_required] =
-        remove_tracking_slots(height).ok_or(PlanningError::Overflow)?;
-    let [(first_len, first_capacity), (last_len, last_capacity)] = cursor.admitted_tracking();
-    let first =
-        plan_tracking_growth::<K, V, P>(first_len, first_capacity, first_required, &mut demand)?;
-    let last =
-        plan_tracking_growth::<K, V, P>(last_len, last_capacity, last_required, &mut demand)?;
-    Ok(EditPlan {
-        demand,
-        first,
-        last,
-    })
 }
 
 fn plan_remove_pair<K, V, P>(

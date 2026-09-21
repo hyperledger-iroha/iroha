@@ -17,7 +17,10 @@ use axum::http::StatusCode;
 use blake3::hash as blake3_hash;
 use iroha_core::{
     smartcontracts::ValidSingularQuery,
-    state::{StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly, WorldReadOnly},
+    state::{
+        BlockHashRead, StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly,
+        WorldReadOnly,
+    },
 };
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -549,7 +552,7 @@ fn apply_orderbook_finalized_telemetry_event_page(
     Ok(())
 }
 fn orderbook_telemetry_event_block_hashes_are_finalized(
-    block_hashes: &[HashOf<BlockHeader>],
+    block_hashes: &(impl BlockHashRead + ?Sized),
     page: &OrderbookFinalizedEventPageV1,
 ) -> bool {
     page.events.iter().all(|record| {
@@ -557,7 +560,7 @@ fn orderbook_telemetry_event_block_hashes_are_finalized(
             .block_height
             .checked_sub(1)
             .and_then(|index| usize::try_from(index).ok())
-            .and_then(|index| block_hashes.get(index))
+            .and_then(|index| block_hashes.hash_at(index))
             .is_some_and(|hash| hash.as_ref() == &record.block_hash)
     })
 }
@@ -2112,6 +2115,7 @@ mod tests {
         let block_hashes: Vec<HashOf<BlockHeader>> = (1_u8..=4)
             .map(|seed| HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32])))
             .collect();
+        let expected_event_hash = *block_hashes[1].as_ref();
         let mut page = OrderbookFinalizedEventPageV1 {
             finalized_cursor,
             events: vec![finalized_event(
@@ -2123,6 +2127,7 @@ mod tests {
             has_more: false,
             next_after: None,
         };
+        page.events[0].block_hash = expected_event_hash;
         assert!(orderbook_telemetry_event_block_hashes_are_finalized(
             &block_hashes,
             &page
@@ -2131,6 +2136,20 @@ mod tests {
         assert!(!orderbook_telemetry_event_block_hashes_are_finalized(
             &block_hashes,
             &page
+        ));
+        let journal = iroha_core::state::BlockHashes::new(block_hashes);
+        let captured = journal.view();
+        page.events[0].block_hash = expected_event_hash;
+        assert!(orderbook_telemetry_event_block_hashes_are_finalized(
+            &captured, &page
+        ));
+        page.events[0].block_height = 0;
+        assert!(!orderbook_telemetry_event_block_hashes_are_finalized(
+            &captured, &page
+        ));
+        page.events[0].block_height = 5;
+        assert!(!orderbook_telemetry_event_block_hashes_are_finalized(
+            &captured, &page
         ));
     }
     #[test]

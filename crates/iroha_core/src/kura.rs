@@ -632,6 +632,8 @@ pub(crate) use publication_lease::{
 /// global state checkpoints into storage.
 #[derive(Debug)]
 pub struct Kura {
+    /// One finite pool shared by every State hash generation using this store.
+    block_hash_history_budget: mv::allocation::AllocationBudget,
     /// Exact owner-published resident and physical resources; never consensus authority.
     resource_inventory: Arc<resource_inventory::Inventory>,
     /// Process-local identity shared with sealed lifecycle storage authority.
@@ -1661,6 +1663,10 @@ impl FinalizedMergeCarrierRepairPreflight {
     }
 }
 impl Kura {
+    /// Retain the original configured pool for State history construction and edits.
+    pub(crate) fn block_hash_history_budget(&self) -> mv::allocation::AllocationBudget {
+        self.block_hash_history_budget.clone()
+    }
     fn notify_block_writer_sender(
         sender: &mpsc::SyncSender<BlockNotify>,
         notification: BlockNotify,
@@ -2582,6 +2588,18 @@ impl Kura {
     ) -> Result<(Arc<Self>, BlockCount)> {
         let init_started_at = Instant::now();
         let configured_store_dir = config.store_dir.resolve_relative_path();
+        let history_bytes = usize::try_from(config.block_hash_history_bytes.get())
+            .ok()
+            .filter(|bytes| *bytes != 0)
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "kura.block_hash_history_bytes must be nonzero and representable as usize",
+                    ),
+                    configured_store_dir.clone(),
+                )
+            })?;
         config.fastpq_artifacts.validate().map_err(|error| {
             Error::IO(
                 std::io::Error::new(ErrorKind::InvalidInput, error.to_string()),
@@ -3002,6 +3020,7 @@ impl Kura {
         }
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
         let kura = Arc::new(Self {
+            block_hash_history_budget: mv::allocation::AllocationBudget::new(history_bytes),
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
             #[cfg(test)]
@@ -3376,6 +3395,14 @@ impl Kura {
         // lane-geometry paths appear to escape the Kura root.
         let store_root = std::fs::canonicalize(temp_store_dir.path())
             .expect("canonicalize temporary Kura directory for tests");
+        let store_root_lock_file = Self::acquire_store_root_lock(&store_root, true)
+            .expect("lock temporary Kura directory for tests");
+        Self::establish_or_verify_configured_lane_catalog_baseline_with_lock(
+            &store_root,
+            LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default()),
+            &store_root_lock_file,
+        )
+        .expect("authenticate default configured catalog before opening test storage");
         let (blocks_root, merge_log_path) = Self::canonical_storage_paths(&store_root);
         std::fs::create_dir_all(&blocks_root)
             .expect("create temporary Kura block directory for tests");
@@ -3397,6 +3424,12 @@ impl Kura {
             .expect("default Native AMX prune-intent bound is valid");
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
         Arc::new(Self {
+            block_hash_history_budget: mv::allocation::AllocationBudget::new(
+                usize::try_from(
+                    iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES.get(),
+                )
+                .expect("default history budget fits supported platforms"),
+            ),
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
             #[cfg(test)]
@@ -3405,7 +3438,7 @@ impl Kura {
             ),
             #[cfg(all(unix, not(target_os = "espidf")))]
             store_root_directory,
-            _store_root_lock_file: None,
+            _store_root_lock_file: Some(store_root_lock_file),
             block_store: Mutex::new(block_store),
             canonical_chain_lock: PublicationMutex::default(),
             block_store_write_lock: Mutex::new(()),
@@ -32985,15 +33018,16 @@ impl Kura {
     }
     fn require_autonomous_lane_entrypoint_claims_released_for_replica_locked(
         &self,
+        entry: &LaneStorageEntry,
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
         queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
     ) -> Result<()> {
         let retirement_hash = retirement.digest()?;
-        let entry = self.lane_storage_entry(payload.origin_proposal.descriptor.lane_id)?;
+        self.require_active_lane_artifact(entry, &payload.origin_proposal.descriptor)?;
         let replica_complete_outcome_hash = self
             .autonomous_lifecycle_replica_terminal_outcome_is_complete_locked(
-                &entry,
+                entry,
                 payload,
                 retirement,
                 queue_disposition,
@@ -33140,6 +33174,7 @@ impl Kura {
     }
     fn complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
         &self,
+        entry: &LaneStorageEntry,
         pending_canonical_bytes: u64,
         current_attempt_view_recovery_bytes: Option<u64>,
         payload: &LaneExecutablePayloadV1,
@@ -33162,10 +33197,18 @@ impl Kura {
         outcome.validate_for_payload(payload).map_err(|message| {
             Self::invalid_lane_artifact_error(self.store_root.clone(), message)
         })?;
-        let entry = self.lane_storage_entry(payload.origin_proposal.descriptor.lane_id)?;
+        // Startup authenticates retained physical entries before State installs
+        // its active routing map. Keep that exact namespace throughout sealing.
+        self.require_active_lane_artifact(entry, &payload.origin_proposal.descriptor)?;
+        if entry.network_id != payload.network_id {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica claim completion belongs to another network",
+            ));
+        }
         let current = self
             .read_current_autonomous_lane_block_record_self_context_locked(
-                &entry,
+                entry,
                 payload.origin_proposal.descriptor.lane_block_height,
                 current_attempt_view_recovery_bytes,
             )?
@@ -33178,7 +33221,7 @@ impl Kura {
         let exact_attempt_is_current = current.artifact.executable_payload == *payload;
         if !exact_attempt_is_current {
             self.require_autonomous_lane_replica_release_completed_or_superseded_locked(
-                &entry,
+                entry,
                 payload,
                 retirement,
                 queue_disposition,
@@ -38104,14 +38147,17 @@ impl Kura {
             for (manifest, receipt) in &plan.artifacts {
                 identities.push(self.authenticate_native_amx_participant_application_prepublication_under_publication_guard(manifest, receipt, mode.requires_post_apply_metadata())?);
             }
-            let token =
-                NativeAmxParticipantApplicationPrepublicationToken::from_plan(plan, identities)
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            self.store_root.clone(),
-                            "Native AMX completed token does not cover the exact manifest",
-                        )
-                    })?;
+            let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan(
+                self.instance_identity(),
+                plan,
+                identities,
+            )
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX completed token does not cover the exact manifest",
+                )
+            })?;
             if permit_cleanup {
                 for (_, receipt) in &plan.artifacts {
                     self.cleanup_native_amx_participant_application_evidence_under_publication_guard(receipt)?;
@@ -38182,13 +38228,17 @@ impl Kura {
                 )?,
             );
         }
-        let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan(plan, identities)
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "Native AMX prepublication token does not cover the exact manifest",
-                )
-            })?;
+        let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan(
+            self.instance_identity(),
+            plan,
+            identities,
+        )
+        .ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX prepublication token does not cover the exact manifest",
+            )
+        })?;
         if permit_cleanup {
             for (_, receipt) in &plan.artifacts {
                 self.cleanup_native_amx_participant_application_evidence_under_publication_guard(
@@ -38836,12 +38886,26 @@ impl Kura {
         expected_receipt: &NativeAmxParticipantApplicationReceiptArtifact,
         require_post_apply_metadata: bool,
     ) -> Result<NativeAmxParticipantApplicationPrepublicationIdentity> {
-        let descriptor = &expected_receipt.participant_proposal.descriptor;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let _geometry_guard = self.lane_geometry_lock.lock();
+        let _sidecar_guard = self.sidecar_lock.lock();
+        self.authenticate_native_amx_participant_application_prepublication_under_publication_guards(
+            expected_manifest,
+            expected_receipt,
+            require_post_apply_metadata,
+        )
+    }
+    /// Read the exact original frontier under the caller's prune, canonical,
+    /// geometry and sidecar fences. Never reacquire a publication lock here.
+    fn authenticate_native_amx_participant_application_prepublication_under_publication_guards(
+        &self,
+        expected_manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
+        expected_receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+        require_post_apply_metadata: bool,
+    ) -> Result<NativeAmxParticipantApplicationPrepublicationIdentity> {
+        let descriptor = &expected_receipt.participant_proposal.descriptor;
         let entry = self.lane_storage_entry(descriptor.lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
-        let _sidecar_guard = self.sidecar_lock.lock();
         let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
         let participant_height = descriptor.lane_block_height;
         let manifest_path = Self::native_amx_application_manifest_path_for_entry(
@@ -40675,6 +40739,20 @@ impl Kura {
         let (data_path, index_path) =
             Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
         let _sidecar = self.sidecar_lock.lock();
+        // The receipt owner can resume its own exact append, but cannot adopt
+        // a concurrent rewrite of the raw lane evidence it authenticates.
+        let (raw_data_path, raw_index_path) =
+            Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
+        if !self.bound_progress_sidecar_directory_is_absent(&raw_data_path, &raw_index_path)? {
+            let raw_namespace =
+                self.open_bound_progress_namespace(&raw_data_path, &raw_index_path)?;
+            self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+                &raw_namespace,
+                &raw_data_path,
+                &raw_index_path,
+                "receipt append raw evidence preflight",
+            )?;
+        }
         if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
             return Ok(());
         }

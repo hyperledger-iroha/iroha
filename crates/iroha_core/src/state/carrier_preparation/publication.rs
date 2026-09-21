@@ -44,7 +44,7 @@ pub(in crate::state::carrier_preparation::journals) struct PublishedCarrier<A, B
     events: Vec<EventBox>,
     checkpoint: KuraWsvCheckpointReceipt,
     // Original opaque State family, retained without a State borrow or pointer ABA.
-    state_owner: std::sync::Arc<crate::state::BlockHashOwner>,
+    state_owner: crate::state::NativeLaneStateOwner,
     source: super::super::super::super::execution_prefix::ValidatedExecutionPrefix,
     // These outlive all values retained for completion delivery.
     _admission: A,
@@ -58,7 +58,7 @@ pub(in crate::state::carrier_preparation::journals) struct PublishedCarrier<A, B
 /// carrier/source and their resource owners; wire evidence cannot construct it.
 #[must_use]
 pub(crate) struct PublishedNativeApply<'published> {
-    state_owner: &'published std::sync::Arc<crate::state::BlockHashOwner>,
+    state_owner: &'published crate::state::NativeLaneStateOwner,
     block: &'published iroha_data_model::block::SignedBlock,
     source: &'published crate::state::NativeExecutionCustody,
 }
@@ -78,7 +78,7 @@ impl PublishedNativeApply<'_> {
         ),
         String,
     > {
-        if !std::sync::Arc::ptr_eq(self.state_owner, &owner.0)
+        if !self.state_owner.same_family(owner)
             || !self
                 .source
                 .retains_carrier(self.block, self.source.context().context())
@@ -314,6 +314,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             admission: retained_admission,
         } = journals;
         admission = retained_admission;
+        let hash_retirement;
         let AcquiredCarrierComponents {
             world,
             runtime,
@@ -322,7 +323,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             _fences: fences,
         } = components;
 
-        let state_owner = std::sync::Arc::clone(&target.block_hashes.owner);
+        let state_owner = block_hashes.state_owner();
         let generation = target.begin_state_view_write();
         transactions.publish();
         runtime.publish();
@@ -344,7 +345,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             .take()
             .map(|effects| effects.publish(target, &generation, true));
         target.install_sccp_registry_cache(std::sync::Arc::clone(&effects.sccp_registry));
-        block_hashes.publish();
+        hash_retirement = block_hashes.publish();
         target.update_latest_block_header_cache(effects.header);
         drop(generation);
         // Capture the final cursor projection under these same physical fences,
@@ -373,6 +374,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         }
         publication_events.append(&mut extra_events);
         drop(commit);
+        drop(hash_retirement);
         Ok(PublishedCarrier {
             block: valid,
             committed_event,

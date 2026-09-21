@@ -1287,6 +1287,34 @@ impl BodyValidationBusy {
     }
 }
 
+/// One bounded physical history dependency retained by its original proposal owner.
+pub(crate) struct HistoryAdmissionWait(mv::ReleaseFuture);
+impl std::fmt::Debug for HistoryAdmissionWait {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HistoryAdmissionWait")
+            .finish_non_exhaustive()
+    }
+}
+impl HistoryAdmissionWait {
+    /// Register before returning to the runner, including releases racing registration.
+    pub(crate) fn new(wait: mv::ReleaseWait, wake: &std::task::Waker) -> Self {
+        let mut pending = Self(wait.wait_for_release());
+        if pending.is_ready(wake) {
+            wake.wake_by_ref();
+        }
+        pending
+    }
+    /// Recheck only the original dependency; no timer or replacement credit is minted.
+    pub(crate) fn is_ready(&mut self, wake: &std::task::Waker) -> bool {
+        std::future::Future::poll(
+            std::pin::Pin::new(&mut self.0),
+            &mut std::task::Context::from_waker(wake),
+        )
+        .is_ready()
+    }
+}
+
 /// Local validator dependency, never a statement about proposal validity.
 #[derive(Clone, Debug, thiserror::Error)]
 pub(crate) enum LocalValidationRefusal {
@@ -5126,3 +5154,43 @@ pub(crate) enum V2BodyStoreError {
     KuraReceiptMismatch,
 }
 include!("v2_body_store_tests.rs");
+
+#[cfg(test)]
+mod history_admission_wait_tests {
+    use super::HistoryAdmissionWait;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct WakeCount(AtomicUsize);
+    impl std::task::Wake for WakeCount {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    #[test]
+    fn history_admission_registers_original_release_and_release_before_registration() {
+        for early in [false, true] {
+            let original = mv::ReleaseNotification::default();
+            let unrelated = mv::ReleaseNotification::default();
+            let release = original.observe();
+            let count = Arc::new(WakeCount(AtomicUsize::new(0)));
+            let wake = std::task::Waker::from(Arc::clone(&count));
+            if early {
+                drop(original.guard(()));
+            }
+            let mut wait = HistoryAdmissionWait::new(release, &wake);
+            if !early {
+                drop(unrelated.guard(()));
+                assert_eq!(count.0.load(Ordering::SeqCst), 0);
+                assert!(!wait.is_ready(&wake));
+                drop(original.guard(()));
+            }
+            assert_eq!(count.0.load(Ordering::SeqCst), 1);
+            assert!(wait.is_ready(&wake));
+        }
+    }
+}

@@ -45,6 +45,17 @@ returns the original successor and input unchanged. Unrestricted mutation stays
 unavailable. Unused prepaid remainder returns before each handoff while allocated
 charges remain in their owners.
 
+Closed map removal plans the original search path and the exact sibling that
+rebalancing can use at each level. For `b` branch levels, the engine needs at most
+`2b + 1` new-node slots and `3b + 2` retirement slots, including merge and root
+demotion. Planning includes actual padded layouts, nested node copies and at
+most two additional separator copies per level. Complete admission precedes
+buffer growth or mutation. Missing keys need no admission or allocation. The
+same removal engine serves both modes; no alternate tree or inverse-insert
+rollback is introduced. `MapAdmissionError` names refusal for acquisition and
+all closed map edits. Storage removal joins this plan with its original undo
+and touched-key demand before acquiring any new credits.
+
 Attached writers in either map mode lend exclusive transaction checkpoints. A
 new private generation tag forces edits to copy parent nodes; nested guards
 resolve in LIFO order. Prepaid checkpoints retain the parent's original tracking
@@ -57,7 +68,8 @@ identity, allowing resolved checkpoints to reuse the pointer niche. Apply keeps
 edits private until the original writer commits. Caught mutation or cleanup panic makes that cursor unusable, including
 for reading, detaching and publishing. Borrowed current and saved-root values
 cannot outlive or mutate their checkpoint. Prepaid mode exposes only closed
-admitted insertion and reset; generic checkpoints do not grant ordinary mutation.
+admitted insertion, removal and reset; generic checkpoints do not grant ordinary
+mutation.
 
 Production Storage now retains both current and block-undo maps in this same
 B+tree engine. Block opening clears a private undo root without deep-cloning the
@@ -70,14 +82,15 @@ Production transactions retain checkpoints of both trees and borrow transaction
 preimages from the saved current root. Dropping a transaction restores both
 original trees without cloning, allocating or replaying inverse edits. Apply
 checks both cursors and destroys ordered touch keys while both rollback guards
-remain armed, then transfers both private changes and the dirty flag. Caught
+remain armed, then transfers both private changes and the dirty flag before
+either checkpoint retirement can invoke user cleanup. Caught
 preimage-clone or owned query-key destruction panic cannot apply partial edits.
 Direct block edits retain their own failure state through first-preimage cloning
 and owned-query destruction, including work outside either tree cursor. Every
 value read, new edit, capture and publication preflights that state and both
 cursor states. A caught child undo-cursor panic therefore cannot publish a
 healthy current tree before discovering the failed undo owner.
-The explicit prepaid insertion transaction retains these same two checkpoints.
+The explicit prepaid insertion/removal transaction retains these same two checkpoints.
 Checked generation refusal occurs before admission or payload copying. Its ordered
 local touches use a concrete `Box<[MaybeUninit<K>]>` plus the original exact array
 charge. Planning extends the canonical pair demand with checked array growth and
@@ -97,19 +110,24 @@ These component operations do not enable prepaid State transactions; concrete
 model payload policies and configured aggregate admission remain required.
 
 The same MV Storage family also exposes explicit prepaid construction and
-insertion blocks. One checked startup reservation is partitioned between both
+insertion/removal blocks. One checked startup reservation is partitioned between both
 map owners; `Arc::ptr_eq` authenticates the original pool, independently of equal
 limits or available counts. Both writer shells are admitted together, then a
 closed reset admits the actual empty undo root and retirement bookkeeping.
 Insertion uses one complete current/first-preimage demand while retaining both
 original locks. A higher-ranked callback prevents writer guards from escaping
 the whole-block refund scope. Node charges are actual `AllocationCharge` owners;
-copied nested payloads require an explicit `AdmittedStoragePolicy`.
+copied nested payloads require an explicit `AdmittedStoragePolicy`. Removal
+preserves a first None preimage even when the queried key is absent and marks
+dirty only for a present value. Owned query cleanup stays inside pair failure
+guards. Both maps and their shared identity publish before any retired allocation
+cleanup or retry notification, including an untouched current generation.
 
 World currently instantiates Untracked Storage. Native mutex/runtime and
 publication/release control storage remain outside constructor admission. Real
-model payload policies, general map iterator stacks, detached capture and
-removal/mutable replacement admission remain unfinished. Final-tree
+model payload policies, detached capture and mutable replacement admission
+remain unfinished. Borrowed map iterators and ranges retain bounded traversal
+state inline and make no heap allocations. Final-tree
 teardown walks original child pointers with a bounded stack and allocates nothing.
 
 Extract node charges before destroying their cache-padded Box and refund only
@@ -295,3 +313,9 @@ Real callback-bearing charges need their original notification-deferral scope
 around physical guards and destruction. The [closed insertion record](../../docs/history/2026-09-20/closed-admitted-insertion.md)
 records the initial operation. The [retained edit record](../../docs/history/2026-09-20/retained-admitted-edits.md)
 records its multi-edit and root-ownership extension with separate validation.
+
+EBR Cell publication uses the original exclusive writer to transfer each allocation
+without entering the epoch collector. Opaque unlinked allocations remain owned
+through both physical writers and pair identity rotation; their retirement runs
+after unlock and retains the original reader grace period. This removes collector
+callbacks from the transfer interval, but does not admit collector bookkeeping.

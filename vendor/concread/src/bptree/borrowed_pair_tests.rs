@@ -48,8 +48,8 @@ fn borrowed_writers_keep_original_locks_and_first_preimages() {
     let busy_undo = without_allocations(|| {
         undo.try_write_admitted::<()>(|_| panic!("original undo lock still held"))
     });
-    assert!(matches!(busy_current, Err(InsertAdmissionError::Busy)));
-    assert!(matches!(busy_undo, Err(InsertAdmissionError::Busy)));
+    assert!(matches!(busy_current, Err(MapAdmissionError::Busy)));
+    assert!(matches!(busy_undo, Err(MapAdmissionError::Busy)));
     drop((busy_current, busy_undo));
     assert!(current.read().is_empty() && undo.read().is_empty());
     without_allocations(|| drop((cw, uw)));

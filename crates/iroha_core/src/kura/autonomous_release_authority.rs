@@ -228,6 +228,7 @@ impl Kura {
                 exact_ordinary_fifo_preserved,
             )?;
             self.require_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+                &entry,
                 payload,
                 retirement,
                 source_disposition,
@@ -261,6 +262,7 @@ impl Kura {
             terminal,
         )?;
         self.complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+            &entry,
             pending_canonical_bytes,
             Some(pending_canonical_bytes),
             payload,

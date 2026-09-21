@@ -79,7 +79,7 @@ DELEGATED_STATE_BINDINGS = (
         "self.stage_certified_merge_entry_with_replay(entry, frozen_mode, Some(replay))",
     )),
 )
-DELEGATED_STATE_BINDINGS += (('build_merge_execution_candidate_for_consensus',
+DELEGATED_STATE_BINDINGS += (('select_merge_execution_candidate_for_consensus',
   ('canonical_merged_lane_frontier_from_world',
    'validate_merge_execution_predecessor_against_frontier',
    'durable_autonomous_merge_source_for_lane_slot',
@@ -186,7 +186,7 @@ DELEGATED_STATE_BINDINGS += (('composed_external_events',
   ('finalized carrier metadata authorization was already minted',
    'reference.matches_entry(entry)',
    'canonical_wsv_merge_commit_authorization_matches',
-   'self.block_hashes.pending.as_slice() != [carrier_hash]',
+   '!self\n            .block_hashes\n            .pending()\n            .iter()\n            .copied()\n            .eq([carrier_hash])',
    'has_exact_staged_block(carrier_storage_height, &self.merge_carrier_entrypoints)',
    'authorization.validated_publication_event_bytes.is_none()',
    'finalized autonomous carrier lacks a validated publication event surface',
@@ -215,6 +215,8 @@ DELEGATED_STATE_BINDINGS += (('composed_external_events',
    'let transactions = tx_validate_result?;',
    'transactions.publish()',
    'authorization.composed_write_set_root()')))
+
+DELEGATED_STATE_BINDINGS += (("build_merge_execution_candidate_for_consensus", ()), ("select_merge_execution_candidate_prefix", ()))
 
 # Exact existing diagnostic literals, separate from executable relations.
 DELEGATED_STATE_DIAGNOSTIC_TOKENS = (
@@ -329,11 +331,11 @@ def validate_delegated_state_contract(
             "let Some(next_gas) = selected_gas.checked_add(gas) else { break; };",
             "selected_gas = next_gas; selected_entrypoints = next_entrypoints; selected_count += 1;",
             "sources.truncate(selected_count); Ok(sources)")
-    require("build_merge_execution_candidate_for_consensus",
+    require("select_merge_execution_candidate_for_consensus",
             "let sources = match select_merge_execution_source_budget(sources, gas_limit_from_parameters(world.parameters()),)",
             "sources[..prefix_len].to_vec()")
     require("build_merge_execution_batch_from_source_prefix",
-            "sources.sort_by_key(|source| merge_execution_canonical_order_key(&source.certified.proposal));",
+            "sources.sort_by_key(|source| { merge_execution_canonical_order_key(&source.certified.proposal) });",
             "if let Err(err) = state_block.validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)")
     require("apply_without_execution_inner",
             "if let Err(error) = self.prepare_deterministic_carrier_metadata(block.as_ref(), topology, topology_authority,) { return (Vec::new(), Err(error)); }",

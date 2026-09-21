@@ -39,6 +39,9 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
+    let genesis = state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish fixture genesis");
     // Configure tiny chunk size (e.g., 2 instructions per chunk)
     let mut cfg = state.view().pipeline().clone();
     cfg.overlay_chunk_instructions = 2;
@@ -68,14 +71,15 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
     // Build and apply a block with this transaction
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let new_block = BlockBuilder::new(vec![accepted])
-        .chain(0, None)
+        .chain(0, Some(&genesis))
         .sign(kp.private_key())
         .unpack(|_| {});
     let mut sb = state.block(new_block.header());
     let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
     let cb = vb.commit_unchecked().unpack(|_| {});
-    let _events = sb.apply_without_execution(&cb, Vec::new());
-    let _ = sb.commit();
+    state
+        .commit_executed_block_for_testing(sb, cb)
+        .expect("publish all instruction effects");
     // Verify all metadata keys were set on the account
     let view = state.view();
     let acc = view

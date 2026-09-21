@@ -82,6 +82,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('block/tx_order_validation_revalidation_test.rs'),
         Path('block/rejected_live_batch_fee_tests.rs'),
         Path('block/fee_admission_tests.rs'),
+        Path('block/public_contract_creation_fee_tests.rs'),
         Path('block/bootstrap_and_genesis_tests.rs'),
     ),
     Path('crates/iroha_config/src/parameters/actual.rs'): (

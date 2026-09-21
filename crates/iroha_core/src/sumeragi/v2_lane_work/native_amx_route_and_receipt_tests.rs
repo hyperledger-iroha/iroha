@@ -501,6 +501,7 @@ fn native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_has
 #[test]
 fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
     let (adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let mut body = native_body(&adapter);
     let lane_id = LaneId::SINGLE;
     let dataspace_id = DataSpaceId::UNIVERSAL;
     let retired_incarnation = adapter
@@ -565,6 +566,12 @@ fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
         .kura
         .install_lane_incarnation_marker_for_test(&recreated_entry, recreated_incarnation, 0)
         .expect("install the explicit recreated consensus namespace");
+    adapter.kura.replace_lane_storage_entries_for_test(
+        &adapter.state.nexus_snapshot().lane_config,
+        &adapter.state.lane_incarnations_snapshot(),
+        &BTreeMap::from([(lane_id, 0)]),
+    )
+    .expect("select the recreated namespace for this explicit incarnation fixture");
     assert_ne!(
         adapter
             .state
@@ -580,7 +587,8 @@ fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
             .is_none(),
         "the active Kura marker must hide the retired high artifact"
     );
-    let body = native_body(&adapter);
+    body.coordinator_lane_incarnation = recreated_incarnation;
+    body.participant_lane_incarnation = recreated_incarnation;
     assert!(
         adapter
             .native_coordinator_height_is_current(&body)

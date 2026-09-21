@@ -48,6 +48,45 @@ fn removal_retains_first_some_and_explicit_none_under_original_writers() {
 }
 
 #[test]
+fn repeated_absent_joint_removal_needs_no_current_or_undo_allocation() {
+    let pool = Pool::new();
+    let current = map::<usize>(&pool);
+    let undo = map::<Option<usize>>(&pool);
+    let mut cw = current.try_write_admitted(|d| pool.reserve(d)).unwrap();
+    let mut uw = undo.try_write_admitted(|d| pool.reserve(d)).unwrap();
+    cw.try_remove_with_undo_admitted(&mut uw, 7, |d, _| pool.reserve(d))
+        .unwrap();
+    assert_eq!(uw.get(&7), Some(&None));
+    let before_current = identity(cw.inner.as_ref());
+    let before_undo = identity(uw.inner.as_ref());
+    let before_budget = (pool.used.get(), pool.takes.get(), pool.clones.get());
+    pool.limit.set(pool.used.get());
+    without_allocations(|| {
+        assert_eq!(
+            cw.try_remove_with_undo_admitted(&mut uw, 7, |demand, key| {
+                assert_eq!(*key, 7);
+                assert_eq!(demand, AllocationDemand::new());
+                pool.reserve(demand)
+            })
+            .unwrap(),
+            None
+        );
+    });
+    let after_current = identity(cw.inner.as_ref());
+    assert_eq!(after_current.root, before_current.root);
+    assert_eq!(after_current.tracking, before_current.tracking);
+    assert_eq!(after_current.backing, before_current.backing);
+    assert_eq!(identity(uw.inner.as_ref()), before_undo);
+    assert_eq!(
+        (pool.used.get(), pool.takes.get(), pool.clones.get()),
+        before_budget
+    );
+    without_allocations(|| drop((cw, uw)));
+    without_allocations(|| drop((current, undo)));
+    assert_eq!(pool.used.get(), 0);
+}
+
+#[test]
 fn removal_whole_demand_refusal_and_exact_retry_preserve_parent_custody() {
     let pool = Pool::new();
     let current = map::<usize>(&pool);

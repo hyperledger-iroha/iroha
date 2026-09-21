@@ -21,7 +21,7 @@ use crate::{
         nexus_active_lane_ids, public_lane_validator_record_matches_key,
     },
 };
-use iroha_crypto::{Algorithm, Hash, HashOf};
+use iroha_crypto::{Algorithm, Hash};
 use iroha_data_model::{
     NetworkId,
     block::{SignedBlock, consensus_v2 as wire},
@@ -865,7 +865,7 @@ pub(crate) fn build_successor_height_context_from_state(
 /// pulse into authoritative entropy.
 pub(crate) fn finalized_global_beacon_npos_successor_seed_from_sources(
     world: &impl WorldReadOnly,
-    block_hashes: &[HashOf<iroha_data_model::block::BlockHeader>],
+    block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
     network_id: &NetworkId,
     boundary_height: wire::Height,
     successor_epoch: u64,
@@ -894,14 +894,14 @@ pub(crate) fn finalized_global_beacon_npos_successor_seed_from_sources(
         return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
     }
 
-    let committed_height = u64::try_from(block_hashes.len())
+    let committed_height = u64::try_from(block_hashes.hash_count())
         .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
     let anchor_index = usize::try_from(anchor_height)
         .ok()
         .and_then(|height| height.checked_sub(1))
         .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
     let anchor_hash = block_hashes
-        .get(anchor_index)
+        .hash_at(anchor_index)
         .copied()
         .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
     let expected_anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
@@ -1775,8 +1775,7 @@ mod tests {
         let records = [(LaneId::SINGLE, peer, 9)];
         let baseline = lane_hash_world(&records);
         let mut changed_catalog = lane_hash_world(&records);
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+        let catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
                 id: DataSpaceId::new(7),
@@ -1786,9 +1785,7 @@ mod tests {
             },
         ])
         .expect("valid runtime catalog");
-        changed_catalog
-            .set_nexus(nexus)
-            .expect("install unrelated runtime catalog");
+        changed_catalog.set_dataspace_catalog_for_testing(catalog);
         assert_ne!(
             baseline.view().world().dataspace_catalog(),
             changed_catalog.view().world().dataspace_catalog(),

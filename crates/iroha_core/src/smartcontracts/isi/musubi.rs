@@ -15,10 +15,12 @@ use crate::{
     },
     telemetry::{MusubiGovernanceActionV1, MusubiGovernanceRejectionReasonV1},
 };
+#[cfg(test)]
 use iroha_crypto::HashOf;
+#[cfg(test)]
+use iroha_data_model::block::BlockHeader;
 use iroha_data_model::{
     asset::AssetId,
-    block::BlockHeader,
     events::data::{DataEvent, musubi::prelude::*},
     governance::types::{GovernanceAttemptStatusV1, ProposalContentId, ProposalKind},
     isi::{
@@ -3363,22 +3365,22 @@ pub fn validate_musubi_registry_snapshot_history_v1(
     )
 }
 fn canonical_finalized_hash(
-    block_hashes: &[HashOf<BlockHeader>],
+    block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
     finalized_height: u64,
 ) -> Option<[u8; 32]> {
     finalized_height
         .checked_sub(1)
         .and_then(|index| usize::try_from(index).ok())
-        .and_then(|index| block_hashes.get(index))
+        .and_then(|index| block_hashes.hash_at(index))
         .map(|hash| *hash.as_ref())
 }
 fn validate_publication_snapshot_history(
     snapshot: &MusubiRegistrySnapshotV1,
     world: &impl WorldReadOnly,
-    block_hashes: &[HashOf<BlockHeader>],
+    block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
     current_revision: u64,
 ) -> Result<(), Error> {
-    let current_height = u64::try_from(block_hashes.len())
+    let current_height = u64::try_from(block_hashes.hash_count())
         .map_err(|_| invariant("Musubi finalized height overflows u64"))?;
     validate_publication_snapshot_anchor(
         snapshot,
@@ -3460,7 +3462,7 @@ fn validate_publication_snapshot_anchor(
 fn validate_resolution_proof(
     publication: &MusubiPublicationV1,
     world: &impl WorldReadOnly,
-    block_hashes: &[HashOf<BlockHeader>],
+    block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
 ) -> Result<(), Error> {
     let nodes = publication
         .resolution

@@ -2,11 +2,14 @@
 //! Node charges are native AllocationCharge; nested payload frees retain the
 //! parent harness's physical allocator witness. Control/World funding is not claimed.
 use super::*;
-use mv::storage::{AdmittedBlockError, AdmittedStorageError, AdmittedStoragePolicy, Storage};
+use mv::storage::{
+    AdmittedBlockError, AdmittedStorageError, AdmittedStoragePolicy, Storage, StorageReadOnly,
+};
 use std::cell::RefCell;
 
 thread_local! {
     static STORAGE_COUNTERS: RefCell<Option<Arc<Counters>>> = const { RefCell::new(None) };
+    static REJECT_PLANNED_KEY: Cell<Option<usize>> = const { Cell::new(None) };
     static FACTORY_FAULT: Cell<u8> = const { Cell::new(0) };
     static FOREIGN_POOL: RefCell<Option<AllocationBudget>> = const { RefCell::new(None) };
 }
@@ -22,6 +25,7 @@ impl Drop for PolicyContext {
     fn drop(&mut self) {
         STORAGE_COUNTERS.with(|slot| assert!(slot.take().is_some()));
         FACTORY_FAULT.with(|mode| mode.set(0));
+        REJECT_PLANNED_KEY.with(|key| key.set(None));
         FOREIGN_POOL.with(|slot| drop(slot.take()));
     }
 }
@@ -54,6 +58,9 @@ impl NodeCloning<Payload, Option<Payload>> for NativeStoragePolicy {
 }
 impl ClonePlanning<Payload, Payload> for NativeStoragePolicy {
     fn plan_key(key: &Payload, demand: &mut AllocationDemand) -> Result<(), PlanningError> {
+        if REJECT_PLANNED_KEY.with(|rejected| rejected.get() == Some(key.order)) {
+            return Err(PlanningError::UnsupportedPayload);
+        }
         <Policy as ClonePlanning<Payload, Payload>>::plan_key(key, demand)
     }
     fn plan_value(value: &Payload, demand: &mut AllocationDemand) -> Result<(), PlanningError> {
@@ -62,7 +69,7 @@ impl ClonePlanning<Payload, Payload> for NativeStoragePolicy {
 }
 impl ClonePlanning<Payload, Option<Payload>> for NativeStoragePolicy {
     fn plan_key(key: &Payload, demand: &mut AllocationDemand) -> Result<(), PlanningError> {
-        <Policy as ClonePlanning<Payload, Option<Payload>>>::plan_key(key, demand)
+        <Self as ClonePlanning<Payload, Payload>>::plan_key(key, demand)
     }
     fn plan_value(
         value: &Option<Payload>,
@@ -90,7 +97,7 @@ impl AdmittedStoragePolicy for NativeStoragePolicy {
             2 => {
                 drop(
                     reservation
-                        .try_partition(1)
+                        .try_partition_bytes(1)
                         .expect("nonempty planned policy"),
                 );
                 None
@@ -1291,15 +1298,15 @@ fn actual_block_removal_preserves_first_preimages_and_absent_dirty_semantics() {
         .try_with_admitted_block(|block| {
             for _ in 0..2 {
                 let previous = block.get(&7).unwrap().pointer();
-                let records = NEXT_RECORD.load(SeqCst);
+                let previous_id = block.get(&7).unwrap().id();
                 assert!(block_remove(block, &budget, 9).is_none());
                 assert!(!block.is_dirty());
-                // Canonical absent deletion still clones its current leaf.
-                // Logical cleanliness does not erase that original paid owner.
+                // Absent removal keeps the original current leaf and its paid
+                // payload owner; only a missing first undo preimage is added.
                 let current = block.get(&7).unwrap();
                 marker(Some(current), 0x11);
-                assert_ne!(current.pointer(), previous);
-                assert!(current.id() >= records);
+                assert_eq!(current.pointer(), previous);
+                assert_eq!(current.id(), previous_id);
                 assert_eq!(
                     RECORDS[current.id()].pointer.load(SeqCst),
                     current.pointer()
@@ -1834,4 +1841,195 @@ fn actual_removal_caught_copy_and_consumed_query_panics_cannot_publish() {
         reclaimed_since(0);
         assert_eq!(budget.reserved_bytes(), 0);
     }
+}
+
+#[test]
+fn prepaid_storage_reads_need_no_heap_credit_or_payload_copy() {
+    fn scan(storage: &impl StorageReadOnly<Payload, Payload>, count: usize) {
+        without_allocations(|| {
+            let mut entries = storage.iter();
+            let mut low = 0;
+            let mut high = count;
+            while low < high {
+                assert_eq!(entries.len(), high - low);
+                let (key, value) = if (high - low).is_multiple_of(2) {
+                    high -= 1;
+                    let entry = entries.next_back().unwrap();
+                    assert_eq!(entry.0.order, high);
+                    entry
+                } else {
+                    let entry = entries.next().unwrap();
+                    assert_eq!(entry.0.order, low);
+                    low += 1;
+                    entry
+                };
+                assert_eq!(key.order, value.order);
+            }
+            assert_eq!(entries.len(), 0);
+            assert!(entries.next().is_none());
+            assert!(entries.next_back().is_none());
+            let mut bounded = storage.range::<usize>((
+                std::ops::Bound::Included(&7),
+                std::ops::Bound::Excluded(&63),
+            ));
+            for order in (7..count.min(63)).rev() {
+                let (key, value) = bounded.next_back().unwrap();
+                assert_eq!(key.order, order);
+                assert_eq!(value.order, order);
+            }
+            assert!(bounded.next().is_none());
+            assert!(bounded.next_back().is_none());
+        });
+    }
+
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 24);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    scan(&storage.view(), 0);
+    storage
+        .try_with_admitted_block(|block| {
+            let mut transaction = block.try_transaction_admitted().unwrap();
+            for order in 0..65 {
+                let (key, value) = input(&budget, order);
+                transaction.try_insert_admitted(key, value).unwrap();
+            }
+            transaction.apply();
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    let old = storage.view();
+    let copied = (counters.keys.load(SeqCst), counters.values.load(SeqCst));
+    let charged = budget.reserved_bytes();
+    let full = budget
+        .try_reserve_bytes(budget.limit_bytes() - charged)
+        .unwrap();
+    scan(&old, 65);
+    assert_eq!(
+        (counters.keys.load(SeqCst), counters.values.load(SeqCst)),
+        copied
+    );
+    drop(full);
+    assert_eq!(budget.reserved_bytes(), charged);
+    storage
+        .try_with_admitted_block(|block| {
+            scan(block, 65);
+            let mut transaction = block.try_transaction_admitted().unwrap();
+            let (key, value) = input(&budget, 65);
+            transaction.try_insert_admitted(key, value).unwrap();
+            scan(&transaction, 66);
+            scan(&transaction.view(), 66);
+            drop(transaction);
+            scan(block, 65);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    scan(&old, 65);
+    scan(&storage.view(), 65);
+    drop(old);
+    drop(storage);
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn missing_removal_planning_refusal_preserves_original_query_and_touch_owners() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 22);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    storage
+        .try_with_admitted_block(|block| {
+            let mut transaction = block.try_transaction_admitted().unwrap();
+            let query = removal_key(&budget, 77);
+            let pointer = query.pointer();
+            let credits = budget.reserved_bytes();
+            let copies = (counters.keys.load(SeqCst), counters.values.load(SeqCst));
+            REJECT_PLANNED_KEY.with(|key| key.set(Some(77)));
+            let (query, error) =
+                without_allocations(|| transaction.try_remove_admitted(query)).unwrap_err();
+            assert!(matches!(
+                error,
+                AdmittedStorageError::Planning(PlanningError::UnsupportedPayload)
+            ));
+            assert_eq!(query.pointer(), pointer);
+            assert_eq!(budget.reserved_bytes(), credits);
+            assert_eq!(
+                (counters.keys.load(SeqCst), counters.values.load(SeqCst)),
+                copies
+            );
+            assert!(transaction.is_empty());
+            assert_eq!(transaction.touched_entries().len(), 0);
+            drop(query);
+            REJECT_PLANNED_KEY.with(|key| key.set(None));
+            assert!(
+                transaction
+                    .try_remove_admitted(removal_key(&budget, 7))
+                    .unwrap()
+                    .is_none()
+            );
+            transaction.apply();
+            assert!(!block.is_dirty());
+            let entry = block.touched_entries().next().unwrap();
+            assert_eq!(entry.key.order, 7);
+            assert!(entry.before.is_none() && entry.after.is_none());
+            assert_eq!(block.touched_entries().len(), 1);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    drop(storage);
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn removed_value_retains_its_original_allocation_after_transaction_and_block_abort() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 22);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    seed(&storage, &budget, 7);
+    let view = storage.view();
+    let original = view.get(&7).unwrap().pointer();
+    let mut removed = None;
+    let error = storage
+        .try_with_admitted_block(|block| {
+            let mut transaction = block.try_transaction_admitted().unwrap();
+            let value = transaction
+                .try_remove_admitted(removal_key(&budget, 7))
+                .unwrap()
+                .unwrap();
+            assert!(transaction.get(&7).is_none());
+            let entry = transaction.touched_entries().next().unwrap();
+            assert_eq!(entry.before.unwrap().pointer(), original);
+            assert!(entry.after.is_none());
+            let pointer = value.pointer();
+            without_allocations(|| drop(transaction));
+            assert_eq!(block.get(&7).unwrap().pointer(), original);
+            assert!(!block.is_dirty());
+            assert_eq!(value.pointer(), pointer);
+            assert!(!RECORDS[value.id()].freed.load(SeqCst));
+            removed = Some(value);
+            Err::<(), _>(())
+        })
+        .unwrap_err();
+    assert!(matches!(error, AdmittedBlockError::Callback(())));
+    let removed = removed.unwrap();
+    let id = removed.id();
+    assert!(!RECORDS[id].freed.load(SeqCst));
+    without_allocations(|| drop(removed));
+    assert!(RECORDS[id].freed.load(SeqCst));
+    assert!(RECORDS[id].refunded.load(SeqCst));
+    assert_eq!(view.get(&7).unwrap().pointer(), original);
+    assert_eq!(storage.view().get(&7).unwrap().pointer(), original);
+    drop(view);
+    drop(storage);
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
 }

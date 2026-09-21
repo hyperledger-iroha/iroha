@@ -3337,7 +3337,8 @@ fn held_lease_first_admission_read_keeps_all_fences_and_does_not_populate_body_c
     drop(query_index);
     assert!(matches!(
         lease.read_first_admission_carrier(height, blocks[0].hash()),
-        Err(Error::CanonicalBlockWireMismatch { height: 2 })
+        Err(Error::BlockHeightConflict { height: 2, expected, actual })
+            if expected == blocks[0].hash() && actual == blocks[1].hash()
     ));
     assert!(matches!(
         lease.read_first_admission_carrier(nonzero!(3_usize), blocks[1].hash()),

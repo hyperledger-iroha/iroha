@@ -1,3 +1,4 @@
+//! Benchmark fixture for validating and publishing canonical block outputs.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "./common.rs"]
 mod common;
@@ -72,13 +73,13 @@ impl StateValidateBlocks {
         let topology = Topology::new(vec![PeerId::new(peer_public_key)]);
         let alice_id = (*ALICE_ID).clone();
         let alice_keypair = (*ALICE_KEYPAIR).clone();
-        let mut state = build_state(rt, &alice_id, alice_keypair.private_key());
-        let (domain_ids, _, _) = generate_ids(
+        let mut state = build_state(rt, &alice_id);
+        let (domain_ids, account_ids, _) = generate_ids(
             BENCH_DOMAINS,
             BENCH_ACCOUNTS_PER_DOMAIN,
             BENCH_ASSETS_PER_DOMAIN,
         );
-        seed_benchmark_domains(&mut state, &domain_ids, &alice_id);
+        seed_benchmark_domains(&mut state, &domain_ids, &account_ids, &alice_id);
         let instructions = instruction_batches().to_vec();
         Self {
             state,
@@ -112,7 +113,7 @@ impl StateValidateBlocks {
             view.height()
         };
         for (instruction_batch, i) in instructions.into_iter().zip(1..) {
-            let (block, mut state_block) = create_block(
+            let (block, state_block) = create_block(
                 &state,
                 instruction_batch.iter().cloned(),
                 account_id.clone(),
@@ -120,15 +121,10 @@ impl StateValidateBlocks {
                 &topology,
                 &peer_private_key,
             );
-            let _events = state_block.apply_without_execution(&block, topology.as_ref().to_owned());
-            assert_eq!(state_block.height(), base_height + i);
-            state_block.commit().unwrap();
-            let block_arc = Arc::new(block.into());
-            let state_view = state.view();
-            state_view
-                .kura()
-                .store_block(block_arc)
-                .expect("store block in bench setup");
+            state
+                .commit_executed_block_for_testing(state_block, block)
+                .expect("publish actual benchmark block outputs");
+            assert_eq!(state.view().height(), base_height + i);
         }
     }
 }

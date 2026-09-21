@@ -169,6 +169,8 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        block_hash_history_bytes:
+            iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     };

@@ -601,8 +601,18 @@ fn runtime_catalog_startup_reconstructs_manifest_without_files_and_preserves_pol
 fn runtime_catalog_replacement_uses_its_retained_parameter_predecessor() {
     run_catalog_test(|| {
         let (state, keys) = catalog_fixture(InvalidMember::None);
-        let (_, pending) = staged_catalog_fixture(&state, &keys);
-        install_fixture_runtime(&state, pending.runtime_catalog.unwrap());
+        let (after, pending) = staged_catalog_fixture(&state, &keys);
+        install_fixture_runtime(&state, pending.runtime_catalog.clone().unwrap());
+        // The tip's World catalog and runtime owner are one scoped publication.
+        *state.nexus.write() = after;
+        state
+            .install_canonical_runtime_projection(
+                &state.nexus.read(),
+                &pending.catalog_update.updated_lane_incarnation_lineage,
+                &state.autoscale_sample_history_snapshot(),
+            )
+            .expect("install the matching runtime owner for the retained catalog");
+        state.install_lane_manifests(&pending.updated_lane_manifests);
         let live = runtime_catalog_from_world(&state.world.view()).unwrap();
         assert!(live.is_some());
         let mut replacement = state.world.block_and_revert();

@@ -23,7 +23,6 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use nonzero_ext::nonzero;
-use std::sync::Arc;
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, KeyPair) {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     let kura = Kura::blank_kura_for_testing();
@@ -186,22 +185,10 @@ fn seed_genesis_block(state: &State) -> HashOf<BlockHeader> {
     if let Some(hash) = state.view().latest_block_hash() {
         return hash;
     }
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let leader = lane_authority_fixture::leader();
-    let genesis = BlockBuilder::new(header)
-        .build_with_signature(0, leader.private_key())
-        .canonical_resultless_proposal();
-    let genesis_hash = genesis.hash();
-    let mut state_block = state.block(genesis.header());
-    let valid = ValidBlock::validate_unchecked(genesis, &mut state_block).unpack(|_| {});
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    let _ = state_block.apply_without_execution(&committed, lane_authority_fixture::peers());
-    state_block
-        .kura()
-        .store_block(Arc::new(committed.clone().into()))
-        .expect("store genesis block");
-    state_block.commit().expect("genesis commit must succeed");
-    genesis_hash
+    state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish authenticated genesis")
+        .hash()
 }
 fn run_validate(
     state: &mut iroha_core::state::State,

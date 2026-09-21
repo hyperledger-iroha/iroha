@@ -84,6 +84,8 @@ const HINT_SKIP_DYNAMIC_STATE_PATH: &str = "dynamic state path is not compiler-r
 const HINT_SKIP_CONTRACT_CALL_TARGET: &str = "contract call target is not compiler-resolved";
 const HINT_SKIP_INTERNAL_CALL_TARGET: &str = "internal call target is not compiler-resolved";
 const HINT_SKIP_OPAQUE_ISI: &str = "opaque ISI access is not compiler-resolved";
+const HINT_SKIP_DYNAMIC_INSTRUCTION_BRIDGE: &str =
+    "instruction bridge requires conservative dynamic access";
 fn multiply_defined_temps(program: &ir::Program) -> HashSet<(usize, ir::Temp)> {
     let mut seen = HashSet::new();
     let mut multiple = HashSet::new();
@@ -1688,15 +1690,15 @@ mod tests {
         ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
         COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES,
         DataKind, DeferredTransfer, GLOBAL_WILDCARD_KEY, HINT_SKIP_CONTRACT_CALL_TARGET,
-        HINT_SKIP_DYNAMIC_STATE_PATH, HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI,
-        IrAccessClass, LiteralFixups, NFT_COARSE_KEY, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES,
-        TransferKind, WIDE_IMM_MAX, checked_align_stack_frame_size, classify_ir_access,
-        collect_dynamic_access_hints, decoded_control_target, emit_addi,
-        emit_get_private_input_arguments, emit_load64, emit_parallel_register_moves,
-        emit_private_numeric_valcom_arguments, emit_store64, encode_addi, encode_jal, encode_nop,
-        patch_indexed_literal_load, patch_literal_load, pointer_type_for_kind, push_word,
-        record_isi_access, relax_control_transfers_with_trampolines, reserve_word,
-        stack_slot_offset_bytes,
+        HINT_SKIP_DYNAMIC_INSTRUCTION_BRIDGE, HINT_SKIP_DYNAMIC_STATE_PATH,
+        HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI, IrAccessClass, LiteralFixups,
+        NFT_COARSE_KEY, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX,
+        checked_align_stack_frame_size, classify_ir_access, collect_dynamic_access_hints,
+        decoded_control_target, emit_addi, emit_get_private_input_arguments, emit_load64,
+        emit_parallel_register_moves, emit_private_numeric_valcom_arguments, emit_store64,
+        encode_addi, encode_jal, encode_nop, patch_indexed_literal_load, patch_literal_load,
+        pointer_type_for_kind, push_word, record_isi_access,
+        relax_control_transfers_with_trampolines, reserve_word, stack_slot_offset_bytes,
     };
     use crate::{
         ast::BinaryOp,
@@ -5684,6 +5686,64 @@ kotoage fn main() authorize("CompilerFixture") {{
         }
     }
     #[test]
+    fn literal_instruction_bridge_keeps_transitive_access_hints_conservative() {
+        let source = r#"
+seiyaku BallotAccess {
+    fn submit() {
+        let instruction = ledger::governance::build_submit_ballot(
+            election_id: "election",
+            ciphertext: b"ciphertext",
+            nullifier: b"0123456789abcdef0123456789abcdef",
+            backend: "halo2/ipa",
+            proof: b"proof",
+            verification_key: b"key",
+        );
+        ledger::governance::submit_ballot(value: instruction);
+    }
+    kotoage fn run() authorize("CanInvokeContractEntrypoint") {
+        submit();
+    }
+}
+"#;
+        let (program, manifest) = Compiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile a literal instruction behind an internal call");
+        let entrypoints = manifest.entrypoints.expect("manifest entrypoints");
+        let entrypoint = entrypoints
+            .iter()
+            .find(|entry| entry.name == "run")
+            .unwrap();
+        assert_eq!(entrypoint.access_hints_complete, Some(false));
+        assert!(entrypoint.write_keys.iter().any(|key| key == "*"));
+        assert!(
+            entrypoint
+                .write_keys
+                .iter()
+                .any(|key| key == "zk:election:election:nullifiers")
+        );
+        assert!(
+            entrypoint
+                .access_hints_skipped
+                .iter()
+                .any(|reason| reason == HINT_SKIP_DYNAMIC_INSTRUCTION_BRIDGE)
+        );
+        let parsed = ProgramMetadata::parse(&program).expect("parse emitted contract");
+        let interface = parsed
+            .contract_interface
+            .expect("embedded contract interface");
+        let embedded = interface
+            .entrypoints
+            .iter()
+            .find(|entry| entry.name == "run")
+            .unwrap();
+        assert_eq!(
+            embedded.access_hints_complete,
+            entrypoint.access_hints_complete
+        );
+        assert_eq!(embedded.write_keys, entrypoint.write_keys);
+    }
+
+    #[test]
     fn inline_submit_ballot_builtin_rejects_invalid_arguments() {
         let src = include_str!("compiler/fixtures/v1/c084.ko");
         let expected = "ledger::governance::build_submit_ballot expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)";
@@ -7487,7 +7547,8 @@ kotoage fn main() authorize("AssetAdmin") {{
                 .write_keys
                 .contains(&"zk:election:election-1:nullifiers".to_string())
         );
-        assert_conservative_ledger_read(&hints.read_keys, &hints.write_keys);
+        assert!(hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_owned()));
+        assert!(hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_owned()));
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let demo = entrypoints
             .iter()
@@ -7496,8 +7557,11 @@ kotoage fn main() authorize("AssetAdmin") {{
         assert_eq!(demo.access_hints_complete, Some(false));
         assert_eq!(
             demo.access_hints_skipped,
-            vec![HINT_SKIP_OPAQUE_ISI.to_owned()],
-            "opaque proof envelopes require a conservative read wildcard even when the ballot instruction payload is exact"
+            vec![
+                HINT_SKIP_OPAQUE_ISI.to_owned(),
+                HINT_SKIP_DYNAMIC_INSTRUCTION_BRIDGE.to_owned(),
+            ],
+            "opaque proofs require conservative reads and the instruction bridge requires conservative writes even for an exact ballot payload"
         );
     }
     #[test]
@@ -16685,6 +16749,7 @@ fn production_allows_incomplete_access_hints(skipped_reasons: &[String]) -> bool
                 reason.as_str(),
                 HINT_SKIP_CONTRACT_CALL_TARGET
                     | HINT_SKIP_DYNAMIC_STATE_PATH
+                    | HINT_SKIP_DYNAMIC_INSTRUCTION_BRIDGE
                     | HINT_SKIP_OPAQUE_ISI
             )
         })
@@ -17116,18 +17181,21 @@ fn record_isi_access(
             add_trigger_rw(access_set, &id);
         }
         ir::Instr::VendorExecuteInstruction { payload, .. } => {
+            // The emitted instruction bridge has Dynamic syscall access. Literal
+            // payload hints remain useful, but cannot claim complete access for
+            // that bridge: artifact admission validates the reachable syscall
+            // surface independently of compiler literal propagation.
+            apply_fallback(
+                access_set,
+                hint_diagnostics,
+                HINT_SKIP_DYNAMIC_INSTRUCTION_BRIDGE,
+            );
             if let Some(access) = instruction_literal_access_map.get(&(func_idx, *payload)) {
                 access_set.union_with(access);
-                return;
-            }
-            let Some(raw) = string_map.get(&(func_idx, *payload)) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            let Some(isi) = decode_instruction_box_literal(raw) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            if record_instruction_box_access(&isi, access_set).is_none() {
-                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            } else if let Some(raw) = string_map.get(&(func_idx, *payload))
+                && let Some(isi) = decode_instruction_box_literal(raw)
+            {
+                let _ = record_instruction_box_access(&isi, access_set);
             }
         }
         ir::Instr::VendorExecuteQuery { payload, .. }

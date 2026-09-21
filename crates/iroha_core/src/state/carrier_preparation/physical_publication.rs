@@ -549,8 +549,8 @@ impl<Admission, BindingAdmission>
                 transactions,
                 block_hashes,
             } = original;
-            // Validation takes a hash read snapshot before World writers. Probe
-            // its writer first, so a retained snapshot cannot create a cycle.
+            // Private execution has already released its hash writer. Acquire the
+            // exact hash predecessor first, then every remaining component.
             let block_hashes = match block_hashes
                 .try_prepare_publication(&target.block_hashes, |_, _| Ok::<_, Infallible>(()))
             {

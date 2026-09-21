@@ -9,11 +9,9 @@ use iroha_core::{
 use iroha_crypto::Algorithm;
 use iroha_model_base::peer::PeerId;
 use iroha_test_samples::gen_account_in;
-use std::sync::Arc;
 pub struct StateApplyBlocks {
     state: State,
     blocks: Vec<CommittedBlock>,
-    topology: Topology,
 }
 impl StateApplyBlocks {
     /// Create [`State`] and blocks for benchmarking
@@ -33,8 +31,8 @@ impl StateApplyBlocks {
         let peer_id = PeerId::new(peer_public_key);
         let topology = Topology::new(vec![peer_id]);
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let mut state = build_state(rt, &alice_id, alice_keypair.private_key());
-        seed_benchmark_domains(&mut state, &domain_ids, &alice_id);
+        let mut state = build_state(rt, &alice_id);
+        seed_benchmark_domains(&mut state, &domain_ids, &account_ids, &alice_id);
         let nth = 10;
         let instructions = [
             populate_state(&domain_ids, &account_ids, &asset_definition_ids, &alice_id),
@@ -43,12 +41,12 @@ impl StateApplyBlocks {
         ];
         let blocks = {
             // Create empty state because it will be changed during creation of block
-            let mut state = build_state(rt, &alice_id, alice_keypair.private_key());
-            seed_benchmark_domains(&mut state, &domain_ids, &alice_id);
+            let mut state = build_state(rt, &alice_id);
+            seed_benchmark_domains(&mut state, &domain_ids, &account_ids, &alice_id);
             instructions
                 .into_iter()
                 .map(|instructions| {
-                    let (block, mut state_block) = create_block(
+                    let (block, state_block) = create_block(
                         &state,
                         instructions,
                         alice_id.clone(),
@@ -56,24 +54,14 @@ impl StateApplyBlocks {
                         &topology,
                         &peer_private_key,
                     );
-                    let _events =
-                        state_block.apply_without_execution(&block, topology.as_ref().to_owned());
-                    state_block.commit().unwrap();
-                    let block_arc = Arc::new(block.clone().into());
-                    let state_view = state.view();
-                    state_view
-                        .kura()
-                        .store_block(block_arc)
-                        .expect("store block in bench setup");
+                    state
+                        .commit_executed_block_for_testing(state_block, block.clone())
+                        .expect("publish actual benchmark block outputs");
                     block
                 })
                 .collect::<Vec<_>>()
         };
-        Self {
-            state,
-            blocks,
-            topology,
-        }
+        Self { state, blocks }
     }
     /// Run benchmark body.
     ///
@@ -83,23 +71,16 @@ impl StateApplyBlocks {
     ///
     /// # Panics
     /// If state height isn't updated after applying block
-    pub fn measure(
-        Self {
-            state,
-            blocks,
-            topology,
-        }: &Self,
-    ) {
+    pub fn measure(Self { state, blocks }: &Self) {
         let base_height = {
             let view = state.view();
             view.height()
         };
         for (block, i) in blocks.iter().zip(1..) {
-            let mut state_block = state.block(block.as_ref().header());
+            let state_block = state.block(block.as_ref().header());
             let _events = state_block
-                .apply_fixture_block(block, topology.as_ref().to_owned(), None)
+                .apply_fixture_block(block, None)
                 .expect("reexecute and apply benchmark block");
-            state_block.commit().unwrap();
             assert_eq!(state.view().height(), base_height + i);
         }
     }

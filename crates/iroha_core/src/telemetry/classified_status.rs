@@ -69,7 +69,8 @@ impl From<TelemetryStatusSourceError> for StatusSnapshotError {
     fn from(error: TelemetryStatusSourceError) -> Self {
         match error {
             TelemetryStatusSourceError::Busy => Self::StateBusy,
-            TelemetryStatusSourceError::TargetChanged
+            TelemetryStatusSourceError::Poisoned
+            | TelemetryStatusSourceError::TargetChanged
             | TelemetryStatusSourceError::InvalidPosition
             | TelemetryStatusSourceError::Encoding => Self::StateUnavailable,
         }

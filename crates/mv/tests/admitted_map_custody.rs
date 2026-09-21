@@ -1,4 +1,4 @@
-//! Public closed map insertion with real MV credits and observed allocation custody.
+//! Closed map edits with real MV credits and observed allocation custody.
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -17,7 +17,7 @@ use std::{
 
 use concread::bptree::{
     AllocationDemand, BptreeMap, BptreeMapCheckpoint, BptreeMapOwned, ClonePlanning,
-    InsertAdmissionError, NodeCloning, NodeFunding, OwnedWriteError, PlanningError, Prepaid,
+    MapAdmissionError, NodeCloning, NodeFunding, OwnedWriteError, PlanningError, Prepaid,
 };
 use mv::allocation::{
     AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation,
@@ -480,7 +480,7 @@ fn complete_demand_refusal_allocates_nothing_and_retries_the_original_input_afte
             .expect("original capacity must refuse the complete operation")
         })
     });
-    let InsertAdmissionError::Refused(AllocationRefusal::Capacity {
+    let MapAdmissionError::Refused(AllocationRefusal::Capacity {
         requested_bytes, ..
     }) = error
     else {
@@ -684,7 +684,7 @@ fn every_partial_leaf_clone_unwind_reclaims_new_storage_and_preserves_published_
                 .expect("poison is explicit")
             })
         });
-        assert!(matches!(error, InsertAdmissionError::Poisoned));
+        assert!(matches!(error, MapAdmissionError::Poisoned));
         budget.with_deferred_refund_notifications(|| drop((key, value, original)));
         without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
         reclaimed_since(0);
@@ -711,7 +711,7 @@ impl Wake for Reenter {
                 .expect("read-only reentrant probe refuses admission")
         });
         self.writer_released
-            .store(matches!(error, InsertAdmissionError::Refused(())), SeqCst);
+            .store(matches!(error, MapAdmissionError::Refused(())), SeqCst);
         *slot = Some(input);
         self.wakes.fetch_add(1, SeqCst);
     }
@@ -890,7 +890,7 @@ fn retained_capacity_refusal_preserves_private_entries_and_input_then_retries() 
     });
     assert!(matches!(
         error,
-        InsertAdmissionError::Refused(AllocationRefusal::Capacity { .. })
+        MapAdmissionError::Refused(AllocationRefusal::Capacity { .. })
     ));
     assert_eq!(NEXT_RECORD.load(SeqCst), records);
     assert_eq!((key.pointer(), value.pointer()), pointers);
@@ -931,7 +931,7 @@ fn retained_edits_refuse_foreign_busy_and_changed_generations_before_admission()
                 .try_insert_owned_admitted(owner, key, value, never)
                 .err()
                 .unwrap();
-            assert!(matches!(error, InsertAdmissionError::Changed));
+            assert!(matches!(error, MapAdmissionError::Changed));
             let held = original
                 .try_write_owned(competing)
                 .unwrap_or_else(|_| panic!("competing writer"));
@@ -939,13 +939,13 @@ fn retained_edits_refuse_foreign_busy_and_changed_generations_before_admission()
                 .try_insert_owned_admitted(owner, key, value, never)
                 .err()
                 .unwrap();
-            assert!(matches!(error, InsertAdmissionError::Busy));
+            assert!(matches!(error, MapAdmissionError::Busy));
             held.commit();
             let ((owner, (key, value)), error) = original
                 .try_insert_owned_admitted(owner, key, value, never)
                 .err()
                 .unwrap();
-            assert!(matches!(error, InsertAdmissionError::Changed));
+            assert!(matches!(error, MapAdmissionError::Changed));
             assert_eq!(
                 (
                     key.pointer(),
@@ -1355,7 +1355,7 @@ fn checkpoint_capacity_refusal_keeps_child_state_and_original_input_for_retry() 
         });
         assert!(matches!(
             error,
-            InsertAdmissionError::Refused(AllocationRefusal::Capacity { .. })
+            MapAdmissionError::Refused(AllocationRefusal::Capacity { .. })
         ));
         assert_eq!((key.pointer(), value.pointer()), pointers);
         assert_eq!(child.to_snapshot().len(), 2);
@@ -1422,6 +1422,280 @@ fn checkpoint_buffer_refund_panic_restores_parent_ownership_and_forbids_publicat
     without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn admitted_removal_funds_all_path_sibling_and_separator_copies_until_empty() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    for direction in 0..3 {
+        reset();
+        let budget = AllocationBudget::new(32 << 20);
+        let counters = Arc::new(Counters::default());
+        let map = map(&budget, &counters);
+        for order in 0..128 {
+            let owner = insert(&map, &budget, &counters, order);
+            commit(&map, &budget, owner);
+        }
+        let original = map.read();
+        let original_pointer = original.get(&0).unwrap().pointer();
+        let original_id = original.get(&0).unwrap().id();
+        let mut present = [true; 128];
+        budget.with_deferred_refund_notifications(|| {
+            for step in 0..128 {
+                // Ascending/descending force both edge sibling cases; this odd
+                // permutation visits every interior key exactly once as well.
+                let order = match direction {
+                    0 => step,
+                    1 => 127 - step,
+                    _ => (step * 73) % 128,
+                };
+                let (key, unused) = input(&budget, order);
+                drop(unused);
+                let mut writer = map
+                    .try_write_admitted(|demand| Policy::admit(&budget, &counters, demand, None))
+                    .unwrap();
+                let demand = without_allocations(|| writer.removal_demand(&key).unwrap());
+                let start = NEXT_RECORD.load(SeqCst);
+                let (previous, allocations) = counted(|| {
+                    writer
+                        .try_remove_admitted(&key, |actual| {
+                            assert_eq!(actual, demand);
+                            Policy::admit(&budget, &counters, actual, None)
+                        })
+                        .unwrap()
+                        .unwrap()
+                });
+                assert_eq!(previous.order, order);
+                assert_eq!(
+                    allocations,
+                    NEXT_RECORD.load(SeqCst) - start,
+                    "removal allocated outside original credit custody"
+                );
+                assert!(allocations <= demand.allocations());
+                drop(previous);
+                drop(key);
+                present[order] = false;
+                assert_eq!(writer.len(), 127 - step);
+                without_allocations(|| writer.commit());
+                let current = map.read();
+                for (index, expected) in present.iter().enumerate() {
+                    assert_eq!(current.get(&index).is_some(), *expected);
+                }
+                assert_eq!(original.len(), 128);
+                assert_eq!(original.get(&0).unwrap().pointer(), original_pointer);
+                assert!(!RECORDS[original_id].freed.load(SeqCst));
+                assert_live_credits(&budget);
+            }
+            assert!(map.read().is_empty());
+            without_allocations(|| drop(original));
+        });
+        without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+        reclaimed_since(0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn admitted_removal_refusal_and_absence_preserve_original_private_generation() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(4 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    for order in 0..32 {
+        let owner = insert(&map, &budget, &counters, order);
+        commit(&map, &budget, owner);
+    }
+    budget.with_deferred_refund_notifications(|| {
+        let mut writer = map
+            .try_write_admitted(|demand| Policy::admit(&budget, &counters, demand, None))
+            .unwrap();
+        let original = writer.get(&7).unwrap().pointer();
+        let (key, unused) = input(&budget, 7);
+        drop(unused);
+        let (missing, unused) = input(&budget, 999);
+        drop(unused);
+        let mut child = writer.checkpoint().unwrap();
+        let blocker = budget
+            .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+            .unwrap();
+        without_allocations(|| {
+            assert_eq!(
+                child.removal_demand(&missing).unwrap(),
+                AllocationDemand::new()
+            );
+            assert!(
+                child
+                    .try_remove_admitted(&missing, |_| -> Result<Policy, ()> {
+                        panic!("absent removal must not request admission")
+                    })
+                    .unwrap()
+                    .is_none()
+            );
+        });
+        let before = NEXT_RECORD.load(SeqCst);
+        let error = without_allocations(|| {
+            child.try_remove_admitted(&key, |demand| {
+                Policy::admit(&budget, &counters, demand, None)
+            })
+        })
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            MapAdmissionError::Refused(AllocationRefusal::Capacity { .. })
+        ));
+        assert_eq!(NEXT_RECORD.load(SeqCst), before);
+        assert_eq!(child.get(&7).unwrap().pointer(), original);
+        drop(blocker);
+        let removed = child
+            .try_remove_admitted(&key, |demand| {
+                Policy::admit(&budget, &counters, demand, None)
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(removed.order, 7);
+        drop(removed);
+        without_allocations(|| child.apply());
+        assert!(writer.get(&7).is_none());
+        without_allocations(|| writer.commit());
+        drop(key);
+        drop(missing);
+        drop(map);
+    });
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn admitted_removal_nested_abort_restores_original_nodes_at_full_capacity() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(16 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    for order in 0..80 {
+        let owner = insert(&map, &budget, &counters, order);
+        commit(&map, &budget, owner);
+    }
+    budget.with_deferred_refund_notifications(|| {
+        let mut writer = map
+            .try_write_admitted(|demand| Policy::admit(&budget, &counters, demand, None))
+            .unwrap();
+        let original = writer.get(&0).unwrap().pointer();
+        let baseline = budget.reserved_bytes();
+        let start = NEXT_RECORD.load(SeqCst);
+        let mut outer = writer.checkpoint().unwrap();
+        let mut nested = outer.checkpoint().unwrap();
+        for order in 0..80 {
+            let (key, unused) = input(&budget, order);
+            drop(unused);
+            drop(
+                nested
+                    .try_remove_admitted(&key, |demand| {
+                        Policy::admit(&budget, &counters, demand, None)
+                    })
+                    .unwrap()
+                    .unwrap(),
+            );
+            drop(key);
+        }
+        assert!(nested.to_snapshot().is_empty());
+        without_allocations(|| nested.apply());
+        assert!(outer.to_snapshot().is_empty());
+        let blocker = budget
+            .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+            .unwrap();
+        let blocked = blocker.remaining_bytes();
+        without_allocations(|| drop(outer));
+        assert_eq!(writer.len(), 80);
+        assert_eq!(writer.get(&0).unwrap().pointer(), original);
+        assert_eq!(budget.reserved_bytes(), baseline + blocked);
+        reclaimed_since(start);
+        drop(blocker);
+        without_allocations(|| writer.commit());
+        drop(map);
+    });
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn admitted_removal_clone_unwind_cannot_publish_and_refunds_private_copies() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    for failure_position in 0..3 {
+        reset();
+        let budget = AllocationBudget::new(8 << 20);
+        let counters = Arc::new(Counters::default());
+        let map = map(&budget, &counters);
+        for order in 0..80 {
+            let owner = insert(&map, &budget, &counters, order);
+            commit(&map, &budget, owner);
+        }
+        let original = map.read();
+        let pointer = original.get(&0).unwrap().pointer();
+        // Fanout changes the number of actual copies. Observe the same edit in
+        // an aborted checkpoint first, then inject at its first, middle and last
+        // copy so every supported tree shape reaches the requested crash cut.
+        let copies = budget.with_deferred_refund_notifications(|| {
+            let mut writer = map
+                .try_write_admitted(|demand| Policy::admit(&budget, &counters, demand, None))
+                .unwrap();
+            let (key, unused) = input(&budget, 0);
+            drop(unused);
+            let mut child = writer.checkpoint().unwrap();
+            counters.keys.store(0, SeqCst);
+            counters.values.store(0, SeqCst);
+            drop(
+                child
+                    .try_remove_admitted(&key, |demand| {
+                        Policy::admit(&budget, &counters, demand, None)
+                    })
+                    .unwrap()
+                    .unwrap(),
+            );
+            let copies = counters.keys.load(SeqCst) + counters.values.load(SeqCst);
+            without_allocations(|| drop(child));
+            without_allocations(|| drop(writer));
+            drop(key);
+            copies
+        });
+        assert!(copies >= 3);
+        let fail_at = match failure_position {
+            0 => 1,
+            1 => copies.div_ceil(2),
+            _ => copies,
+        };
+        let baseline = budget.reserved_bytes();
+        let start = NEXT_RECORD.load(SeqCst);
+        budget.with_deferred_refund_notifications(|| {
+            let mut writer = map
+                .try_write_admitted(|demand| Policy::admit(&budget, &counters, demand, None))
+                .unwrap();
+            let (key, unused) = input(&budget, 0);
+            drop(unused);
+            let mut child = writer.checkpoint().unwrap();
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    let _ = child.try_remove_admitted(&key, |demand| {
+                        Policy::admit(&budget, &counters, demand, Some(fail_at))
+                    });
+                }))
+                .is_err()
+            );
+            assert!(catch_unwind(AssertUnwindSafe(|| child.get(&0))).is_err());
+            assert!(catch_unwind(AssertUnwindSafe(|| child.apply())).is_err());
+            assert!(catch_unwind(AssertUnwindSafe(|| writer.commit())).is_err());
+            drop(key);
+        });
+        assert_eq!(map.read().len(), 80);
+        assert_eq!(map.read().get(&0).unwrap().pointer(), pointer);
+        assert_eq!(budget.reserved_bytes(), baseline);
+        reclaimed_since(start);
+        budget.with_deferred_refund_notifications(|| drop(original));
+        budget.with_deferred_refund_notifications(|| drop(map));
+        reclaimed_since(0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
 }
 
 fn admitted_writer_start(map: &Map, budget: &AllocationBudget, counters: &Arc<Counters>) -> Owned {
@@ -1548,7 +1822,7 @@ fn admitted_writer_start_refuses_one_byte_below_and_accepts_exact_complete_deman
         .err()
         .expect("probe must refuse")
     });
-    assert!(matches!(refused, InsertAdmissionError::Refused(())));
+    assert!(matches!(refused, MapAdmissionError::Refused(())));
     let demand = required.unwrap();
     assert_eq!(demand.allocations(), 2);
     assert_eq!(budget.reserved_bytes(), before);
@@ -1570,7 +1844,7 @@ fn admitted_writer_start_refuses_one_byte_below_and_accepts_exact_complete_deman
     });
     assert!(matches!(
         refused,
-        InsertAdmissionError::Refused(AllocationRefusal::Capacity { .. })
+        MapAdmissionError::Refused(AllocationRefusal::Capacity { .. })
     ));
     assert_eq!(counters.admissions.load(SeqCst), calls + 1);
     assert_eq!(budget.reserved_bytes(), held);

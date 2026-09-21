@@ -896,8 +896,9 @@ fn validate_and_record_transactions_never_executes_local_soracloud_mailbox_runti
     let runtime = CountingSoracloudRuntime::default();
     state.set_soracloud_runtime(Some(Arc::new(runtime.clone())));
     let leader = crate::block::checked_keypair();
+    state.seed_genesis_for_testing().expect("authenticate ordinary fixture predecessor");
     let block = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
-        .chain(0, None)
+        .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
         .unpack(|_| {});
     let mut state_block = state.block(block.header);
@@ -906,7 +907,9 @@ fn validate_and_record_transactions_never_executes_local_soracloud_mailbox_runti
             &state_block.transaction(),
         )
         .expect("fixture audit sequence");
-    let _valid = block.validate_and_record_transactions(&mut state_block);
+    let valid = block
+        .validate_and_record_transactions(&mut state_block)
+        .unpack(|_| {});
     assert_eq!(
         crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
             &state_block.transaction(),
@@ -915,7 +918,12 @@ fn validate_and_record_transactions_never_executes_local_soracloud_mailbox_runti
         audit_sequence_before,
         "local runtime output cannot advance the consensus audit sequence",
     );
-    state_block.commit().expect("commit first mailbox block");
+    state
+        .commit_executed_block_for_testing(
+            state_block,
+            valid.commit_unchecked().unpack(|_| {}),
+        )
+        .expect("commit first mailbox block under its exact execution authority");
     let view = state.view();
     let world = view.world();
     let runtime_state = world
@@ -968,8 +976,9 @@ fn validate_and_record_transactions_ignores_local_soracloud_mailbox_state_mutati
         }]);
     state.set_soracloud_runtime(Some(Arc::new(runtime.clone())));
     let leader = crate::block::checked_keypair();
+    state.seed_genesis_for_testing().expect("authenticate ordinary fixture predecessor");
     let block = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
-        .chain(0, None)
+        .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
         .unpack(|_| {});
     let mut state_block = state.block(block.header);
@@ -978,7 +987,9 @@ fn validate_and_record_transactions_ignores_local_soracloud_mailbox_state_mutati
             &state_block.transaction(),
         )
         .expect("fixture audit sequence");
-    let _valid = block.validate_and_record_transactions(&mut state_block);
+    let valid = block
+        .validate_and_record_transactions(&mut state_block)
+        .unpack(|_| {});
     assert_eq!(
         crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
             &state_block.transaction(),
@@ -987,7 +998,12 @@ fn validate_and_record_transactions_ignores_local_soracloud_mailbox_state_mutati
         audit_sequence_before,
         "local runtime output cannot advance the consensus audit sequence",
     );
-    state_block.commit().expect("commit mailbox state block");
+    state
+        .commit_executed_block_for_testing(
+            state_block,
+            valid.commit_unchecked().unpack(|_| {}),
+        )
+        .expect("commit mailbox state block under its exact execution authority");
     let view = state.view();
     let world = view.world();
     let runtime_state = world

@@ -3909,7 +3909,34 @@ fn native_amx_completed_publication_retry_reauthenticates_without_new_index_or_r
             )
             .expect("completed exact publication retry")
     };
-    assert_eq!(repeated, first);
+    let NativeAmxParticipantApplicationPrepublicationToken {
+        original_kura: first_kura,
+        application_block_height: first_height,
+        application_block_hash: first_hash,
+        executed_block_wire_hash: first_wire_hash,
+        finality_artifact_hash: first_finality_hash,
+        manifest_root: first_manifest_root,
+        manifest_leaf_count: first_leaf_count,
+        identities: first_identities,
+    } = first;
+    let NativeAmxParticipantApplicationPrepublicationToken {
+        original_kura: repeated_kura,
+        application_block_height: repeated_height,
+        application_block_hash: repeated_hash,
+        executed_block_wire_hash: repeated_wire_hash,
+        finality_artifact_hash: repeated_finality_hash,
+        manifest_root: repeated_manifest_root,
+        manifest_leaf_count: repeated_leaf_count,
+        identities: repeated_identities,
+    } = repeated;
+    assert!(repeated_kura.same_instance(&first_kura));
+    assert_eq!(repeated_height, first_height);
+    assert_eq!(repeated_hash, first_hash);
+    assert_eq!(repeated_wire_hash, first_wire_hash);
+    assert_eq!(repeated_finality_hash, first_finality_hash);
+    assert_eq!(repeated_manifest_root, first_manifest_root);
+    assert_eq!(repeated_leaf_count, first_leaf_count);
+    assert_eq!(repeated_identities, first_identities);
     assert!(
         fixture
             .kura

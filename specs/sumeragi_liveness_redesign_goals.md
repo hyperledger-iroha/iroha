@@ -1,5 +1,7 @@
 # Sumeragi liveness redesign goals
 
+Current participant custody work: the [source-coupled record](../docs/history/2026-09-21/participant-publication-custody.md) describes the original-Kura readback boundary and distinguishes remaining scalar AMX consumers from the new Native Decision path. The latter owns its sealed application markers and does not require the old participant representation. Retire that representation with its remaining consumers; do not reopen rejected MergeQC execution. Scoped checkpoint133 validation does not close L1–L6.
+
 Work location: `/Users/takemiyamakoto/dev/iroha`, branch `optimizations`. All ongoing source edits and validation use this checkout; temporary source checkouts are retired from this workflow.
 
 Set: 2026-09-16. Overall goal: **Active**. Implementation and qualification are
@@ -1550,9 +1552,48 @@ original generations through snapshots and publication retry. The live
 now retain both original parent roots and borrow transaction preimages directly.
 Abort restores both trees without allocation, cloning or inverse edits; caught
 preimage-clone and owned query-key destruction panic cannot apply partial work.
-The next Storage step must jointly admit current edits, first block preimages and
-ordered touch metadata, propagate generation refusal through State admission,
-and carry concrete payload policies into configured production funding.
+The [joint Storage admission](../docs/history/2026-09-20/joint-storage-admission.md)
+now reserves current edits, first block preimages and charged ordered touch storage
+before any mutation. It retains both checkpoint retirements through private apply,
+and both physical publication owners through joint root/identity installation.
+The same stages cover EBR Cell pairs and current-only replacement, retaining
+unscheduled old allocations until unlock before entering the epoch collector.
+Successful physical release disarms poisoning during later retirement cleanup.
+Arbitrary cleanup and wake callbacks run after every participant unlocks. Carry
+these owners through concrete model payload policies, closed removal/mutation,
+State generation refusal and configured aggregate memory/work admission; native
+runtime and identity allocation remain outside this boundary. The
+[allocation-free State scan](../docs/history/2026-09-21/allocation-free-state-scans.md)
+removes both MV read-iterator boxes and dynamic B+tree traversal stacks from the
+live engine. Actual allocator controls cover committed and private State views,
+history, retained readers and an exhausted prepaid pool; this funds no mutation
+or candidate payload by implication. Closed admitted map removal now uses the same
+engine for both modes, funding path/sibling/separator copies and bounded tracking
+before mutation. Missing-key removal needs no admission; nested rollback restores
+actual original nodes at full capacity. The [joint Storage removal](../docs/history/2026-09-21/joint-storage-removal.md)
+now shares insertion's complete admission and original rollback owners. Missing
+keys retain explicit first absence and touch without dirtying a clean block;
+returned private values keep their original charges. Default and skinny MV suites
+pass; the linked record tracks final validation and remaining activation boundaries.
+The actual BlockHashes block, StateView and QueryView paths now retain original
+shared height-indexed tree generations. Append and replacement edit private paths;
+opening releases the hash writer before World acquisition. Final publication
+reacquires the original physical root and exact predecessor; restored equal bytes
+and same-height ABA cannot authorize it. Canonical readers use indexed/range access
+and snapshot JSON streams the same ordered array. Native State identity retains
+the actual tree family, while emergency Fast mapping remains read-only and cannot
+open Native execution. See the [integration record](../docs/history/2026-09-21/shared-block-history.md).
+Checkpoint131 uses one configured original Kura pool for
+prepaid hash construction/restoration and successor creation before World/start
+effects. Its hidden private tip requires no further credit to finalize; exact
+current footprint distinguishes an impossible bound from release-driven pressure.
+Validate, global proposals and autonomous prefix selection retain typed local
+refusals. Shipping checks, the nine-package test build and scoped regression
+controls pass with exact final executable joins; the integration record retains
+failed captures and distinct formal/vendor scopes. Native lock/runtime provisioning
+and complete resident capacity remain open. Each World field migration must propagate
+its concrete mode through capture/publication and return local capacity refusals
+through execution before enabling retained Validate-to-Apply.
 L1–L6 and four/seven-validator qualification stay open.
 
 

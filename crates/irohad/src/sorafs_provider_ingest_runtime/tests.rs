@@ -3,6 +3,7 @@ use iroha_config_base::util::Bytes;
 use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
 use iroha_data_model::{
     NetworkId,
+    block::BlockHeader,
     isi::InstructionBox,
     musubi::{
         ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiContentDigestV1,
@@ -2188,6 +2189,8 @@ fn completed_cursor_consistency_rejects_historical_and_head_forks() {
         .collect::<Vec<_>>();
     let cursor_hash = *committed_hashes[8].as_ref();
     let head_hash = *committed_hashes[9].as_ref();
+    let journal = iroha_core::state::BlockHashes::new(committed_hashes);
+    let committed_hashes = journal.view();
     let cursor = ProviderIngestFinalizedCursorV1 {
         height: 9,
         block_hash: cursor_hash,
@@ -2236,6 +2239,8 @@ fn completion_payload_anchor_accepts_an_authenticated_committed_prefix() {
         block_hash: *committed_hashes[8].as_ref(),
     };
     let head_hash = *committed_hashes[9].as_ref();
+    let journal = iroha_core::state::BlockHashes::new(committed_hashes);
+    let committed_hashes = journal.view();
     let finalized_at_unix_ms = 1_700_000_009_999;
     let completion_epoch = 1_700_000_009;
     let head_at_unix_ms = 1_700_000_010_123;

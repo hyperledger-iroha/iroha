@@ -1416,12 +1416,12 @@ fn seed_genesis_alias_bootstrap_covers_domains_and_account_labels() {
 }
 #[test]
 fn register_name_persists_account_alias_record_in_state() {
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    state.nexus.write().dataspace_catalog = dataspace_catalog();
+    state.set_dataspace_catalog_for_testing(dataspace_catalog());
     let owner = another_owner();
     let record = apply_with_state_block(&state, |tx| {
         register_name(
@@ -1451,12 +1451,12 @@ fn register_name_persists_account_alias_record_in_state() {
 }
 #[test]
 fn register_name_rejects_duplicate_domain_registration() {
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    state.nexus.write().dataspace_catalog = dataspace_catalog();
+    state.set_dataspace_catalog_for_testing(dataspace_catalog());
     let owner = owner();
     apply_with_state_block(&state, |tx| {
         register_name(
@@ -1503,12 +1503,12 @@ fn register_name_rejects_duplicate_domain_registration() {
 }
 #[test]
 fn register_name_accepts_underscore_account_alias_labels() {
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    state.nexus.write().dataspace_catalog = dataspace_catalog();
+    state.set_dataspace_catalog_for_testing(dataspace_catalog());
     let owner = owner();
     let record = apply_with_state_block(&state, |tx| {
         register_name(
@@ -1537,12 +1537,12 @@ fn sns_state_block_does_not_advance_transaction_height() {
     use iroha_data_model::block::BlockHeader;
     use nonzero_ext::nonzero;
     use std::collections::HashSet;
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    state.nexus.write().dataspace_catalog = dataspace_catalog();
+    state.set_dataspace_catalog_for_testing(dataspace_catalog());
     let owner = owner();
     assert_eq!(state.transactions_latest_height_for_testing(), 0);
     apply_with_state_block(&state, |tx| {
@@ -1586,12 +1586,12 @@ fn sns_state_block_does_not_advance_transaction_height() {
 #[test]
 fn sns_state_block_uses_wall_clock_lifecycle_time() {
     use std::time::SystemTime;
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    state.nexus.write().dataspace_catalog = dataspace_catalog();
+    state.set_dataspace_catalog_for_testing(dataspace_catalog());
     let owner = owner();
     let before_ms = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -1627,12 +1627,12 @@ fn sns_state_block_uses_wall_clock_lifecycle_time() {
 }
 #[test]
 fn register_domain_name_rejects_bare_domain_literal() {
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    state.nexus.write().dataspace_catalog = dataspace_catalog();
+    state.set_dataspace_catalog_for_testing(dataspace_catalog());
     let owner = owner();
     let err = apply_with_state_block(&state, |tx| {
         register_name(
@@ -1660,12 +1660,12 @@ fn register_domain_name_rejects_bare_domain_literal() {
 }
 #[test]
 fn register_domain_name_reserved_label_requires_steward() {
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    state.nexus.write().dataspace_catalog = dataspace_catalog();
+    state.set_dataspace_catalog_for_testing(dataspace_catalog());
     let owner = another_owner();
     let steward = fixtures::steward_account();
     let err = apply_with_state_block(&state, |tx| {
@@ -1814,7 +1814,7 @@ fn register_domain_name_allows_released_reserved_label() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    state.nexus.write().dataspace_catalog = dataspace_catalog();
+    state.set_dataspace_catalog_for_testing(dataspace_catalog());
     let steward = fixtures::steward_account();
     let mut policy = {
         let view = state.view();
@@ -1945,12 +1945,12 @@ fn register_name_rejects_unknown_suffix_id() {
 }
 #[test]
 fn set_name_lease_expiry_rejects_past_timestamp() {
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    state.nexus.write().dataspace_catalog = dataspace_catalog();
+    state.set_dataspace_catalog_for_testing(dataspace_catalog());
     let owner = owner();
     apply_with_state_block(&state, |tx| {
         register_name(
@@ -1982,12 +1982,12 @@ fn set_name_lease_expiry_rejects_past_timestamp() {
 }
 #[test]
 fn set_name_lease_expiry_updates_lifecycle_windows() {
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    state.nexus.write().dataspace_catalog = dataspace_catalog();
+    state.set_dataspace_catalog_for_testing(dataspace_catalog());
     let owner = owner();
     apply_with_state_block(&state, |tx| {
         register_name(

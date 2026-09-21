@@ -884,6 +884,7 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 application_header.clone(),
                 active_context.context().mode,
             )
+            .expect("local fixture history admission")
             .expect("select the exact contiguous certified autonomous source");
         assert_eq!(candidate.carrier_height, merge_carrier_height);
         assert_eq!(candidate.carrier_parent_hash, successor.body.hash());

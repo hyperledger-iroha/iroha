@@ -14,7 +14,9 @@ use crate::utils::MapCollector;
 
 pub use crate::internals::lincowcell::OwnedWriteError;
 use crate::internals::lincowcell::{
-    LinCowCell, LinCowCellOwned, LinCowCellReadTxn, LinCowCellWriteTxn,
+    LinCowCell, LinCowCellCommitRetirement, LinCowCellFamily, LinCowCellOwned,
+    LinCowCellPredecessor, LinCowCellPreparedCommit, LinCowCellPublished, LinCowCellReadTxn,
+    LinCowCellRetainedPredecessor, LinCowCellWriteTxn,
 };
 
 mod admission;
@@ -24,8 +26,8 @@ pub use crate::internals::bptree::allocation::{NodeCloning, NodeFunding};
 pub use crate::internals::bptree::tracking::{FixedTrackingBuffer, TrackingBuffer};
 pub use crate::internals::lincowcell::Untracked;
 pub use admission::{
-    AllocationDemand, BptreeMapCheckpoint, ClearAdmissionError, ClonePlanning,
-    InsertAdmissionError, PairInsertError, PairRemoveError, PlanningError,
+    AllocationDemand, BptreeMapCheckpoint, CheckpointRetirement, ClonePlanning, MapAdmissionError,
+    PairInsertError, PairRemoveError, PlanningError,
 };
 pub use mode::{MapMode, Prepaid};
 
@@ -52,6 +54,141 @@ type MapWrite<'a, K, V, M> = LinCowCellWriteTxn<
 
 include!("impl.rs");
 
+/// Opaque custody of one original map family, independent of its generation.
+///
+/// Cloning retains the existing charged root allocation; it creates no identity
+/// allocation and does not require the original move-only charge to be cloneable.
+pub struct BptreeMapFamily<K, V, M = Untracked>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    inner: LinCowCellFamily<SuperBlock<K, V, M>, CursorRead<K, V, M>, M::Charge>,
+}
+
+impl<K, V, M> Clone for BptreeMapFamily<K, V, M>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<K, V, M> BptreeMapFamily<K, V, M>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Match only this actual original map, without locking or allocating.
+    pub fn matches(&self, target: &BptreeMap<K, V, M>) -> bool {
+        self.inner.matches(&target.inner)
+    }
+
+    /// Compare original root allocations, not map contents or mutable heights.
+    pub fn same_family(&self, other: &Self) -> bool {
+        self.inner.same_family(&other.inner)
+    }
+}
+
+/// Borrowed original map family and reader generation.
+/// This immutable comparison grants no mutation or publication authority.
+pub struct BptreeMapPredecessor<'a, K, V, M = Untracked>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    inner: LinCowCellPredecessor<'a, SuperBlock<K, V, M>, CursorRead<K, V, M>, M::Charge>,
+}
+
+impl<K, V, M> BptreeMapPredecessor<'_, K, V, M>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Retain only these original root and reader allocations, without copying work.
+    pub fn retain(&self) -> BptreeMapRetainedPredecessor<K, V, M> {
+        BptreeMapRetainedPredecessor {
+            inner: self.inner.retain(),
+        }
+    }
+
+    /// Compare exact roots and retained reader allocations across owner scopes.
+    pub fn same_predecessor(&self, other: &BptreeMapPredecessor<'_, K, V, M>) -> bool {
+        self.inner.same_predecessor(&other.inner)
+    }
+}
+
+/// Original family and predecessor retained independently of the private cursor.
+/// This identity-only owner allocates nothing and grants no edit/publication rights.
+pub struct BptreeMapRetainedPredecessor<K, V, M = Untracked>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    inner: LinCowCellRetainedPredecessor<SuperBlock<K, V, M>, CursorRead<K, V, M>, M::Charge>,
+}
+impl<K, V, M> Clone for BptreeMapRetainedPredecessor<K, V, M>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+impl<K, V, M> Debug for BptreeMapRetainedPredecessor<K, V, M>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BptreeMapRetainedPredecessor")
+            .finish_non_exhaustive()
+    }
+}
+impl<K, V, M> PartialEq for BptreeMapRetainedPredecessor<K, V, M>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+impl<K, V, M> Eq for BptreeMapRetainedPredecessor<K, V, M>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+}
+impl<K, V, M> BptreeMapRetainedPredecessor<K, V, M>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Compare the same original family and reader; equality is never by value.
+    pub fn matches(&self, other: &BptreeMapPredecessor<'_, K, V, M>) -> bool {
+        self.inner.matches(&other.inner)
+    }
+}
+
 /// The exact unpublished successor of a synchronous [`BptreeMap`].
 ///
 /// This move-only owner retains the original cursor allocation, working nodes,
@@ -76,6 +213,22 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 where
     M: MapMode + NodeCloning<K, V>,
 {
+    /// Borrow this original unpublished owner's family and predecessor.
+    pub fn predecessor(&self) -> BptreeMapPredecessor<'_, K, V, M> {
+        BptreeMapPredecessor {
+            inner: self.inner.predecessor(),
+        }
+    }
+
+    /// Compare the retained predecessor with the current target without waiting.
+    /// This advisory result grants no lease and cannot replace exact reacquisition.
+    pub fn try_matches_current(
+        &self,
+        target: &BptreeMap<K, V, M>,
+    ) -> Result<bool, OwnedWriteError> {
+        self.inner.try_matches_current(&target.inner)
+    }
+
     /// Borrow a value from the original unpublished successor.
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
@@ -83,6 +236,26 @@ where
         Q: Ord + ?Sized,
     {
         self.inner.as_ref().search(key)
+    }
+
+    /// Number of entries retained in this original private generation.
+    pub fn len(&self) -> usize {
+        self.inner.as_ref().len()
+    }
+
+    /// Whether this original private generation has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Borrow an ordered range directly from this retained original cursor.
+    pub fn range<R, T>(&self, range: R) -> RangeIter<'_, K, V, M::Charge>
+    where
+        K: Borrow<T>,
+        T: Ord + ?Sized,
+        R: RangeBounds<T>,
+    {
+        self.inner.as_ref().range(range)
     }
 
     /// Borrow original entries in key order without reconstructing the successor.
@@ -98,16 +271,48 @@ where
     }
 }
 
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    BptreeMapOwned<K, V, Untracked>
+{
+    /// Edit this exclusively owned private generation without taking a map lock.
+    /// Publication still requires reacquiring its unchanged original predecessor.
+    /// A mutation panic makes the private cursor unusable; drop that owner.
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.inner.get_mut().insert(key, value)
+    }
+
+    /// Remove from the original private generation without reacquiring its map.
+    /// The original base remains retained, even after another generation publishes.
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        self.inner.get_mut().remove(key)
+    }
+}
+
 impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
     BptreeMap<K, V, M>
 where
     M: MapMode + NodeCloning<K, V>,
 {
+    /// Retain this map's original charged root without a new identity allocation.
+    pub fn family(&self) -> BptreeMapFamily<K, V, M> {
+        BptreeMapFamily {
+            inner: self.inner.family(),
+        }
+    }
+
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
     pub fn read(&self) -> BptreeMapReadTxn<'_, K, V, M> {
         let inner = self.inner.read();
         BptreeMapReadTxn { inner }
+    }
+
+    /// Retain the original current reader without waiting or allocating.
+    /// `Busy` and `Poisoned` describe the reader lock, not a writer lease.
+    pub fn try_read(&self) -> Result<BptreeMapReadTxn<'_, K, V, M>, OwnedWriteError> {
+        self.inner
+            .try_read()
+            .map(|inner| BptreeMapReadTxn { inner })
     }
 
     /// Reacquire the original writer without copying or allocating a successor.
@@ -119,6 +324,7 @@ where
         &self,
         owned: BptreeMapOwned<K, V, M>,
     ) -> Result<BptreeMapWriteTxn<'_, K, V, M>, (BptreeMapOwned<K, V, M>, OwnedWriteError)> {
+        owned.inner.as_ref().assert_operable();
         self.inner
             .try_write_owned(owned.inner)
             .map(|inner| BptreeMapWriteTxn { inner })
@@ -132,19 +338,37 @@ where
 }
 
 impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
+    BptreeMapReadTxn<'_, K, V, M>
+where
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Borrow this pinned reader's original map and exact predecessor generation.
+    /// The projection remains stable across publications and grants no writer lease.
+    pub fn predecessor(&self) -> BptreeMapPredecessor<'_, K, V, M> {
+        BptreeMapPredecessor {
+            inner: self.inner.predecessor(),
+        }
+    }
+}
+
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
     BptreeMapWriteTxn<'_, K, V, M>
 where
     M: MapMode + NodeCloning<K, V>,
 {
+    /// Borrow this writer's original family and reader, regardless of private edits.
+    pub fn predecessor(&self) -> BptreeMapPredecessor<'_, K, V, M> {
+        BptreeMapPredecessor {
+            inner: self.inner.predecessor(),
+        }
+    }
+
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to perceive these changes.
     ///
     /// To abort (unstage changes), just do not call this function.
     pub fn commit(self) {
-        // Reject a caught admitted-edit panic before consuming the cursor shell
-        // or transferring any ownership into the published reader generation.
-        self.inner.as_ref().assert_operable();
-        self.inner.commit();
+        drop(self.prepare_commit().publish().release());
     }
 
     /// Retain the exact unpublished successor and release its original lock.
@@ -155,6 +379,122 @@ where
         self.inner.as_ref().assert_operable();
         BptreeMapOwned {
             inner: self.inner.detach(),
+        }
+    }
+}
+
+/// An original map successor checked under both physical publication locks.
+/// Dropping it abandons the private successor after releasing its locks.
+pub struct BptreeMapPreparedCommit<'a, K, V, M = Untracked>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    inner: LinCowCellPreparedCommit<
+        'a,
+        SuperBlock<K, V, M>,
+        CursorRead<K, V, M>,
+        CursorWrite<K, V, M>,
+        M::Charge,
+    >,
+}
+
+/// Published original map owners retaining physical locks and cleanup custody.
+/// Aggregate owners release every participating map before dropping cleanup.
+pub struct BptreeMapPublished<'a, K, V, M = Untracked>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    inner: LinCowCellPublished<
+        'a,
+        SuperBlock<K, V, M>,
+        CursorRead<K, V, M>,
+        CursorWrite<K, V, M>,
+        M::Charge,
+    >,
+}
+
+/// Original cursor and reader cleanup retained after physical publication.
+/// Destruction frees original bookkeeping and retired payloads before refunding
+/// their charges. This owner grants no mutation or publication authority.
+pub struct BptreeMapCommitRetirement<K, V, M = Untracked>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    _inner: LinCowCellCommitRetirement<CursorRead<K, V, M>, CursorWrite<K, V, M>, M::Charge>,
+}
+
+impl<'a, K, V, M> BptreeMapWriteTxn<'a, K, V, M>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Prepare without waiting for the map's short active-reader lock.
+    /// Busy or poison returns the exact original writer with its lock still held.
+    pub fn try_prepare_commit(
+        self,
+    ) -> Result<BptreeMapPreparedCommit<'a, K, V, M>, (Self, OwnedWriteError)> {
+        self.inner.as_ref().assert_operable();
+        self.inner
+            .try_prepare_commit()
+            .map(|inner| BptreeMapPreparedCommit { inner })
+            .map_err(|(inner, error)| (Self { inner }, error))
+    }
+
+    /// Acquire and check all physical owners before any aggregate publication.
+    /// Preparation allocates nothing and preserves the original cursor. Failed
+    /// logical state, poison or inconsistent original ownership panics before
+    /// transferring any nodes; aggregate owners prepare every map first.
+    pub fn prepare_commit(self) -> BptreeMapPreparedCommit<'a, K, V, M> {
+        self.inner.as_ref().assert_operable();
+        BptreeMapPreparedCommit {
+            inner: self.inner.prepare_commit(),
+        }
+    }
+}
+
+impl<'a, K, V, M> BptreeMapPreparedCommit<'a, K, V, M>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Release preparation's reader lock and return the same held original writer.
+    /// No nodes, reader shell, cursor or admission are recreated or abandoned.
+    pub fn abort(self) -> BptreeMapWriteTxn<'a, K, V, M> {
+        BptreeMapWriteTxn {
+            inner: self.inner.abort(),
+        }
+    }
+
+    /// Publish original nodes without allocation or user destruction.
+    /// Both physical locks remain held through the returned owner. Publish all
+    /// prepared participants and their shared identity before releasing any.
+    pub fn publish(self) -> BptreeMapPublished<'a, K, V, M> {
+        BptreeMapPublished {
+            inner: self.inner.publish(),
+        }
+    }
+}
+
+impl<K, V, M> BptreeMapPublished<'_, K, V, M>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Unlock this map without invoking any payload or charge destructor.
+    /// Release every participating map and aggregate physical lock before
+    /// dropping the returned cleanup owners or issuing release notifications.
+    pub fn release(self) -> BptreeMapCommitRetirement<K, V, M> {
+        BptreeMapCommitRetirement {
+            _inner: self.inner.release(),
         }
     }
 }
@@ -255,6 +595,9 @@ mod tests {
         send_sync::<BptreeMap<usize, usize, Mode<usize, ()>>>();
         send_sync::<super::BptreeMapReadTxn<'_, usize, usize, Mode<usize, ()>>>();
         send_sync::<super::BptreeMapOwned<usize, usize, Mode<usize, ()>>>();
+        send_sync::<super::BptreeMapFamily<usize, usize, Mode<usize, ()>>>();
+        send_sync::<super::BptreeMapPredecessor<'_, usize, usize, Mode<usize, ()>>>();
+        send_sync::<super::BptreeMapRetainedPredecessor<usize, usize, Mode<usize, ()>>>();
         #[cfg(feature = "asynch")]
         send_sync::<super::asynch::BptreeMap<usize, usize, Mode<usize, ()>>>();
 
@@ -285,11 +628,181 @@ mod tests {
         let _ = <super::BptreeMapOwned<usize, usize, Mode<Cell<usize>, ()>> as AmbiguousIfSync<
             _,
         >>::probe;
+        let _ =
+            <super::BptreeMapFamily<usize, usize, Mode<Rc<()>, ()>> as AmbiguousIfSend<_>>::probe;
+        let _ = <super::BptreeMapFamily<usize, usize, Mode<Cell<usize>, ()>> as AmbiguousIfSync<
+            _,
+        >>::probe;
+        let _ =
+            <super::BptreeMapPredecessor<'_, usize, usize, Mode<Rc<()>, ()>> as AmbiguousIfSend<
+                _,
+            >>::probe;
+        let _ = <super::BptreeMapPredecessor<'_, usize, usize, Mode<Cell<usize>, ()>> as AmbiguousIfSync<_>>::probe;
+        let _ = <super::BptreeMapRetainedPredecessor<usize, usize, Mode<Rc<()>, ()>> as AmbiguousIfSend<_>>::probe;
+        let _ = <super::BptreeMapRetainedPredecessor<usize, usize, Mode<Cell<usize>, ()>> as AmbiguousIfSync<_>>::probe;
         #[cfg(feature = "asynch")]
         {
             let _ = <super::asynch::BptreeMap<usize, usize, Mode<Cell<usize>, ()>> as AmbiguousIfSend<_>>::probe;
             let _ = <super::asynch::BptreeMapReadTxn<'_, usize, usize, Mode<Rc<()>, ()>> as AmbiguousIfSync<_>>::probe;
         }
+    }
+
+    #[test]
+    fn original_family_and_predecessor_comparisons_reject_foreign_equal_and_aba_maps() {
+        use crate::internals::bptree::node::allocation_tests::without_allocations;
+        let map = BptreeMap::new();
+        let foreign = BptreeMap::new();
+        for map in [&map, &foreign] {
+            let mut writer = map.write();
+            writer.insert(1usize, 7usize);
+            writer.commit();
+        }
+        let (family, other_family) = without_allocations(|| (map.family(), foreign.family()));
+        without_allocations(|| {
+            assert!(family.clone().same_family(&family));
+            assert!(family.matches(&map));
+            assert!(!family.matches(&foreign));
+            assert!(!family.same_family(&other_family));
+        });
+        let old = map.write().detach();
+        let retained = without_allocations(|| old.predecessor().retain());
+        without_allocations(|| {
+            assert_eq!(retained, retained.clone());
+            assert!(retained.matches(&old.predecessor()));
+        });
+        let mut writer = map.write();
+        without_allocations(|| {
+            assert!(old.predecessor().same_predecessor(&writer.predecessor()));
+            assert_eq!(old.try_matches_current(&map), Ok(true));
+            assert_eq!(old.try_matches_current(&foreign), Ok(false));
+        });
+        writer.insert(1, 8);
+        assert!(
+            old.predecessor().same_predecessor(&writer.predecessor()),
+            "private edits do not replace predecessor"
+        );
+        writer.commit();
+        let mut writer = map.write();
+        writer.insert(1, 7);
+        writer.commit();
+        assert_eq!(map.read().get(&1), Some(&7));
+        let unchanged = map.write().detach();
+        without_allocations(|| {
+            assert!(family.matches(&map), "family persists through publications");
+            assert!(!old.predecessor().same_predecessor(&unchanged.predecessor()));
+            assert!(!retained.matches(&unchanged.predecessor()));
+            assert_eq!(
+                old.try_matches_current(&map),
+                Ok(false),
+                "equal bytes do not undo generation advance"
+            );
+            assert_eq!(unchanged.try_matches_current(&map), Ok(true));
+        });
+        // Even an untouched publication consumes its own original reader shell.
+        map.write().commit();
+        assert_eq!(unchanged.try_matches_current(&map), Ok(false));
+        drop(old);
+        drop(unchanged);
+        drop(map);
+        drop(foreign);
+        drop(family);
+        drop(other_family);
+        drop(retained);
+        assert_released();
+    }
+
+    #[test]
+    fn original_prepared_abort_returns_same_private_payload_and_cursor_for_publication() {
+        use crate::internals::bptree::node::allocation_tests::without_allocations;
+        let map = BptreeMap::<usize, Box<[u8]>>::new();
+        let old_read = without_allocations(|| map.try_read().expect("original reader"));
+        let mut writer = map.write();
+        writer.insert(1, vec![7; 137].into_boxed_slice());
+        let cursor = writer.inner.as_ref() as *const _;
+        let value = writer.get(&1).unwrap().as_ptr();
+        for _ in 0..3 {
+            writer = without_allocations(|| {
+                writer
+                    .try_prepare_commit()
+                    .unwrap_or_else(|_| panic!("uncontended original preparation"))
+                    .abort()
+            });
+            assert_eq!(writer.inner.as_ref() as *const _, cursor);
+            assert_eq!(writer.get(&1).unwrap().as_ptr(), value);
+            assert!(old_read.get(&1).is_none());
+            assert!(
+                map.try_write().is_none(),
+                "returned writer retains physical lease"
+            );
+        }
+        let owned = without_allocations(|| writer.detach());
+        assert_eq!(owned.inner.as_ref() as *const _, cursor);
+        let writer = without_allocations(|| {
+            map.try_write_owned(owned)
+                .unwrap_or_else(|_| panic!("original retry"))
+        });
+        let retirement = without_allocations(|| {
+            writer
+                .try_prepare_commit()
+                .unwrap_or_else(|_| panic!("original publication"))
+                .publish()
+                .release()
+        });
+        without_allocations(|| {
+            let current = map.try_read().expect("published reader");
+            assert_eq!(current.get(&1).unwrap().as_ptr(), value);
+        });
+        assert!(old_read.get(&1).is_none());
+        drop(retirement);
+        drop(old_read);
+        drop(map);
+        assert_released();
+    }
+
+    #[test]
+    fn original_owned_untracked_edits_need_no_map_writer_and_cannot_publish_stale_work() {
+        use crate::internals::bptree::node::allocation_tests::without_allocations;
+        let map = BptreeMap::<usize, usize>::new();
+        let mut writer = map.write();
+        writer.insert(0, 7);
+        writer.commit();
+        let old_read = map.read();
+        let mut owned = map.write().detach();
+        let cursor = owned.inner.as_ref() as *const _;
+        let mut held = map.write();
+        assert_eq!(owned.insert(1, 11), None);
+        assert_eq!(owned.remove(&0), Some(7));
+        assert_eq!(old_read.get(&0), Some(&7));
+        assert_eq!(old_read.get(&1), None);
+        assert_eq!(held.get(&0), Some(&7));
+        held.insert(9, 99);
+        held.commit();
+        // A newer publication cannot invalidate retained immutable source nodes.
+        assert_eq!(owned.insert(2, 22), None);
+        assert_eq!(owned.get(&9), None);
+        let (owned, error) = without_allocations(|| {
+            map.try_write_owned(owned)
+                .err()
+                .expect("stale original source")
+        });
+        assert_eq!(error, super::OwnedWriteError::Changed);
+        assert_eq!(owned.inner.as_ref() as *const _, cursor);
+        assert_eq!(owned.get(&1), Some(&11));
+        assert_eq!(owned.get(&2), Some(&22));
+        without_allocations(|| {
+            assert_eq!(owned.len(), 2);
+            assert!(!owned.is_empty());
+            let mut range = owned.range(1..=2);
+            assert_eq!(range.next_back(), Some((&2, &22)));
+            assert_eq!(range.next(), Some((&1, &11)));
+            assert_eq!(range.next(), None);
+        });
+        assert_eq!(map.read().get(&1), None);
+        assert_eq!(map.read().get(&9), Some(&99));
+        drop(owned);
+        drop(old_read);
+        drop(map);
+        assert_released();
     }
 
     #[test]

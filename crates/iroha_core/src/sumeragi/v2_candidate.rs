@@ -646,6 +646,7 @@ impl V2CandidateAssembler {
                 && request
                     .state
                     .deterministic_start_work_pending(&candidate_header)
+                    .map_err(CandidateError::LocalStateAdmission)?
                     != Some(true)
             {
                 if request.queue.transaction_selection_durability_faulted() {
@@ -869,6 +870,7 @@ impl V2CandidateAssembler {
                 && request
                     .state
                     .deterministic_start_work_pending(&candidate_header)
+                    .map_err(CandidateError::LocalStateAdmission)?
                     != Some(true)
             {
                 // Optional evidence cannot manufacture an empty/pulse-only
@@ -939,7 +941,9 @@ impl V2CandidateAssembler {
                 &block,
                 request.state,
                 request.attachments.time_trigger_clock_progress_required,
-            ) {
+            )
+            .map_err(CandidateError::LocalStateAdmission)?
+            {
                 return Err(CandidateError::BuiltWithoutProposalWork);
             }
             let subject = wire::BlockSubject {
@@ -1413,8 +1417,9 @@ pub(crate) fn candidate_block_has_proposal_work(
     block: &SignedBlock,
     state: &State,
     time_trigger_clock_progress_required: bool,
-) -> bool {
-    block.external_entrypoints_cloned().next().is_some()
+) -> Result<bool, crate::state::StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>>
+{
+    let independent = block.external_entrypoints_cloned().next().is_some()
         || block.execution_context().is_some_and(|context| {
             !context.autonomous_lane_payloads.is_empty()
                 || context
@@ -1434,8 +1439,8 @@ pub(crate) fn candidate_block_has_proposal_work(
             .npos_consensus_effects()
             .is_some_and(npos_effects_have_independent_proposal_work)
         || block.header().sccp_commitment_root().is_some()
-        || time_trigger_clock_progress_required
-        || state.deterministic_start_work_pending(&block.header()) == Some(true)
+        || time_trigger_clock_progress_required;
+    Ok(independent || state.deterministic_start_work_pending(&block.header())? == Some(true))
 }
 // Headers carry proposal identity only; complete outputs belong to BlockResult.
 // A stripped context therefore removes only the Network input commitment.
@@ -1866,6 +1871,11 @@ fn encoded_chunk_count(
 /// Candidate construction failure.
 #[derive(Debug, Error)]
 pub(crate) enum CandidateError {
+    /// Local State acquisition could not proceed; no candidate was signed.
+    #[error("local State admission: {0}")]
+    LocalStateAdmission(
+        crate::state::StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>,
+    ),
     /// A prior fatal consensus operation requires process restart.
     #[error("Sumeragi v2 candidate signing requires process restart")]
     RestartRequired,
@@ -3904,7 +3914,10 @@ pub(super) mod tests {
             301,
             0,
         );
-        assert_eq!(state.deterministic_start_work_pending(&header), Some(false));
+        assert_eq!(
+            state.deterministic_start_work_pending(&header).unwrap(),
+            Some(false)
+        );
         let outcome = assemble_empty_snapshot_candidate_for_state(
             CandidateAttachments::default(),
             &state,
@@ -3964,7 +3977,10 @@ pub(super) mod tests {
             301,
             0,
         );
-        assert_eq!(state.deterministic_start_work_pending(&header), Some(true));
+        assert_eq!(
+            state.deterministic_start_work_pending(&header).unwrap(),
+            Some(true)
+        );
         assert_eq!(
             state.world.privacy_activations.view().get(&activation_key),
             Some(&activation),
@@ -3972,12 +3988,18 @@ pub(super) mod tests {
         );
         let mut stale = header.clone();
         stale.set_height(NonZeroU64::new(302).expect("future height"));
-        assert_eq!(state.deterministic_start_work_pending(&stale), None);
+        assert_eq!(
+            state.deterministic_start_work_pending(&stale).unwrap(),
+            None
+        );
         stale = header.clone();
         stale.set_prev_block_hash(Some(HashOf::from_untyped_unchecked(Hash::new(
             b"wrong parent",
         ))));
-        assert_eq!(state.deterministic_start_work_pending(&stale), None);
+        assert_eq!(
+            state.deterministic_start_work_pending(&stale).unwrap(),
+            None
+        );
         let outcome = assemble_empty_snapshot_candidate_for_state(
             CandidateAttachments::default(),
             &state,
@@ -3991,11 +4013,7 @@ pub(super) mod tests {
         assert_eq!(candidate.block().header().height().get(), 301);
         assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
         assert!(candidate.block().is_resultless_proposal());
-        assert!(candidate_block_has_proposal_work(
-            candidate.block(),
-            &state,
-            false
-        ));
+        assert!(candidate_block_has_proposal_work(candidate.block(), &state, false).unwrap());
         let mut signed = candidate.block().clone();
         {
             let outputs = crate::execution_output_test_support::structural_network_outputs(
@@ -4044,9 +4062,12 @@ pub(super) mod tests {
             302,
             0,
         );
-        assert_eq!(state.deterministic_start_work_pending(&header), None);
         assert_eq!(
-            state.deterministic_start_work_pending(&successor),
+            state.deterministic_start_work_pending(&header).unwrap(),
+            None
+        );
+        assert_eq!(
+            state.deterministic_start_work_pending(&successor).unwrap(),
             Some(false)
         );
     }
@@ -4397,14 +4418,14 @@ pub(super) mod tests {
     fn canonical_block_work_gate_preserves_transaction_autonomous_and_clock_work() {
         let (state, context, _anchor, key) = snapshot_parent_fixture();
         let mut block: SignedBlock = ValidBlock::new_dummy(key.private_key()).into();
-        assert!(!candidate_block_has_proposal_work(&block, &state, false));
+        assert!(!candidate_block_has_proposal_work(&block, &state, false).unwrap());
         assert!(
-            candidate_block_has_proposal_work(&block, &state, true),
+            candidate_block_has_proposal_work(&block, &state, true).unwrap(),
             "state-derived clock progress is semantic proposal work"
         );
         let transaction = accepted(71, "canonical-block-external");
         block.set_external_entrypoints(vec![transaction.entrypoint().clone()]);
-        assert!(candidate_block_has_proposal_work(&block, &state, false));
+        assert!(candidate_block_has_proposal_work(&block, &state, false).unwrap());
         let mut autonomous: SignedBlock = ValidBlock::new_dummy(key.private_key()).into();
         autonomous.set_execution_context(Some(
             BlockExecutionContextBundle::default().with_autonomous_lane_payloads(vec![
@@ -4426,17 +4447,13 @@ pub(super) mod tests {
                 },
             ]),
         ));
-        assert!(candidate_block_has_proposal_work(
-            &autonomous,
-            &state,
-            false
-        ));
+        assert!(candidate_block_has_proposal_work(&autonomous, &state, false).unwrap());
         let mut queue_plan: SignedBlock = ValidBlock::new_dummy(key.private_key()).into();
         queue_plan.set_execution_context(Some(
             BlockExecutionContextBundle::default().with_queue_plan_admissions(vec![vec![0xA5]]),
         ));
         assert!(
-            candidate_block_has_proposal_work(&queue_plan, &state, false),
+            candidate_block_has_proposal_work(&queue_plan, &state, false).unwrap(),
             "a proposal-native QueuePlan certificate is deterministic carrier work"
         );
     }

@@ -68,7 +68,7 @@ fn remove_tracking_bound_is_checked_for_root_branch_and_overflow() {
 }
 
 #[test]
-fn remove_fixed_slot_refusal_precedes_any_node_copy_and_preserves_original_root() {
+fn remove_fixed_slot_preflight_preserves_original_root_and_skips_absent_keys() {
     for populated in [false, true] {
         for query in [7, 99] {
             for capacities in [[0, 1], [1, 0]] {
@@ -83,7 +83,12 @@ fn remove_fixed_slot_refusal_precedes_any_node_copy_and_preserves_original_root(
                 // must occur before asking the finite provider for any clone.
                 cursor.funding.0.as_mut().unwrap().remaining = 0;
                 cursor.begin_admitted_edit();
-                assert_eq!(without_allocations(|| cursor.try_remove(&query)), Err(()));
+                let expected = if populated && query == 7 {
+                    Err(())
+                } else {
+                    Ok(None)
+                };
+                assert_eq!(without_allocations(|| cursor.try_remove(&query)), expected);
                 assert!(cursor.edit_failed, "the original caller still owns cleanup");
                 assert_eq!((cursor.root, cursor.length), (root, length));
                 assert_eq!(cursor.first_seen.as_ptr(), first);
@@ -104,7 +109,7 @@ fn remove_fixed_slot_refusal_precedes_any_node_copy_and_preserves_original_root(
 }
 
 #[test]
-fn remove_exact_root_slots_preserve_absent_clone_and_original_reader_custody() {
+fn remove_exact_root_slots_preserve_original_reader_and_skip_absent_clone() {
     for populated in [false, true] {
         for query in [7, 99] {
             let (base, mut cursor) = root_fixture(populated, [1, 1]);
@@ -119,24 +124,38 @@ fn remove_exact_root_slots_preserve_absent_clone_and_original_reader_custody() {
                 cursor.edit_failed,
                 "success never seals arbitrary caller cleanup"
             );
-            assert_ne!(
-                cursor.root, old_root,
-                "canonical missing deletion still clones the old generation"
-            );
+            let removed = populated && query == 7;
+            if removed {
+                assert_ne!(cursor.root, old_root);
+            } else {
+                assert_eq!(
+                    cursor.root, old_root,
+                    "missing deletion keeps the exact root"
+                );
+            }
             assert!(self_meta_shared!(cursor.root).is_leaf());
             assert_eq!(cursor.length, usize::from(populated && query != 7));
-            assert_eq!(cursor.first_seen.as_slice(), &[cursor.root]);
-            assert_eq!(cursor.last_seen.as_ref().unwrap().as_slice(), &[old_root]);
+            if removed {
+                assert_eq!(cursor.first_seen.as_slice(), &[cursor.root]);
+                assert_eq!(cursor.last_seen.as_ref().unwrap().as_slice(), &[old_root]);
+            } else {
+                assert!(cursor.first_seen.as_slice().is_empty());
+                assert!(cursor.last_seen.as_ref().unwrap().as_slice().is_empty());
+            }
             assert_eq!(old.search(&7), populated.then_some(&70));
             assert_eq!(old.len(), usize::from(populated));
             let provider = cursor.take_completed_admitted_funding();
-            assert_eq!(provider.next, taken + 1);
-            assert_eq!(provider.remaining, 0);
-            let clone = record(taken);
-            assert_eq!(clone.pointer, cursor.root as usize);
-            assert!(!clone.freed && !clone.refunded);
+            assert_eq!(provider.next, taken + usize::from(removed));
+            assert_eq!(provider.remaining, usize::from(!removed));
+            if removed {
+                let clone = record(taken);
+                assert_eq!(clone.pointer, cursor.root as usize);
+                assert!(!clone.freed && !clone.refunded);
+            }
             without_allocations(|| drop(cursor));
-            assert!(record(taken).freed && record(taken).refunded);
+            if removed {
+                assert!(record(taken).freed && record(taken).refunded);
+            }
             assert_eq!(old.search(&7), populated.then_some(&70));
             assert!(!record(0).freed && !record(0).refunded);
             without_allocations(|| drop(old));

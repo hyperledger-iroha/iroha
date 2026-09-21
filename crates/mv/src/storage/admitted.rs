@@ -1,7 +1,8 @@
 //! Finite insertion and removal in the original MV current/undo pair.
 //!
 //! This admits original node, cursor, reader, tracking and copied payload owners.
-//! It does not admit publication/release control objects or iteration workspace.
+//! Borrowed iteration retains its traversal state inline without allocating.
+//! Publication/release control objects remain separately funded.
 //! Transactions additionally admit their ordered local touch owners.
 //! Capture/detachment, mutable access and replacement blocks remain
 //! unavailable until their complete ownership paths are funded.
@@ -12,8 +13,8 @@ use crate::{
     allocation::{AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation},
 };
 use concread::bptree::{
-    AllocationDemand, ClearAdmissionError, ClonePlanning, InsertAdmissionError, NodeFunding,
-    PairInsertError, PairRemoveError, PlanningError, Prepaid,
+    AllocationDemand, ClonePlanning, MapAdmissionError, NodeFunding, PairInsertError,
+    PairRemoveError, PlanningError, Prepaid,
 };
 
 /// Constructs a payload policy from the original finite MV reservation.
@@ -132,22 +133,45 @@ fn reserve_pair(
         .try_reserve_bytes(total)
         .map_err(AdmittedStorageError::Allocation)?;
     let current = original
-        .try_partition(current.bytes())
+        .try_partition_bytes(current.bytes())
         .expect("part of the same checked complete demand");
     Ok((current, original))
 }
 
 fn writer_error(
-    error: InsertAdmissionError<AdmittedStorageError>,
+    error: MapAdmissionError<AdmittedStorageError>,
     role: StorageRole,
     release: ReleaseWait,
 ) -> AdmittedStorageError {
     match error {
-        InsertAdmissionError::Busy => AdmittedStorageError::Busy { role, release },
-        InsertAdmissionError::Poisoned => AdmittedStorageError::Poisoned { role },
-        InsertAdmissionError::Planning(error) => AdmittedStorageError::Planning(error),
-        InsertAdmissionError::Refused(error) => error,
-        InsertAdmissionError::Changed => unreachable!("new original writer has no detached input"),
+        MapAdmissionError::Busy if release.is_poisoned() => AdmittedStorageError::Poisoned { role },
+        MapAdmissionError::Busy => AdmittedStorageError::Busy { role, release },
+        MapAdmissionError::Poisoned => AdmittedStorageError::Poisoned { role },
+        MapAdmissionError::Planning(error) => AdmittedStorageError::Planning(error),
+        MapAdmissionError::Refused(error) => error,
+        MapAdmissionError::Changed => unreachable!("new original writer has no detached input"),
+    }
+}
+
+// An ordinary refusal can release a raw writer before any guard is returned.
+// Signal only those releases; contention and poison never acquired authority.
+pub(super) fn acquire_writer<T>(
+    notification: &ReleaseNotification,
+    acquire: impl FnOnce() -> Result<T, MapAdmissionError<AdmittedStorageError>>,
+) -> Result<ReleaseGuard<'_, T>, MapAdmissionError<AdmittedStorageError>> {
+    match notification.with_acquisition_unwind_notification(acquire) {
+        Ok(writer) => Ok(notification.poisoning_guard(writer)),
+        Err(error) => {
+            if matches!(
+                error,
+                MapAdmissionError::Planning(_)
+                    | MapAdmissionError::Refused(_)
+                    | MapAdmissionError::Changed
+            ) {
+                drop(notification.guard(()));
+            }
+            Err(error)
+        }
     }
 }
 
@@ -219,12 +243,7 @@ where
                 publication,
                 ..
             } = block;
-            publication.publish(|| {
-                if dirty {
-                    blocks.release_with(|writer| writer.commit());
-                }
-                revert.release_with(|writer| writer.commit());
-            });
+            publish_pair(blocks, revert, publication, NextPublication::new(), dirty);
             Ok(output)
         })
     }
@@ -242,29 +261,28 @@ where
             .map_err(AdmittedStorageError::Planning)?;
         let (current, undo) = reserve_pair(budget, current, undo)?;
         let wait = self.revert_released.observe();
-        let revert = self
-            .revert_released
-            .with_acquisition_unwind_notification(|| {
-                self.revert
-                    .try_write_admitted(|demand| policy::<P>(budget, undo, demand))
-            })
-            .map_err(|error| writer_error(error, StorageRole::Undo, wait))?;
-        let mut revert = self.revert_released.poisoning_guard(revert);
+        let mut revert = acquire_writer(&self.revert_released, || {
+            self.revert
+                .try_write_admitted(|demand| policy::<P>(budget, undo, demand))
+        })
+        .map_err(|error| writer_error(error, StorageRole::Undo, wait))?;
         let wait = self.blocks_released.observe();
-        let blocks = self
-            .blocks_released
-            .with_acquisition_unwind_notification(|| {
-                self.blocks
-                    .try_write_admitted(|demand| policy::<P>(budget, current, demand))
-            })
-            .map_err(|error| writer_error(error, StorageRole::Current, wait))?;
-        let blocks = self.blocks_released.poisoning_guard(blocks);
+        let blocks = acquire_writer(&self.blocks_released, || {
+            self.blocks
+                .try_write_admitted(|demand| policy::<P>(budget, current, demand))
+        })
+        .map_err(|error| writer_error(error, StorageRole::Current, wait))?;
         let predecessor = self.publication.capture();
         revert
             .try_clear_admitted(|demand| admit::<P>(budget, demand))
             .map_err(|error| match error {
-                ClearAdmissionError::Planning(error) => AdmittedStorageError::Planning(error),
-                ClearAdmissionError::Refused(error) => error,
+                MapAdmissionError::Planning(error) => AdmittedStorageError::Planning(error),
+                MapAdmissionError::Refused(error) => error,
+                MapAdmissionError::Busy
+                | MapAdmissionError::Poisoned
+                | MapAdmissionError::Changed => {
+                    unreachable!("clearing an acquired writer never reacquires it")
+                }
             })?;
         Ok(Block {
             revert,
@@ -367,15 +385,6 @@ where
         self.blocks.get(key)
     }
 
-    /// Borrow the original value before this block's first mutation of a key.
-    pub fn get_before_block(&self, key: &K) -> Option<&V> {
-        self.assert_admitted_operable();
-        match self.revert.get(key) {
-            Some(previous) => previous.as_ref(),
-            None => self.blocks.get(key),
-        }
-    }
-
     /// Number of private current entries.
     pub fn len(&self) -> usize {
         self.assert_admitted_operable();
@@ -384,10 +393,5 @@ where
     /// Whether the private current map has no entries.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-    /// Whether an admitted insertion or present removal changed this generation.
-    pub fn is_dirty(&self) -> bool {
-        self.assert_admitted_operable();
-        self.dirty
     }
 }
