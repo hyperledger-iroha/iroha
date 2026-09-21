@@ -112,13 +112,13 @@ python3 scripts/run_release_pipeline.py \
   --publish-target iroha3=<REVIEWED_TARGET_URI>
 ```
 
-The signer adapter authenticates to the isolated software-signing service at
-runtime. V1 fixes `signing_provider=authenticated_external_signer` and
-`signing_backend=software`; a verified release reports
-`signer_qualification=software-key-qualified`. Never place private keys, PINs,
+The signer adapter authenticates to its signing service at runtime. V1 fixes
+`signing_provider=authenticated_external_signer`; verification establishes
+authorized signatures over the exact release bytes, without backend-origin
+claims. Software and optional hardware storage follow the same contract.
+Never place private keys, PINs,
 bearer tokens, or forwarded authentication headers in repository files,
-command arguments, or release artifacts. Iroha exposes no hardware-specific
-signer mode; the authenticated process boundary remains provider-neutral.
+command arguments, or release artifacts.
 
 The output is created at `artifacts/releases/<X.Y.Z>/` unless another output
 root is supplied. Review at least:

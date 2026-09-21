@@ -136,9 +136,10 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1> RnsNativeComparatorTopCommitme
     pub(in super::super) fn commit_prepared_v1(
         mut self,
         statement: &PreparedComparatorStatementV1<'_>,
-    ) -> Result<Self, ZkAmsMkheErrorV1> {
+    ) -> Result<(Self, PreparedPlaneOpeningTailV1), ZkAmsMkheErrorV1> {
         // Take before order validation, entropy, secret MSM or inventory mutation.
-        // The sampled scalar and computed point never leave this consuming call.
+        // Only an opaque canonical tail may carry a copy of the admitted
+        // retained scalar/point into the same source's prepared value sequence.
         let mut live = self
             .live
             .take()
@@ -183,8 +184,19 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1> RnsNativeComparatorTopCommitme
         session.next_purpose = next.purpose;
         session.next_purpose_ordinal = next.purpose_ordinal;
         validate_top_progress_v1(&live)?;
+        let tail = PreparedPlaneOpeningTailV1::from_admitted_v1(
+            live.session
+                .live
+                .as_ref()
+                .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?,
+            coordinate,
+            live.blindings
+                .as_slice()
+                .last()
+                .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?,
+        )?;
         self.live = Some(live);
-        Ok(self)
+        Ok((self, tail))
     }
 }
 
@@ -255,3 +267,10 @@ fn require_top_position_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
 #[cfg(test)]
 #[path = "prepared_comparator_commitment_v1_tests.rs"]
 mod tests;
+
+#[path = "prepared_difference_commitment_v1.rs"]
+mod prepared_difference_commitment_v1;
+pub(in super::super) use prepared_difference_commitment_v1::{
+    RnsNativeComparatorContinuationV1, RnsNativeDifferenceCommitmentsV1,
+    RnsNativeSmallSignedCommitmentsV1, RnsNativeStoredPlaneReplayV1,
+};

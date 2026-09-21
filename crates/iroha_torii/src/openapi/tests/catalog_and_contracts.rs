@@ -1109,7 +1109,13 @@ fn generated_spec_includes_documented_paths() {
     for path in
         openapi_contract_strings("openapi.generated_spec_includes_documented_paths.path_present.12")
     {
-        assert!(paths.contains_key(path));
+        assert!(paths.contains_key(path), "missing current route: {path}");
+    }
+    for retired in [
+        "/v1/node/query/projection/checkpoint/plan",
+        "/v1/node/query/projection/checkpoint/publish",
+    ] {
+        assert!(!paths.contains_key(retired), "retired route: {retired}");
     }
     let reputation_latest = paths
         .get("/v1/sorafs/reputation/latest")
@@ -2039,7 +2045,9 @@ fn generated_operations_declare_tool_effects() {
         )
         .into_iter()
         .filter(|route| {
-            route.method() == CatalogHttpMethod::Get && route.surface() == ApiSurface::Operator
+            route.method() == CatalogHttpMethod::Get
+                && (route.surface() == ApiSurface::Operator
+                    || route.authentication() == AuthenticationPolicy::OperatorSignature)
         })
     {
         let operation = paths

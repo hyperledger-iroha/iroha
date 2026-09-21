@@ -25,7 +25,7 @@ mod unix_main {
         IrohaRuntimeProviderSlotV1, RuntimeProviderBrokerExecutableArgsV1,
         RuntimeProviderBrokerExecutableV1, load_runtime_provider_broker_catalog_file_v1,
     };
-    use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload};
+    use norito::{NoritoDeserialize, NoritoSerialize};
     use std::{
         env,
         ffi::{OsStr, OsString},
@@ -315,7 +315,6 @@ mod unix_main {
     #[derive(Debug, norito::JsonDeserialize)]
     #[norito(deny_unknown_fields)]
     struct SignatureReceiptBindingJsonV1 {
-        backend: String,
         handle: String,
         service_id: String,
         administrator_id: String,
@@ -817,7 +816,6 @@ mod unix_main {
         inode: u64,
         owner: u32,
         mode: u32,
-        links: u64,
     }
     impl DirectoryIdentity {
         fn try_from_metadata(metadata: &fs::Metadata) -> Result<Self, CliError> {
@@ -826,16 +824,19 @@ mod unix_main {
                 inode: metadata.ino(),
                 owner: metadata.uid(),
                 mode: metadata.mode(),
-                links: metadata.nlink(),
             };
             let effective_uid = rustix::process::geteuid().as_raw();
             if !metadata.is_dir()
                 || (identity.owner != 0 && identity.owner != effective_uid)
                 || identity.mode & 0o022 != 0
-                || identity.links == 0
+                || metadata.nlink() == 0
             {
                 return Err(CliError::Input);
             }
+            // A directory's link count can track its entries (including files
+            // on APFS). Publishing an artifact must not change its directory
+            // identity. Device, inode, owner and mode remain pinned; regular
+            // file readers and writers separately require exactly one link.
             Ok(identity)
         }
     }
@@ -1020,7 +1021,6 @@ mod unix_main {
         if parsed.schema != "sorafs.external_software_signer.signature_receipt.v1"
             || parsed.protocol_version != 1
             || parsed.digest_contract != "blake3-domain-separated-v1"
-            || parsed.binding.backend != "software"
             || parsed.binding.handle != binding.handle
             || parsed.binding.service_id != binding.service_id
             || parsed.binding.administrator_id != binding.administrator_id
@@ -1101,7 +1101,6 @@ mod unix_main {
                 binding.digest().map_err(|()| CliError::Binding)?,
             )),
         );
-        root.insert("backend".into(), Value::from("software"));
         root.insert("service_id".into(), Value::from(binding.service_id.clone()));
         root.insert(
             "administrator_id".into(),
@@ -1148,7 +1147,7 @@ mod unix_main {
         root.insert("provenance_attestation_valid".into(), Value::from(true));
         root.insert("response_attestation_valid".into(), Value::from(true));
         let bytes = norito::json::to_vec(&Value::Object(root)).map_err(|_| CliError::Output)?;
-        write_new(path, &bytes, 0o644)
+        write_new(path, &bytes, 0o600)
     }
     fn write_signature_receipt_json_new(
         path: &Path,
@@ -1161,7 +1160,6 @@ mod unix_main {
             .try_to_bytes()
             .map_err(|_| CliError::Output)?;
         let mut binding_json = Map::new();
-        binding_json.insert("backend".into(), Value::from("software"));
         binding_json.insert("handle".into(), Value::from(binding.handle.clone()));
         binding_json.insert("service_id".into(), Value::from(binding.service_id.clone()));
         binding_json.insert(
@@ -1465,6 +1463,138 @@ mod unix_main {
         use super::*;
         use clap::CommandFactory as _;
         use std::os::unix::fs::symlink;
+
+        #[test]
+        fn artifact_roundtrip_preserves_directory_identity_and_rejects_file_hardlinks() {
+            let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+            let directory = root.path().join("artifacts");
+            fs::create_dir(&directory).unwrap();
+            let before =
+                DirectoryIdentity::try_from_metadata(&fs::metadata(&directory).unwrap()).unwrap();
+            let output = directory.join("receipt.json");
+            write_new(&output, b"public receipt", 0o644).unwrap();
+            assert_eq!(
+                read_bounded_regular(&output, 1024).unwrap(),
+                b"public receipt"
+            );
+            assert_eq!(
+                DirectoryIdentity::try_from_metadata(&fs::metadata(&directory).unwrap()).unwrap(),
+                before
+            );
+
+            fs::hard_link(&output, directory.join("alias.json")).unwrap();
+            assert!(read_bounded_regular(&output, 1024).is_err());
+            let moved = root.path().join("moved");
+            fs::rename(&directory, &moved).unwrap();
+            fs::create_dir(&directory).unwrap();
+            assert_ne!(
+                DirectoryIdentity::try_from_metadata(&fs::metadata(&directory).unwrap()).unwrap(),
+                before
+            );
+        }
+
+        #[test]
+        fn receipt_json_preserves_authority_without_backend_origin_claims() {
+            let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+            let uid = rustix::process::geteuid().as_raw();
+            let service = SoftwareSignerServiceV1::provision(
+                root.path().join("state"),
+                SoftwareSignerProvisioningV1 {
+                    handle: "software://sorafs/promotion/primary".into(),
+                    service_id: "promotion-primary".into(),
+                    administrator_id: "promotion-security".into(),
+                    service_uid: uid,
+                    client_uid: uid.checked_add(1).unwrap(),
+                    administrator_uid: uid.checked_add(2).unwrap(),
+                    role: SignerRoleV1::Promotion,
+                    purpose_binding: SignerPurposeBindingV1::NativeOrPromotion,
+                    algorithm: SignerKeyAlgorithmV1::Ed25519,
+                    key_revision: 1,
+                    policy_revision: 1,
+                    policy_digest: [0x71; 32],
+                    max_request_bytes: 2048,
+                },
+                SoftwareSignerWrappingKeyV1::try_from_bytes([0x72; 32]).unwrap(),
+            )
+            .unwrap();
+            let binding = service.public_binding().unwrap();
+            // This is a transport-shape fixture. Its invented operation signature
+            // must remain unauthorized after decoding; parsing grants no authority.
+            let receipt = SoftwareSignerSignatureReceiptV1 {
+                operation_id: [0x73; 32],
+                request_digest: [0x74; 32],
+                payload_digest: [0x75; 32],
+                payload_length: 7,
+                signature: vec![0x76; 64],
+                commit_sequence: 1,
+                commit_audit_head: [0x77; 32],
+                replayed: false,
+                provenance: service.provenance().unwrap(),
+                response_digest: [0x78; 32],
+                response_attestation: vec![0x79; 64],
+            };
+            let path = root.path().join("receipt.json");
+            write_signature_receipt_json_new(&path, &receipt).unwrap();
+            let value: norito::json::Value =
+                norito::json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert!(value["binding"].get("backend").is_none());
+            let decoded = read_signature_receipt_json(&path, &binding).unwrap();
+            assert_eq!(decoded, receipt);
+            assert!(
+                decoded
+                    .verify_offline(
+                        &binding,
+                        receipt.operation_id,
+                        b"payload",
+                        &receipt.signature
+                    )
+                    .is_err()
+            );
+
+            for backend in ["software", "hardware"] {
+                let mut retired = value.clone();
+                retired
+                    .as_object_mut()
+                    .unwrap()
+                    .get_mut("binding")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("backend".into(), backend.into());
+                let path = root.path().join(format!("retired-{backend}.json"));
+                write_new(&path, &norito::json::to_vec(&retired).unwrap(), 0o600).unwrap();
+                assert!(matches!(
+                    read_signature_receipt_json(&path, &binding),
+                    Err(CliError::Input)
+                ));
+            }
+            let mut substituted = binding.clone();
+            substituted.service_id = "promotion-substituted".into();
+            assert!(matches!(
+                read_signature_receipt_json(&path, &substituted),
+                Err(CliError::Binding)
+            ));
+
+            // The validation writer is called only after verify_offline succeeds
+            // in the command handler. Exercise its payload-free serialization here.
+            let validation_path = root.path().join("validation.json");
+            write_receipt_validation_json_new(
+                &validation_path,
+                &receipt,
+                &receipt.signature,
+                &binding,
+            )
+            .unwrap();
+            let validation: norito::json::Value =
+                norito::json::from_slice(&fs::read(&validation_path).unwrap()).unwrap();
+            assert!(validation.get("backend").is_none());
+            assert_eq!(
+                validation["service_id"],
+                norito::json::Value::from(binding.service_id)
+            );
+            assert_eq!(fs::metadata(validation_path).unwrap().mode() & 0o777, 0o600);
+        }
+
         #[test]
         fn credential_values_never_enter_the_cli() {
             let help = Cli::command().render_long_help().to_string();

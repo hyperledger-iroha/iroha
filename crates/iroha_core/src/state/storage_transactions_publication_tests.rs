@@ -42,7 +42,7 @@ fn publication_and_abort_keep_original_membership_allocation_and_history() {
     assert!(storage.write_lock.try_lock().is_none());
     assert_eq!(storage.latest_height(), 1);
     assert_eq!(storage.view().get(&key(3)), None);
-    let journal = prepared.abort();
+    let journal = prepared.abort().0;
     assert_eq!(std::ptr::from_ref(journal.staged_membership().1), pointer);
     assert_eq!(
         journal.observe_predecessor(&storage),
@@ -159,7 +159,7 @@ fn membership_abort_detach_and_commit_signal_the_exact_busy_writer() {
             3 => {
                 prepare(competitor.detach(), &storage).abort();
             }
-            _ => competitor.publish(),
+            _ => drop(competitor.publish()),
         }
         assert!(Pin::new(&mut wait).poll(&mut context).is_ready());
         assert_eq!(std::ptr::from_ref(journal.staged_membership().1), pointer);
@@ -246,7 +246,8 @@ fn installation_outlives_writer_on_drop_abort_and_publication() {
     let journal = detached()
         .try_prepare_publication(&storage, admit)
         .unwrap_or_else(|_| panic!("prepare"))
-        .abort();
+        .abort()
+        .0;
     assert_eq!(releases.get(), 2);
     let guard = journal
         .try_prepare_publication(&storage, admit)
@@ -260,4 +261,97 @@ fn installation_outlives_writer_on_drop_abort_and_publication() {
     assert_eq!(storage.latest_height(), 1);
     drop(guard);
     assert_eq!(releases.get(), 3);
+}
+
+#[test]
+fn membership_publication_retains_original_cleanup_until_outer_unlock() {
+    use std::{
+        future::Future,
+        sync::atomic::{AtomicUsize, Ordering},
+        task::{Context, Wake, Waker},
+    };
+    struct Reenter {
+        storage: Arc<TransactionsStorage>,
+        outer: Arc<crate::publication_lock::PublicationMutex>,
+        observed: AtomicUsize,
+    }
+    impl Wake for Reenter {
+        fn wake(self: Arc<Self>) {
+            let _outer = self
+                .outer
+                .try_lock_or_wait()
+                .expect("outer commit fence released");
+            let _writer = self
+                .storage
+                .write_lock
+                .try_lock()
+                .expect("membership writer released");
+            assert_eq!(self.storage.view().get(&key(2)), NonZeroUsize::new(2));
+            self.observed.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    for detached in [false, true] {
+        for unwind in [false, true] {
+            let storage = Arc::new(TransactionsStorage::new());
+            stage(&storage, 1, &[1]).commit().unwrap();
+            let tip = Arc::downgrade(storage.latest_block.load().as_ref().unwrap());
+            let identity = Arc::downgrade(&storage.write_lock.lock());
+            let prepared = stage(&storage, 2, &[2]).prepare_commit().unwrap();
+            // Detachment also releases its writer: observe only the final owner.
+            let publish: Box<dyn FnOnce() -> Box<dyn std::any::Any> + '_> = if detached {
+                let prepared = prepare(prepared.detach(), &storage);
+                Box::new(move || Box::new(prepared.publish()))
+            } else {
+                Box::new(move || Box::new(prepared.publish()))
+            };
+            let outer = Arc::new(crate::publication_lock::PublicationMutex::default());
+            let outer_guard = outer.lock();
+            let mut pending = Box::pin(storage.released.observe().wait_for_release());
+            let probe = Arc::new(Reenter {
+                storage: Arc::clone(&storage),
+                outer: Arc::clone(&outer),
+                observed: AtomicUsize::new(0),
+            });
+            let waker = Waker::from(Arc::clone(&probe));
+            assert!(
+                pending
+                    .as_mut()
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+            let retirement = publish();
+            assert!(storage.write_lock.try_lock().is_some());
+            assert_eq!(probe.observed.load(Ordering::SeqCst), 0);
+            assert!(
+                tip.upgrade().is_some(),
+                "original published tip is still retained"
+            );
+            assert!(
+                identity.upgrade().is_some(),
+                "original predecessor identity is still retained"
+            );
+            if unwind {
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        let _retirement = retirement;
+                        let _outer = outer_guard;
+                        panic!("enclosing completion unwind");
+                    }))
+                    .is_err()
+                );
+            } else {
+                drop(outer_guard);
+                drop(retirement);
+            }
+            assert_eq!(probe.observed.load(Ordering::SeqCst), 1);
+            assert!(
+                pending
+                    .as_mut()
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_ready()
+            );
+            assert!(tip.upgrade().is_none());
+            assert!(identity.upgrade().is_none());
+        }
+    }
 }

@@ -348,11 +348,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 366;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 368;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 366;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 368;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 349;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 351;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -402,9 +402,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "9791fab68c24c43014e13a13a9d62ac2b56b05da156228b48e041820816c96a9";
+            "b23594ddd1af13bcff35b00094e081e2fee641f00aa6a8f9e864e7cf69c4555b";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "1cd545c2a683beaf712c4d8a2b75a547af4a221635de16a0da85ea5d9629cc42";
+            "7c1c329cd99879566b505f456f52b902db13db09d50ea17960477ea7b30e8855";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -1515,3 +1515,11 @@ mod tests {
 #[cfg(test)]
 #[path = "registry/stream_token_custody_tests.rs"]
 mod stream_token_custody_tests;
+
+#[cfg(test)]
+#[path = "registry/final_promotion_authority_tests.rs"]
+mod final_promotion_authority_tests;
+
+#[cfg(test)]
+#[path = "registry/final_promotion_account_custody_tests.rs"]
+mod final_promotion_account_custody_tests;

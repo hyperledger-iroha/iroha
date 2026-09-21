@@ -691,6 +691,7 @@ where
 }
 #[path = "incremental_source_phase23_radix_range_v2.rs"]
 mod radix_range_v2;
+pub(in crate::vega::zk_ams::mkhe) use radix_range_v2::MaterializedPlaneContextV1;
 #[cfg(test)]
 const _: () = {
     assert!(include_bytes!("incremental_source_phase23_radix_range_v2.rs").len() <= 52_000);

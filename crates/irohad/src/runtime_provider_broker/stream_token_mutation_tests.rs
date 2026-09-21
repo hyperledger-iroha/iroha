@@ -1,18 +1,18 @@
 // Exercise the actual stream-token client over isolated socket pairs. The peer uses a
-// deterministic software key only as a protocol fixture; this is not hardware qualification.
+// deterministic software key only as a protocol fixture; this is not signer qualification.
 mod stream_token_mutation_tests {
     use super::*;
     use std::io::{Read as _, Write as _};
 
     struct Fixture {
-        signer: StreamTokenHardwareBrokerClient,
+        signer: StreamTokenSignerBrokerClient,
         peer: UnixStream,
         reconnect_listener: UnixListener,
         _directory: tempfile::TempDir,
     }
 
     fn fixture() -> Fixture {
-        let directory = tempfile::tempdir().expect("isolated endpoint directory");
+        let directory = new_broker_socket_test_directory();
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
             .expect("private endpoint directory");
         let path = directory.path().join("stream-token.sock");
@@ -36,7 +36,7 @@ mod stream_token_mutation_tests {
         validate_observation(&binding, &observation(&binding))
             .expect("exact simulated peer observation");
         let metadata_digest = observation(&binding).metadata_digest;
-        let signer = StreamTokenHardwareBrokerClient {
+        let signer = StreamTokenSignerBrokerClient {
             session: Arc::new(BrokerSession {
                 decode_pool: new_test_process_pool(),
                 connection: Mutex::new(BrokerConnection {
@@ -63,11 +63,11 @@ mod stream_token_mutation_tests {
     }
 
     fn token_body() -> sorafs_manifest::StreamTokenBodyV1 {
-        stream_token_hardware_test_support::body()
+        stream_token_signer_test_support::body()
     }
 
     fn expected() -> SignerStreamTokenExpectedV1 {
-        stream_token_hardware_test_support::expected(&token_body())
+        stream_token_signer_test_support::expected(&token_body())
     }
 
     fn signing_payload() -> Vec<u8> {
@@ -114,9 +114,9 @@ mod stream_token_mutation_tests {
         let result = encode_canonical(
             request
                 .binding
-                .stream_token_hardware_binding
+                .stream_token_signer_binding
                 .as_ref()
-                .expect("complete hardware metadata"),
+                .expect("complete signer_backend metadata"),
             MAX_STREAM_TOKEN_METADATA_BYTES_V1,
         )
         .expect("encode exact non-authorizing metadata");
@@ -130,7 +130,7 @@ mod stream_token_mutation_tests {
             signing_payload(),
             "the originally admitted body is exact"
         );
-        let result = stream_token_hardware_test_support::receipt(&request.payload)
+        let result = stream_token_signer_test_support::receipt(&request.payload)
             .encode_canonical()
             .expect("canonical untrusted receipt claims");
         (request, result)
@@ -147,7 +147,7 @@ mod stream_token_mutation_tests {
     }
 
     fn assert_fenced(
-        signer: &StreamTokenHardwareBrokerClient,
+        signer: &StreamTokenSignerBrokerClient,
         listener: &UnixListener,
         next_id: u64,
     ) {
@@ -165,7 +165,7 @@ mod stream_token_mutation_tests {
         }
         assert!(matches!(
             signer.sign(&expected(), &token_body()),
-            Err(StreamTokenHardwareCallErrorV1::AmbiguousCompletion)
+            Err(StreamTokenSignerCallErrorV1::AmbiguousCompletion)
         ));
         assert!(matches!(signer.metadata(), Err(BrokerError::Ambiguous)));
         assert_eq!(signer.session.reconnect(), Err(BrokerError::Ambiguous));
@@ -243,7 +243,7 @@ mod stream_token_mutation_tests {
                 .expect("substituted request envelope");
                 validate_operation_request(&other)
                     .expect("substitution itself is a valid signing request");
-                let result = stream_token_hardware_test_support::receipt(&body)
+                let result = stream_token_signer_test_support::receipt(&body)
                     .encode_canonical()
                     .expect("substituted canonical receipt claims");
                 let response = make_operation_response(&other, STATUS_OK_V1, result, &network_id())
@@ -261,7 +261,7 @@ mod stream_token_mutation_tests {
                 response.result = if matches!(failure, Failure::MalformedResult) {
                     vec![0x41; 17]
                 } else {
-                    let mut receipt = stream_token_hardware_test_support::receipt(&request.payload);
+                    let mut receipt = stream_token_signer_test_support::receipt(&request.payload);
                     receipt.signatures[0].signature.fill(0);
                     receipt
                         .encode_canonical()
@@ -323,7 +323,7 @@ mod stream_token_mutation_tests {
             assert!(
                 matches!(
                     signing.join().expect("signing client terminates"),
-                    Err(StreamTokenHardwareCallErrorV1::AmbiguousCompletion)
+                    Err(StreamTokenSignerCallErrorV1::AmbiguousCompletion)
                 ),
                 "{failure:?}"
             );
@@ -421,7 +421,7 @@ mod stream_token_mutation_tests {
                 .expect("end postqualification response");
             assert!(matches!(
                 signing.join().expect("signing client terminates"),
-                Err(StreamTokenHardwareCallErrorV1::AmbiguousCompletion)
+                Err(StreamTokenSignerCallErrorV1::AmbiguousCompletion)
             ));
             assert_fenced(&signer, &reconnect_listener, 4);
             assert_no_request_bytes(&mut peer);
@@ -515,7 +515,7 @@ mod stream_token_mutation_tests {
             .expect("lose only the prequalification response");
         assert!(matches!(
             signing.join().expect("signing client terminates"),
-            Err(StreamTokenHardwareCallErrorV1::Unavailable)
+            Err(StreamTokenSignerCallErrorV1::Unavailable)
         ));
         {
             let connection = signer
@@ -547,6 +547,21 @@ mod stream_token_mutation_tests {
                 Err(error) => panic!("reconnect accept failed: {error}"),
             }
         };
+        // A macOS accepted socket inherits the nonblocking listener's mode. The
+        // replacement transcript uses blocking reads with a finite socket timeout.
+        replacement
+            .set_nonblocking(false)
+            .expect("blocking replacement transcript");
+        assert!(
+            !rustix::fs::fcntl_getfl(&replacement)
+                .expect("replacement descriptor flags")
+                .contains(rustix::fs::OFlags::NONBLOCK)
+        );
+        assert!(
+            rustix::fs::fcntl_getfl(&reconnect_listener)
+                .expect("listener descriptor flags")
+                .contains(rustix::fs::OFlags::NONBLOCK)
+        );
         replacement
             .set_read_timeout(Some(Duration::from_secs(5)))
             .expect("bounded replacement read");

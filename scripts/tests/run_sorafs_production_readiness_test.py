@@ -87,7 +87,6 @@ def write_lane_inventory(path: Path) -> Path:
     payload = {
         "schema": LANE_INVENTORY.INVENTORY_SCHEMA,
         "status": "ready",
-        "signer_qualification": "software-key-qualified",
         "generated_at_unix": 1_800_800_000,
         "max_summary_age_secs": LANE_INVENTORY.MAX_SUMMARY_AGE_SECS,
         "summary_file_count": 17,

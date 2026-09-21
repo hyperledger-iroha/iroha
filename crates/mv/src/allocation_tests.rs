@@ -82,11 +82,11 @@ impl Wake for WakeCount {
     }
 }
 
-fn poll(wait: &mut crate::ReleaseFuture, wakes: &Arc<WakeCount>) -> Poll<()> {
+fn poll(wait: &mut concread::release::ReleaseFuture, wakes: &Arc<WakeCount>) -> Poll<()> {
     Pin::new(wait).poll(&mut Context::from_waker(&Waker::from(Arc::clone(wakes))))
 }
 
-fn capacity_wait(error: AllocationRefusal) -> crate::ReleaseFuture {
+fn capacity_wait(error: AllocationRefusal) -> concread::release::ReleaseFuture {
     let AllocationRefusal::Capacity { release, .. } = error else {
         panic!("expected temporary capacity refusal: {error}");
     };
@@ -373,10 +373,10 @@ fn nested_original_pool_scopes_return_credits_immediately_and_coalesce_without_a
     assert!(poll(&mut wait, &wakes).is_pending());
 
     without_allocations(|| {
-        budget.with_deferred_refund_notifications(|| {});
+        budget.with_deferred_refund_notifications(|_| {});
         assert_eq!(wakes.0.load(SeqCst), 0);
-        budget.with_deferred_refund_notifications(|| {
-            same_pool.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
+            same_pool.with_deferred_refund_notifications(|_| {
                 drop(owner);
                 assert_eq!(budget.reserved_bytes(), 0);
                 assert_eq!(wakes.0.load(SeqCst), 0);
@@ -406,8 +406,8 @@ fn nested_different_pool_scopes_flush_independently() {
     assert!(poll(&mut first_wait, &first_wakes).is_pending());
     assert!(poll(&mut second_wait, &second_wakes).is_pending());
 
-    first.with_deferred_refund_notifications(|| {
-        second.with_deferred_refund_notifications(|| {
+    first.with_deferred_refund_notifications(|_| {
+        second.with_deferred_refund_notifications(|_| {
             // Finding the exact pool crosses an unrelated inner scope.
             drop(first_owner);
             drop(second_owner);
@@ -432,7 +432,7 @@ fn another_threads_refund_notifies_while_this_threads_scope_is_still_active() {
     let mut wait = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         drop(local);
         assert_eq!(budget.reserved_bytes(), 4);
         assert_eq!(wakes.0.load(SeqCst), 0);
@@ -478,7 +478,7 @@ fn scope_unwind_notifies_after_its_physical_writer_has_unlocked() {
     );
     assert!(
         catch_unwind(AssertUnwindSafe(|| {
-            budget.with_deferred_refund_notifications(|| {
+            budget.with_deferred_refund_notifications(|_| {
                 let _held = physical.lock().unwrap();
                 drop(owner);
                 assert_eq!(budget.reserved_bytes(), 0);
@@ -511,10 +511,10 @@ fn caught_inner_unwind_remains_deferred_until_the_original_outer_scope_exits() {
     let mut wait = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         assert!(
             catch_unwind(AssertUnwindSafe(|| {
-                budget.with_deferred_refund_notifications(|| {
+                budget.with_deferred_refund_notifications(|_| {
                     drop(owner);
                     panic!("inner operation abandoned");
                 });
@@ -536,7 +536,7 @@ fn refund_callback_can_reenter_scopes_and_its_panic_leaves_no_stale_tls_owner() 
     }
     impl Wake for Reenter {
         fn wake(self: Arc<Self>) {
-            self.budget.with_deferred_refund_notifications(|| {
+            self.budget.with_deferred_refund_notifications(|_| {
                 let owner = self.budget.try_reserve(layout(8)).unwrap();
                 drop(owner);
             });
@@ -559,7 +559,7 @@ fn refund_callback_can_reenter_scopes_and_its_panic_leaves_no_stale_tls_owner() 
     );
     assert!(
         catch_unwind(AssertUnwindSafe(|| {
-            budget.with_deferred_refund_notifications(|| drop(owner));
+            budget.with_deferred_refund_notifications(|_| drop(owner));
         }))
         .is_err()
     );
@@ -627,7 +627,7 @@ fn deferred_flush_preserves_first_panic_and_wakes_the_remaining_cohort_after_unl
             .is_pending()
     );
     let panic = catch_unwind(AssertUnwindSafe(|| {
-        budget.with_deferred_refund_notifications(|| {
+        budget.with_deferred_refund_notifications(|_| {
             let _held = physical.lock().unwrap();
             drop(owner);
             assert_eq!(budget.reserved_bytes(), 0);
@@ -731,7 +731,7 @@ fn actual_retired_reader_refund_under_a_new_writer_waits_for_its_scope_to_unlock
     let waker = Waker::from(Arc::clone(&wake));
     let mut context = Context::from_waker(&waker);
     let mut wait = None;
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         let held = owner.write_charged(admit).unwrap();
         let mut pending = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
         assert!(Pin::new(&mut pending).poll(&mut context).is_pending());
@@ -818,7 +818,7 @@ fn partition_retains_exact_original_pool_and_conserves_real_credits() {
         part.try_split(Layout::from_size_align(16, 8).unwrap())
             .unwrap()
     });
-    budget.with_deferred_refund_notifications(|| {
+    budget.with_deferred_refund_notifications(|_| {
         without_allocations(|| drop(part));
         assert_eq!(budget.reserved_bytes(), 56);
         assert_eq!(wakes.0.load(SeqCst), 0);
@@ -829,5 +829,62 @@ fn partition_retains_exact_original_pool_and_conserves_real_credits() {
     assert!(poll(&mut wait, &wakes).is_ready());
     assert_eq!(equal_but_foreign.reserved_bytes(), 0);
     without_allocations(|| drop(charge));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn partition_prepaid_reservation_preserves_same_pool_without_allocation_or_acquisition() {
+    let budget = AllocationBudget::new(64);
+    let mut parent = budget.try_reserve_bytes(64).unwrap();
+    let mut child = without_allocations(|| parent.try_partition_bytes(24).unwrap());
+    assert_eq!(parent.remaining_bytes(), 40);
+    assert_eq!(child.remaining_bytes(), 24);
+    assert_eq!(budget.reserved_bytes(), 64);
+    assert!(matches!(
+        budget.try_reserve_bytes(1),
+        Err(AllocationRefusal::Capacity { .. })
+    ));
+    let charge = without_allocations(|| child.try_split(layout(24)).unwrap());
+    assert_eq!(charge.layout(), layout(24));
+    assert_eq!(child.remaining_bytes(), 0);
+    without_allocations(|| drop(child));
+    assert_eq!(budget.reserved_bytes(), 64);
+    without_allocations(|| drop(parent));
+    assert_eq!(budget.reserved_bytes(), 24);
+    let replacement = budget.try_reserve_bytes(40).unwrap();
+    assert!(matches!(
+        budget.try_reserve_bytes(1),
+        Err(AllocationRefusal::Capacity { .. })
+    ));
+    without_allocations(|| drop(charge));
+    assert_eq!(budget.reserved_bytes(), 40);
+    without_allocations(|| drop(replacement));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn partition_refusal_and_zero_partition_preserve_original_remaining_and_refund() {
+    let budget = AllocationBudget::new(17);
+    let mut parent = budget.try_reserve_bytes(17).unwrap();
+    let error = without_allocations(|| parent.try_partition_bytes(18)).unwrap_err();
+    assert_eq!(
+        error,
+        InsufficientReservation {
+            requested_bytes: 18,
+            remaining_bytes: 17
+        }
+    );
+    assert_eq!(parent.remaining_bytes(), 17);
+    assert_eq!(budget.reserved_bytes(), 17);
+    let empty = without_allocations(|| parent.try_partition_bytes(0).unwrap());
+    assert_eq!(empty.remaining_bytes(), 0);
+    assert_eq!(parent.remaining_bytes(), 17);
+    without_allocations(|| drop(empty));
+    assert_eq!(budget.reserved_bytes(), 17);
+    let child = without_allocations(|| parent.try_partition_bytes(17).unwrap());
+    assert_eq!(parent.remaining_bytes(), 0);
+    without_allocations(|| drop(parent));
+    assert_eq!(budget.reserved_bytes(), 17);
+    without_allocations(|| drop(child));
     assert_eq!(budget.reserved_bytes(), 0);
 }

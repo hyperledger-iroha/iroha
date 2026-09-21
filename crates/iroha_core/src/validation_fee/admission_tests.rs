@@ -28,6 +28,217 @@ fn newly_dispatchable_native_instruction_fails_until_explicitly_classified() {
     );
 }
 #[test]
+fn stream_token_custody_actions_remain_available_under_validation_fee_policy() {
+    use iroha_data_model::{
+        isi::sorafs::MutateSorafsStreamTokenCustody,
+        sorafs::{
+            capacity::ProviderId,
+            stream_token_custody::{
+                SorafsStreamTokenCustodyActionV1 as Action, SorafsStreamTokenCustodyRevocationV1,
+            },
+        },
+    };
+
+    let policy = policy(&account(3));
+    // Fee admission classifies the complete action surface. These opaque payloads are not
+    // enrollment evidence: Core still owns canonical decoding, permission checks and custody CAS.
+    for action in [
+        Action::Configure(Vec::new()),
+        Action::Enroll(Vec::new()),
+        Action::Revoke(SorafsStreamTokenCustodyRevocationV1 {
+            signer: true,
+            attester: true,
+        }),
+    ] {
+        let instruction: InstructionBox = MutateSorafsStreamTokenCustody {
+            provider_id: ProviderId::new([0x31; 32]),
+            expected_revision: 1,
+            expected_digest: [0x32; 32],
+            action,
+        }
+        .into();
+        assert_eq!(
+            crate::smartcontracts::isi::registered_native_instruction_type_name(&instruction),
+            Some(core::any::type_name::<MutateSorafsStreamTokenCustody>()),
+        );
+        assert_eq!(
+            native_instruction_ds_effect_disposition(&instruction, &policy_fee_asset(&policy)),
+            NativeInstructionDsEffectDisposition::AuditedNoDsEffect,
+        );
+        assert_eq!(
+            enforce_policy(&tx(1, vec![instruction], Metadata::default()), &policy),
+            Ok(()),
+        );
+    }
+}
+#[test]
+fn stream_token_custody_does_not_exempt_adjacent_asset_transfers() {
+    use iroha_data_model::{
+        isi::sorafs::MutateSorafsStreamTokenCustody,
+        sorafs::{
+            capacity::ProviderId,
+            stream_token_custody::{
+                SorafsStreamTokenCustodyActionV1, SorafsStreamTokenCustodyRevocationV1,
+            },
+        },
+    };
+
+    let policy = policy(&account(3));
+    let custody: InstructionBox = MutateSorafsStreamTokenCustody {
+        provider_id: ProviderId::new([0x31; 32]),
+        expected_revision: 1,
+        expected_digest: [0x32; 32],
+        action: SorafsStreamTokenCustodyActionV1::Revoke(SorafsStreamTokenCustodyRevocationV1 {
+            signer: true,
+            attester: false,
+        }),
+    }
+    .into();
+    let transfer = transfer(
+        &account(1),
+        &policy_fee_asset(&policy),
+        Quantity::from(1_u64),
+        &account(2),
+    );
+    for instructions in [
+        vec![custody.clone(), transfer.clone()],
+        vec![transfer, custody],
+    ] {
+        assert_eq!(
+            enforce_policy(&tx(1, instructions, metadata_for(&policy)), &policy),
+            Err(ValidationFeeAdmissionError::MissingFee {
+                required_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
+            }),
+        );
+    }
+}
+#[test]
+fn final_promotion_authority_actions_remain_available_under_validation_fee_policy() {
+    use iroha_data_model::{
+        isi::sorafs::MutateSorafsFinalPromotionAuthority,
+        sorafs::final_promotion_authority::{
+            FinalPromotionAuthorityActionV1 as Action, FinalPromotionCheckSubjectV1,
+            FinalPromotionCheckV1, FinalPromotionCompleteV1, FinalPromotionExpireV1,
+            FinalPromotionReserveV1, FinalPromotionRevocationV1,
+        },
+    };
+    use sorafs_manifest::signer::final_promotion::SignerFinalPromotionRequestV1;
+    use sorafs_manifest::signer::protocol::{
+        SignerOperationActionV1, SignerOperationAuditHeadV1, SignerOperationCommitmentV1,
+        SignerOperationCustodyV1, SignerOperationIntentV1, SignerOperationReservationV1,
+    };
+    let policy = policy(&account(3));
+    let intent = SignerOperationIntentV1 {
+        action: SignerOperationActionV1::Sign,
+        operation_id: [1; 32],
+        request_digest: [2; 32],
+        previous_audit: SignerOperationAuditHeadV1 {
+            sequence: 0,
+            digest: [0; 32],
+        },
+    };
+    let custody = SignerOperationCustodyV1 {
+        record_digest: [3; 32],
+        control_state_digest: [4; 32],
+    };
+    let reservation = SignerOperationReservationV1 {
+        reservation_id: [5; 32],
+        fence: 1,
+        expires_at_unix_ms: 10_000,
+    };
+    for action in [
+        Action::Configure(Vec::new()),
+        Action::Enroll(Vec::new()),
+        Action::Revoke(FinalPromotionRevocationV1 {
+            signer: true,
+            attester: true,
+        }),
+        Action::Reserve(FinalPromotionReserveV1 { intent, custody }),
+        Action::Complete(FinalPromotionCompleteV1 {
+            intent,
+            custody,
+            reservation,
+            commitment: SignerOperationCommitmentV1 {
+                audit: SignerOperationAuditHeadV1 {
+                    sequence: 1,
+                    digest: [6; 32],
+                },
+                response_digest: [7; 32],
+            },
+            signatures_digest: [8; 32],
+        }),
+        Action::Expire(FinalPromotionExpireV1 {
+            operation_id: intent.operation_id,
+            reservation,
+        }),
+        Action::Check(FinalPromotionCheckV1 {
+            challenge: [10; 32],
+            network_id: [11; 32],
+            expected_operator: account(2),
+            minimum_height: 1,
+            minimum_block_hash: [12; 32],
+            request: SignerFinalPromotionRequestV1 {
+                operation_id: intent.operation_id,
+                binding_digest: [13; 32],
+                original_custody: custody,
+                statement_digest: [14; 32],
+                statement_size: 128,
+            },
+            subject: FinalPromotionCheckSubjectV1::Current(intent.previous_audit),
+        }),
+    ] {
+        let instruction: InstructionBox = MutateSorafsFinalPromotionAuthority {
+            deployment_id: "promotion-primary".into(),
+            expected_control_revision: 1,
+            expected_control_digest: custody.control_state_digest,
+            action,
+        }
+        .into();
+        assert_eq!(
+            crate::smartcontracts::isi::registered_native_instruction_type_name(&instruction),
+            Some(core::any::type_name::<MutateSorafsFinalPromotionAuthority>())
+        );
+        assert_eq!(
+            native_instruction_ds_effect_disposition(&instruction, &policy_fee_asset(&policy)),
+            NativeInstructionDsEffectDisposition::AuditedNoDsEffect
+        );
+        assert_eq!(
+            enforce_policy(
+                &tx(1, vec![instruction.clone()], Metadata::default()),
+                &policy
+            ),
+            Ok(())
+        );
+        for instructions in [
+            vec![
+                instruction.clone(),
+                transfer(
+                    &account(1),
+                    &policy_fee_asset(&policy),
+                    Quantity::from(1_u64),
+                    &account(2),
+                ),
+            ],
+            vec![
+                transfer(
+                    &account(1),
+                    &policy_fee_asset(&policy),
+                    Quantity::from(1_u64),
+                    &account(2),
+                ),
+                instruction,
+            ],
+        ] {
+            assert_eq!(
+                enforce_policy(&tx(1, instructions, metadata_for(&policy)), &policy),
+                Err(ValidationFeeAdmissionError::MissingFee {
+                    required_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS
+                })
+            );
+        }
+    }
+}
+#[test]
 fn moderation_challenge_custody_paths_are_classified_as_state_derived_ds_effects() {
     use iroha_data_model::{
         isi::sorafs::{

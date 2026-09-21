@@ -82,7 +82,7 @@ fn build_sample_envelope() -> StarkVerifyEnvelopeV1 {
 fn sample_air_params(domain_tag: String) -> StarkFriParamsV1 {
     StarkFriParamsV1 {
         version: 1,
-        n_log2: 6,
+        n_log2: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
         blowup_log2: 3,
         fold_arity: 2,
         queries: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
@@ -199,7 +199,7 @@ fn sample_stark_vk_box(
     let payload = StarkFriVerifyingKeyV1 {
         version: 1,
         circuit_id: circuit_id.to_string(),
-        n_log2: 6,
+        n_log2: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
         blowup_log2: 3,
         fold_arity: 2,
         queries: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
@@ -467,7 +467,7 @@ fn stark_open_verify_envelope_rejects_synthetic_air_proof() {
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
     let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-    let circuit_id = "ivm-execution-v1";
+    let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1";
     let vk_box = sample_stark_vk_box(backend, circuit_id);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
     // Two columns, one row each (matches the instance-column shape used by other backends).
@@ -506,7 +506,7 @@ fn stark_open_verify_envelope_rejects_synthetic_air_proof() {
     );
     // Changing circuit_id without updating the inner envelope's `domain_tag` must fail.
     let mut env_bad = env;
-    env_bad.circuit_id = "other-circuit".to_string();
+    env_bad.circuit_id = format!("{backend}:other-circuit");
     let proof_bad = ProofBox::new(
         backend.into(),
         norito::to_bytes(&env_bad).expect("encode tampered OpenVerifyEnvelope"),
@@ -582,11 +582,10 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         transaction::{Executable, IvmProved},
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
-    use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
     use iroha_primitives::json::Json;
     use std::sync::Arc;
     let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-    let circuit_id = "ivm-execution-v1";
+    let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1";
     // Use the canonical contract artifact and dispatch boundary so this test reaches
     // native proof rejection after successful execution and registry admission.
     let compiler =
@@ -623,7 +622,7 @@ seiyaku StarkProofRejection {
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        format!("{backend}:{circuit_id}"),
+        circuit_id,
         BackendTag::Stark,
         "goldilocks",
         iroha_core::zk::ivm_execution_public_inputs_schema_hash(),
@@ -659,7 +658,6 @@ seiyaku StarkProofRejection {
     {
         let mut stx = block.transaction();
         for permission in [
-            CanRegisterSmartContractCode.into(),
             Permission::new("CanManageVerifyingKeys".to_owned(), Json::new(())),
             Permission::new("CanRunStarkProofRejection".to_owned(), Json::new(())),
         ] {
@@ -868,6 +866,8 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
     );
     ballot_vk_record.status = ConfidentialStatus::Active;
     ballot_vk_record.gas_schedule_id = Some("sched_ballot".to_string());
+    ballot_vk_record.vk_len =
+        u32::try_from(ballot_vk_box.bytes.len()).expect("fixture VK length fits");
     ballot_vk_record.key = Some(ballot_vk_box.clone());
     verifying_keys::RegisterVerifyingKey {
         id: ballot_vk_id.clone(),
@@ -890,6 +890,8 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
     );
     tally_vk_record.status = ConfidentialStatus::Active;
     tally_vk_record.gas_schedule_id = Some("sched_tally".to_string());
+    tally_vk_record.vk_len =
+        u32::try_from(tally_vk_box.bytes.len()).expect("fixture VK length fits");
     tally_vk_record.key = Some(tally_vk_box.clone());
     verifying_keys::RegisterVerifyingKey {
         id: tally_vk_id.clone(),
@@ -978,6 +980,8 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     );
     ballot_vk_record.status = ConfidentialStatus::Active;
     ballot_vk_record.gas_schedule_id = Some("sched_bad_ballot".to_owned());
+    ballot_vk_record.vk_len =
+        u32::try_from(ballot_vk_box.bytes.len()).expect("fixture VK length fits");
     ballot_vk_record.key = Some(ballot_vk_box);
     verifying_keys::RegisterVerifyingKey {
         id: ballot_vk_id.clone(),
@@ -997,6 +1001,8 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     );
     tally_vk_record.status = ConfidentialStatus::Active;
     tally_vk_record.gas_schedule_id = Some("sched_tally".to_owned());
+    tally_vk_record.vk_len =
+        u32::try_from(tally_vk_box.bytes.len()).expect("fixture VK length fits");
     tally_vk_record.key = Some(tally_vk_box);
     verifying_keys::RegisterVerifyingKey {
         id: tally_vk_id.clone(),
@@ -1084,6 +1090,8 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     );
     ballot_vk_record.status = ConfidentialStatus::Active;
     ballot_vk_record.gas_schedule_id = Some("sched_ballot".to_owned());
+    ballot_vk_record.vk_len =
+        u32::try_from(ballot_vk_box.bytes.len()).expect("fixture VK length fits");
     ballot_vk_record.key = Some(ballot_vk_box);
     verifying_keys::RegisterVerifyingKey {
         id: ballot_vk_id.clone(),
@@ -1103,6 +1111,8 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     );
     tally_vk_record.status = ConfidentialStatus::Active;
     tally_vk_record.gas_schedule_id = Some("sched_bad_tally".to_owned());
+    tally_vk_record.vk_len =
+        u32::try_from(tally_vk_box.bytes.len()).expect("fixture VK length fits");
     tally_vk_record.key = Some(tally_vk_box);
     verifying_keys::RegisterVerifyingKey {
         id: tally_vk_id.clone(),
@@ -1130,13 +1140,16 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
 }
 #[test]
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
+fn governance_rejects_development_halo2_and_generic_stark_ballot_roles() {
     use core::num::NonZeroU64;
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::Execute,
-        state::{State, World, WorldReadOnly},
+        state::{
+            ElectionState, GovernanceLockCustody, GovernanceLockRecord,
+            GovernanceLocksForReferendum, State, World, WorldReadOnly,
+        },
         zk::test_utils::halo2_fixture_envelope,
     };
     use iroha_data_model::{
@@ -1146,12 +1159,14 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
         confidential::ConfidentialStatus,
         domain::Domain,
         isi::{
-            Grant, verifying_keys,
-            zk::{CreateElection, SubmitBallot},
+            Grant,
+            error::{InstructionExecutionError, InvalidParameterError},
+            verifying_keys,
+            zk::SubmitBallot,
         },
         permission::Permission,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId, VerifyingKeyRecord},
-        zk::BackendTag,
+        zk::{BackendTag, OpenVerifyEnvelope},
     };
     use iroha_executor_data_model::permission::governance::{
         CanManageParliament, CanSubmitGovernanceBallot,
@@ -1199,7 +1214,7 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     Grant::account_permission(perm_stark_ballot, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant stark ballot permission");
-    // Register a Halo2 VK/circuit pair and submit a valid Halo2 ballot.
+    // Construct a real tiny-add development proof, never a production ballot.
     let halo2_backend = "halo2/ipa";
     let halo2_circuit_id = "halo2/ipa:tiny-add2inst-public";
     let halo2_vk_id = VerifyingKeyId::new(halo2_backend, "mixed_halo2_ballot");
@@ -1220,49 +1235,46 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     );
     halo2_vk_record.status = ConfidentialStatus::Active;
     halo2_vk_record.gas_schedule_id = Some("sched_halo2_ballot".to_string());
+    halo2_vk_record.vk_len =
+        u32::try_from(halo2_vk_box.bytes.len()).expect("fixture VK length fits");
     halo2_vk_record.key = Some(halo2_vk_box);
-    verifying_keys::RegisterVerifyingKey {
+    let registration_error = verifying_keys::RegisterVerifyingKey {
         id: halo2_vk_id.clone(),
-        record: halo2_vk_record,
+        record: halo2_vk_record.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
-    .expect("register halo2 ballot vk");
+    .expect_err("development Halo2 relation must stay outside the production registry");
+    assert_eq!(
+        registration_error,
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "Halo2 OpenVerify circuit_id is not in the production circuit registry".into(),
+        )),
+    );
+    assert!(stx.world.verifying_keys().get(&halo2_vk_id).is_none());
+    assert!(stx.world.elections().get(&halo2_election_id).is_none());
+    // This is explicitly corrupt retained registry state, not an admitted key.
+    // The consumer must reject its development role independently of registration.
+    stx.world
+        .verifying_keys_mut_for_testing()
+        .insert(halo2_vk_id.clone(), halo2_vk_record);
     let mut halo2_commit = [0u8; 32];
     halo2_commit.copy_from_slice(&halo2_fixture.public_inputs[..32]);
     let mut halo2_root = [0u8; 32];
     halo2_root.copy_from_slice(&halo2_fixture.public_inputs[32..64]);
-    CreateElection {
-        election_id: halo2_election_id.clone(),
-        options: 2,
-        eligible_root: halo2_root,
-        start_ts: 0,
-        end_ts: 0,
-        vk_ballot: halo2_vk_id.clone(),
-        vk_tally: halo2_vk_id.clone(),
-        domain_tag: "gov:ballot:v1".to_string(),
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect("create halo2 election");
+    let mut halo2_envelope: OpenVerifyEnvelope =
+        norito::decode_from_bytes(&halo2_fixture.proof_bytes)
+            .expect("decode genuine development proof");
+    halo2_envelope.vk_hash = halo2_vk_hash;
     let halo2_ballot_attachment = ProofAttachment::new_ref(
         halo2_backend.to_string(),
-        ProofBox::new(halo2_backend.to_string(), halo2_fixture.proof_bytes.clone()),
+        ProofBox::new(
+            halo2_backend.to_string(),
+            norito::encode_canonical(&halo2_envelope)
+                .expect("bind development envelope to its actual VK"),
+        ),
         halo2_vk_id.clone(),
     );
-    let halo2_nullifier = derive_ballot_nullifier_for_test(
-        "gov:ballot:v1",
-        state.network_id_ref(),
-        &halo2_election_id,
-        &halo2_commit,
-    );
-    SubmitBallot {
-        election_id: halo2_election_id.clone(),
-        ciphertext: halo2_commit.to_vec(),
-        ballot_proof: halo2_ballot_attachment,
-        nullifier: halo2_nullifier,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect("submit halo2 ballot");
-    // Register a STARK VK/circuit pair and reject a synthetic STARK ballot.
+    // Generic STARK key registration is allowed; its semantic ballot role is not.
     let stark_backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
     let stark_ballot_circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:vote-ballot";
     let stark_tally_circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:vote-tally";
@@ -1281,10 +1293,12 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     );
     stark_ballot_vk_record.status = ConfidentialStatus::Active;
     stark_ballot_vk_record.gas_schedule_id = Some("sched_stark_ballot".to_string());
+    stark_ballot_vk_record.vk_len =
+        u32::try_from(stark_ballot_vk_box.bytes.len()).expect("fixture VK length fits");
     stark_ballot_vk_record.key = Some(stark_ballot_vk_box.clone());
     verifying_keys::RegisterVerifyingKey {
         id: stark_ballot_vk_id.clone(),
-        record: stark_ballot_vk_record,
+        record: stark_ballot_vk_record.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register stark ballot vk");
@@ -1303,6 +1317,8 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     );
     stark_tally_vk_record.status = ConfidentialStatus::Active;
     stark_tally_vk_record.gas_schedule_id = Some("sched_stark_tally".to_string());
+    stark_tally_vk_record.vk_len =
+        u32::try_from(stark_tally_vk_box.bytes.len()).expect("fixture VK length fits");
     stark_tally_vk_record.key = Some(stark_tally_vk_box);
     verifying_keys::RegisterVerifyingKey {
         id: stark_tally_vk_id.clone(),
@@ -1312,18 +1328,6 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     .expect("register stark tally vk");
     let stark_commit = [0x11; 32];
     let stark_root = [0x22; 32];
-    CreateElection {
-        election_id: stark_election_id.clone(),
-        options: 2,
-        eligible_root: stark_root,
-        start_ts: 0,
-        end_ts: 0,
-        vk_ballot: stark_ballot_vk_id.clone(),
-        vk_tally: stark_tally_vk_id,
-        domain_tag: "gov:ballot:v1".to_string(),
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect("create stark election");
     let stark_ballot_proof_bytes = build_stark_open_verify_envelope_bytes_for_columns(
         stark_backend,
         stark_ballot_circuit_id,
@@ -1334,50 +1338,142 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     let stark_ballot_attachment = ProofAttachment::new_ref(
         stark_backend.to_string(),
         ProofBox::new(stark_backend.to_string(), stark_ballot_proof_bytes),
-        stark_ballot_vk_id,
+        stark_ballot_vk_id.clone(),
     );
-    let stark_nullifier = derive_ballot_nullifier_for_test(
-        "gov:ballot:v1",
-        state.network_id_ref(),
-        &stark_election_id,
-        &stark_commit,
-    );
-    let err = SubmitBallot {
-        election_id: stark_election_id.clone(),
-        ciphertext: stark_commit.to_vec(),
-        ballot_proof: stark_ballot_attachment,
-        nullifier: stark_nullifier,
+    // These two elections are deliberately adversarial retained state. Neither
+    // can be created through CreateElection's closed semantic-circuit registry.
+    // Keep existing corpus entries to detect replacement as well as insertion.
+    for (
+        election_id,
+        commit,
+        eligible_root,
+        ballot_vk_id,
+        tally_vk_id,
+        vk_commitment,
+        attachment,
+    ) in [
+        (
+            halo2_election_id,
+            halo2_commit,
+            halo2_root,
+            halo2_vk_id.clone(),
+            halo2_vk_id,
+            halo2_vk_hash,
+            halo2_ballot_attachment,
+        ),
+        (
+            stark_election_id,
+            stark_commit,
+            stark_root,
+            stark_ballot_vk_id,
+            stark_tally_vk_id,
+            stark_ballot_vk_hash,
+            stark_ballot_attachment,
+        ),
+    ] {
+        let nullifier = derive_ballot_nullifier_for_test(
+            "gov:ballot:v1",
+            state.network_id_ref(),
+            &election_id,
+            &commit,
+        );
+        let mut retained = ElectionState {
+            options: 2,
+            eligible_root,
+            start_ts: 0,
+            end_ts: 0,
+            tally: vec![0; 2],
+            vk_ballot: Some(ballot_vk_id),
+            vk_ballot_commitment: Some(vk_commitment),
+            vk_tally: Some(tally_vk_id),
+            domain_tag: "gov:ballot:v1".to_owned(),
+            ..ElectionState::default()
+        };
+        retained.ballot_nullifiers.insert([0x55; 32]);
+        retained.ciphertexts.push(vec![0x66; 32]);
+        assert!(!retained.ballot_nullifiers.contains(&nullifier));
+        let election_before =
+            norito::to_bytes(&retained).expect("encode retained election before rejection");
+        stx.world
+            .elections_mut()
+            .insert(election_id.clone(), retained);
+        // Retain a pre-existing non-escrowed lock as part of the adversarial
+        // snapshot. Rejection must neither rewrite nor remove its custody.
+        let retained_lock = GovernanceLockRecord {
+            owner: ALICE_ID.clone(),
+            amount: 17_u64.into(),
+            slashed: 3_u64.into(),
+            expiry_height: 10,
+            direction: 2,
+            duration_blocks: 9,
+            custody: GovernanceLockCustody {
+                escrowed: false,
+                asset_definition_id: stx.gov.voting_asset_id.clone(),
+                bond_escrow_account: stx.gov.bond_escrow_account.clone(),
+                slash_receiver_account: stx.gov.slash_receiver_account.clone(),
+            },
+        };
+        stx.world.governance_locks_mut().insert(
+            election_id.clone(),
+            GovernanceLocksForReferendum {
+                locks: std::collections::BTreeMap::from([(ALICE_ID.clone(), retained_lock)]),
+            },
+        );
+        let locks_before = stx
+            .world
+            .governance_locks()
+            .iter()
+            .map(|(id, locks)| {
+                (
+                    id.clone(),
+                    norito::to_bytes(locks).expect("encode existing locks"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let error = SubmitBallot {
+            election_id: election_id.clone(),
+            ciphertext: commit.to_vec(),
+            ballot_proof: attachment,
+            nullifier,
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("nonsemantic retained role must reject before ballot consumption");
+        assert_eq!(
+            error,
+            InstructionExecutionError::InvariantViolation(
+                "ballot verifying key circuit mismatch".into()
+            ),
+        );
+        let election = stx
+            .world
+            .elections()
+            .get(&election_id)
+            .expect("retained election remains");
+        assert!(!election.ballot_nullifiers.contains(&nullifier));
+        assert_eq!(election.ballot_nullifiers.len(), 1);
+        assert_eq!(election.ciphertexts, vec![vec![0x66; 32]]);
+        assert_eq!(
+            norito::to_bytes(election).expect("encode retained election after rejection"),
+            election_before,
+        );
+        let locks_after = stx
+            .world
+            .governance_locks()
+            .iter()
+            .map(|(id, locks)| {
+                (
+                    id.clone(),
+                    norito::to_bytes(locks).expect("encode unchanged locks"),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            locks_after, locks_before,
+            "role rejection cannot mutate locks"
+        );
     }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("synthetic STARK ballot must be rejected");
-    let err_text = format!("{err:?}");
-    assert!(
-        err_text.contains("invalid ballot proof"),
-        "unexpected stark ballot rejection: {err:?}"
-    );
-    let halo2_election = stx
-        .world
-        .elections()
-        .get(&halo2_election_id)
-        .cloned()
-        .expect("halo2 election exists");
-    assert_eq!(
-        halo2_election.ciphertexts.len(),
-        1,
-        "halo2 ballot must be accepted"
-    );
-    let stark_election = stx
-        .world
-        .elections()
-        .get(&stark_election_id)
-        .cloned()
-        .expect("stark election exists");
-    assert_eq!(
-        stark_election.ciphertexts.len(),
-        0,
-        "synthetic stark ballot must be rejected"
-    );
 }
+
 #[test]
 fn stark_envelope_respects_limits() {
     let env = build_sample_air_composition_envelope();

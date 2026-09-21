@@ -1750,6 +1750,29 @@ def _authenticated_source_directories(
     return tuple(sorted(directories, key=os.fspath))
 
 
+class _AuthenticatedNativePackageFinder:
+    """Expose the one inspected native spec and source-only package siblings."""
+
+    def __init__(
+        self, package_root: Path, native_spec: importlib.machinery.ModuleSpec
+    ) -> None:
+        self._native_spec = native_spec
+        self._sources = importlib.machinery.FileFinder(
+            str(package_root),
+            (importlib.machinery.SourceFileLoader, importlib.machinery.SOURCE_SUFFIXES),
+        )
+
+    def find_spec(
+        self, fullname: str, target: object = None
+    ) -> importlib.machinery.ModuleSpec | None:
+        if fullname == NATIVE_MODULE_NAME:
+            return self._native_spec
+        return self._sources.find_spec(fullname, target)
+
+    def invalidate_caches(self) -> None:
+        self._sources.invalidate_caches()
+
+
 def load_from_trusted_specs(
     *,
     wheel: WheelPreflight,
@@ -1866,6 +1889,12 @@ def load_from_trusted_specs(
                     *source_loader_details,
                 )
             )
+        # The package's canonical loader discovers its own extension through
+        # PathFinder. Return only the already inspected native spec; a general
+        # extension finder here could select an uninspected suffix or sibling.
+        sys.path_importer_cache[str(layout.package_root)] = (
+            _AuthenticatedNativePackageFinder(layout.package_root, native_spec)
+        )
         _assert_unique_distribution_origin(wheel, layout)
         _assert_unique_distribution_origin(sdk_wheel, sdk_layout)
         package = importlib.util.module_from_spec(package_spec)

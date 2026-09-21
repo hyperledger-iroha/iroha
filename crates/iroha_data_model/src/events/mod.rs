@@ -39,24 +39,14 @@ macro_rules! impl_json_via_norito_bytes {
     };
 }
 pub use self::model::*;
-/// Shared, reference-counted wrapper for [`data::DataEvent`] to avoid repeated cloning.
+/// Shared physical payload for internal processing and external delivery.
+///
+/// Cloning retains this same payload. Its allocation stays private: callers may
+/// borrow the value, but cannot extract an `Arc` or create a weak reference.
+/// This closes sharing identity; it does not itself provide allocation funding.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::SharedDataEvent")]
 pub struct SharedDataEvent(Arc<data::DataEvent>);
-impl SharedDataEvent {
-    /// Wrap an existing [`Arc`] around a [`data::DataEvent`].
-    pub fn from_arc(event: Arc<data::DataEvent>) -> Self {
-        Self(event)
-    }
-    /// Consume the wrapper and return the inner [`Arc`].
-    pub fn into_arc(self) -> Arc<data::DataEvent> {
-        self.0
-    }
-    /// Borrow the underlying [`Arc`].
-    pub fn as_arc(&self) -> &Arc<data::DataEvent> {
-        &self.0
-    }
-}
 impl Deref for SharedDataEvent {
     type Target = data::DataEvent;
     fn deref(&self) -> &Self::Target {
@@ -66,11 +56,6 @@ impl Deref for SharedDataEvent {
 impl From<data::DataEvent> for SharedDataEvent {
     fn from(event: data::DataEvent) -> Self {
         Self(Arc::new(event))
-    }
-}
-impl From<Arc<data::DataEvent>> for SharedDataEvent {
-    fn from(event: Arc<data::DataEvent>) -> Self {
-        Self(event)
     }
 }
 impl AsRef<data::DataEvent> for SharedDataEvent {
@@ -99,7 +84,7 @@ mod tests {
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
-    use std::{str::FromStr, sync::Arc};
+    use std::str::FromStr;
 
     #[test]
     fn event_filter_json_is_canonical_and_ambient_independent() {
@@ -148,16 +133,55 @@ mod tests {
         norito::json::from_json::<EventFilterBox>(&alternate_json)
             .expect_err("alternate-layout event-filter JSON must be rejected");
     }
-    #[test]
-    fn shared_data_event_from_arc_preserves_arc_pointer() {
+    fn shared_event_fixture() -> DataEvent {
         let metadata = MetadataChanged {
             target: DomainId::try_new("wonderland", "universal").expect("domain id"),
             key: Name::from_str("flag").expect("metadata key"),
             value: Json::from(norito::json!("ok")),
         };
-        let event = Arc::new(DataEvent::Domain(DomainEvent::MetadataInserted(metadata)));
-        let shared = SharedDataEvent::from_arc(Arc::clone(&event));
-        assert!(Arc::ptr_eq(shared.as_arc(), &event));
+        DataEvent::Domain(DomainEvent::MetadataInserted(metadata))
+    }
+    #[test]
+    fn shared_data_event_clone_preserves_physical_payload() {
+        let original = SharedDataEvent::from(shared_event_fixture());
+        let retained = original.clone();
+        let separately_owned = SharedDataEvent::from(shared_event_fixture());
+        assert!(core::ptr::eq(original.as_ref(), retained.as_ref()));
+        assert_eq!(original, separately_owned);
+        assert!(!core::ptr::eq(original.as_ref(), separately_owned.as_ref()));
+        drop(original);
+        assert_eq!(retained.as_ref(), &shared_event_fixture());
+    }
+    #[test]
+    fn shared_data_event_closed_sharing_preserves_canonical_codec() {
+        let original = SharedDataEvent::from(shared_event_fixture());
+        let bytes = norito::to_bytes(&original).expect("encode shared event");
+        let decoded: SharedDataEvent =
+            norito::decode_from_bytes(&bytes).expect("decode shared event");
+        assert_eq!(decoded, original);
+        assert!(!core::ptr::eq(original.as_ref(), decoded.as_ref()));
+        assert_eq!(
+            norito::to_bytes(&decoded).expect("reencode shared event"),
+            bytes
+        );
+        assert_eq!(original.encode(), decoded.encode());
+    }
+    #[test]
+    fn shared_data_event_retained_clone_survives_original_thread() {
+        let original = SharedDataEvent::from(shared_event_fixture());
+        let retained = original.clone();
+        let bytes = norito::to_bytes(&original).expect("encode before thread handoff");
+        std::thread::spawn(move || {
+            let last_local = original.clone();
+            drop(original);
+            assert_eq!(last_local.as_ref(), &shared_event_fixture());
+        })
+        .join()
+        .expect("producer thread completes");
+        assert_eq!(
+            norito::to_bytes(&retained).expect("encode retained event"),
+            bytes
+        );
     }
     #[cfg(feature = "transparent_api")]
     #[test]

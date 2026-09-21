@@ -264,7 +264,6 @@ def externally_sign(receipt: dict, seed: bytes) -> bytes:
     receipt["authentication"] = {
         "kind": "external-ed25519",
         "algorithm": "ed25519",
-        "backend": "software",
         "service_id": SIGNER_SERVICE_ID,
         "administrator_id": SIGNER_ADMINISTRATOR_ID,
         "key_revision": SIGNER_KEY_REVISION,
@@ -549,13 +548,15 @@ def test_external_receipt_without_trusted_key_is_not_recognized(
     )
 
 
-def test_non_software_signer_is_rejected_even_with_valid_signature(
+@pytest.mark.parametrize("backend", ["software", "hsm", "hardware"])
+def test_backend_claim_is_rejected_even_with_valid_signature(
     tmp_path: Path,
+    backend: str,
 ) -> None:
     _path, topology, artifact_root, receipt = local_receipt(tmp_path)
     seed = os.urandom(32)
     public_key = externally_sign(receipt, seed)
-    receipt["authentication"]["backend"] = "hsm"
+    receipt["authentication"]["backend"] = backend
     resign(receipt, seed)
 
     summary, errors = validate(
@@ -563,7 +564,7 @@ def test_non_software_signer_is_rejected_even_with_valid_signature(
     )
 
     assert summary["status"] == "blocked"
-    assert any("signer backend must be `software`" in error for error in errors)
+    assert any("schema-closed" in error for error in errors)
 
 
 def test_signer_service_and_administrator_must_be_distinct(tmp_path: Path) -> None:

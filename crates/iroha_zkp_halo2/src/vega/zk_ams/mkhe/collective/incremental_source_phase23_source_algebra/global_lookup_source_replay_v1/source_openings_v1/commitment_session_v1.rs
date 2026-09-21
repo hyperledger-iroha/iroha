@@ -197,6 +197,8 @@ impl GlobalLookupCommitmentInventorySkeletonV1 {
         if source_opening_context_digest == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
+        #[cfg(test)]
+        SOURCE_PREFIX_ROOT_VALIDATIONS_V1.with(|count| count.set(count.get() + 1));
         let mut hash = Keccak256::new();
         hash.update(SOURCE_OPENING_COMMITMENT_DOMAIN_V1);
         hash.update(&[SOURCE_OPENING_VERSION_V1]);
@@ -231,6 +233,7 @@ enum GlobalLookupProofSessionEntropySourceV1<R> {
     Production {
         original_random: R,
         commitment_entropy_bytes: u64,
+        q_mask_entropy_bytes: u64,
     },
     #[cfg(test)]
     TestOnly(DeterministicProofSessionEntropyV1),
@@ -261,6 +264,11 @@ impl Drop for DeterministicProofSessionEntropyV1 {
 }
 
 struct GlobalLookupCommitmentSessionLiveV1<R> {
+    // Created once at the original entropy handoff and moved through every
+    // consuming phase. Existing earlier allocations/work are not certified by
+    // adding this ledger; later owners may not replace it with fresh counters.
+    proof_resources:
+        crate::vega::zk_ams::mkhe::rns_native_resource_budget::RnsNativeProofResourceBudgetV1,
     entropy: GlobalLookupProofSessionEntropySourceV1<R>,
     inventory: GlobalLookupCommitmentInventorySkeletonV1,
     proof_session_context_digest: [u8; 32],
@@ -307,6 +315,7 @@ impl GlobalLookupCommitmentSessionV1<Infallible, SourceOpeningEntropyStageV1> {
         let inventory = GlobalLookupCommitmentInventorySkeletonV1::new_v1()?;
         Ok(Self {
             live: Some(GlobalLookupCommitmentSessionLiveV1 {
+                proof_resources: Default::default(),
                 entropy: GlobalLookupProofSessionEntropySourceV1::TestOnly(entropy),
                 inventory,
                 proof_session_context_digest,
@@ -538,6 +547,7 @@ fn fill_entropy_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
         GlobalLookupProofSessionEntropySourceV1::Production {
             original_random,
             commitment_entropy_bytes,
+            ..
         } => {
             let Some(next) = commitment_entropy_bytes
                 .checked_add(SOURCE_OPENING_BLINDING_SLOT_BYTES_V1)
@@ -583,6 +593,10 @@ fn fill_entropy_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
     }
 }
 
+#[path = "commitment_session_v1/prepared_opening_tail_v1.rs"]
+mod prepared_opening_tail_v1;
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_opening_tail_v1::PreparedPlaneOpeningTailV1;
+
 #[path = "commitment_session_v1/retained_source_session_v1.rs"]
 mod retained_source_session_v1;
 pub(super) use retained_source_session_v1::RetainedSourceSessionV1;
@@ -616,3 +630,16 @@ const _: () = assert!(MAX_COMMITMENT_ENTROPY_BYTES_V1 == 296_493_056);
 
 #[path = "commitment_session_v1/original_entropy_handoff_v1.rs"]
 mod original_entropy_handoff_v1;
+
+// Count actual source-prefix root traversals, only for replay-work regression tests.
+#[cfg(test)]
+thread_local! {
+    static SOURCE_PREFIX_ROOT_VALIDATIONS_V1: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[path = "commitment_session_v1/q_mask_first_block_v1.rs"]
+mod q_mask_first_block_v1;
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use q_mask_first_block_v1::{
+    QMaskComplementOpeningsV1,
+    QMaskSBlockAdmissionV1, CompleteQMaskSOpeningsV1, QMaskSOpeningStreamV1, QMaskSErrorV1, QMaskFirstBlockMemoryV1, SampledQMaskSBlockV1,
+};

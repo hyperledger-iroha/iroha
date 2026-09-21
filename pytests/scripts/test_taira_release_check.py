@@ -30,8 +30,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1368 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1546 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1395 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1573 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -475,8 +475,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         paths = ("scripts/formal/sumeragi_v2_rust_text.py", "crates/mv/src/lib.rs",
                  "crates/mv/src/allocation.rs", "crates/mv/src/allocation_tests.rs",
                  "crates/mv/src/publication.rs", "crates/mv/src/publication_nonblocking_tests.rs",
-                 "crates/mv/src/release.rs", "crates/mv/src/release_tests.rs",
+                 "crates/mv/src/release_tests.rs",
                  "crates/mv/src/cell.rs", "crates/mv/src/cell/charged_allocation_tests.rs",
+                 "crates/mv/src/cell/publication_tests.rs",
                  "crates/mv/src/storage.rs", "crates/mv/src/storage/publication_tests.rs",
                  "crates/mv/src/storage/detached_tests.rs", "crates/mv/src/storage/touches.rs",
                  "crates/mv/src/storage/touches_tests.rs", "crates/mv/src/storage/admitted_tests.rs")
@@ -501,18 +502,19 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 command.assert_not_called()
                 next_guard.assert_not_called()
             release.write_text(original)
-            owner = copied / "crates/mv/src/release.rs"
+            owner = copied / "crates/mv/src/lib.rs"
             owner.write_text(owner.read_text().replace('path = "release_tests.rs"', 'path = "foreign_tests.rs"'))
             with self.assertRaisesRegex(gate.CheckError, "module edge differs"):
                 gate.validate_mv_test_registration(copied)
         library_groups = {
             "publication::nonblocking_tests::": 1,
             "allocation::tests::": 7,
-            "release::tests::": 11,
+            "release_tests::": 8,
             "cell::charged_allocation_tests::": 7,
-            "storage::publication_tests::": 9,
-            "storage::detached_tests::": 9,
-            "storage::admitted_tests::": 9,
+            "storage::publication_tests::": 13,
+            "cell::publication_tests::": 1,
+            "storage::detached_tests::": 10,
+            "storage::admitted_tests::": 10,
             "storage::touches::tests::": 6,
         }
         for platform in ("darwin", "linux"):
@@ -524,10 +526,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 59)
+                self.assertEqual(len(library), 63)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 59), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 59), ("concread", 109)):
+                for harness, count in (("mv", 63), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 64), ("concread", 126)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -576,6 +578,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         names = lambda text: re.findall(r"#\[test\]\s*fn\s+(\w+)", namespace["mask_rust_comments"](text))
         admitted = names((root / "crates/mv/tests/admitted_map_custody.rs").read_text())
         storage = names((root / "crates/mv/tests/admitted_map_custody/storage.rs").read_text())
+        capture = names((root / "crates/mv/tests/admitted_map_custody/capture.rs").read_text())
         mapped = names((root / "crates/mv/tests/map_owned_generations.rs").read_text())
         admission_source = (root / "vendor/concread/src/bptree/admission_tests.rs").read_text()
         ordinary, writer = admission_source.split("mod writer_start {", 1)
@@ -603,9 +606,12 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         self.assertNotIn("test_bptree2_cursor_remove_stress_7", canonical_remove,
                          "the disabled comment fixture must not qualify as executable coverage")
         expected = {
-            "mv-admitted-map": [*admitted, *("storage_custody::" + name for name in storage)],
+            "mv-admitted-map": [*admitted, *("storage_custody::" + name for name in storage),
+                                *("storage_custody::capture::" + name for name in capture)],
             "mv-map": mapped,
-            "concread": [*("bptree::admission::tests::" + name for name in names(ordinary)),
+            "concread": [*("release::tests::" + name for name in names((root / "vendor/concread/src/release_tests.rs").read_text())),
+                         *("internals::lincowcell::identity_preparation_tests::" + name for name in names((root / "vendor/concread/src/internals/lincowcell/mod.rs").read_text()) if name.startswith("reader_")),
+                         *("bptree::admission::tests::" + name for name in names(ordinary)),
                          *("bptree::admission::tests::writer_start::" + name for name in names(writer)),
                          *("internals::bptree::cursor::checkpoint::tests::" + name for name in checkpoint),
                          *("bptree::admission::pair_admission::tests::" + name for name in paired),
@@ -619,6 +625,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         self.assertEqual((len(admitted), len(storage), len(mapped), len(names(ordinary)), len(names(writer)), len(checkpoint), len(paired), len(borrowed), len(clear)), (29, 30, 24, 35, 6, 9, 9, 7, 7))
         self.assertIn('#[path = "admitted_map_custody/storage.rs"]\nmod storage_custody;',
                       (root / "crates/mv/tests/admitted_map_custody.rs").read_text())
+        self.assertEqual(len(capture), 5)
+        self.assertIn('#[path = "capture.rs"]\nmod capture;',
+                      (root / "crates/mv/tests/admitted_map_custody/storage.rs").read_text())
         self.assertIn('#[path = "clear_admission_tests.rs"]\nmod clear;',
                       (root / "vendor/concread/src/bptree/pair_admission_tests.rs").read_text())
         self.assertIn('#[path = "remove.rs"]\nmod remove;',
@@ -2075,7 +2084,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             requested = tuple(harness + "=" + test for harness in gate.MV_OWNERSHIP_HARNESSES
                               for _, tests in selected[harness] for test in tests)
-            self.assertEqual(len(requested), 256)
+            self.assertEqual(len(requested), 282)
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
             with self.subTest(scope=scope), \
@@ -2099,7 +2108,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
-            self.assertIn("256 focused regressions", output.getvalue())
+            self.assertIn("282 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 

@@ -39,6 +39,8 @@
 mod api;
 /// Standard deployment-owned broker assembly without credential discovery.
 mod launcher;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod socket_fixture_directory;
 pub use api::StockRuntimeProviderBrokerRegistryV1;
 pub use api::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,

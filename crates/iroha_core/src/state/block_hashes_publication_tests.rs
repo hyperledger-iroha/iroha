@@ -79,7 +79,7 @@ fn abort_and_drop_leave_the_exact_original_cut_available() {
     let journal = detached(&owner, true, &[3]);
     let visible = journal.get(0).map(std::ptr::from_ref);
     let pending = journal.pending().get(0).map(std::ptr::from_ref);
-    let journal = prepare(journal, &owner).abort();
+    let journal = prepare(journal, &owner).abort().0;
     assert_eq!(journal.get(0).map(std::ptr::from_ref), visible);
     assert_eq!(journal.pending().get(0).map(std::ptr::from_ref), pending);
     assert_eq!(journal.prefix(), &[hash(1)]);
@@ -281,7 +281,7 @@ fn installation_is_retained_until_after_drop_abort_or_aggregate_publication() {
     };
     drop(prepare(detached(&owner, false, &[2])));
     assert_eq!(releases.get(), 1);
-    let journal = prepare(detached(&owner, false, &[2])).abort();
+    let journal = prepare(detached(&owner, false, &[2])).abort().0;
     assert_eq!(releases.get(), 2);
     assert_eq!(
         &owner.view().iter().copied().collect::<Vec<_>>(),
@@ -319,7 +319,7 @@ fn late_hash_refusal_releases_prepared_membership_before_exact_retry() {
         .err()
         .expect("late busy hash component");
     assert!(matches!(error, PublicationPreparationError::Busy(_)));
-    let journal = admitted.abort();
+    let journal = admitted.abort().0;
     assert_eq!(membership.view().get(&entrypoint), None);
     assert_eq!(hashes.committed_height(), 1);
     drop(blocker);
@@ -373,15 +373,29 @@ fn advisory_predecessor_observation_notifies_only_successful_acquisition() {
     };
     let owner = BlockHashes::new(vec![hash(1)]);
     let journal = detached(&owner, false, &[2]);
-    let mut released = owner.released.observe().wait_for_release();
+    let mut released = owner
+        .map()
+        .unwrap()
+        .observe_reader_release()
+        .wait_for_release();
+    let mut writer_released = owner.released.observe().wait_for_release();
     assert!(journal.matches_current(&owner));
     assert!(
         Pin::new(&mut released)
             .poll(&mut Context::from_waker(Waker::noop()))
             .is_ready()
     );
+    assert!(
+        Pin::new(&mut writer_released)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
     let prepared = prepare(detached(&owner, false, &[]), &owner);
-    let mut blocked = owner.released.observe().wait_for_release();
+    let mut blocked = owner
+        .map()
+        .unwrap()
+        .observe_reader_release()
+        .wait_for_release();
     assert!(!journal.matches_current(&owner));
     assert!(
         Pin::new(&mut blocked)
@@ -394,4 +408,50 @@ fn advisory_predecessor_observation_notifies_only_successful_acquisition() {
             .poll(&mut Context::from_waker(Waker::noop()))
             .is_ready()
     );
+}
+
+#[test]
+fn hash_reader_refusal_waits_on_the_original_reader_mutex() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Waker},
+    };
+    let owner = BlockHashes::new(vec![hash(1)]);
+    let journal = detached(&owner, false, &[2]);
+    let held = prepare(detached(&owner, false, &[]), &owner);
+    let expected = owner.map().unwrap().observe_reader_release();
+    let writer_release = owner.released.observe();
+    let (journal, error) = journal
+        .try_prepare_publication(&owner, |_, _| -> Result<(), ()> {
+            panic!("reader contention precedes admission");
+        })
+        .err()
+        .expect("active reader mutex is held");
+    let PublicationPreparationError::Busy(wait) = error else {
+        panic!("original blocker required");
+    };
+    assert_eq!(wait, expected);
+    assert_ne!(wait, writer_release);
+    let mut wait = wait.wait_for_release();
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    let (first, retirement) = held.abort();
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    drop(retirement);
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready()
+    );
+    drop(first);
+    prepare(journal, &owner).publish();
+    assert!(owner.view().iter().copied().eq([hash(1), hash(2)]));
 }

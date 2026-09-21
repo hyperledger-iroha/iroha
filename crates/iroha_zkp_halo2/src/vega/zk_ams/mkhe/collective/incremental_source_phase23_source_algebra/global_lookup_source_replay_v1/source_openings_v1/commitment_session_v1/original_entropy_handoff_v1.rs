@@ -18,6 +18,9 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1>
         // No bytes are requested while validating the source and reserving its
         // original inventory. The complete canonical source bundle binds this
         // session context; no caller supplies a replacement digest or RNG.
+        // Original identity is established before any later table allocation;
+        // never accept a replacement resource ledger from a later stage.
+        let proof_resources = Default::default();
         let inventory = GlobalLookupCommitmentInventorySkeletonV1::new_v1()?;
         let original_random = owner
             .original_random
@@ -25,9 +28,11 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1>
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
         Ok(Self {
             live: Some(GlobalLookupCommitmentSessionLiveV1 {
+                proof_resources,
                 entropy: GlobalLookupProofSessionEntropySourceV1::Production {
                     original_random,
                     commitment_entropy_bytes: 0,
+                    q_mask_entropy_bytes: 0,
                 },
                 inventory,
                 proof_session_context_digest: owner.bundle_digest,

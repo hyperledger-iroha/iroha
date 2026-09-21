@@ -12,7 +12,7 @@ fn privacy_release_anchor_binding_is_exact_and_drift_checked() {
         validate_exact_backend_set(std::slice::from_ref(&binding), &backends),
         Ok(())
     );
-    make_server_observation(&binding, &backends)
+    make_server_observation(network_id(), &binding, &backends)
         .expect("stable exact finalized release anchor qualifies twice");
     assert_eq!(
         validate_exact_backend_set(&[], &backends),
@@ -36,13 +36,13 @@ fn privacy_release_anchor_binding_is_exact_and_drift_checked() {
     let substituted = RuntimeProviderBrokerBackendsV1::new()
         .with_privacy_release_anchor(Arc::new(ServerTestPrivacyReleaseAnchor::substituted()));
     assert_eq!(
-        make_server_observation(&binding, &substituted),
+        make_server_observation(network_id(), &binding, &substituted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
     let drifted = RuntimeProviderBrokerBackendsV1::new()
         .with_privacy_release_anchor(Arc::new(ServerTestPrivacyReleaseAnchor::drifting()));
     assert_eq!(
-        make_server_observation(&binding, &drifted),
+        make_server_observation(network_id(), &binding, &drifted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
 }
@@ -66,7 +66,7 @@ fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
     let provider = Arc::new(ServerTestPrivacyReleaseAnchor::exact());
     let backends =
         RuntimeProviderBrokerBackendsV1::new().with_privacy_release_anchor(provider.clone());
-    let observed = make_server_observation(&binding, &backends)
+    let observed = make_server_observation(network_id(), &binding, &backends)
         .expect("qualify stable finalized release anchor");
     let state = BrokerServerStateV1 {
         decode_pool: new_test_process_pool(),
@@ -183,8 +183,9 @@ fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
     let no_readback = Arc::new(ServerTestPrivacyReleaseAnchor::without_readback());
     let no_readback_backends =
         RuntimeProviderBrokerBackendsV1::new().with_privacy_release_anchor(no_readback.clone());
-    let no_readback_observed = make_server_observation(&binding, &no_readback_backends)
-        .expect("qualify non-persisting test release anchor");
+    let no_readback_observed =
+        make_server_observation(network_id(), &binding, &no_readback_backends)
+            .expect("qualify non-persisting test release anchor");
     let no_readback_state = BrokerServerStateV1 {
         decode_pool: new_test_process_pool(),
         chain_id: "privacy-release-anchor-no-readback-test-chain".to_owned(),
@@ -248,7 +249,7 @@ fn transparency_leader_lease_binding_is_exact_and_drift_checked() {
         validate_exact_backend_set(std::slice::from_ref(&binding), &backends),
         Ok(())
     );
-    make_server_observation(&binding, &backends)
+    make_server_observation(network_id(), &binding, &backends)
         .expect("stable exact leader-lease provider qualifies twice");
     assert_eq!(
         validate_exact_backend_set(&[], &backends),
@@ -274,14 +275,14 @@ fn transparency_leader_lease_binding_is_exact_and_drift_checked() {
             ServerTestTransparencyLeaderLeaseProvider::substituted(),
         ));
     assert_eq!(
-        make_server_observation(&binding, &substituted),
+        make_server_observation(network_id(), &binding, &substituted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
     let drifted = RuntimeProviderBrokerBackendsV1::new().with_transparency_leader_lease_provider(
         Arc::new(ServerTestTransparencyLeaderLeaseProvider::drifting()),
     );
     assert_eq!(
-        make_server_observation(&binding, &drifted),
+        make_server_observation(network_id(), &binding, &drifted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
 }

@@ -8,7 +8,7 @@
 pub mod external_software_signer;
 #[cfg(all(feature = "daemon", unix))]
 mod runtime_credential;
-/// Opaque hardware operations fenced by independently authenticated custody and completion.
+/// Software or optional hardware signing fenced by authenticated custody and completion.
 #[cfg(feature = "daemon")]
 pub mod signer_operation;
 use iroha_model_base::peer::PeerId;

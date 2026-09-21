@@ -212,6 +212,12 @@ unsafe impl<T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static> Sen
 impl<'a, T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static>
     EbrCellPreparedCommit<'a, T, Charge>
 {
+    /// Return the same unpublished writer without allocating or publishing.
+    /// Its original exclusive lock remains held for aggregate rollback.
+    pub fn abort(self) -> EbrCellWriteTxn<'a, T, Charge> {
+        self.writer
+    }
+
     /// Install the already allocated successor, retaining the original writer.
     /// No epoch pin, collector callback, payload clone or user destructor runs.
     pub fn publish(mut self) -> EbrCellPublished<'a, T, Charge> {

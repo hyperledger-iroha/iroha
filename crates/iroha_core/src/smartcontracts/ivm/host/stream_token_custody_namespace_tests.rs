@@ -1,16 +1,53 @@
 // Actual host boundaries for native custody keys. Included in host::tests.
 // These local host fixtures do not certify deployed transaction admission or consensus.
 
-fn custody_namespace_paths() -> [StatePath; 5] {
+fn custody_namespace_paths() -> Vec<StatePath> {
     use crate::query::stream_token_custody::{head_key, height_key, key_path, record_key};
     let provider = iroha_data_model::sorafs::capacity::ProviderId::new([37; 32]);
-    [
+    let mut paths = vec![
         head_key(provider),
         record_key(provider, 8194),
         height_key(provider, 17, 1),
         key_path(provider, true, ALICE_KEYPAIR.public_key()).expect("signer first-use key"),
         key_path(provider, false, BOB_KEYPAIR.public_key()).expect("attester first-use key"),
-    ]
+    ];
+    // Exercise the same real syscall/overlay boundaries for deployment custody and operations.
+    use crate::query::final_promotion_authority as promotion;
+    use crate::query::signer_custody_history::{
+        AccountPurpose, ReceiptPurpose, control_head_key, control_height_key, control_record_key,
+        key_path as custody_key_path,
+    };
+    let deployment = "promotion-primary";
+    paths.extend([
+        control_head_key::<ReceiptPurpose>(deployment).unwrap(),
+        control_record_key::<ReceiptPurpose>(deployment, 8194).unwrap(),
+        control_height_key::<ReceiptPurpose>(deployment, 17, 1).unwrap(),
+        custody_key_path::<ReceiptPurpose>(deployment, true, ALICE_KEYPAIR.public_key()).unwrap(),
+        custody_key_path::<ReceiptPurpose>(deployment, false, BOB_KEYPAIR.public_key()).unwrap(),
+        promotion::operation_head_key(deployment).unwrap(),
+        promotion::operation_record_key(deployment, 131072).unwrap(),
+        promotion::operation_height_key(deployment, 17, 1).unwrap(),
+        promotion::operation_slot_key(deployment, [31; 32]).unwrap(),
+        promotion::operation_admission_key(deployment, [31; 32]).unwrap(),
+    ]);
+    paths.extend([
+        control_head_key::<AccountPurpose>(deployment).unwrap(),
+        control_record_key::<AccountPurpose>(deployment, 8194).unwrap(),
+        control_height_key::<AccountPurpose>(deployment, 17, 1).unwrap(),
+        custody_key_path::<AccountPurpose>(deployment, true, ALICE_KEYPAIR.public_key()).unwrap(),
+        custody_key_path::<AccountPurpose>(deployment, false, BOB_KEYPAIR.public_key()).unwrap(),
+    ]);
+    // Retain exact root and descendant probes in addition to every actual account key family.
+    paths.extend([
+        "sorafs_final_promotion_account_custody_v1".parse().unwrap(),
+        "sorafs_final_promotion_account_custody_v1/descendant"
+            .parse()
+            .unwrap(),
+        "sorafs_final_promotion_account_custody_v1_future"
+            .parse()
+            .unwrap(),
+    ]);
+    paths
 }
 
 fn custody_namespace_scoped_host() -> CoreHost {
@@ -109,6 +146,12 @@ fn stream_token_custody_namespace_reserves_exact_root_and_all_native_key_familie
         "sorafs_stream_token_custody_v1",
         "sorafs_stream_token_custody_v1/descendant",
         "sorafs_stream_token_custody_v1_future",
+        "sorafs_final_promotion_authority_v1",
+        "sorafs_final_promotion_authority_v1/descendant",
+        "sorafs_final_promotion_authority_v1_future",
+        "sorafs_final_promotion_account_custody_v1",
+        "sorafs_final_promotion_account_custody_v1/descendant",
+        "sorafs_final_promotion_account_custody_v1_future",
     ] {
         assert_eq!(
             CoreHost::contract_state_namespace_access(key),
@@ -119,6 +162,12 @@ fn stream_token_custody_namespace_reserves_exact_root_and_all_native_key_familie
         "sorafs_stream_token_custody_v1x",
         "sorafs_stream_token_custody_v10",
         "sorafs_stream_token_custody_v1x/entry",
+        "sorafs_final_promotion_authority_v1x",
+        "sorafs_final_promotion_authority_v10",
+        "sorafs_final_promotion_authority_v1x/entry",
+        "sorafs_final_promotion_account_custody_v1x",
+        "sorafs_final_promotion_account_custody_v10",
+        "sorafs_final_promotion_account_custody_v1x/entry",
     ] {
         assert_eq!(
             CoreHost::contract_state_namespace_access(key),
@@ -213,14 +262,32 @@ fn stream_token_custody_debug_syscalls_cannot_mutate_delete_or_disclose_native_s
 fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_typed_values() {
     let paths = custody_namespace_paths();
     let user: StatePath = "sorafs_stream_token_custody_v1x".parse().unwrap();
-    let mut declarations = paths.to_vec();
+    // Slash descendants are namespace probes, not valid Kotodama declaration identifiers.
+    // Keep their real syscall denials below without building an invalid CNTR declaration.
+    let namespace_descendant: StatePath = "sorafs_final_promotion_account_custody_v1/descendant"
+        .parse()
+        .unwrap();
+    let mut declarations = paths
+        .iter()
+        .filter(|path| *path != &namespace_descendant)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(declarations.len() + 1, paths.len());
     declarations.push(user.clone());
     let value = custody_namespace_bytes_record();
     let mut vm = custody_namespace_vm(&declarations);
     let mut host = custody_namespace_scoped_host();
     for path in &paths {
-        ivm::host::validate_declared_state_value_payload(&vm, path, &value)
-            .expect("valid typed SET candidate");
+        let typed_value = ivm::host::validate_declared_state_value_payload(&vm, path, &value);
+        if path == &namespace_descendant {
+            assert_eq!(
+                typed_value,
+                Err(ivm::VMError::NoritoInvalid),
+                "namespace-only descendant is not a declared Bytes state"
+            );
+        } else {
+            typed_value.expect("valid typed SET candidate for every native key family");
+        }
         let physical = host.scoped_durable_state_path(path).unwrap().unwrap();
         host.durable_state_base.insert(path.clone(), value.clone());
         host.durable_state_base.insert(physical, value.clone());
@@ -238,19 +305,37 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
         ] {
             vm.set_register(10, path_ptr);
             vm.set_register(11, value_ptr);
+            // Reads validate declarations first; writes apply the namespace guard first.
+            // Every declarable native key must reach the opaque namespace denial instead.
+            let expected = if path == &namespace_descendant
+                && matches!(
+                    syscall,
+                    ivm_sys::SYSCALL_STATE_GET
+                        | ivm_sys::SYSCALL_STATE_HAS
+                        | ivm_sys::SYSCALL_STATE_LEN
+                ) {
+                ivm::VMError::NoritoInvalid
+            } else {
+                ivm::VMError::PermissionDenied
+            };
             assert_eq!(
                 host.syscall(syscall, &mut vm),
-                Err(ivm::VMError::PermissionDenied),
+                Err(expected),
                 "{path}: {syscall}"
             );
         }
         vm.set_register(10, path_ptr);
-        assert!(host.syscall(ivm_sys::SYSCALL_STATE_COUNT, &mut vm).is_ok());
-        assert_eq!(
-            vm.register(10),
-            0,
-            "native-looking scoped entry remains opaque"
-        );
+        let count = host.syscall(ivm_sys::SYSCALL_STATE_COUNT, &mut vm);
+        if path == &namespace_descendant {
+            assert_eq!(count, Err(ivm::VMError::NoritoInvalid));
+        } else {
+            assert!(count.is_ok());
+            assert_eq!(
+                vm.register(10),
+                0,
+                "native-looking scoped entry remains opaque"
+            );
+        }
     }
     assert!(host.durable_state_overlay.is_empty());
     assert_eq!(host.durable_state_base, before);

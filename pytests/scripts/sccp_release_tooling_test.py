@@ -45,7 +45,7 @@ CORRIDOR_PHASES = (
     "python-sdk",
     "swift-sdk",
     "kotlin-sdk",
-    "java-android",
+    "java-source-kotlin",
     "dotnet-sdk",
     "contract-smoke",
     "tvm-contract-smoke",
@@ -3572,3 +3572,29 @@ def test_production_tooling_has_no_private_key_api_or_signing_call() -> None:
             and (node.name == "sign" or node.name.startswith("sign_"))
             for node in ast.walk(tree)
         )
+
+
+@pytest.mark.parametrize("label", ["java-source-kotlin", "java-android", "java_android"])
+def test_java_consumer_phase_has_one_first_release_evidence_name(label: str) -> None:
+    phases = [
+        {"name": name, "status": "passed", "artifact_path": f"artifacts/phases/{name}.log"}
+        for name in common.REQUIRED_PHASES
+    ]
+    paths = {phase["artifact_path"]: {"kind": "phase-transcript"} for phase in phases}
+    phases[6]["name"] = label
+    validation = {"corridor": "sccp-production-corridor-v1", "phases": phases}
+    if label == "java-source-kotlin":
+        assert common._validate_validation(validation, paths) == set(paths)
+        assert len(phases) == 12
+        assert phase_log_runner._PHASE_LOG_LIMITS[label] == 256 * 1024 * 1024
+    else:
+        with pytest.raises(common.SccpReleaseError, match="must be passed java-source-kotlin"):
+            common._validate_validation(validation, paths)
+        assert label not in phase_log_runner._PHASE_LOG_LIMITS
+
+
+def test_retired_java_phase_refused_before_log_or_command_creation(tmp_path: Path) -> None:
+    output = tmp_path / "retired-log"
+    with pytest.raises(phase_log_runner.PhaseLogError, match="invocation is invalid"):
+        phase_log_runner.run_phase(str(output), "java-android", ("nonexistent-command",))
+    assert not output.exists()

@@ -11,8 +11,8 @@ fn standard_launcher_forwards_external_sorafs_runtime_dependencies() {
         .collect();
     for (field, builder) in [
         (
-            "sorafs_stream_token_hardware_client",
-            "with_sorafs_stream_token_hardware_client",
+            "sorafs_stream_token_signer_client",
+            "with_sorafs_stream_token_signer_client",
         ),
         (
             "sorafs_stream_token_state_observer",

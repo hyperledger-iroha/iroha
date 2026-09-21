@@ -582,7 +582,9 @@ fn validate_operation_payload(
             if session_chain_id.is_some() {
                 ensure_transaction_session_network(&payload, session_network_id)?;
             }
-            if payload.authority() != expected.authority() {
+            if payload.authority() != expected.authority()
+                || !iroha_torii::sorafs::native_transaction_signer::sorafs_native_transaction_payload_matches_role_v1(expected.role(), &payload)
+            {
                 return Err(BrokerError::Rejected);
             }
         }

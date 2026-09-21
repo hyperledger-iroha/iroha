@@ -1027,7 +1027,7 @@ pub(crate) fn validate_and_prepare_verifying_key_record_v1(
             if record.curve != "goldilocks" {
                 return Err("STARK/FRI verifying-key curve must be goldilocks".to_owned());
             }
-            if !stark_open_verify_circuit_id_matches_backend(backend, &record.circuit_id) {
+            if !stark_registry_circuit_id_matches_backend(backend, &record.circuit_id) {
                 return Err(
                     "STARK/FRI verifying-key circuit is not admitted for the registry backend"
                         .to_owned(),
@@ -1532,50 +1532,60 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
         halo2_backend::proving_key_to_processed_bytes(&pk),
     )
 }
-pub(crate) fn normalize_stark_fri_circuit_id_for_backend(
+/// Borrow the exact profile-qualified generic OpenVerify circuit identifier.
+/// Bare native-protocol identifiers have their own typed consumer and are not
+/// alternate spellings of a generic OpenVerify circuit.
+pub(crate) fn canonical_stark_fri_circuit_id_for_backend<'a>(
     backend: &str,
-    raw: &str,
-) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed == backend {
+    circuit_id: &'a str,
+) -> Option<&'a str> {
+    if !is_stark_fri_v1_backend(backend)
+        || circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+        || !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+    {
         return None;
     }
-    if let Some(rest) = trimmed.strip_prefix(backend) {
-        if let Some(rest) = rest.strip_prefix(':') {
-            return (!rest.is_empty()).then(|| trimmed.to_string());
-        }
-        if let Some(rest) = rest.strip_prefix('/') {
-            return (!rest.is_empty()).then(|| format!("{backend}:{rest}"));
-        }
-    }
-    Some(format!("{backend}:{trimmed}"))
+    let relation = circuit_id.strip_prefix(backend)?.strip_prefix(':')?;
+    iroha_data_model::zk::open_verify_circuit_id_is_portable(relation).then_some(circuit_id)
 }
+
+// Registry admission for these exact bare native identities retains their own
+// typed VK/AIR contract. This list grants no generic OpenVerify dispatch and no
+// BFV parameter/security qualification.
+fn is_typed_native_stark_circuit_id(circuit_id: &str) -> bool {
+    [
+        iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+    ]
+    .contains(&circuit_id)
+}
+
+fn stark_registry_circuit_id_matches_backend(backend: &str, circuit_id: &str) -> bool {
+    if !is_stark_fri_v1_backend(backend) {
+        return false;
+    }
+    if is_typed_native_stark_circuit_id(circuit_id) {
+        return true;
+    }
+    let Some(exact) = canonical_stark_fri_circuit_id_for_backend(backend, circuit_id) else {
+        return false;
+    };
+    let relation = &exact[backend.len() + 1..];
+    // Typed keys have one bare registry identity. A matched prefixed record and
+    // payload must not preserve an unused second spelling in the registry.
+    !is_typed_native_stark_circuit_id(relation)
+        && stark_open_verify_circuit_id_matches_backend(backend, exact)
+}
+
 fn stark_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str) -> bool {
-    if circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
-        || !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
-        || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
+    canonical_stark_fri_circuit_id_for_backend(backend, circuit_id).is_some()
+        && !iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
             circuit_id,
         )
-        || !is_stark_fri_v1_backend(backend)
-        || normalize_stark_fri_circuit_id_for_backend(backend, circuit_id).is_none()
-    {
-        return false;
-    }
-    let trimmed = circuit_id.trim();
-    if stark_open_verify_circuit_id_uses_reserved_proof_family(trimmed) {
-        return false;
-    }
-    // The sole production backend is a concrete commitment profile. A circuit
-    // naming another profile or the retired generic family cannot inherit it.
-    if trimmed == "stark/fri" || trimmed.starts_with("stark/fri:") {
-        return false;
-    }
-    if trimmed.starts_with("stark/fri/") {
-        return trimmed
-            .strip_prefix(backend)
-            .is_some_and(|suffix| suffix.starts_with(':') || suffix.starts_with('/'));
-    }
-    true
+        && !stark_open_verify_circuit_id_uses_reserved_proof_family(circuit_id)
 }
 #[cfg(feature = "zk-stark")]
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
@@ -1657,6 +1667,13 @@ mod stark_verifying_key_cache_tests {
         );
     }
 }
+#[cfg(all(test, feature = "zk-stark"))]
+std::thread_local! {
+    // Observe entry, including cache hits, without sharing counters between
+    // concurrently executing native tests. No production admission state.
+    static STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
 /// Decode and validate a canonical STARK/FRI V1 verifier key for one registry binding.
 ///
 /// The returned value is the typed, bounded material that proof verification
@@ -1668,7 +1685,9 @@ pub(crate) fn validate_stark_fri_verifying_key_v1(
     circuit_id: &str,
     bytes: &[u8],
 ) -> Result<crate::zk_stark::StarkFriVerifyingKeyV1, String> {
-    if !stark_open_verify_circuit_id_matches_backend(backend, circuit_id) {
+    #[cfg(test)]
+    STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1.with(|entries| entries.set(entries.get() + 1));
+    if !stark_registry_circuit_id_matches_backend(backend, circuit_id) {
         return Err("STARK/FRI circuit id does not match the production backend".to_owned());
     }
     if bytes.len() > crate::zk_stark::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES {
@@ -1677,11 +1696,9 @@ pub(crate) fn validate_stark_fri_verifying_key_v1(
             crate::zk_stark::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES
         ));
     }
-    let expected_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
-        .ok_or_else(|| "invalid STARK/FRI registry circuit id".to_owned())?;
     let cache_key = StarkVerifyingKeyCacheKeyV1 {
         backend: backend.to_owned(),
-        circuit_id: expected_circuit_id.clone(),
+        circuit_id: circuit_id.to_owned(),
         vk_hash: hash_vk_bytes(backend, bytes),
     };
     let cache = STARK_VERIFYING_KEY_CACHE_V1
@@ -1696,16 +1713,8 @@ pub(crate) fn validate_stark_fri_verifying_key_v1(
     }
     let payload = crate::zk_stark::decode_stark_fri_verifying_key_v1(bytes)?;
     crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
-        &payload,
-        &payload.circuit_id,
-        "OpenVerify",
+        &payload, circuit_id, "registry",
     )?;
-    let payload_circuit_id =
-        normalize_stark_fri_circuit_id_for_backend(backend, &payload.circuit_id)
-            .ok_or_else(|| "invalid STARK/FRI verifier-key circuit id".to_owned())?;
-    if payload_circuit_id != expected_circuit_id {
-        return Err("STARK/FRI verifier-key circuit id does not match registry record".to_owned());
-    }
     let mut guard = cache
         .lock()
         .map_err(|_| "STARK/FRI verifier-key cache lock poisoned".to_owned())?;
@@ -1738,17 +1747,17 @@ fn stark_open_verify_circuit_id_fragment_uses_reserved_proof_family(fragment: &s
             .is_some_and(|suffix| suffix.starts_with('/') || suffix.starts_with(':'))
         || is_trusted_setup_backend_label(&lower)
 }
-/// Return whether a normalized generic-STARK circuit id enters the ZK-ACE namespace.
+/// Return whether a canonical generic-STARK circuit id enters the ZK-ACE namespace.
 ///
 /// The complete namespace is reserved from generic `OpenVerify`; ZK-ACE must
 /// use typed privacy verification. Deliberately reserving the namespace avoids
 /// retaining a dispatch table of retired aliases while making every old
 /// spelling fail closed.
-fn normalized_circuit_is_zk_ace_relation_for_backend(
+fn canonical_circuit_is_zk_ace_relation_for_backend(
     backend: &str,
-    normalized_circuit_id: &str,
+    canonical_circuit_id: &str,
 ) -> bool {
-    let Some(relation) = normalized_circuit_id
+    let Some(relation) = canonical_circuit_id
         .strip_prefix(backend)
         .and_then(|suffix| suffix.strip_prefix(':'))
     else {
@@ -1758,35 +1767,37 @@ fn normalized_circuit_is_zk_ace_relation_for_backend(
         || relation.starts_with("zk_ace_")
         || relation.starts_with("zk-ace-")
 }
-fn normalized_bfv_full_bootstrap_stark_circuit_id_for_backend(backend: &str) -> Option<String> {
-    normalize_stark_fri_circuit_id_for_backend(
-        backend,
-        iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
-    )
+fn canonical_bfv_full_bootstrap_stark_circuit_id_for_backend(backend: &str) -> Option<String> {
+    is_stark_fri_v1_backend(backend).then(|| {
+        format!(
+            "{backend}:{}",
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1
+        )
+    })
 }
-fn normalized_ivm_execution_stark_circuit_id_for_backend(backend: &str) -> Option<String> {
-    normalize_stark_fri_circuit_id_for_backend(backend, IVM_EXECUTION_V1_CIRCUIT_ID)
+fn canonical_ivm_execution_stark_circuit_id_for_backend(backend: &str) -> Option<String> {
+    is_stark_fri_v1_backend(backend).then(|| format!("{backend}:{IVM_EXECUTION_V1_CIRCUIT_ID}"))
 }
-fn normalized_circuit_is_governance_vote_relation_for_backend(
+fn canonical_circuit_is_governance_vote_relation_for_backend(
     backend: &str,
-    normalized_circuit_id: &str,
+    canonical_circuit_id: &str,
 ) -> bool {
     [
         GOVERNANCE_BALLOT_CIRCUIT_ID_V1,
         GOVERNANCE_TALLY_CIRCUIT_ID_V1,
     ]
     .into_iter()
-    .filter_map(|circuit_id| normalize_stark_fri_circuit_id_for_backend(backend, circuit_id))
-    .any(|circuit_id| circuit_id == normalized_circuit_id)
+    .map(|circuit_id| format!("{backend}:{circuit_id}"))
+    .any(|circuit_id| circuit_id == canonical_circuit_id)
 }
-/// Return whether a normalized circuit id names a typed Soracloud FHE relation.
+/// Return whether a canonical circuit id names a typed Soracloud FHE relation.
 ///
 /// These circuit ids must never fall back to the generic binding AIR: that AIR
 /// only authenticates public metadata and does not prove any of the private FHE
 /// witness relations advertised by the typed Soracloud protocols.
-fn normalized_circuit_is_soracloud_fhe_relation_for_backend(
+fn canonical_circuit_is_soracloud_fhe_relation_for_backend(
     backend: &str,
-    normalized_circuit_id: &str,
+    canonical_circuit_id: &str,
 ) -> bool {
     [
         iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
@@ -1795,8 +1806,8 @@ fn normalized_circuit_is_soracloud_fhe_relation_for_backend(
         iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
     ]
     .into_iter()
-    .filter_map(|circuit_id| normalize_stark_fri_circuit_id_for_backend(backend, circuit_id))
-    .any(|circuit_id| circuit_id == normalized_circuit_id)
+    .map(|circuit_id| format!("{backend}:{circuit_id}"))
+    .any(|circuit_id| circuit_id == canonical_circuit_id)
 }
 #[cfg(feature = "zk-stark")]
 pub(crate) fn stark_open_verify_domain_tag_current(
@@ -1964,14 +1975,11 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
     if !stark_open_verify_circuit_id_matches_backend(backend, circuit_id) {
         return Err("STARK circuit_id does not match backend family".to_owned());
     }
-    let vk_payload =
-        validate_stark_fri_verifying_key_v1(backend, circuit_id, vk_box.bytes.as_slice())
-            .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
-    let env_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
+    let env_circuit_id = canonical_stark_fri_circuit_id_for_backend(backend, circuit_id)
         .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
-    let is_ivm_execution_circuit = normalized_ivm_execution_stark_circuit_id_for_backend(backend)
+    let is_ivm_execution_circuit = canonical_ivm_execution_stark_circuit_id_for_backend(backend)
         .as_deref()
-        == Some(env_circuit_id.as_str());
+        == Some(env_circuit_id);
     if circuit_policy == StarkOpenVerifyCircuitPolicy::Generic && is_ivm_execution_circuit {
         return Err(
             "generic STARK OpenVerify proof cannot target the IVM execution circuit; use the IVM execution STARK prover"
@@ -1991,35 +1999,38 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
     {
         return Err("IVM execution STARK prover requires single-row public inputs".to_owned());
     }
-    if normalized_circuit_is_zk_ace_relation_for_backend(backend, &env_circuit_id) {
+    if canonical_circuit_is_zk_ace_relation_for_backend(backend, env_circuit_id) {
         return Err(
             "generic STARK OpenVerify proof cannot target a ZK-ACE relation; use SubmitPrivacyProofV1"
                 .to_owned(),
         );
     }
-    if normalized_bfv_full_bootstrap_stark_circuit_id_for_backend(backend).as_deref()
-        == Some(env_circuit_id.as_str())
+    if canonical_bfv_full_bootstrap_stark_circuit_id_for_backend(backend).as_deref()
+        == Some(env_circuit_id)
     {
         return Err(
             "generic STARK OpenVerify proof cannot target the BFV full-bootstrap circuit; use the BFV full-bootstrap STARK prover"
                 .to_owned(),
         );
     }
-    if normalized_circuit_is_governance_vote_relation_for_backend(backend, &env_circuit_id) {
+    if canonical_circuit_is_governance_vote_relation_for_backend(backend, env_circuit_id) {
         return Err(
             "generic STARK OpenVerify proof cannot target a governance vote role; a dedicated semantic governance circuit is required"
                 .to_owned(),
         );
     }
     if circuit_policy == StarkOpenVerifyCircuitPolicy::Generic
-        && normalized_circuit_is_soracloud_fhe_relation_for_backend(backend, &env_circuit_id)
+        && canonical_circuit_is_soracloud_fhe_relation_for_backend(backend, env_circuit_id)
     {
         return Err(
             "generic STARK OpenVerify proof cannot target a Soracloud FHE relation; a dedicated typed Soracloud verifier is required"
                 .to_owned(),
         );
     }
-    let vk_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, &vk_payload.circuit_id)
+    let vk_payload =
+        validate_stark_fri_verifying_key_v1(backend, circuit_id, vk_box.bytes.as_slice())
+            .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
+    let vk_circuit_id = canonical_stark_fri_circuit_id_for_backend(backend, &vk_payload.circuit_id)
         .ok_or_else(|| "invalid STARK verifying key circuit_id".to_owned())?;
     if env_circuit_id != vk_circuit_id {
         return Err("STARK verifying key circuit_id mismatch".to_owned());
@@ -2057,14 +2068,14 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
         crate::zk_stark::prove_stark_fri_reserved_air_envelope_bytes(
             params,
             STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1.to_owned(),
-            env_circuit_id.clone(),
+            env_circuit_id.to_owned(),
             public_digest,
         )
     } else {
         crate::zk_stark::prove_stark_fri_air_envelope_bytes(
             params,
             STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1.to_owned(),
-            env_circuit_id.clone(),
+            env_circuit_id.to_owned(),
             public_digest,
         )
     }?;
@@ -4691,30 +4702,27 @@ fn preverify_open_verify_envelope_metadata(
             return Err(PreverifyResult::MalformedProof);
         }
         let Some(env_circuit_id) =
-            normalize_stark_fri_circuit_id_for_backend(&proof.backend, &envelope.circuit_id)
+            canonical_stark_fri_circuit_id_for_backend(&proof.backend, &envelope.circuit_id)
         else {
             return Err(PreverifyResult::MalformedProof);
         };
-        if normalized_circuit_is_zk_ace_relation_for_backend(&proof.backend, &env_circuit_id) {
+        if canonical_circuit_is_zk_ace_relation_for_backend(&proof.backend, env_circuit_id) {
             return Err(PreverifyResult::MalformedProof);
         }
-        if normalized_bfv_full_bootstrap_stark_circuit_id_for_backend(&proof.backend).as_deref()
-            == Some(env_circuit_id.as_str())
+        if canonical_bfv_full_bootstrap_stark_circuit_id_for_backend(&proof.backend).as_deref()
+            == Some(env_circuit_id)
         {
             return Err(PreverifyResult::MalformedProof);
         }
-        if normalized_circuit_is_governance_vote_relation_for_backend(
-            &proof.backend,
-            &env_circuit_id,
-        ) {
-            return Err(PreverifyResult::MalformedProof);
-        }
-        if normalized_circuit_is_soracloud_fhe_relation_for_backend(&proof.backend, &env_circuit_id)
+        if canonical_circuit_is_governance_vote_relation_for_backend(&proof.backend, env_circuit_id)
         {
             return Err(PreverifyResult::MalformedProof);
         }
-        if normalized_ivm_execution_stark_circuit_id_for_backend(&proof.backend).as_deref()
-            == Some(env_circuit_id.as_str())
+        if canonical_circuit_is_soracloud_fhe_relation_for_backend(&proof.backend, env_circuit_id) {
+            return Err(PreverifyResult::MalformedProof);
+        }
+        if canonical_ivm_execution_stark_circuit_id_for_backend(&proof.backend).as_deref()
+            == Some(env_circuit_id)
         {
             if envelope.public_inputs.as_slice() != ivm_execution_public_inputs_schema_descriptor()
             {
@@ -4998,6 +5006,31 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     if !stark_open_verify_circuit_id_matches_backend(backend, &env.circuit_id) {
         return reject("STARK OpenVerifyEnvelope circuit_id does not match backend family");
     }
+    // Refuse dedicated semantic roles before preparing or caching any supplied
+    // key. Direct verifier calls have the same early boundary as preverify and
+    // the generic prover; a valid key cannot grant generic role authority.
+    let env_circuit_id = match canonical_stark_fri_circuit_id_for_backend(backend, &env.circuit_id)
+    {
+        Some(id) => id,
+        None => return reject("invalid STARK envelope circuit_id"),
+    };
+    if canonical_circuit_is_zk_ace_relation_for_backend(backend, env_circuit_id) {
+        return reject("generic ZK-ACE relation requires typed privacy verification");
+    }
+    if canonical_circuit_is_governance_vote_relation_for_backend(backend, env_circuit_id) {
+        return reject("governance vote roles require dedicated semantic verification");
+    }
+    if canonical_bfv_full_bootstrap_stark_circuit_id_for_backend(backend).as_deref()
+        == Some(env_circuit_id)
+    {
+        return reject("BFV full-bootstrap STARK circuit requires BFV-specific verification");
+    }
+    if canonical_circuit_is_soracloud_fhe_relation_for_backend(backend, env_circuit_id) {
+        return reject("Soracloud FHE relation requires dedicated typed Soracloud verification");
+    }
+    let is_ivm_execution_circuit = canonical_ivm_execution_stark_circuit_id_for_backend(backend)
+        .as_deref()
+        == Some(env_circuit_id);
     let Some(vk_box) = vk else {
         return reject("missing verifying key");
     };
@@ -5037,36 +5070,13 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
             }
             Err(_) => return reject("invalid STARK verifying key payload"),
         };
-    let env_circuit_id = match normalize_stark_fri_circuit_id_for_backend(backend, &env.circuit_id)
-    {
-        Some(id) => id,
-        None => return reject("invalid STARK envelope circuit_id"),
-    };
-    if normalized_circuit_is_zk_ace_relation_for_backend(backend, &env_circuit_id) {
-        return reject("generic ZK-ACE relation requires typed privacy verification");
-    }
-    if normalized_circuit_is_governance_vote_relation_for_backend(backend, &env_circuit_id) {
-        return reject("governance vote roles require dedicated semantic verification");
-    }
-    let is_bfv_full_bootstrap_circuit =
-        normalized_bfv_full_bootstrap_stark_circuit_id_for_backend(backend).as_deref()
-            == Some(env_circuit_id.as_str());
-    let is_ivm_execution_circuit = normalized_ivm_execution_stark_circuit_id_for_backend(backend)
-        .as_deref()
-        == Some(env_circuit_id.as_str());
     let vk_circuit_id =
-        match normalize_stark_fri_circuit_id_for_backend(backend, &vk_circuit_id_raw) {
+        match canonical_stark_fri_circuit_id_for_backend(backend, &vk_circuit_id_raw) {
             Some(id) => id,
             None => return reject("invalid STARK verifying key circuit_id"),
         };
     if env_circuit_id != vk_circuit_id {
         return reject("STARK verifying key circuit_id mismatch");
-    }
-    if is_bfv_full_bootstrap_circuit {
-        return reject("BFV full-bootstrap STARK circuit requires BFV-specific verification");
-    }
-    if normalized_circuit_is_soracloud_fhe_relation_for_backend(backend, &env_circuit_id) {
-        return reject("Soracloud FHE relation requires dedicated typed Soracloud verification");
     }
     // Decode the STARK wrapper payload.
     let open: StarkFriOpenProofV1 = match norito::decode_canonical(&env.proof_bytes) {
@@ -5145,7 +5155,7 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     let Some(air) = inner.proof.air.as_ref() else {
         return reject("missing STARK AIR section");
     };
-    let air_circuit_id = match normalize_stark_fri_circuit_id_for_backend(backend, &air.circuit_id)
+    let air_circuit_id = match canonical_stark_fri_circuit_id_for_backend(backend, &air.circuit_id)
     {
         Some(id) => id,
         None => return reject("invalid STARK AIR circuit_id"),
@@ -5940,7 +5950,7 @@ mod stark_backend_tag_tests {
     #[test]
     fn stark_open_verify_circuit_ids_are_bound_to_the_sole_production_profile() {
         let backend = ZK_BACKEND_STARK_FRI_V1;
-        for circuit_id in ["binding-air".to_owned(), format!("{backend}:binding-air")] {
+        for circuit_id in [format!("{backend}:binding-air")] {
             assert!(stark_open_verify_circuit_id_matches_backend(
                 backend,
                 &circuit_id
@@ -5964,7 +5974,7 @@ mod stark_backend_tag_tests {
     fn stark_open_verify_circuit_id_rejects_trusted_setup_family_aliases() {
         assert!(stark_open_verify_circuit_id_matches_backend(
             ZK_BACKEND_STARK_FRI_V1,
-            "generic-binding-air"
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1:generic-binding-air"
         ));
         assert!(stark_open_verify_circuit_id_matches_backend(
             "stark/fri/poseidon-x7-goldilocks-6x64-v1",
@@ -6155,11 +6165,11 @@ macro_rules! consensus_stark_vk {
 mod stark_prover_tests {
     use super::{
         STARK_BINDING_AIR_CONSTANT, STARK_BINDING_AIR_Z_COEFF, STARK_GOLDILOCKS_MODULUS,
-        STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1, ZK_BACKEND_STARK_FRI_V1, limb_as_instance_bytes,
-        normalize_stark_fri_circuit_id_for_backend, prove_stark_fri_ivm_execution_envelope,
-        prove_stark_fri_open_verify_envelope, stark_binding_air_terms,
-        stark_open_verify_air_public_digest_current, stark_open_verify_domain_tag_current,
-        verify_backend_with_timing,
+        STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1, ZK_BACKEND_STARK_FRI_V1,
+        canonical_stark_fri_circuit_id_for_backend, limb_as_instance_bytes,
+        prove_stark_fri_ivm_execution_envelope, prove_stark_fri_open_verify_envelope,
+        stark_binding_air_terms, stark_open_verify_air_public_digest_current,
+        stark_open_verify_domain_tag_current, verify_backend_with_timing,
     };
     use crate::zk_stark::{
         STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
@@ -6175,6 +6185,223 @@ mod stark_prover_tests {
         let encoded = limb_as_instance_bytes(limb);
         assert_eq!(&encoded[..8], &limb.to_le_bytes());
         assert_eq!(encoded[8..], [0; 24]);
+    }
+    #[test]
+    fn stark_exact_circuit_grammar_rejects_retired_wire_spellings() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        let exact = format!("{backend}:binding-air");
+        let borrowed = canonical_stark_fri_circuit_id_for_backend(backend, &exact).unwrap();
+        assert!(core::ptr::eq(borrowed.as_ptr(), exact.as_ptr()));
+        for other in [
+            "binding-air".to_owned(),
+            format!("{backend}/binding-air"),
+            format!(" {exact}"),
+            format!("{exact} "),
+            format!("{backend}::binding-air"),
+            format!("{backend}:"),
+            "stark/fri/poseidon2-goldilocks:binding-air".to_owned(),
+            format!(
+                "{backend}:{}",
+                "x".repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES)
+            ),
+        ] {
+            assert!(
+                canonical_stark_fri_circuit_id_for_backend(backend, &other).is_none(),
+                "{other}"
+            );
+        }
+        assert!(canonical_stark_fri_circuit_id_for_backend("stark/fri", &exact).is_none());
+    }
+
+    #[test]
+    fn stark_exact_registry_material_and_cache_do_not_adopt_aliases() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        let exact = format!("{backend}:exact-registry-test");
+        let payload = consensus_stark_vk!(exact.clone());
+        let bytes = norito::encode_canonical(&payload).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                super::validate_stark_fri_verifying_key_v1(backend, &exact, &bytes)
+                    .unwrap()
+                    .circuit_id,
+                exact
+            );
+        }
+        for alias in [
+            "exact-registry-test".to_owned(),
+            format!("{backend}/exact-registry-test"),
+            format!(" {exact} "),
+        ] {
+            assert!(super::validate_stark_fri_verifying_key_v1(backend, &alias, &bytes).is_err());
+            let changed = consensus_stark_vk!(alias.clone());
+            let changed_bytes = norito::encode_canonical(&changed).unwrap();
+            assert!(
+                super::validate_stark_fri_verifying_key_v1(backend, &exact, &changed_bytes)
+                    .is_err()
+            );
+            assert!(
+                super::validate_stark_fri_verifying_key_v1(backend, &alias, &changed_bytes)
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            super::validate_stark_fri_verifying_key_v1(backend, &exact, &bytes)
+                .unwrap()
+                .circuit_id,
+            exact
+        );
+    }
+
+    #[test]
+    fn stark_exact_native_key_contract_does_not_grant_generic_dispatch() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        for bare in [
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+        ] {
+            assert!(super::is_typed_native_stark_circuit_id(bare));
+            assert!(super::stark_registry_circuit_id_matches_backend(
+                backend, bare
+            ));
+            assert!(!super::stark_open_verify_circuit_id_matches_backend(
+                backend, bare
+            ));
+            let payload = consensus_stark_vk!(bare.to_owned());
+            let bytes = norito::encode_canonical(&payload).unwrap();
+            assert_eq!(
+                super::validate_stark_fri_verifying_key_v1(backend, bare, &bytes)
+                    .unwrap()
+                    .circuit_id,
+                bare
+            );
+            for alias in [
+                format!("{backend}:{bare}"),
+                format!("{backend}/{bare}"),
+                format!(" {bare} "),
+            ] {
+                assert!(!super::is_typed_native_stark_circuit_id(&alias));
+                assert!(!super::stark_registry_circuit_id_matches_backend(
+                    backend, &alias
+                ));
+                assert!(
+                    super::validate_stark_fri_verifying_key_v1(backend, &alias, &bytes).is_err()
+                );
+                let altered = consensus_stark_vk!(alias.clone());
+                assert!(
+                    super::validate_stark_fri_verifying_key_v1(
+                        backend,
+                        &alias,
+                        &norito::encode_canonical(&altered).unwrap()
+                    )
+                    .is_err()
+                );
+                assert!(
+                    super::validate_stark_fri_verifying_key_v1(
+                        backend,
+                        bare,
+                        &norito::encode_canonical(&altered).unwrap()
+                    )
+                    .is_err()
+                );
+            }
+            assert!(!super::stark_registry_circuit_id_matches_backend(
+                "stark/fri",
+                bare
+            ));
+        }
+    }
+
+    #[test]
+    fn stark_exact_envelope_and_air_reject_aliases_of_a_real_proof() {
+        let (backend, exact, vk_box, proof) = sample_stark_open_verify_proof();
+        assert!(verify_backend_with_timing(backend, &proof, Some(&vk_box)).ok);
+        let outer: OpenVerifyEnvelope = norito::decode_canonical(&proof.bytes).unwrap();
+        let open: StarkFriOpenProofV1 = norito::decode_canonical(&outer.proof_bytes).unwrap();
+        let native: StarkVerifyEnvelopeV1 = norito::decode_canonical(&open.envelope_bytes).unwrap();
+        for alias in [
+            "tiny-open".to_owned(),
+            format!("{backend}/tiny-open"),
+            format!(" {exact} "),
+        ] {
+            let mut altered = outer.clone();
+            altered.circuit_id = alias.clone();
+            let wire = ProofBox::new(
+                backend.to_owned(),
+                norito::encode_canonical(&altered).unwrap(),
+            );
+            assert!(!verify_backend_with_timing(backend, &wire, Some(&vk_box)).ok);
+            let mut changed_native = native.clone();
+            changed_native.proof.air.as_mut().unwrap().circuit_id = alias;
+            let mut changed_open = open.clone();
+            changed_open.envelope_bytes = norito::encode_canonical(&changed_native).unwrap();
+            let mut changed_outer = outer.clone();
+            changed_outer.proof_bytes = norito::encode_canonical(&changed_open).unwrap();
+            let wire = ProofBox::new(
+                backend.to_owned(),
+                norito::encode_canonical(&changed_outer).unwrap(),
+            );
+            assert!(!verify_backend_with_timing(backend, &wire, Some(&vk_box)).ok);
+        }
+    }
+    #[test]
+    fn stark_exact_reserved_roles_refuse_before_direct_key_preparation() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        for role in [
+            super::GOVERNANCE_BALLOT_CIRCUIT_ID_V1,
+            super::GOVERNANCE_TALLY_CIRCUIT_ID_V1,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+            iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        ] {
+            let circuit_id = format!("{backend}:{role}");
+            assert!(super::stark_open_verify_circuit_id_matches_backend(
+                backend,
+                &circuit_id
+            ));
+            let payload = consensus_stark_vk!(circuit_id.clone());
+            // A canonical payload and a malformed payload both have authentic
+            // outer key hashes. Refusal must precede even the preparation entry,
+            // rather than depend on registry grammar, payload decode, or cache.
+            for bytes in [norito::encode_canonical(&payload).unwrap(), vec![0x5a]] {
+                let vk = VerifyingKeyBox::new(backend.to_owned(), bytes);
+                let outer = OpenVerifyEnvelope {
+                    backend: BackendTag::Stark,
+                    circuit_id: circuit_id.clone(),
+                    vk_hash: super::hash_vk(&vk),
+                    public_inputs: b"reserved-role:preparation-order:v1".to_vec(),
+                    proof_bytes: vec![0x7d],
+                    aux: Vec::new(),
+                };
+                outer.validate_for_admission().unwrap();
+                let proof = ProofBox::new(
+                    backend.to_owned(),
+                    norito::encode_canonical(&outer).unwrap(),
+                );
+                super::STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1.with(|entries| entries.set(0));
+                assert!(!super::verify_backend(backend, &proof, Some(&vk)), "{role}");
+                super::STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1.with(|entries| {
+                    assert_eq!(entries.get(), 0, "reserved role prepared a key: {role}");
+                });
+            }
+        }
+        // Exercise an actual generic positive proof twice: the observer sees
+        // each native verifier preparation entry even when the key is cached.
+        let (backend, _, vk, proof) = sample_stark_open_verify_proof();
+        for _ in 0..2 {
+            super::STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1.with(|entries| entries.set(0));
+            assert!(super::verify_backend(backend, &proof, Some(&vk)));
+            super::STARK_VERIFYING_KEY_PREPARATION_ENTRIES_V1.with(|entries| {
+                assert_eq!(
+                    entries.get(),
+                    1,
+                    "generic verifier preparation observer is live"
+                );
+            });
+        }
     }
     fn sample_stark_open_verify_proof() -> (&'static str, String, VerifyingKeyBox, ProofBox) {
         let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
@@ -6246,8 +6473,16 @@ mod stark_prover_tests {
             merkle_arity: vk_payload.merkle_arity,
             domain_tag,
         };
-        let env_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
-            .expect("normalize weak STARK circuit id");
+        let env_circuit_id = if let Some(relation) = circuit_id
+            .strip_prefix(backend)
+            .and_then(|suffix| suffix.strip_prefix('/'))
+        {
+            format!("{backend}:{relation}")
+        } else if circuit_id.starts_with(&format!("{backend}:")) {
+            circuit_id.to_owned()
+        } else {
+            format!("{backend}:{circuit_id}")
+        };
         let public_digest = stark_open_verify_air_public_digest_current(
             backend,
             circuit_id,
@@ -6259,7 +6494,7 @@ mod stark_prover_tests {
         let envelope_bytes = match crate::zk_stark::prove_stark_fri_air_envelope_bytes(
             params.clone(),
             transcript_label.to_owned(),
-            env_circuit_id.clone(),
+            env_circuit_id.to_owned(),
             public_digest,
         ) {
             Ok(envelope_bytes) => envelope_bytes,
@@ -6639,7 +6874,11 @@ mod stark_prover_tests {
             )
             .expect_err("generic STARK prover must not target IVM execution circuit aliases");
             assert!(
-                err.contains("IVM execution"),
+                if circuit_id.starts_with(&format!("{backend}:")) {
+                    err.contains("IVM execution")
+                } else {
+                    err == "STARK circuit_id does not match backend family"
+                },
                 "unexpected IVM alias rejection for {circuit_id}: {err}"
             );
         }
@@ -6727,7 +6966,11 @@ mod stark_prover_tests {
                 )
                 .expect_err("generic STARK prover must not target BFV full-bootstrap aliases");
                 assert!(
-                    err.contains("BFV full-bootstrap"),
+                    if circuit_id.starts_with(&format!("{backend}:")) {
+                        err.contains("BFV full-bootstrap")
+                    } else {
+                        err == "STARK circuit_id does not match backend family"
+                    },
                     "unexpected BFV alias rejection for {backend} / {circuit_id}: {err}"
                 );
             }
@@ -6817,7 +7060,12 @@ mod stark_prover_tests {
                 )
                 .expect_err("generic STARK prover must not target a Soracloud FHE relation");
                 assert!(
-                    err.contains("Soracloud") || err.contains("BFV full-bootstrap"),
+                    err.contains("Soracloud")
+                        || if circuit_id.starts_with(&format!("{backend}:")) {
+                            err.contains("BFV full-bootstrap")
+                        } else {
+                            err == "STARK circuit_id does not match backend family"
+                        },
                     "unexpected Soracloud relation rejection for {circuit_id}: {err}"
                 );
             }

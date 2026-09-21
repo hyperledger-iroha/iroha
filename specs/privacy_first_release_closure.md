@@ -81,7 +81,7 @@ independent audit, SDK, hardware, and deployment evidence.
 | VeRange | Native P-256 range profile and typed component surface. | Same-candidate range, composition, resource and release qualification. |
 | ZK-AMS | Native40 qPCS/FRI roots and staged transcript use the shared six-lane owner and [sole three-section V1 wire](crypto/zk_ams_rns_native_wire_v1.md). Source packing retains both native48 anchors. One 72,386-entry inventory replaces disconnected commitment owners; original fallible entropy continues through source and authenticated D/S preparation. The repaired fixture-based direct-proof suite passes all 34 tests on ordinary stacks, including four actual 16,384-gate proofs. Actual source replay and composite MKHE admission remain unavailable, and full qPCS hashing exceeds the unchanged work cap. | Complete actual source/prover and composite admission, a reviewed qPCS commitment/evaluation design within whole-proof resource bounds, malicious-party, decryption-share, phase-2/3 and full-size release-KAT gates. Fixture proofs do not qualify a production source. |
 | Vega | Credential relation and Figure 9 key-install machinery exist; compiled profile unavailable. | Full-shape governed keys, independent proof vector and complete Figure 9 qualification. |
-| ZK-X509 | Native certificate relation and pinned compiled metadata exist; activation is unavailable. | Narrow or recursively compose the relation to fit the 9 MiB limit. The shared-geometry MAIN maximum is 16,447,808 bytes, including 12,235,648 bytes of raw trace openings; the combined X5S1 maximum is 19,156,074 bytes. Regenerate artifacts and measure the real implementation. |
+| ZK-X509 | Native certificate relation and pinned compiled metadata exist; activation is unavailable. | Redesign or recursively compose the complete relation to fit the 9 MiB limit while preserving all certificate coverage. The shared-geometry MAIN maximum is 16,447,808 bytes, including 12,235,648 bytes of raw trace openings; the combined X5S1 maximum is 19,156,074 bytes. Regenerate artifacts and measure the real implementation. |
 | Jindo | Native Figures 2–7 implementation with 32 signed-monomial repetitions. | Reviewed qROM extractor certificate, exact adversarial/max-shape evidence and production qualification. |
 | Bootle/Lantern | Native lattice anonymous credential and Falcon issuer implementation. | Independent arithmetic/sampling/custody review, issuer lifecycle, maximum-shape and release qualification. |
 | Orchard | Sole Orchard/PostNu6_3 profile with two-pass preparation and authorization. | Audited parameter/proof provenance and full native/SDK/network qualification. |
@@ -94,8 +94,10 @@ MAIN has a log-22 common domain and the accumulator pads its 104 active rows to
 8,192 rows on a log-16 LDE. Canonical registration and arithmetic diagnostics do
 not establish activation. The combined maximum wire is 19,156,074 bytes; the
 unchanged production ceiling is 9,437,184 bytes. Full MAIN proving rejects the
-resource preflight before witness preparation or entropy. A narrower relation or
-reviewed recursive composition and new soundness/resource evidence remain required.
+resource preflight before witness preparation or entropy. A reviewed redesign or
+recursive composition must preserve the complete certificate, CRL, disclosure and
+ownership relation. Reducing supported coverage or increasing the 9 MiB ceiling
+is not an accepted completion path. New soundness/resource evidence remains required.
 
 BFV arithmetic diagnostics reconstruct artifact-bound traces and bounds through
 `bfv_full_bootstrap_diagnostic_execution_v1`. They share the witness relation and
@@ -124,6 +126,29 @@ implementation markers must not be substituted for the qualification record in
 | SDKs and fixtures | Rust, Kotlin/Java consumers, Swift, JavaScript, Python and C# use the same final canonical bytes and native admission; signed same-source native packages and target-platform execution. Structural parser/source tests alone cannot qualify an SDK. |
 | Hardware | Final FASTPQ six-lane hashes and polynomial derivation currently execute on CPU. Old scalar-permutation/FFT preflights cannot qualify final V1 GPU proofs. The allocation-free typed frame now shares CPU, streaming and hardware input framing. Dedicated Metal digest dispatch and cleanup/quarantine tests pass locally; CUDA compilation/device evidence and full proof routing remain outstanding. Complete real mode propagation; then execute CPU/NEON/SIMD/Metal/CUDA parity, fault quarantine and measured memory/throughput. A feature build or selected mode is not device execution. |
 | Release and deployment | Clean signed source/lock/toolchain identity, complete independent audit classes and finding dispositions, real 48-stage/54-artifact evidence, exact four-validator quorum, staged restart/canary/convergence and authenticated endpoint readback. |
+
+The SDK release matrix retains ten consumers in this order: `kotlin_jvm`,
+`kotlin_android`, `java_source_kotlin`, `swift_c_bridge`, `javascript_napi`,
+`python_pyo3`, `csharp`, `cli`, `openapi`, and `genesis_tooling`.
+`java_source_kotlin` requires the Java-source consumer suites against the
+canonical Kotlin APIs on **both JVM and Android**, with the original fixture,
+rejection, native JNI and platform assertions preserved. Its distinct package
+artifact must bind the built Java consumers, exact Kotlin/JNI/Android artifacts,
+shared fixture corpus and execution evidence from the same release candidate.
+The distinct Java-consumer qualification artifact producer remains pending;
+this is evidence about consumers of Kotlin, not a new Java SDK implementation.
+Runtime host tests alone do not supply that artifact. Kotlin-only results or
+compilation without native/platform execution do not satisfy this row. The
+Kotlin JVM and Android rows remain separately required.
+
+The canonical Java-source consumer uses Norito index 10. The retired mirrored
+Java Android consumer index 2 and JSON tag `java_android` are rejected; there is
+no alias. The other nine indices remain 0, 1 and 3 through 9. The nominal type
+identity stays `PrivacyReleaseSdkConsumerV1`; its generated structural descriptor,
+qualification artifacts and their dependent signatures must be regenerated and
+validated against the changed wire contract. The explicit
+`PrivacyExact12QualificationRecordV1` schema root publishes the complete native
+qualification closure. A label/source update is not SDK or release qualification.
 
 ## Verification discipline
 

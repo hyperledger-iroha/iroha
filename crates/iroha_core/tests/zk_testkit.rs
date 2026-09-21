@@ -1,4 +1,4 @@
-#![doc = "Helpers for generating minimal Halo2 proofs for governance tests."]
+#![doc = "Development-only depth-8 membership proofs and rejected production inputs; never ballot/tally proofs."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(dead_code, unused_imports)]
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -78,15 +78,17 @@ mod halo2_bundle {
             write_tlv(buf, *b"I10P", &payload);
         }
     }
-    /// Deterministic Halo2/IPA vote tally circuit (depth 8) exercising the production backend.
-    pub struct VoteTallyProofBundle {
+    /// Development-only fixed-witness membership relation. The production registry rejects it.
+    pub struct DevVoteMembershipProofBundle {
+        raw_proof: Vec<u8>,
+        raw_vk: halo2_proofs::plonk::VerifyingKey<Curve>,
         /// Backend identifier for the proof attachment (`halo2/ipa`).
         pub backend: &'static str,
         /// Circuit identifier recorded alongside the verifying key.
         pub circuit_id: &'static str,
         /// Verifying key identifier (backend/name).
         pub vk_id: VerifyingKeyId,
-        /// Registry-style verifying key record (inline bytes populated).
+        /// Rejected registry-shaped input (inline bytes populated); never an admitted key.
         pub vk_record: VerifyingKeyRecord,
         /// Norito-encoded `OpenVerifyEnvelope` bytes carrying the proof payload.
         pub proof_bytes: Vec<u8>,
@@ -97,7 +99,31 @@ mod halo2_bundle {
         /// Deterministic Merkle root witness used when generating the proof.
         pub root: Scalar,
     }
-    impl VoteTallyProofBundle {
+    impl DevVoteMembershipProofBundle {
+        /// Verify the actual raw IPA transcript against the supplied commitment and root.
+        /// This test-only API cannot dispatch through the production verifier.
+        pub fn verify_raw(&self, proof: &[u8], commit: Scalar, root: Scalar) -> bool {
+            use halo2_proofs::transcript::{Blake2bRead, TranscriptReadBuffer as _};
+            let params = ParamsIPA::<Curve>::new(6);
+            let commit_column = [commit];
+            let root_column = [root];
+            let columns = [&commit_column[..], &root_column[..]];
+            let mut transcript = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(proof);
+            let strategy = halo2_proofs::poly::ipa::strategy::SingleStrategy::<Curve>::new(&params);
+            halo2_proofs::plonk::verify_proof(
+                &params,
+                &self.raw_vk,
+                strategy,
+                &[&columns],
+                &mut transcript,
+            )
+            .is_ok()
+        }
+        /// Return the raw proof, without production envelope or registry admission.
+        pub fn raw_proof(&self) -> &[u8] {
+            &self.raw_proof
+        }
+
         /// Return the commitment as raw 32-byte little-endian bytes.
         pub fn commit_bytes(&self) -> [u8; 32] {
             use halo2_proofs::halo2curves::ff::PrimeField as _;
@@ -117,8 +143,8 @@ mod halo2_bundle {
             base64::engine::general_purpose::STANDARD.encode(&self.proof_bytes)
         }
     }
-    /// Generate a Halo2/IPA proof bundle for the production vote tally circuit.
-    pub fn vote_merkle8_bundle() -> VoteTallyProofBundle {
+    /// Generate and raw-verify the development relation, then require production rejection.
+    pub fn dev_vote_merkle8_bundle() -> DevVoteMembershipProofBundle {
         use halo2_proofs::{
             halo2curves::{
                 ff::PrimeField as _,
@@ -129,8 +155,8 @@ mod halo2_bundle {
         };
         let backend = "halo2/ipa";
         let envelope_circuit_id = "halo2/pasta/ipa/vote-bool-commit-merkle8";
-        let circuit_id = "halo2/pasta/vote-bool-commit-merkle8";
-        let name = "tally_current";
+        let circuit_id = envelope_circuit_id;
+        let name = "dev_vote_membership";
         let k: u32 = 6;
         let params: <IPACommitmentScheme<Curve> as CommitmentScheme>::ParamsProver =
             ParamsIPA::<Curve>::new(k);
@@ -197,27 +223,10 @@ mod halo2_bundle {
                 &insts,
                 &mut transcript,
             );
-            #[cfg(debug_assertions)]
-            if res.is_err() {
-                let inst_refs_swapped = [&inst_root[..], &inst_commit[..]];
-                let alt_insts = [&inst_refs_swapped[..]];
-                let mut transcript_alt = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(
-                    Cursor::new(proof_raw.as_slice()),
-                );
-                let strategy_alt =
-                    halo2_proofs::poly::ipa::strategy::SingleStrategy::<Curve>::new(&params);
-                let res_swapped = halo2_proofs::plonk::verify_proof(
-                    &params,
-                    &vk_h2,
-                    strategy_alt,
-                    &alt_insts,
-                    &mut transcript_alt,
-                );
-                panic!(
-                    "vote tally halo2 verify_proof failed: {res:?}, swapped order: {res_swapped:?}"
-                );
-            }
-            assert!(res.is_ok(), "vote tally halo2 verify_proof failed: {res:?}");
+            assert!(
+                res.is_ok(),
+                "development membership raw verify_proof failed: {res:?}"
+            );
         }
         let commit_col = [commit];
         let root_col = [root];
@@ -233,7 +242,8 @@ mod halo2_bundle {
         let mut public_inputs = Vec::with_capacity(64);
         public_inputs.extend_from_slice(commit.to_repr().as_ref());
         public_inputs.extend_from_slice(root.to_repr().as_ref());
-        let public_inputs_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+        let dev_schema_hash: [u8; 32] =
+            CryptoHash::new(b"dev-vote-membership-v1:commit:fp32,root:fp32").into();
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_bytes.clone());
         let commitment = zk::hash_vk(&vk_box);
         let mut vk_record = VerifyingKeyRecord::new(
@@ -241,7 +251,7 @@ mod halo2_bundle {
             circuit_id,
             BackendTag::Halo2IpaPasta,
             "pallas",
-            public_inputs_hash,
+            dev_schema_hash,
             commitment,
         );
         vk_record.vk_len = vk_bytes.len() as u32;
@@ -264,8 +274,13 @@ mod halo2_bundle {
         let proof_box = ProofBox::new(backend.into(), proof_bytes.clone());
         let vk_box = vk_record.key.as_ref().expect("VK bytes populated").clone();
         let report = zk::verify_backend_with_timing(backend, &proof_box, Some(&vk_box));
-        assert!(report.ok, "vote tally proof must verify: {report:?}");
-        VoteTallyProofBundle {
+        assert!(
+            !report.ok,
+            "development relation must stay outside production: {report:?}"
+        );
+        DevVoteMembershipProofBundle {
+            raw_proof: proof_raw,
+            raw_vk: vk_h2,
             backend,
             circuit_id,
             vk_id: VerifyingKeyId::new(backend, name),
@@ -278,14 +293,14 @@ mod halo2_bundle {
     }
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub use halo2_bundle::{VoteTallyProofBundle, vote_merkle8_bundle};
+pub use halo2_bundle::{DevVoteMembershipProofBundle, dev_vote_merkle8_bundle};
 #[cfg(all(
     test,
     feature = "zk-tests",
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 mod vote_bundle_sanity {
-    use super::halo2_bundle::vote_merkle8_bundle;
+    use super::halo2_bundle::dev_vote_merkle8_bundle;
     use halo2_proofs::{
         dev::MockProver,
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
@@ -294,7 +309,7 @@ mod vote_bundle_sanity {
     };
     #[test]
     fn mock_prover_satisfies_vote_bundle() {
-        let bundle = vote_merkle8_bundle();
+        let bundle = dev_vote_merkle8_bundle();
         let k = 6;
         let params = ParamsIPA::<Curve>::new(k);
         let circuit = iroha_core::zk::depth::VoteBoolCommitMerkle::<8>::default();

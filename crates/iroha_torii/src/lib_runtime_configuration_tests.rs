@@ -2279,6 +2279,7 @@ mod sorafs_native_transaction_signer_startup_tests {
         let error = qualify_configured_sorafs_native_transaction_signer_for_startup::<
             dyn SoraFsProofOutcomeTransactionSigner,
         >(
+            signed_query_test_network_id(),
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             true,
             None,
@@ -2296,6 +2297,7 @@ mod sorafs_native_transaction_signer_startup_tests {
             0x11,
         ));
         let error = qualify_configured_sorafs_native_transaction_signer_for_startup(
+            signed_query_test_network_id(),
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             false,
             None,
@@ -2313,8 +2315,13 @@ mod sorafs_native_transaction_signer_startup_tests {
             0x21,
         ));
         let configured = provider.configured_binding();
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x73; 32])),
+        );
+        assert_ne!(network_id, signed_query_test_network_id());
         let provider: Arc<dyn SoraFsProofOutcomeTransactionSigner> = provider;
         let qualified = qualify_configured_sorafs_native_transaction_signer_for_startup(
+            network_id,
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             true,
             Some(&configured),
@@ -2327,6 +2334,34 @@ mod sorafs_native_transaction_signer_startup_tests {
         assert_eq!(qualified.authority(), configured.authority);
         assert_eq!(qualified.public_key(), Ok(configured.public_key));
         assert_eq!(qualified.qualification(), Ok(QUALIFICATION));
+        use iroha_data_model::isi::sorafs::{
+            SorafsPdpProofOutcomeSubmissionV1, SorafsProofOutcomeSubmissionV1,
+            SubmitSorafsProofOutcome,
+        };
+        // The startup boundary owns the typed envelope; native execution validates its evidence.
+        let payload = TransactionBuilder::new(
+            network_id,
+            configured.authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SubmitSorafsProofOutcome::new(
+            SorafsProofOutcomeSubmissionV1::Pdp(SorafsPdpProofOutcomeSubmissionV1 {
+                archive_payload: vec![1],
+            }),
+        )])
+        .into_payload()
+        .unwrap();
+        let mut foreign = payload.clone();
+        foreign.domain = iroha_data_model::transaction::TransactionDomain::Network(
+            signed_query_test_network_id(),
+        );
+        assert_eq!(
+            qualified.sign(foreign),
+            Err(SoraFsProofOutcomeSigningError::Refused)
+        );
+        let signed = qualified.sign(payload.clone()).unwrap();
+        assert_eq!(signed.payload(), &payload);
+        signed.verify_signature().unwrap();
     }
     #[test]
     fn native_signer_startup_rejects_substituted_provider() {
@@ -2337,6 +2372,7 @@ mod sorafs_native_transaction_signer_startup_tests {
             0x32,
         ));
         let error = qualify_configured_sorafs_native_transaction_signer_for_startup(
+            signed_query_test_network_id(),
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             true,
             Some(&configured),
@@ -2693,7 +2729,7 @@ mod gateway_runtime_config_tests {
         );
         mapped.validate().expect("mapped policy must remain valid");
     }
-    include!("runtime_dependency_tests/stream_token_hardware.rs");
+    include!("runtime_dependency_tests/stream_token_signer.rs");
     #[test]
     fn gateway_security_builds_only_from_resolved_config_and_runtime_dependencies() {
         let checkpoint_dir = tempfile::tempdir().expect("temporary checkpoint directory");

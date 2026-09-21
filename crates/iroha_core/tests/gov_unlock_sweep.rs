@@ -27,13 +27,26 @@ fn unlocks_after_expiry_height() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-    let state = State::new_for_testing(World::with([], [alice], []), kura, query_handle);
+    let mut state = State::new_for_testing(World::with([], [alice], []), kura, query_handle);
+    let mut governance = state.gov.clone();
+    // This sweep fixture retains an explicit zero-bond, zero-weight position.
+    governance.min_bond_amount = 0_u64.into();
+    governance.conviction_step_blocks = 1;
+    governance.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+    governance.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
+    state.set_gov(governance);
     let _kp = checked_random_governance_unlock_keypair();
     // Block H=1: insert a lock expiring at H=2 (will unlock at H>=3 per current policy)
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     {
         let mut sblock1 = state.block(header1);
         let mut stx = sblock1.transaction();
+        iroha_core::query::standalone_plain_test_fixture::fund_voter(
+            &mut stx,
+            &iroha_test_samples::ALICE_ID,
+            1_000_000_u64.into(),
+            0,
+        );
         stx.world.governance_referenda_mut().insert(
             "rid-unlock".to_owned(),
             GovernanceReferendumRecord {
@@ -41,6 +54,18 @@ fn unlocks_after_expiry_height() {
                 h_end: 0,
                 status: GovernanceReferendumStatus::Closed,
                 mode: iroha_core::state::GovernanceReferendumMode::Plain,
+                plain_context: iroha_core::query::standalone_plain_test_fixture::context(
+                    &stx.gov, 0,
+                ),
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::Decided(
+                        iroha_data_model::governance::conviction::PlainVotingDecisionV1 {
+                            approve: 0,
+                            reject: 0,
+                            abstain: 0,
+                            approved: false,
+                        },
+                    ),
             },
         );
         let mut map = GovernanceLocksForReferendum::default();
@@ -54,7 +79,7 @@ fn unlocks_after_expiry_height() {
                 direction: 0,
                 duration_blocks: 2,
                 custody: GovernanceLockCustody {
-                    escrowed: false,
+                    escrowed: true,
                     asset_definition_id: state.gov.voting_asset_id.clone(),
                     bond_escrow_account: state.gov.bond_escrow_account.clone(),
                     slash_receiver_account: state.gov.slash_receiver_account.clone(),

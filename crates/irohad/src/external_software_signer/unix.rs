@@ -12,10 +12,7 @@ use super::{
         admin_response_digest, payload_digest, qualify_response_digest, scrub, sign_request_digest,
         sign_response_digest,
     },
-    service::{
-        SoftwareSignerServiceV1, native_payload_matches_role, verify_provenance,
-        verify_response_attestation,
-    },
+    service::{SoftwareSignerServiceV1, verify_provenance, verify_response_attestation},
 };
 use crate::runtime_credential::{RuntimeCredentialErrorV1, load_bounded_runtime_credential_v1};
 use iroha_crypto::Signature;
@@ -349,6 +346,22 @@ impl SoftwareSignerClientV1 {
                     .map_err(|_| ExternalSoftwareSignerClientErrorV1::Rejected)?
         {
             return Err(ExternalSoftwareSignerClientErrorV1::Rejected);
+        }
+        if let Some(role) = super::protocol::native_role(self.policy.expected_binding.role) {
+            let builder =
+                iroha_data_model::transaction::TransactionBuilder::decode_payload(payload)
+                    .map_err(|_| ExternalSoftwareSignerClientErrorV1::Rejected)?;
+            if builder.payload().authority()
+                != &iroha_data_model::account::AccountId::new(
+                    self.policy.expected_binding.public_key.clone(),
+                )
+                || !iroha_torii::sorafs::native_transaction_signer::sorafs_native_transaction_payload_matches_role_v1(
+                    role,
+                    builder.payload(),
+                )
+            {
+                return Err(ExternalSoftwareSignerClientErrorV1::Rejected);
+            }
         }
         let mut request = SignRequestV1 {
             binding_digest: self
@@ -977,7 +990,12 @@ fn verify_payload_signature(
                     .map_err(|_| ExternalSoftwareSignerClientErrorV1::Rejected)?;
             if builder.payload().authority()
                 != &iroha_data_model::account::AccountId::new(binding.public_key.clone())
-                || !native_payload_matches_role(binding.role, builder.payload())
+                || !super::protocol::native_role(binding.role).is_some_and(|role| {
+                    iroha_torii::sorafs::native_transaction_signer::sorafs_native_transaction_payload_matches_role_v1(
+                        role,
+                        builder.payload(),
+                    )
+                })
             {
                 return Err(ExternalSoftwareSignerClientErrorV1::Rejected);
             }

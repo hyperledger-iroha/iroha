@@ -276,8 +276,11 @@ registry, juror client, or deployed verifier service.
   signed credential plus fixed-depth private credential and sparse-revocation
   paths. `verify_pop_membership_proof_v1` verifies the signed active root and
   revocation publication, pinned transparent parameter and verifying-key
-  fingerprints, exact expected challenge/context and presentation binding, expiry, replay cache, and
-  cryptographic proof. The retired transcript-digest proof variant and policy
+  fingerprints, the independently supplied `PopMembershipPresentationV1`
+  (exact challenge, verifier context and presentation binding), expiry, replay
+  cache, and cryptographic proof. Provers and verifiers use this same typed
+  invocation context; it does not obtain authority from proof-supplied values.
+  The retired transcript-digest proof variant and policy
   verifier have been removed rather than retained as a compatibility surface.
 - The native SoraFS moderation appeal lifecycle snapshots the exact active
   registry publications at intake, revalidates those immutable historical

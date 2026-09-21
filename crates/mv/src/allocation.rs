@@ -22,6 +22,13 @@ use std::{
 
 use crate::{ReleaseNotification, ReleaseWait};
 
+/// Original-budget owners around the existing charged map engine.
+pub mod map;
+
+mod byte_buffer;
+
+pub use byte_buffer::{ChargedByteBuffer, ChargedByteBufferError};
+
 thread_local! {
     // Scope records live on this thread's stack; registration allocates nothing.
     static REFUND_SCOPES: Cell<*const RefundScope> = const { Cell::new(ptr::null()) };
@@ -95,6 +102,40 @@ impl Pool {
     }
 }
 
+/// Borrowed proof that one original pool defers refunds on this thread.
+///
+/// Only the budget's synchronous callback creates this token. Physical owners
+/// which borrow it cannot escape the callback or move to another thread.
+/// Detached owners may leave after their physical guards have been released.
+///
+/// ```compile_fail
+/// let budget = mv::allocation::AllocationBudget::new(1024);
+/// let escaped = budget.with_deferred_refund_notifications(|scope| scope);
+/// drop(escaped);
+/// ```
+///
+/// The scope cannot be used from a different thread:
+/// ```compile_fail
+/// let budget = mv::allocation::AllocationBudget::new(1024);
+/// budget.with_deferred_refund_notifications(|scope| {
+///     std::thread::scope(|threads| {
+///         threads.spawn(move || { std::hint::black_box(scope); });
+///     });
+/// });
+/// ```
+pub struct AllocationScope<'scope> {
+    budget: &'scope AllocationBudget,
+    // Refund deferral is thread-local. Even a scoped thread cannot borrow this
+    // token to acquire writers whose refunds would notify on another thread.
+    _thread: std::marker::PhantomData<*mut ()>,
+}
+
+impl AllocationScope<'_> {
+    pub(crate) fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        Arc::ptr_eq(&self.budget.pool, &budget.pool)
+    }
+}
+
 /// One immutable finite allocation limit shared by its outstanding owners.
 ///
 /// Clones refer to the same pool. Dropping the budget handle does not invalidate
@@ -106,6 +147,12 @@ pub struct AllocationBudget {
 }
 
 impl AllocationBudget {
+    // Equality of actual retained pool owners, never a caller-supplied digest
+    // or the address of a movable AllocationBudget handle.
+    fn same_pool(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.pool, &other.pool)
+    }
+
     /// Construct a pool with an explicit finite requested-byte limit.
     pub fn new(limit_bytes: usize) -> Self {
         Self {
@@ -139,9 +186,13 @@ impl AllocationBudget {
     /// Acquire and release every physical guard inside the closure. Do not keep
     /// an enclosing guard held or return one from the closure: the budget cannot
     /// infer lock ownership. Detached allocation owners may escape after their
-    /// physical guards have been released. This API exposes no movable scope
-    /// guard and does not make an asynchronous future execute inside the scope.
-    pub fn with_deferred_refund_notifications<R>(&self, operation: impl FnOnce() -> R) -> R {
+    /// physical guards have been released. The callback receives a borrowed,
+    /// thread-bound token for APIs that enforce this lifetime in their physical
+    /// owner types. This does not make an async future execute inside the scope.
+    pub fn with_deferred_refund_notifications<R>(
+        &self,
+        operation: impl for<'scope> FnOnce(&'scope AllocationScope<'scope>) -> R,
+    ) -> R {
         let scope = RefundScope {
             pool: Arc::as_ptr(&self.pool),
             previous: REFUND_SCOPES.with(Cell::get),
@@ -152,7 +203,11 @@ impl AllocationBudget {
             pool: &self.pool,
         };
         REFUND_SCOPES.with(|head| head.set(ptr::from_ref(&scope)));
-        let output = operation();
+        let capability = AllocationScope {
+            budget: self,
+            _thread: std::marker::PhantomData,
+        };
+        let output = operation(&capability);
         drop(entered);
         output
     }

@@ -257,7 +257,7 @@ fn broker_server_rejects_active_locked_socket_without_unlinking_it() {
 }
 #[test]
 fn broker_server_recovers_exact_stale_socket_after_unclean_exit() {
-    let directory = tempfile::tempdir().expect("create stale broker directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden stale broker directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -299,7 +299,7 @@ fn broker_server_recovers_exact_stale_socket_after_unclean_exit() {
 }
 #[test]
 fn broker_server_preserves_non_socket_symlink_and_wrong_mode_entries() {
-    let directory = tempfile::tempdir().expect("create rejected endpoint directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden rejected endpoint directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -357,7 +357,7 @@ fn broker_server_preserves_non_socket_symlink_and_wrong_mode_entries() {
 #[test]
 fn stale_socket_recovery_detects_identity_substitution_before_unlink() {
     use std::cell::RefCell;
-    let directory = tempfile::tempdir().expect("create recovery race directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden recovery race directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -397,7 +397,7 @@ fn stale_socket_recovery_detects_identity_substitution_before_unlink() {
 #[test]
 fn orderly_cleanup_quarantines_before_detecting_identity_substitution() {
     use std::cell::RefCell;
-    let directory = tempfile::tempdir().expect("create cleanup race directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden cleanup race directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -436,7 +436,7 @@ fn orderly_cleanup_quarantines_before_detecting_identity_substitution() {
 }
 #[test]
 fn broker_endpoint_rejects_socket_hardlink_alias_without_removal() {
-    let directory = tempfile::tempdir().expect("create hardlink regression directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden hardlink regression directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -470,7 +470,7 @@ fn broker_endpoint_rejects_socket_hardlink_alias_without_removal() {
 }
 #[test]
 fn broker_server_readiness_follows_qualification_and_secure_bind() {
-    let directory = tempfile::tempdir().expect("create broker server directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -533,7 +533,7 @@ fn broker_server_readiness_follows_qualification_and_secure_bind() {
 }
 #[test]
 fn broker_server_readiness_failure_stops_before_accept_and_cleans_endpoint() {
-    let directory = tempfile::tempdir().expect("create failed-readiness server directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden failed-readiness server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -576,7 +576,7 @@ fn broker_server_readiness_failure_stops_before_accept_and_cleans_endpoint() {
 }
 #[test]
 fn unauthorized_peer_rejection_is_connection_local() {
-    let directory = tempfile::tempdir().expect("create peer-authorization server directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden peer-authorization server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -643,7 +643,7 @@ fn unauthorized_peer_rejection_is_connection_local() {
 }
 #[test]
 fn broker_server_graceful_cleanup_allows_exact_endpoint_rebind() {
-    let directory = tempfile::tempdir().expect("create broker server directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -754,7 +754,7 @@ fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalifica
             Ok([0xA5; 64])
         }
     }
-    let directory = tempfile::tempdir().expect("create broker server directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -815,7 +815,7 @@ fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalifica
 }
 #[test]
 fn broker_server_idle_loop_detects_endpoint_substitution_and_preserves_replacement() {
-    let directory = tempfile::tempdir().expect("create broker server directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -842,11 +842,17 @@ fn broker_server_idle_loop_detects_endpoint_substitution_and_preserves_replaceme
         .recv_timeout(Duration::from_secs(2))
         .expect("broker becomes ready before substitution");
     let original_identity = endpoint_identity(&policy).expect("inspect original endpoint");
-    fs::remove_file(&path).expect("unlink original broker endpoint");
-    let replacement = UnixListener::bind(&path).expect("bind substituted endpoint inode");
-    set_socket_mode(&path).expect("harden substituted endpoint");
-    let replacement_identity = endpoint_identity(&policy).expect("inspect substituted endpoint");
+    let replacement_path = directory.path().join("replacement.sock");
+    let replacement =
+        UnixListener::bind(&replacement_path).expect("bind substituted endpoint inode");
+    set_socket_mode(&replacement_path).expect("harden substituted endpoint");
+    let replacement_identity =
+        endpoint_identity(&EndpointPolicy::for_test(replacement_path.clone()))
+            .expect("inspect substituted endpoint");
     assert_ne!(replacement_identity, original_identity);
+    // Publish the already hardened replacement atomically. Unlink-then-bind would instead
+    // allow the idle loop and cleanup to finish during a legitimate missing-endpoint state.
+    fs::rename(&replacement_path, &path).expect("atomically substitute broker endpoint");
     assert_eq!(
         result_receiver
             .recv_timeout(Duration::from_secs(2))
@@ -864,8 +870,49 @@ fn broker_server_idle_loop_detects_endpoint_substitution_and_preserves_replaceme
     fs::remove_file(&path).expect("remove test replacement endpoint");
 }
 #[test]
+fn broker_server_idle_loop_detects_endpoint_removal_and_shuts_down() {
+    let directory = new_broker_socket_test_directory();
+    let path = directory.path().join("runtime-provider-broker-v1.sock");
+    let policy = BrokerTestEndpoint::for_test(path.clone());
+    let server_policy = policy.clone();
+    let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
+    let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+    let server_lifecycle = Arc::clone(&lifecycle);
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+    let (result_sender, result_receiver) = mpsc::sync_channel(1);
+    let server = thread::spawn(move || {
+        let result = serve_test_process_with_lifecycle(
+            &bindings,
+            RuntimeProviderBrokerBackendsV1::new(),
+            &server_policy,
+            server_lifecycle,
+            move || ready_sender.send(()).expect("publish broker readiness"),
+        );
+        result_sender
+            .send(result)
+            .expect("publish removed endpoint result");
+    });
+    ready_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("broker becomes ready before removal");
+    endpoint_identity(&policy).expect("inspect original endpoint before removal");
+    fs::remove_file(&path).expect("remove original broker endpoint without replacement");
+    assert_eq!(
+        result_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("idle broker detects missing endpoint"),
+        Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)
+    );
+    server.join().expect("join broker with removed endpoint");
+    assert!(lifecycle.shutdown_requested());
+    assert_eq!(
+        fs::symlink_metadata(&path).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+}
+#[test]
 fn broker_server_callback_panic_still_cleans_bound_endpoint() {
-    let directory = tempfile::tempdir().expect("create broker server directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -924,7 +971,7 @@ fn broker_server_requalifies_complete_catalog_immediately_before_ready() {
             Ok([0xA5; 64])
         }
     }
-    let directory = tempfile::tempdir().expect("create broker server directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -992,7 +1039,7 @@ fn broker_server_preserves_requalification_failure_during_shutdown() {
             Ok([0xA5; 64])
         }
     }
-    let directory = tempfile::tempdir().expect("create broker server directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -1292,7 +1339,7 @@ fn source_fetch_future_obeys_configured_absolute_timeout() {
 }
 #[test]
 fn broker_server_pre_requested_shutdown_skips_qualification_and_bind() {
-    let directory = tempfile::tempdir().expect("create broker server directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -2285,7 +2332,7 @@ fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_alloc
         revision: Some(5),
         policy_digest: Some([0xB1; 32]),
         bootle_lantern_issuance_bindings: None,
-        stream_token_hardware_binding: None,
+        stream_token_signer_binding: None,
         stream_token_gateway_admission_qualification: None,
         stream_token_gateway_admission_max_pending: None,
         stream_token_gateway_admission_max_tracked_tokens: None,
@@ -2492,9 +2539,9 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
                 governance_request_ingress_binding_to_wire(ingress_fixture(TEST_SIGNER_KEY)),
             );
         }),
-        ("foreign hardware role", |binding| {
-            binding.stream_token_hardware_binding =
-                token_signer_binding().stream_token_hardware_binding;
+        ("foreign signer role", |binding| {
+            binding.stream_token_signer_binding =
+                token_signer_binding().stream_token_signer_binding;
         }),
         ("foreign evidence role", |binding| {
             binding.evidence_viewer_grant_ttl_ms = Some(1_000);
@@ -2523,7 +2570,7 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
         .with_stream_token_gateway_admission(Arc::new(QualificationOnlyProvider { qualification }));
     validate_exact_backend_set(std::slice::from_ref(&binding), &backends)
         .expect("exact stream-token gateway backend set");
-    let observation = make_server_observation(&binding, &backends)
+    let observation = make_server_observation(network_id(), &binding, &backends)
         .expect("observe exact stream-token gateway backend");
     let state = BrokerServerStateV1 {
         decode_pool: new_test_process_pool(),
@@ -2568,24 +2615,13 @@ fn macos_socket_device_identity_preserves_signed_dev_t_bits() {
         "valid high-bit macOS device identities must not be rejected"
     );
 }
-fn broker_socket_test_directory() -> io::Result<tempfile::TempDir> {
-    // A shared checkout or operator-selected TMPDIR may not support Unix socket
-    // permissions (for example, a macOS directory mounted into a Linux guest).
-    // Both real and fake brokers need the native socket filesystem. Canonical
-    // /tmp also keeps absolute paths below macOS's 104-byte sun_path limit.
-    let root = fs::canonicalize("/tmp")?;
-    tempfile::Builder::new()
-        .prefix(".iroha-rpb-")
-        .permissions(fs::Permissions::from_mode(0o700))
-        .tempdir_in(root)
-}
 fn bind_fake_broker() -> (
     tempfile::TempDir,
     std::path::PathBuf,
     BrokerTestEndpoint,
     BrokerTestListener,
 ) {
-    let directory = broker_socket_test_directory().expect("create short fake broker directory");
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden fake broker directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
@@ -2594,6 +2630,116 @@ fn bind_fake_broker() -> (
     let policy = BrokerTestEndpoint::for_test(path.clone());
     let listener = policy.fake_listener(listener);
     (directory, path, policy, listener)
+}
+
+#[test]
+fn broker_socket_fixture_is_private_and_works_from_deep_cwd_and_tmpdir() {
+    use std::os::unix::{
+        ffi::OsStrExt as _,
+        fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _},
+    };
+
+    const CHILD: &str = "IROHA_BROKER_SHORT_SOCKET_FIXTURE_CHILD";
+    const TEST: &str = "runtime_provider_broker::protocol::platform::tests::broker_socket_fixture_is_private_and_works_from_deep_cwd_and_tmpdir";
+    if let Some(marker) = std::env::var_os(CHILD) {
+        assert_eq!(marker, "1");
+        let cwd = std::env::current_dir().expect("child working directory");
+        assert!(cwd.as_os_str().as_bytes().len() > 104);
+        assert_eq!(std::env::var_os("TMPDIR"), Some(cwd.into_os_string()));
+        let fixtures = [bind_fake_broker(), bind_fake_broker()];
+        assert_ne!(fixtures[0].0.path(), fixtures[1].0.path());
+        for (directory, path, policy, listener) in fixtures {
+            assert!(path.is_absolute());
+            assert!(path.as_os_str().as_bytes().len() < 104);
+            assert_eq!(directory.path().canonicalize().unwrap(), directory.path());
+            let parent = fs::symlink_metadata(directory.path()).unwrap();
+            assert!(parent.is_dir() && !parent.file_type().is_symlink());
+            assert_eq!(parent.permissions().mode() & 0o7777, 0o700);
+            assert_eq!(parent.uid(), policy.expected_service_uid);
+            let socket = fs::symlink_metadata(&path).unwrap();
+            assert!(socket.file_type().is_socket() && !socket.file_type().is_symlink());
+            assert_eq!(
+                socket.permissions().mode() & 0o7777,
+                STOCK_BROKER_SOCKET_MODE_V1
+            );
+            assert_eq!(socket.uid(), policy.expected_service_uid);
+            assert_eq!(socket.nlink(), 1);
+            let identity = endpoint_identity(&policy).expect("unchanged endpoint policy");
+            let client =
+                connect_verified(&policy).expect("connect through peer and endpoint checks");
+            let (accepted, _) = listener.accept().expect("accept actual fixture connection");
+            assert_eq!(endpoint_identity(&policy), Ok(identity));
+            drop(accepted);
+            drop(client);
+            drop(listener);
+            let directory_path = directory.path().to_owned();
+            directory.close().expect("remove owned fixture directory");
+            assert_eq!(
+                fs::symlink_metadata(&directory_path).unwrap_err().kind(),
+                io::ErrorKind::NotFound
+            );
+            assert_eq!(
+                fs::symlink_metadata(&path).unwrap_err().kind(),
+                io::ErrorKind::NotFound
+            );
+        }
+        return;
+    }
+
+    let directory = new_broker_socket_test_directory();
+    let deep = directory.path().join("deep-checkout-".repeat(10));
+    fs::create_dir(&deep).expect("create isolated deep child working directory");
+    fs::set_permissions(&deep, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(deep.as_os_str().as_bytes().len() > 104);
+    let output =
+        std::process::Command::new(std::env::current_exe().expect("current test executable"))
+            .args([
+                "--exact",
+                TEST,
+                "--nocapture",
+                "--test-threads=1",
+                "--color",
+                "never",
+            ])
+            .current_dir(&deep)
+            .env("TMPDIR", &deep)
+            .env(CHILD, "1")
+            .output()
+            .expect("run isolated deep-directory fixture regression");
+    let stdout = String::from_utf8(output.stdout).expect("child test output");
+    assert!(
+        output.status.success(),
+        "child fixture failed: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| *line == "running 1 test")
+            .count(),
+        1
+    );
+    let success = format!("test {TEST} ... ok");
+    assert_eq!(stdout.lines().filter(|line| *line == success).count(), 1);
+    let summaries = stdout
+        .lines()
+        .filter(|line| line.starts_with("test result:"))
+        .collect::<Vec<_>>();
+    assert_eq!(summaries.len(), 1);
+    let summary = summaries[0]
+        .strip_prefix("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; ")
+        .expect("exact successful child counts");
+    let (filtered, elapsed) = summary
+        .split_once(" filtered out; finished in ")
+        .expect("complete child summary");
+    assert!(!filtered.is_empty() && filtered.bytes().all(|byte| byte.is_ascii_digit()));
+    let elapsed = elapsed.strip_suffix('s').expect("child summary duration");
+    let elapsed = elapsed.parse::<f64>().expect("numeric child duration");
+    assert!(elapsed.is_finite() && elapsed >= 0.0);
+    assert_eq!(
+        stdout.lines().rev().find(|line| !line.is_empty()),
+        Some(summaries[0])
+    );
 }
 fn hold_instance_lock(policy: &BrokerTestEndpoint) -> endpoint_recovery::InstanceLockGuard {
     let parent = fs::File::open(policy.path.parent().expect("broker endpoint parent"))

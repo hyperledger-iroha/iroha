@@ -1,3 +1,4 @@
+import { parseGovernanceReferendumResponseV1, parseGovernanceTallyResponseV1, parseGovernanceLocksResponseV1 } from "./governancePlainV1.js";
 import { createSorafsAliasResponseNormalizers } from "./sorafsAliasResponses.js";
 import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
@@ -7556,9 +7557,10 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch a governance referendum (`GET /v1/gov/referenda/{id}`).
+   * Fetch an exact governance referendum and its required frozen context/result.
+   * Unsigned integers above Number.MAX_SAFE_INTEGER are returned as bigint.
    * @param {string} referendumId
-   * @returns {Promise<Record<string, unknown> | null>}
+   * @returns {Promise<ToriiGovernanceReferendumResponse | null>}
    */
   async getGovernanceReferendum(referendumId, options) {
     const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
@@ -7575,11 +7577,13 @@ export class ToriiClient {
       return null;
     }
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response, SCCP_JSON_RESPONSE_MAX_BYTES, "governance referendum response", { signal },
+    );
     if (!payload) {
       rejectError("governance referendum endpoint returned no payload");
     }
-    return payload;
+    return parseGovernanceReferendumResponseV1(payload);
   }
 
   /**
@@ -7592,13 +7596,14 @@ export class ToriiClient {
     if (!payload) {
       return { found: false, referendum: null };
     }
-    return parseGovernanceReferendumResult(payload);
+    return { found: payload.found, referendum: payload.found ? payload.referendum : null };
   }
 
   /**
-   * Fetch referendum tally (`GET /v1/gov/tally/{id}`).
+   * Fetch exact referendum counts and their authoritative evaluated block coordinates.
+   * Unsigned integers above Number.MAX_SAFE_INTEGER are returned as bigint.
    * @param {string} referendumId
-   * @returns {Promise<Record<string, unknown> | null>}
+   * @returns {Promise<ToriiGovernanceTally | null>}
    */
   async getGovernanceTally(referendumId, options) {
     const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
@@ -7615,11 +7620,13 @@ export class ToriiClient {
     if (response.status === 404) {
       return null;
     }
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response, SCCP_JSON_RESPONSE_MAX_BYTES, "governance tally response", { signal },
+    );
     if (!payload) {
       rejectError("governance tally endpoint returned no payload");
     }
-    return payload;
+    return parseGovernanceTallyResponseV1(payload, normalized);
   }
 
   /**
@@ -7633,14 +7640,15 @@ export class ToriiClient {
     if (!payload) {
       return createEmptyGovernanceTallyResult(normalizedId);
     }
-    const tally = parseGovernanceTally(payload);
+    const tally = payload;
     return { found: true, referendum_id: tally.referendum_id, tally };
   }
 
   /**
-   * Fetch referendum locks (`GET /v1/gov/locks/{id}`).
+   * Fetch the exact nested Core lock corpus, including required duration and custody.
+   * Unsigned integers above Number.MAX_SAFE_INTEGER are returned as bigint.
    * @param {string} referendumId
-   * @returns {Promise<Record<string, unknown> | null>}
+   * @returns {Promise<ToriiGovernanceLocksResponse | null>}
    */
   async getGovernanceLocks(referendumId, options) {
     const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
@@ -7657,11 +7665,13 @@ export class ToriiClient {
     if (response.status === 404) {
       return null;
     }
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response, SCCP_JSON_RESPONSE_MAX_BYTES, "governance locks response", { signal },
+    );
     if (!payload) {
       rejectError("governance locks endpoint returned no payload");
     }
-    return payload;
+    return parseGovernanceLocksResponseV1(payload, normalized);
   }
 
   /**
@@ -7675,7 +7685,8 @@ export class ToriiClient {
     if (!payload) {
       return createEmptyGovernanceLocksResult(normalizedId);
     }
-    return parseGovernanceLocksResult(payload);
+    return { found: payload.found, referendum_id: payload.referendum_id,
+      locks: payload.found ? payload.locks.locks : {} };
   }
 
   /**
@@ -16368,141 +16379,12 @@ function requireExactGovernanceProposalRecord(payload, fields, context) {
   return record;
 }
 
-function parseGovernanceReferendumResult(payload) {
-  const record = ensureRecord(payload, "governance referendum payload");
-  if (typeof record.found !== "boolean") {
-    rejectType("governance referendum payload missing bool `found` field");
-  }
-  let referendum = null;
-  if (record.referendum != null) {
-    if (!isPlainObject(record.referendum)) {
-      rejectType("governance referendum payload `referendum` must be an object");
-    }
-    referendum = { ...record.referendum };
-  }
-  return { found: record.found, referendum };
-}
-
-function parseGovernanceTally(payload) {
-  const record = ensureRecord(payload, "governance tally payload");
-  const referendumId = requireNonEmptyString(
-    record.referendum_id,
-    "governance.tally.referendum_id",
-  );
-  return {
-    referendum_id: referendumId,
-    approve: coerceInteger(record.approve ?? 0, "governance.tally.approve"),
-    reject: coerceInteger(record.reject ?? 0, "governance.tally.reject"),
-    abstain: coerceInteger(record.abstain ?? 0, "governance.tally.abstain"),
-  };
-}
-
 function createEmptyGovernanceTallyResult(referendumId) {
-  return {
-    found: false,
-    referendum_id: requireNonEmptyString(
-      referendumId,
-      "governance tally referendum_id",
-    ),
-    tally: null,
-  };
+  return { found: false, referendum_id: referendumId, tally: null };
 }
 
 function createEmptyGovernanceLocksResult(referendumId) {
-  return {
-    found: false,
-    referendum_id: requireNonEmptyString(
-      referendumId,
-      "governance locks referendum_id",
-    ),
-    locks: {},
-  };
-}
-
-function parseGovernanceLocksResult(payload) {
-  const record = ensureRecord(payload, "governance locks payload");
-  if (typeof record.found !== "boolean") {
-    rejectType("governance locks payload missing bool `found` field");
-  }
-  const referendumId = requireNonEmptyString(
-    record.referendum_id,
-    "governance.locks.referendum_id",
-  );
-  const locksPayload = record.locks ?? {};
-  if (!isPlainObject(locksPayload)) {
-    rejectType("governance locks payload `locks` must be an object");
-  }
-  const locks = {};
-  for (const [accountId, entry] of Object.entries(locksPayload)) {
-    if (typeof accountId !== "string" || !accountId) {
-      rejectType("governance locks keys must be non-empty account identifiers");
-    }
-    locks[accountId] = parseGovernanceLockRecord(
-      ensureRecord(entry, `governance.locks["${accountId}"]`),
-      `governance.locks["${accountId}"]`,
-    );
-  }
-  return {
-    found: record.found,
-    referendum_id: referendumId,
-    locks,
-  };
-}
-
-function parseGovernanceLockRecord(payload, context) {
-  const owner = requireNonEmptyString(payload.owner, `${context}.owner`);
-  const amount = requireCanonicalQuantity(payload.amount, `${context}.amount`);
-  const slashed = requireCanonicalQuantity(payload.slashed, `${context}.slashed`);
-  const expiryHeight = coerceInteger(payload.expiry_height, `${context}.expiry_height`);
-  const direction = coerceInteger(payload.direction, `${context}.direction`);
-  if (direction < 0 || direction > 255) {
-    rejectRange(`${context}.direction must be within 0-255`);
-  }
-  const durationBlocks = coerceInteger(payload.duration_blocks ?? 0, `${context}.duration_blocks`);
-  const custody = parseGovernanceLockCustody(payload.custody, `${context}.custody`);
-  return {
-    owner,
-    amount,
-    slashed,
-    expiry_height: expiryHeight,
-    direction,
-    duration_blocks: durationBlocks,
-    custody,
-  };
-}
-
-const GOVERNANCE_LOCK_CUSTODY_KEYS = Object.freeze([
-  "escrowed",
-  "asset_definition_id",
-  "bond_escrow_account",
-  "slash_receiver_account",
-]);
-
-function parseGovernanceLockCustody(payload, context) {
-  if (payload === null) return null;
-  const custody = exactEnumerableDataRecord(
-    payload,
-    GOVERNANCE_LOCK_CUSTODY_KEYS,
-    context,
-  );
-  if (typeof custody.escrowed !== "boolean") {
-    rejectType(`${context}.escrowed must be a boolean`);
-  }
-  return {
-    escrowed: custody.escrowed,
-    asset_definition_id: requireExactNonEmptyString(
-      custody.asset_definition_id,
-      `${context}.asset_definition_id`,
-    ),
-    bond_escrow_account: requireExactNonEmptyString(
-      custody.bond_escrow_account,
-      `${context}.bond_escrow_account`,
-    ),
-    slash_receiver_account: requireExactNonEmptyString(
-      custody.slash_receiver_account,
-      `${context}.slash_receiver_account`,
-    ),
-  };
+  return { found: false, referendum_id: referendumId, locks: {} };
 }
 
 function parseGovernanceUnlockStats(payload) {

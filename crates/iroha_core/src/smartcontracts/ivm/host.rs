@@ -137,6 +137,7 @@ const AXT_PROOF_CACHE_MISS: &str = "miss";
 const AXT_PROOF_CACHE_EXPIRED: &str = "expired";
 const AXT_PROOF_CACHE_CLEARED: &str = "cleared";
 const AXT_PROOF_CACHE_REJECT: &str = "reject";
+include!("host/contract_state_namespace.rs");
 // `World::smart_contract_state` also carries native consensus records.  They must
 // never be reachable through the generic contract state syscalls: a forged or
 // deleted merge marker can make globally applied execution appear absent, fee
@@ -146,10 +147,12 @@ const AXT_PROOF_CACHE_REJECT: &str = "reject";
 // physical namespace directly.
 //
 // Keep these lists in sync with the native key constructors in `state.rs`,
-// `tx.rs`, `da/quota.rs`, and `query/stream_token_custody.rs`. Entries name a
+// `tx.rs`, `da/quota.rs`, and the native custody query owners. Entries name a
 // canonical root or include its delimiter. Matching reserves only the exact
 // root and `_`/`/` descendants so similarly named user keys remain available.
 const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
+    "sorafs_final_promotion_authority_v1",
+    "sorafs_final_promotion_account_custody_v1",
     "sorafs_stream_token_custody_v1",
     "sc/",
     "da_ingest_quota_v1/",
@@ -5455,49 +5458,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 key: key.to_string(),
                 value: 1,
             });
-    }
-    fn contract_state_key_matches_namespace(key: &str, prefix: &str) -> bool {
-        if let Some(root) = prefix
-            .strip_suffix('/')
-            .or_else(|| prefix.strip_suffix('_'))
-        {
-            return key == root || key.starts_with(prefix);
-        }
-        key == prefix
-            || key
-                .strip_prefix(prefix)
-                .is_some_and(|suffix| suffix.starts_with('_') || suffix.starts_with('/'))
-    }
-    fn contract_state_namespace_access(key: &str) -> ContractStateNamespaceAccess {
-        if OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES
-            .iter()
-            .any(|prefix| Self::contract_state_key_matches_namespace(key, prefix))
-        {
-            ContractStateNamespaceAccess::OpaqueSystem
-        } else if READ_ONLY_SYSTEM_CONTRACT_STATE_PREFIXES
-            .iter()
-            .any(|prefix| Self::contract_state_key_matches_namespace(key, prefix))
-        {
-            ContractStateNamespaceAccess::ReadOnlySystem
-        } else {
-            ContractStateNamespaceAccess::User
-        }
-    }
-    fn ensure_contract_state_read_allowed(path: &StatePath) -> Result<(), ivm::VMError> {
-        if Self::contract_state_namespace_access(path.as_ref())
-            == ContractStateNamespaceAccess::OpaqueSystem
-        {
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        Ok(())
-    }
-    fn ensure_contract_state_write_allowed(path: &StatePath) -> Result<(), ivm::VMError> {
-        if Self::contract_state_namespace_access(path.as_ref())
-            != ContractStateNamespaceAccess::User
-        {
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        Ok(())
     }
     fn scoped_durable_state_path(
         &self,
@@ -24926,59 +24886,6 @@ seiyaku DurableOwner {
                 "case {backend} must be rejected before reaching IVM verification"
             );
         }
-    }
-    #[test]
-    fn state_syscall_works_without_access_logging() {
-        let authority: AccountId = fixture_account("alice");
-        let mut host = local_contract_host(authority);
-        let mut vm = IVM::new(10_000);
-        let path: StatePath = "counter".parse().unwrap();
-        let path_ptr = store_state_path_tlv(&mut vm, &path);
-        let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
-        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
-        vm.set_register(10, path_ptr);
-        vm.set_register(11, value_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Ok(test_state_value_gas(&path, value_bytes.len())),
-            "STATE_SET should succeed without access logging"
-        );
-        vm.set_register(10, path_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(test_state_value_gas(&path, value_bytes.len())),
-            "STATE_GET should succeed without access logging"
-        );
-        let out_ptr = vm.register(10);
-        let tlv = vm.memory.validate_tlv(out_ptr).expect("state get tlv");
-        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
-        assert_eq!(value, 1);
-    }
-    #[test]
-    fn state_set_budget_exhaustion_traps_without_staging_a_write() {
-        let authority: AccountId = fixture_account("alice");
-        let mut host = local_contract_host(authority);
-        host.restrict_output_limits(HostOutputLimits::new(0, u64::MAX));
-        let mut vm = IVM::new(10_000);
-        let path: StatePath = "counter".parse().expect("valid state path");
-        let path_ptr = store_state_path_tlv(&mut vm, &path);
-        let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
-        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
-        vm.set_register(10, path_ptr);
-        vm.set_register(11, value_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Err(ivm::VMError::HostOutputBudgetExceeded {
-                resource: ivm::HostOutputResource::Items,
-                attempted: 1,
-                limit: 0,
-            })
-        );
-        assert!(
-            host.durable_state_overlay.is_empty(),
-            "a rejected durable write must not be staged"
-        );
     }
     include!("host/contract_state_namespace_tests.rs");
     include!("host/stream_token_custody_namespace_tests.rs");

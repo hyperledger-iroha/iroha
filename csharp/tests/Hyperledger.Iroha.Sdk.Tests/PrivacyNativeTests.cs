@@ -336,6 +336,30 @@ public sealed class PrivacyNativeTests
     }
 
     [Fact]
+    public async Task NativeArchivesRoundTripOnOrdinaryThreadPoolWorkers()
+    {
+        await Task.Run(() =>
+        {
+            Assert.True(Thread.CurrentThread.IsThreadPoolThread);
+            Assert.True(PrivacyNative.IsAvailable());
+            var catalog = PrivacyNative.CompiledProfileCatalogV1().NoritoBytes;
+            var fixture = PrivacyNative.Exact12FixtureBundleV1().NoritoBytes;
+            Assert.Equal(
+                PrivacyCompiledProfileCatalogValidationStatusV1.Valid,
+                PrivacyNative.ValidateCompiledProfileCatalogV1(catalog));
+            Assert.Equal(
+                PrivacyExact12FixtureValidationStatusV1.Valid,
+                PrivacyNative.ValidateExact12FixtureBundleV1(fixture));
+            Assert.NotEqual(
+                PrivacyExact12FixtureValidationStatusV1.Valid,
+                PrivacyNative.ValidateExact12FixtureBundleV1([.. fixture, 0]));
+            Assert.NotEqual(
+                PrivacyExact12CapabilityManifestValidationStatusV1.Valid,
+                PrivacyNative.ValidateExact12CapabilityManifestV1(fixture));
+        }, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public void RetiredGenericProofAndCapabilitySurfacesAreAbsent()
     {
         var privacyType = typeof(PrivacyNative);

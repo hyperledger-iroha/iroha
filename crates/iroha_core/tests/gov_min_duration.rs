@@ -44,6 +44,17 @@ fn plain_ballot_rejected_when_duration_below_min() {
     Grant::account_permission(permission, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant exact ballot permission");
+    stx.world.governance_referenda_mut().insert(
+        "rid-min-dur".into(),
+        iroha_core::state::GovernanceReferendumRecord {
+            h_start: 1,
+            h_end: 2,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
+            mode: iroha_core::state::GovernanceReferendumMode::Plain,
+            plain_context: iroha_core::query::standalone_plain_test_fixture::context(&stx.gov, 0),
+            plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
+        },
+    );
     let instr = CastPlainBallot {
         referendum_id: "rid-min-dur".to_string(),
         direction: 0,

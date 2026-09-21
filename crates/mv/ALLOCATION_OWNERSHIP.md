@@ -154,7 +154,7 @@ follow physical writer and publication-lock release, including unwind.
 
 World currently instantiates Untracked Storage. Native mutex/runtime and
 release notification storage remain outside constructor admission. Real
-model payload policies, detached capture, mutable access, State generation-refusal
+model payload policies, mutable access, State generation-refusal
 propagation and aggregate execution/restore work admission remain unfinished.
 Sorted touched-key insertion shifts its suffix and still needs a bounded work policy. Borrowed map iterators and ranges retain bounded traversal
 state inline and make no heap allocations. Final-tree
@@ -349,3 +349,63 @@ without entering the epoch collector. Opaque unlinked allocations remain owned
 through both physical writers and pair identity rotation; their retirement runs
 after unlock and retains the original reader grace period. This removes collector
 callbacks from the transfer interval, but does not admit collector bookkeeping.
+
+## Scoped detached Storage
+
+Prepaid capture moves the same admitted current/undo nodes, next publication
+identity and callback result out of the synchronous block scope. Both physical
+writers release before either native release signal runs. No payload clone or
+new capture allocation occurs. Original nodes and publication identities keep
+their own charges after the source Storage is destroyed.
+
+Joint reattachment requires the original pool's borrowed `AllocationScope`.
+That token is neither Send nor Sync and cannot leave the higher-ranked budget
+callback. Prepared owners borrow it through publication, abort, drop and unwind;
+a detached journal may leave after both physical writers have released. Same-pool
+budget clones authenticate; another pool with equal limits does not. This closes
+Storage's owned handoff, while concrete World/resource integration remains open.
+
+Block opening, execution and prepared-pair abandonment share one original writer
+owner, established immediately after both acquisitions. Reset, replacement and
+admitted snapshot copying retain this owner through every fallible operation. It
+destroys both physical owners before either native notification, including when
+private payload destruction unwinds. Both actual writer poison states are read
+after destruction and retained before callbacks start. A cleanup or callback
+panic does not stand in for a physical mutex poison verdict. Pool refunds remain
+inside the original enclosing scope. Child transactions borrow this pair's same
+original checkpoints; block publication and capture consume it once. Partial
+acquisition still reports the actual held writer. Whole-State cleanup and complete
+aggregate physical preparation remain separate required boundaries.
+
+The canonical release implementation lives in Concread. Native active-reader
+mutex observations identify that physical blocker independently of the writer.
+Published retirement retains the same notification state by reference count after
+both locks release; its deferred signal allocates no new source. Notification
+construction and pending-future registration remain outside native constructor
+admission. Complete aggregate abort and callback ordering remain required.
+
+Detached preparation now retains native prepared commits and the identity guard.
+Successful publication transfers those owners without another lock acquisition
+and returns original cleanup plus reservations. Prepaid published cleanup retains
+the same borrowed scope as physical preparation. World keeps this cleanup in its
+original prepared boxes, and State retains the resulting field vector and runtime
+cleanup through its physical fences. See the [component boundary record](../../docs/history/2026-09-21/prepared-component-retirement.md);
+whole-State abort and effect-lock preparation remain open.
+
+
+Prepared abort returns the original detached current/undo journal together with
+its original reader, writer and identity notifications and installation owner.
+An aggregate must retain the returned cleanup until every participant and outer
+fence is unlocked. Prepaid abort cleanup borrows the original allocation scope;
+only the detached journal may leave that scope. Returning the journal alone by
+selecting the first tuple member intentionally finishes cleanup at that local
+boundary and is unsuitable while an enclosing aggregate still holds writers.
+
+Preparation refusal returns original journal, error and cleanup separately. No
+installation reservation is refunded during a normal failed return. Original
+identity probes and acquired writer/reader release owners remain in cleanup until
+the aggregate unlocks. The prepaid refusal wrapper borrows the original pool scope;
+a compile-fail control prevents that cleanup from escaping, while the original
+detached journal may leave. Cleanup uses fixed optional owner slots, not a heap
+queue or fabricated owner for an unacquired Busy lock. Native stale-map rejection
+and panic propagation remain separate boundaries requiring original ownership.

@@ -517,7 +517,7 @@ impl KagemushaMintFinalityLocalAuthorityV1 {
         self.epoch.as_ref()
     }
 
-    /// Borrow the non-exportable local signer.
+    /// Borrow the local signer without exposing its private seed.
     #[must_use]
     pub const fn signer(&self) -> &KagemushaMintFinalitySignerV1 {
         &self.signer

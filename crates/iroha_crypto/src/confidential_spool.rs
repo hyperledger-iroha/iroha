@@ -307,6 +307,49 @@ impl ConfidentialSpoolLayoutV1 {
         8
     }
 
+    /// Return the retained named allocation bytes for one writer or snapshot.
+    ///
+    /// The larger concrete handle includes its file descriptor, layout and owning
+    /// pointer; the separately allocated zeroizing key payload is added once.
+    /// This excludes operating-system handle storage, allocator metadata and
+    /// temporary pathname allocation. It is not an RSS or whole-process bound.
+    #[expect(
+        clippy::unused_self,
+        reason = "retained ownership remains an instance-level layout query"
+    )]
+    pub const fn named_retained_bytes_v1(&self) -> usize {
+        let writer = size_of::<ConfidentialSpoolWriterV1>();
+        let snapshot = size_of::<ConfidentialSpoolSnapshotV1>();
+        let handle = if writer > snapshot { writer } else { snapshot };
+        handle + size_of::<Zeroizing<[u8; KEY_BYTES_V1]>>()
+    }
+
+    /// Return a conservative sum of named record-operation workspace payloads.
+    ///
+    /// The sum covers one exact chunk and AAD allocation, their owners, the
+    /// concrete AEAD handle, nonce, tag, derived coordinate and two BLAKE3
+    /// hashers (the seal hasher overlaps coordinate derivation). It also covers
+    /// the three metadata values that coexist during file creation. It may
+    /// overcount values whose source lifetimes do not overlap.
+    ///
+    /// Callers retain this reservation across creation, record operations and
+    /// destruction of returned chunks. Dependency-internal cipher/hash scratch,
+    /// allocator/path setup, compiler/register frames, kernel state and RSS are
+    /// outside this named-payload accounting. A complete admission owner must
+    /// qualify those separately; this method is not an allocation permit.
+    pub fn named_operation_workspace_bytes_v1(&self) -> usize {
+        self.plaintext_len as usize
+            + size_of::<ConfidentialSpoolChunkV1>()
+            + self.aad_len
+            + size_of::<Zeroizing<Vec<u8>>>()
+            + size_of::<XChaCha20Poly1305>()
+            + size_of::<aead::Nonce<XChaCha20Poly1305>>()
+            + size_of::<aead::Tag<XChaCha20Poly1305>>()
+            + size_of::<[u8; CONFIDENTIAL_SPOOL_COORDINATE_BYTES_V1]>()
+            + 2 * size_of::<blake3::Hasher>()
+            + 3 * size_of::<std::fs::Metadata>()
+    }
+
     fn slot_index_v1(&self, slot: u64) -> Result<usize, ConfidentialSpoolErrorV1> {
         if slot >= self.slot_count {
             return Err(ConfidentialSpoolErrorV1::SlotOutOfRange {
@@ -933,7 +976,20 @@ fn allocate_aad_v1(
     let mut aad = Zeroizing::new(Vec::new());
     aad.try_reserve_exact(layout.aad_len)
         .map_err(|_| ConfidentialSpoolErrorV1::Allocation("record AAD"))?;
+    require_exact_aad_capacity_v1(layout, &aad)?;
     Ok(aad)
+}
+
+fn require_exact_aad_capacity_v1(
+    layout: &ConfidentialSpoolLayoutV1,
+    aad: &Vec<u8>,
+) -> Result<(), ConfidentialSpoolErrorV1> {
+    // A larger allocator-selected capacity is not a funded named buffer.
+    // Reject before any secret record is processed or any AAD is appended.
+    if aad.capacity() != layout.aad_len {
+        return Err(ConfidentialSpoolErrorV1::Allocation("record AAD capacity"));
+    }
+    Ok(())
 }
 
 fn fill_aad_v1(
@@ -2112,3 +2168,7 @@ mod tests {
         assert!(production.contains("metadata.nlink() != 0"));
     }
 }
+
+#[cfg(test)]
+#[path = "confidential_spool/resource_accounting_tests_v1.rs"]
+mod resource_accounting_tests_v1;

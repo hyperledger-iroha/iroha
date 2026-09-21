@@ -63,6 +63,11 @@ def test_native_preparation_accepts_actual_owners(fixture):
     ("VALIDATION_CUSTODY", "fn new", "markers.try_reserve_exact(limit)?;", "// marker admission removed"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", "if self.candidates.len() == self.limit", "if false"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", "if requires_existing_owner", "if false"),
+    ("VALIDATION_CUSTODY", "fn preflight_marker", "candidate.is_some_and(|row| row.owner.is_none())", "false"),
+    ("VALIDATION_CUSTODY", "fn preflight_marker", "self.markers.len() == self.limit", "false"),
+    ("VALIDATION_CUSTODY", "fn preflight_marker", "candidate.is_none() && self.candidates.len() == self.limit", "false"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", ".pop()", ".first()"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "self.candidates[index].owner = Some(owner);", "drop(owner);"),
     ("JOURNALS", "fn matches_candidate", "self.journals\n            .matches_validation_candidate(context, proposal)", "true"),
     ("DECISION_CARRIER", "fn resume_capture", ".map(Self::Validated)", ".map(|_| unreachable!())"),
     ("DECISION_CARRIER", "fn resume_capture", "(Self::Capturing(carrier), error)", "(Self::Capturing(other), error)"),
@@ -92,6 +97,8 @@ def test_native_preparation_accepts_actual_owners(fixture):
     ("VALIDATION_CUSTODY", "fn drop(&mut self)", "self.service.candidates[self.index].owner = Some(owner);", "self.service.candidates[0].owner = Some(owner);"),
     ("RETAINED_VALIDATION", "fn execute_retained_durable_validation", "if !service.matches_store(&self.instance_identity())", "if false"),
     ("RETAINED_VALIDATION", "fn execute_retained_durable_validation", "already_validated.is_some() || reused.is_some()", "false"),
+    ("RETAINED_VALIDATION", "fn execute_retained_durable_validation", "service.preflight_marker(&durable)?;", "// predecode admission removed"),
+    ("RETAINED_VALIDATION", "fn execute_retained_durable_validation", "if !self.rejected.contains_key(&key)", "if true"),
 ])
 def test_retained_carrier_rejects_owner_or_refusal_substitution(fixture, owner, anchor, old, new):
     root, helper, checker, _ = fixture
@@ -184,13 +191,22 @@ def test_retained_carrier_requires_sealed_phase_owner(fixture, mutation):
     assert any("retained carrier" in e for e in validate(fixture))
 
 
-@pytest.mark.parametrize("mutation", ["execute-before-capacity", "resume-before-install", "marker-before-resume", "persist-before-install", "confirm-before-persist"])
+@pytest.mark.parametrize("mutation", ["execute-before-capacity", "execute-before-slot", "resume-before-install", "marker-before-resume", "decode-before-capacity", "persist-before-install", "confirm-before-persist"])
 def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation):
     root, helper, checker, _ = fixture
     c = checker.native_preparation_contract
     if mutation == "execute-before-capacity":
         helper.replace_once_after(root / c.VALIDATION_CUSTODY, "fn prepare_marker",
                                   "let existing = self", "self.validator.prepare(context, body); let existing = self")
+    elif mutation == "execute-before-slot":
+        path = root / c.VALIDATION_CUSTODY
+        source = path.read_text()
+        start = source.index("                self.candidates.push(Candidate {", source.index("fn prepare_marker"))
+        end = source.index("                let owner = match self.validator.prepare", start)
+        reservation = source[start:end]
+        source = source[:start] + source[end:]
+        at = source.index("                self.candidates[index].owner = Some(owner);", start)
+        path.write_text(source[:at] + reservation + source[at:])
     elif mutation == "resume-before-install":
         helper.replace_once_after(root / c.VALIDATION_CUSTODY, "fn prepare_marker",
                                   "self.candidates.push(Candidate {", "self.resume_candidate(0, context, body); self.candidates.push(Candidate {")
@@ -203,6 +219,14 @@ def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation)
         source = source[:start] + source[end:]
         at = source.index("        let commitment = match owner.ready_commitment()", source.index("fn prepare_marker"))
         path.write_text(source[:at] + marker + source[at:])
+    elif mutation == "decode-before-capacity":
+        path = root / c.RETAINED_VALIDATION
+        source = path.read_text()
+        load = "        let envelope = self.load_validation_envelope(&durable, expected_manifest_hash)?;\n"
+        assert source.count(load) == 1
+        source = source.replace(load, "", 1)
+        at = source.index("        if !self.rejected.contains_key(&key)")
+        path.write_text(source[:at] + load + source[at:])
     else:
         path = root / c.RETAINED_VALIDATION
         anchor = "fn execute_retained_durable_validation"
@@ -215,6 +239,17 @@ def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation)
             helper.replace_once_after(path, anchor, persistence, "service.confirm(&validated)?;\n" + persistence)
     errors = validate(fixture)
     assert any("reorders executable relation" in e or "repeats execution" in e or "installed owner" in e for e in errors), errors
+    assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("before", ["candidates", "_descriptor_admission"])
+def test_retained_service_keeps_original_producer_until_payload_and_descriptor_release(fixture, before):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.VALIDATION_CUSTODY
+    helper.replace_once_after(path, "struct RetainedBodyValidationService", "    validator: P,", "")
+    helper.replace_once_after(path, "struct RetainedBodyValidationService", f"    {before}:", f"    validator: P,\n    {before}:")
+    errors = validate(fixture)
+    assert any("retained carrier" in e for e in errors), errors
     assert not any("digest" in e or "must have one" in e for e in errors), errors
 
 
@@ -802,7 +837,7 @@ def test_geometry_retirement_admission_precedes_retained_writer_transfer(fixture
     ("fn try_into_cut", "})?;", '}).expect("invalid refusal") ;'),
     ("fn try_into_cut", "_mutation: mutation,", "_mutation: other_mutation,"),
     ("fn try_into_cut", "observer: self,", "observer: other_observer,"),
-    ("struct QueueRetirementBusy", "pub(crate) wait: mv::ReleaseWait,", "pub(crate) wait: mv::ReleaseWait, retained: PublicationGuard<'static>,"),
+    ("struct QueueRetirementBusy", "pub(crate) wait: concread::release::ReleaseWait,", "pub(crate) wait: concread::release::ReleaseWait, retained: PublicationGuard<'static>,"),
     ("impl QueueLaneRetirementCut<'_>", "queue.transaction_selection_durability_faulted()", "false"),
     ("impl QueueLaneRetirementCut<'_>", "Queue::lane_retirement_reservation_snapshot(\n            &self.reservations,", "Queue::lane_retirement_reservation_snapshot(\n            &other_reservations,"),
     ("impl QueueLaneRetirementCut<'_>", "return true;", "return false;"),
@@ -941,8 +976,8 @@ def test_retained_descriptor_and_cut_lifetimes_reject_early_release(fixture, mut
         helper.replace_once_after(path, "struct RetainedBodyValidationService", "    validator: P,", field + "\n    validator: P,")
     else:
         path = root / contract.PHYSICAL_CARRIER
-        helper.replace_once_after(path, "fn release_for_completion", "drop(queue);", "")
-        helper.replace_once_after(path, "fn release_for_completion", "drop(write);", "drop(queue);\n        drop(write);")
+        helper.replace_once_after(path, "fn release_for_completion", "let queue = queue.map(CarrierQueueRetirement::release_deferred);", "")
+        helper.replace_once_after(path, "fn release_for_completion", "let state = [write.release_deferred(), lifecycle.release_deferred()];", "let queue = queue.map(CarrierQueueRetirement::release_deferred);\n        let state = [write.release_deferred(), lifecycle.release_deferred()];")
     errors = validate(fixture)
     assert any("executable relation" in error or "retained carrier" in error for error in errors), errors
 
@@ -973,7 +1008,9 @@ def test_native_preparation_ledger_tokens_match_exact_reviewed_items(fixture):
     pytest.param("HASH_SURFACE", "fn capture", "block.work.predecessor().retain()", "other.work.predecessor().retain()", id="seal-retains-original-predecessor"),
     pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "self.observe_current(target)", "Ok(true)", id="pre-admission-predecessor"),
     pytest.param("STATE", "fn observe_current", "self.work.try_matches_current(map)", "Ok(true)", id="original-advisory-predecessor"),
-    pytest.param("STATE", "fn observe_current", "if result.is_ok()", "if result.is_err()", id="advisory-release-not-busy-self-wake"),
+    pytest.param("STATE", "fn observe_current", "self.work.try_matches_current(map)", "drop(target.released.guard(())); self.work.try_matches_current(map)", id="advisory-release-not-busy-self-wake"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "let wait = map.observe_reader_release();\n        match self.observe_current(target)", "let wait = target.released.observe();\n        match self.observe_current(target)", id="advisory-waits-for-actual-reader"),
+    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "let wait = map.observe_reader_release();\n        let prepared = match writer.try_prepare_commit()", "let wait = target.released.observe();\n        let prepared = match writer.try_prepare_commit()", id="commit-preparation-cannot-wake-itself"),
     pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "map.try_write_owned(work)", "other.try_write_owned(work)", id="original-final-reacquisition"),
     pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "if error == OwnedWriteError::Changed", "if false", id="changed-release-notification"),
     pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "writer.try_prepare_commit()", "Ok(writer.prepare_commit())", id="nonblocking-reader-acquisition"),
@@ -994,18 +1031,18 @@ def test_shared_history_preserves_original_identity_and_refusal(fixture, owner, 
 
 
 @pytest.mark.parametrize("owner,anchor,first,second", [
-    ("HASH_PUBLICATION", "fn abort", "let work = prepared.abort().detach();", "drop(notification);"),
+    ("HASH_PUBLICATION", "fn abort", "let work = writer.detach();", "let ((), writer) = notification.release_deferred(drop);"),
     ("HASH_PUBLICATION", "fn publish", "let published = prepared.publish();", "committed_height.store(height, Ordering::Release);"),
-    ("TERMINAL_CARRIER", "fn publish", "let hash_retirement;", "let AcquiredCarrierComponents {"),
+    ("TERMINAL_CARRIER", "fn publish", "let hash_retirement;", "let AcquiredCarrierParticipants {"),
     ("TERMINAL_CARRIER", "fn publish", "drop(commit);", "drop(hash_retirement);"),
 ])
 def test_shared_history_cleanup_and_publication_order(fixture, owner, anchor, first, second):
     root, helper, checker, _ = fixture
     path = root / getattr(checker.native_preparation_contract, owner)
-    if second == "let AcquiredCarrierComponents {":
+    if second == "let AcquiredCarrierParticipants {":
         # Move a complete declaration below the complete destructuring statement.
         helper.replace_once_after(path, anchor, first, "")
-        helper.replace_once_after(path, anchor, "} = components;", "} = components;\n        " + first)
+        helper.replace_once_after(path, anchor, "} = components.into_original();", "} = components.into_original();\n        " + first)
     else:
         helper.replace_once_after(path, anchor, first, "")
         helper.replace_once_after(path, anchor, second, second + "\n        " + first)
@@ -1035,12 +1072,12 @@ def test_shared_history_cleanup_and_publication_order(fixture, owner, anchor, fi
     pytest.param("LANE_WORK_HISTORY", "fn build_and_memoize_merge_execution_candidate", ".build_merge_execution_candidate(application_block_header, self.context.mode)?", ".build_merge_execution_candidate(application_block_header, self.context.mode).unwrap_or(None)", id="memoization-propagates-local-refusal"),
     pytest.param("LANE_WORK_HISTORY", "fn refresh_merge_candidates", "*view == active_view && !pending.is_ready(&wake)", "false", id="merge-waits-on-exact-view-dependency"),
     pytest.param("LANE_WORK_HISTORY", "fn refresh_merge_candidates", "let Some(wait) = error.release_wait() else", "let Some(wait) = None else", id="merge-refusal-retains-original-release"),
-    pytest.param("LANE_WORK_HISTORY", "fn refresh_merge_candidates", "HistoryAdmissionWait::new(\n                                    wait.clone(),", "HistoryAdmissionWait::new(\n                                    mv::ReleaseNotification::default().observe(),", id="merge-cannot-substitute-release-owner"),
+    pytest.param("LANE_WORK_HISTORY", "fn refresh_merge_candidates", "HistoryAdmissionWait::new(\n                                    wait.clone(),", "HistoryAdmissionWait::new(\n                                    concread::release::ReleaseNotification::default().observe(),", id="merge-cannot-substitute-release-owner"),
     pytest.param("RUNNER_HISTORY", "fn candidate_attachments", "error.downcast_ref::<crate::state::BlockHashAdmissionError>()", "None::<&crate::state::BlockHashAdmissionError>", id="npos-preserves-typed-history-refusal"),
     pytest.param("RUNNER_HISTORY", "let attachments = match attachments", "&queue.sumeragi_waker()", "&std::task::Waker::noop()", id="npos-arms-original-proposal-runner"),
     pytest.param("LANE_WORK_HISTORY", "fn classify_merge_state_validation", "MergeCandidateValidationError::Frontier(error.to_string())", "MergeCandidateValidationError::Invalid(error.to_string())", id="permanent-history-failure-is-local"),
     pytest.param("LANE_WORK_HISTORY", "fn classify_merge_state_validation", "Ok(MergeCandidateValidation::Deferred)", "Ok(MergeCandidateValidation::Ready)", id="temporary-history-refusal-never-authorizes"),
-    pytest.param("LANE_WORK_HISTORY", "fn classify_merge_state_validation", "HistoryAdmissionWait::new(wait.clone(), &wake)", "HistoryAdmissionWait::new(mv::ReleaseNotification::default().observe(), &wake)", id="validation-retains-original-refund-wait"),
+    pytest.param("LANE_WORK_HISTORY", "fn classify_merge_state_validation", "HistoryAdmissionWait::new(wait.clone(), &wake)", "HistoryAdmissionWait::new(concread::release::ReleaseNotification::default().observe(), &wake)", id="validation-retains-original-refund-wait"),
     pytest.param("LANE_WORK_HISTORY", "fn validate_merge_candidate_for_active_round", "self.classify_merge_state_validation(active_view, validation)?", "MergeCandidateValidation::Ready", id="no-positive-memo-on-history-refusal"),
     pytest.param("HASH_ADMISSION", "struct BlockHashPolicy", "(mv::allocation::AllocationReservation)", "(usize)", id="original-move-only-reservation"),
     pytest.param("HASH_ADMISSION", "impl NodeFunding for BlockHashPolicy", "type Charge = mv::allocation::AllocationCharge;", "type Charge = ();", id="actual-allocation-charge"),
@@ -1169,8 +1206,8 @@ def test_carrier_retirement_rejects_guard_and_sticky_fault_reordering(fixture, m
         helper.replace_once_after(root / c.PHYSICAL_CARRIER, "fn try_prepare_physical", "let queue = match queue_observer", "let _early = journals.try_map_components(); let queue = match queue_observer")
     elif mutation == "release-before-write":
         path = root / c.PHYSICAL_CARRIER
-        helper.replace_once_after(path, "fn release_for_completion", "drop(queue);", "")
-        helper.replace_once_after(path, "fn release_for_completion", "drop(write);", "drop(queue); drop(write);")
+        helper.replace_once_after(path, "fn release_for_completion", "let queue = queue.map(CarrierQueueRetirement::release_deferred);", "")
+        helper.replace_once_after(path, "fn release_for_completion", "let state = [write.release_deferred(), lifecycle.release_deferred()];", "let queue = queue.map(CarrierQueueRetirement::release_deferred); let state = [write.release_deferred(), lifecycle.release_deferred()];")
     elif mutation == "fault-before-storage":
         path = root / c.TERMINAL_CARRIER
         text = path.read_text()
@@ -1182,8 +1219,8 @@ def test_carrier_retirement_rejects_guard_and_sticky_fault_reordering(fixture, m
         path.write_text(text[:target] + block + "\n" + text[target:])
     else:
         path = root / c.PHYSICAL_CARRIER
-        helper.replace_once_after(path, "struct AcquiredCarrierComponents", "    _fences: CarrierFences<'target>,\n", "")
-        helper.replace_once_after(path, "struct AcquiredCarrierComponents", "    world:", "    _fences: CarrierFences<'target>,\n    world:")
+        helper.replace_once_after(path, "struct AcquiredCarrierParticipants", "    _fences: CarrierFences<'target>,\n", "")
+        helper.replace_once_after(path, "struct AcquiredCarrierParticipants", "    world:", "    _fences: CarrierFences<'target>,\n    world:")
     errors = validate(fixture)
     assert any("executable relation" in e for e in errors), errors
     assert not any("digest" in e or "must have one" in e for e in errors), errors
@@ -1218,7 +1255,87 @@ def test_retained_descriptor_admission_precedes_allocation_and_outlives_vectors(
         helper.replace_once_after(path, "fn new(\n        validator", "let layouts = Self::descriptor_layouts(limit)?;", "let mut candidates = Vec::new(); candidates.try_reserve_exact(limit)?; let layouts = Self::descriptor_layouts(limit)?;")
     else:
         helper.replace_once_after(path, "struct RetainedBodyValidationService", "    _descriptor_admission: [AllocationCharge; 2],\n", "")
-        helper.replace_once_after(path, "struct RetainedBodyValidationService", "    validator: P,", "    _descriptor_admission: [AllocationCharge; 2],\n    validator: P,")
+        helper.replace_once_after(path, "struct RetainedBodyValidationService", "    candidates:", "    _descriptor_admission: [AllocationCharge; 2],\n    candidates:")
     errors = validate(fixture)
     assert any("executable relation" in e or "original custody" in e for e in errors), errors
     assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("owner,anchor,old,new", [
+    ("PUBLICATION_MUTEX", "fn release_deferred", "self.inner.release_deferred(drop).1", "other.release_deferred(drop).1"),
+    ("KURA", "fn release_deferred", "_prune.release_deferred()", "other.release_deferred()"),
+    ("QUEUE_OWNER", "fn release_deferred", "reservations.release_deferred()", "other.release_deferred()"),
+    ("CARRIER_QUEUE", "fn release_deferred", "_routes: routes", "_routes: Vec::new()"),
+    ("TERMINAL_CARRIER", "fn publish(", "membership_retirement = transactions.publish();", "transactions.publish();"),
+    ("TERMINAL_CARRIER", "fn publish(", "drop(membership_retirement);", ""),
+])
+def test_completion_retains_original_release_owners(fixture, owner, anchor, old, new):
+    root, helper, checker, _ = fixture
+    contract = checker.native_preparation_contract
+    path = root / getattr(contract, owner)
+    if owner == "KURA":
+        path = root / "crates/iroha_core/src/kura/publication_lease.rs"
+    helper.replace_once_after(path, anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error or "retained carrier" in error for error in errors), errors
+
+
+def test_completion_unlocks_commit_before_deferred_callbacks(fixture):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.PHYSICAL_CARRIER
+    helper.swap_ordered_once_after(path, "struct CompletionFences", "_commit: PublicationGuard<'target>,", "_state: [concread::release::DeferredRelease; 2],")
+    assert any("executable relation" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("anchor,old,new", [
+    ("impl Drop for AcquiredCarrierComponents", "drop(original.abort())", "drop(original)"),
+    ("impl AcquiredCarrierParticipants", "let (world, world_retirement) = world.abort()", "let (world, world_retirement) = replacement.abort()"),
+    ("impl AcquiredCarrierParticipants", "drop(fences.release_for_completion())", "drop(fences)"),
+])
+def test_carrier_abandonment_keeps_joint_original_release(fixture, anchor, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / checker.native_preparation_contract.PHYSICAL_CARRIER, anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("cut", ["runtime", "world"])
+def test_partial_carrier_refusal_keeps_cleanup_after_original_fences(fixture, cut):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.PHYSICAL_CARRIER
+    anchor = f"Err(({cut}, error, {cut}_retirement)) =>"
+    helper.replace_once_after(path, anchor,
+                              "drop(fences.release_for_completion());",
+                              f"drop({cut}_retirement); drop(fences.release_for_completion());")
+    errors = validate(fixture)
+    assert any("executable relation" in e for e in errors), errors
+
+
+def test_world_refusal_preserves_original_cleanup_shells(fixture):
+    root, helper, _, _ = fixture
+    path = root / "crates/iroha_core/src/state/world_publication.rs"
+    helper.replace_once_after(path, "fn try_prepare_publication", "_fields: prepared,",
+                              "_fields: PreparedWorldFields(Vec::new()),")
+    errors = validate(fixture)
+    assert any("executable relation" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("path,owner,first,last", [
+    ("crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs", "PreparedRuntimeJournals", "canonical_runtime", "lane_consensus_contexts"),
+    ("crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs", "PreparedSet", "data_triggers", "contracts"),
+])
+@pytest.mark.parametrize("cut", ["raw-drop", "early-notification", "early-capacity"])
+def test_aggregate_abandonment_retains_joint_release_and_original_capacity(fixture, path, owner, first, last, cut):
+    root, helper, _, _ = fixture
+    anchor = f"Drop for {owner}"
+    if cut == "raw-drop":
+        helper.replace_once_after(root / path, anchor,
+                                  f"let {first} = {first}.abort();", f"let {first} = {first};")
+    elif cut == "early-notification":
+        helper.replace_once_after(root / path, anchor,
+                                  f"let {last} = {last}.abort();", f"drop({first}); let {last} = {last}.abort();")
+    else:
+        helper.replace_once_after(root / path, anchor,
+                                  f"let {first} = {first}.abort();", f"drop((admission, installation)); let {first} = {first}.abort();")
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors

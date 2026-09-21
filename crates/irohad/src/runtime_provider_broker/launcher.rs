@@ -987,7 +987,8 @@ mod tests {
     #[test]
     fn systemd_notifier_publishes_only_exact_ready_datagram() {
         use std::os::unix::net::UnixDatagram;
-        let directory = tempfile::tempdir().expect("systemd notifier socket directory");
+        let directory =
+            crate::runtime_provider_broker::socket_fixture_directory::new_broker_socket_test_directory();
         let path = directory.path().join("notify.sock");
         let notification_socket =
             UnixDatagram::bind(&path).expect("bind fake systemd notification socket");
@@ -1008,7 +1009,8 @@ mod tests {
     #[test]
     fn systemd_notifier_rejects_send_after_supervisor_disappears() {
         use std::os::unix::net::UnixDatagram;
-        let directory = tempfile::tempdir().expect("systemd notifier socket directory");
+        let directory =
+            crate::runtime_provider_broker::socket_fixture_directory::new_broker_socket_test_directory();
         let path = directory.path().join("notify.sock");
         let receiver = UnixDatagram::bind(&path).expect("bind fake systemd notification socket");
         let notifier =

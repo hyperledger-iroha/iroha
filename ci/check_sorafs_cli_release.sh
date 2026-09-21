@@ -71,14 +71,16 @@ bash -n scripts/release_sorafs_cli.sh scripts/package_iroha_cli_release.sh \
   configs/sorafs/external_software_signer/launchd/sorafs-external-software-signer-launchd-v1 \
   python/iroha_python/scripts/release_smoke.sh \
   scripts/tests/release_manifest_signing_test.sh \
-  ci/check_sorafs_reference_ffi_header.sh
+  ci/check_sorafs_reference_ffi_header.sh ci/check_sorafs_native_authority_runtime.sh
 
 echo "[sorafs-release] reference FFI header contract"
 ci/check_sorafs_reference_ffi_header.sh
 
 echo "[sorafs-release] release helper adversarial tests"
 python3 scripts/check_workflow_action_pins.py
+python3 ci/qualify_sorafs_cosign.py
 python3 -m pytest -q \
+  scripts/tests/sorafs_native_authority_runtime_test.py \
   scripts/tests/check_workflow_action_pins_test.py \
   scripts/tests/check_sorafs_release_automation_test.py \
   scripts/tests/check_sorafs_mobile_parity_reports_test.py \
@@ -110,6 +112,10 @@ python3 -m pytest -q \
   scripts/tests/run_sorafs_production_readiness_test.py \
   scripts/tests/run_sorafs_production_readiness_negative_archive_test.py \
   scripts/tests/check_sorafs_production_promotion_bundle_test.py \
+  scripts/tests/sorafs_final_promotion_cosign_test.py \
+  scripts/tests/qualify_sorafs_cosign_test.py \
+  scripts/tests/sorafs_final_promotion_evidence_test.py \
+  scripts/tests/sorafs_verifier_process_test.py \
   scripts/tests/check_sorafs_repair_rollout_evidence_test.py \
   scripts/tests/check_sorafs_reputation_rollout_evidence_test.py \
   scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py \
@@ -137,7 +143,7 @@ python3 -m pytest -q \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_pdp_provider_protocol_and_chain_repair_boundary_are_documented \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reserve_rent_chain_authoritative_contract_stays_open_until_evidence \
-  scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_release_http_clients_do_not_follow_redirects \
+  scripts/tests/check_sorafs_rust_owner_contract_test.py \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_validate_release_packager_rejects_symlink_stage_entries \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_cli_release_gate_runs_helper_adversarial_tests
@@ -157,7 +163,9 @@ if [[ "$(grep -Fxc -- "${provider_ingest_test}: test" <<<"${provider_ingest_list
 fi
 cargo test --locked -p irohad --lib "${provider_ingest_test}" -- \
   --exact --include-ignored --nocapture
-
+echo "[sorafs-release] full signer contract libraries"
+cargo test --locked -p sorafs_manifest -p iroha_data_model -p iroha_executor_data_model -p iroha_executor -p iroha_schema_gen --lib
+bash ci/check_sorafs_native_authority_runtime.sh
 echo "[sorafs-release] external software signer protocol and CLI tests"
 cargo test --locked -p irohad --lib external_software_signer
 cargo test --locked -p irohad --features external-software-signer-bin \
@@ -168,7 +176,6 @@ cargo clippy --locked -p sorafs_orchestrator --all-targets -- -D warnings
 
 echo "[sorafs-release] clippy sorafs_car helpers (cli feature)"
 cargo clippy --locked -p sorafs_car --features cli --all-targets -- -D warnings
-
 echo "[sorafs-release] clippy sorafs_manifest"
 cargo clippy --locked -p sorafs_manifest --all-targets -- -D warnings
 
@@ -180,7 +187,6 @@ cargo test --locked -p sorafs_orchestrator --test sorafs_cli
 
 echo "[sorafs-release] tests sorafs_car helpers (cli feature)"
 cargo test --locked -p sorafs_car --features cli --all-targets
-
 echo "[sorafs-release] tests sorafs_manifest"
 cargo test --locked -p sorafs_manifest --all-targets
 

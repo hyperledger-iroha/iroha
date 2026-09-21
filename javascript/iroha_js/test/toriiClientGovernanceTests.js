@@ -345,6 +345,65 @@ export function registerToriiClientGovernanceTests({
   });
   const governanceReadOptions = (options = {}) =>
     governanceBallotOptions(FIXTURE_ALICE_ID, options);
+  const plainFixtureRoot = new URL("../../../fixtures/governance/plain_v1/", import.meta.url);
+  const plainFixture = (name) => readFileSync(new URL(name, plainFixtureRoot), "utf8");
+  for (const [method, file, verify] of [
+    ["getGovernanceReferendum", "referendum-max.json", (value) => {
+      assert.equal(value.referendum.plain_result.content.approve, (1n << 128n) - 1n);
+      assert.equal(value.referendum.plain_result.content.approved, true);
+    }],
+    ["getGovernanceReferendumTyped", "referendum-max.json", (value) => {
+      assert.equal(value.referendum.plain_result.content.approve, (1n << 128n) - 1n);
+    }],
+    ["getGovernanceTally", "tally-large.json", (value) => {
+      assert.equal(value.approve, 18446744073709551617n);
+      assert.equal(value.evaluated_block_height, 9007199254740993n);
+      assert.equal(value.evaluated_block_hash, "12".repeat(32));
+    }],
+    ["getGovernanceTallyTyped", "tally-max.json", (value) => {
+      assert.equal(value.tally.approve, (1n << 128n) - 1n);
+      assert.equal(value.tally.evaluated_block_height, (1n << 64n) - 1n);
+      assert.equal(value.tally.evaluated_block_hash, "12".repeat(32));
+    }],
+    ["getGovernanceLocks", "locks.json", (value) => {
+      assert.equal(Object.values(value.locks.locks)[0].expiry_height, (1n << 64n) - 1n);
+    }],
+    ["getGovernanceLocksTyped", "locks.json", (value) => {
+      const lock = Object.values(value.locks)[0];
+      assert.equal(lock.duration_blocks, (1n << 64n) - 2n);
+      assert.equal(lock.amount, "18446744073709551616.25");
+      assert.equal(lock.custody.escrowed, true);
+    }],
+  ]) {
+    test(`${method} retains exact authoritative integers through authenticated response reads`, async () => {
+      const controller = new AbortController();
+      let captured;
+      const client = new ToriiClient(BASE_URL, { fetchImpl: async (url, options) => {
+        captured = { url, options };
+        return createResponse({ status: 200, textBody: plainFixture(file),
+          headers: { "content-type": "application/json" } });
+      } });
+      verify(await client[method]("ref-1", governanceReadOptions({ signal: controller.signal })));
+      assert.match(captured.url, /\/v1\/gov\/(referenda|tally|locks)\/ref-1$/u);
+      assertRequestSignal(captured.options.signal, controller.signal);
+      const headers = new Headers(captured.options.headers);
+      assert.ok(headers.get("X-Iroha-Account"));
+      assert.ok(headers.get("X-Iroha-Signature"));
+      assert.ok(headers.get("X-Iroha-Nonce"));
+    });
+  }
+  for (const suffix of ["", "Typed"]) {
+    for (const entry of JSON.parse(plainFixture("cases.json")).cases.filter((c) => !c.valid)) {
+      test(`getGovernanceTally${suffix} refuses raw negative vector ${entry.file}`, async () => {
+        const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({
+          status: 200, textBody: plainFixture(entry.file),
+          headers: { "content-type": "application/json" },
+        }) });
+        await assert.rejects(() => client[`getGovernanceTally${suffix}`]("ref-1", governanceReadOptions()),
+          /governance|unsigned/u);
+      });
+    }
+  }
   const governanceBallotClient = (options = {}) => new ToriiClient(BASE_URL, {
     ...options,
     localSigningContext: GOVERNANCE_LOCAL_SIGNING_CONTEXT,
@@ -895,7 +954,7 @@ export function registerToriiClientGovernanceTests({
 
   test("getGovernanceLocksTyped parses lock records and synthesizes not-found result on 404", async () => {
     const locksFixture = cloneFixture(toriiFixtures.governance.locks);
-    const [lock] = Object.values(locksFixture.locks);
+    const [lock] = Object.values(locksFixture.locks.locks);
     lock.amount = "18446744073709551616.25";
     lock.slashed = "0.25";
     const fetchImpl = async () =>
@@ -913,12 +972,7 @@ export function registerToriiClientGovernanceTests({
     assert.equal(firstLock.amount, "18446744073709551616.25");
     assert.equal(firstLock.slashed, "0.25");
     assert.equal(firstLock.duration_blocks, 5);
-    assert.deepEqual(firstLock.custody, {
-      escrowed: true,
-      asset_definition_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
-      bond_escrow_account: "bond-escrow-account",
-      slash_receiver_account: "slash-receiver-account",
-    });
+    assert.deepEqual(firstLock.custody, lock.custody);
 
     const missingClient = new ToriiClient(BASE_URL, {
       fetchImpl: async () => createResponse({ status: 404 }),
@@ -936,10 +990,10 @@ export function registerToriiClientGovernanceTests({
     });
   });
 
-  test("getGovernanceLocksTyped accepts null legacy custody and rejects malformed custody", async () => {
+  test("getGovernanceLocksTyped rejects null, missing and malformed custody", async () => {
     const parseCustody = async (mutate) => {
       const fixture = cloneFixture(toriiFixtures.governance.locks);
-      const [lock] = Object.values(fixture.locks);
+      const [lock] = Object.values(fixture.locks.locks);
       mutate(lock);
       const client = new ToriiClient(BASE_URL, {
         fetchImpl: async () =>
@@ -952,10 +1006,10 @@ export function registerToriiClientGovernanceTests({
       return client.getGovernanceLocksTyped("ref-1", governanceReadOptions());
     };
 
-    const legacy = await parseCustody((lock) => {
-      lock.custody = null;
-    });
-    assert.equal(Object.values(legacy.locks)[0].custody, null);
+    await assert.rejects(
+      () => parseCustody((lock) => { lock.custody = null; }),
+      /custody must be an object/u,
+    );
 
     for (const fixture of [
       {
@@ -963,7 +1017,7 @@ export function registerToriiClientGovernanceTests({
         mutate(lock) {
           delete lock.custody;
         },
-        error: /custody must be an object/u,
+        error: /must contain exactly.*custody/u,
       },
       {
         label: "missing custody field",
@@ -1011,7 +1065,7 @@ export function registerToriiClientGovernanceTests({
         "9".repeat(155),
       ]) {
         const fixture = cloneFixture(toriiFixtures.governance.locks);
-        const [lock] = Object.values(fixture.locks);
+        const [lock] = Object.values(fixture.locks.locks);
         lock[field] = value;
         const client = new ToriiClient(BASE_URL, {
           fetchImpl: async () =>
@@ -1063,6 +1117,8 @@ export function registerToriiClientGovernanceTests({
       referendum_id: "ref-1",
       tally: {
         referendum_id: "ref-1",
+        evaluated_block_height: 42,
+        evaluated_block_hash: "12".repeat(32),
         approve: 7,
         reject: 3,
         abstain: 1,

@@ -158,7 +158,7 @@ def test_membership_rejects_weakened_ledger(fixture):
     ("STORAGE", "if expected_current_height != current_height", "if expected_current_height == current_height", "executable relation"),
     ("STORAGE", "previous: previous_block,", "previous: None,", "executable relation"),
     ("STORAGE", "fn publish(self)", "fn publish(&self)", "executable relation"),
-    ("STORAGE", "MembershipPublication::Repeated => {", "MembershipPublication::Repeated => { block.latest_block_ref.store(None);", "executable relation"),
+    ("STORAGE", "MembershipPublication::Repeated => None", "MembershipPublication::Repeated => block.latest_block_ref.swap(None)", "executable relation"),
     ("STORAGE", "*height < current.height", "*height <= current.height", "executable relation"),
     ("STORAGE", "block.blocks_ref.insert(transaction, previous.height)", "block.blocks_ref.insert(transaction, current.height)", "executable relation"),
     ("STORAGE", "let changes_identity = !matches!", "block.validate_commit()?; let changes_identity = !matches!", "repeats admission"),
@@ -166,9 +166,13 @@ def test_membership_rejects_weakened_ledger(fixture):
     ("STORAGE", "predecessor_identity: Arc::clone(&block._guard)", "predecessor_identity: Arc::new(())", "executable relation"),
     ("STORAGE", "Arc::ptr_eq(&guard, &self.predecessor_identity)", "true", "executable relation"),
     ("STORAGE", "storage.write_lock.try_lock()", "storage.write_lock.lock()", "executable relation"),
-    ("STORAGE", "**block._guard = next_identity;", "// **block._guard = next_identity;", "executable relation"),
+    ("STORAGE", "std::mem::replace(&mut **block._guard, next_identity)", "next_identity", "executable relation"),
+    ("STORAGE", "_guard.release_deferred(drop)", "other.release_deferred(drop)", "executable relation"),
+    ("STORAGE", "_tip: tip,", "_tip: None,", "executable relation"),
+    ("STORAGE", "_identity: identity,", "_identity: Arc::new(()),", "executable relation"),
+    ("STORAGE", "_retirement: prepared.publish(),", "_retirement: replacement,", "executable relation"),
     ("STATE", "let tx_validate_result = transactions.prepare_commit();", "let tx_validate_result = transactions.validate_commit();", "misses or reorders"),
-    ("STATE", "            transactions.publish();", "            // transactions.publish();", "misses or reorders"),
+    ("STATE", "            membership_retirement = transactions.publish();", "            transactions.publish();", "misses or reorders"),
 ])
 def test_membership_rejects_semantic_mutation(fixture, owner, old, new, diagnostic):
     root, helper, checker, _ = fixture
@@ -182,6 +186,7 @@ def test_membership_rejects_semantic_mutation(fixture, owner, old, new, diagnost
     ("let tx_validate_result = transactions.prepare_commit();", "state_ref.apply_committed_autoscale_lane_geometry("),
     ("state_ref.apply_committed_autoscale_lane_geometry(", "transactions.publish();"),
     ("transactions.publish();", "canonical_runtime.commit();"),
+    ("drop(_state_commit_lock);", "drop(membership_retirement);"),
 ])
 def test_membership_rejects_publication_order_drift(fixture, earlier, later):
     root, helper, checker, _ = fixture

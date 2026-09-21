@@ -64,7 +64,7 @@ fn all_images(world: &World) -> Vec<(&'static str, String)> {
 fn prepare<'a, A>(journal: DetachedWorld<A>, target: &'a World) -> PreparedWorld<'a, A, ()> {
     journal
         .try_prepare_publication(target, |_, _| Ok::<_, ()>(()))
-        .unwrap_or_else(|(_, error)| panic!("World preparation refused: {error:?}"))
+        .unwrap_or_else(|(_, error, _)| panic!("World preparation refused: {error:?}"))
 }
 
 fn physical_custody<A>(journal: &DetachedWorld<A>) -> (usize, usize, Vec<usize>) {
@@ -106,7 +106,6 @@ fn complete_world_preparation_holds_every_inventory_writer_and_matches_direct_co
     mutate(&mut original, 2, "world_publish");
     mutate(&mut reference, 2, "world_publish");
     let prepared = prepare(capture(original), &world);
-    assert_eq!(all_images(&world), before);
     assert_eq!(probes.len(), 278);
     // Probe each original field separately, so an early busy field cannot hide
     // a missing writer later in the heterogeneous World inventory.
@@ -119,12 +118,85 @@ fn complete_world_preparation_holds_every_inventory_writer_and_matches_direct_co
             PublicationPreparationError::Busy(_)
         ));
     }
+    let journal = prepared.abort().0;
+    assert_eq!(
+        all_images(&world),
+        before,
+        "complete preparation and abort transfer no component"
+    );
+    let prepared = prepare(journal, &world);
     reference.commit();
     prepared.publish();
     assert_eq!(all_images(&world), all_images(&direct));
     assert_eq!(reader.get(&path("capture/value")), Some(&vec![1]));
     assert_eq!(undo.revert_map().get(&path("capture/value")), Some(&None));
     assert_all_writers_released(&world);
+}
+
+#[test]
+fn world_publication_retains_original_busy_notification_until_aggregate_unlock() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Wake, Waker},
+    };
+    struct Probe {
+        world: Arc<World>,
+        fence: Arc<std::sync::Mutex<()>>,
+        calls: AtomicUsize,
+    }
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            assert!(
+                self.fence.try_lock().is_ok(),
+                "aggregate fence must release before callbacks"
+            );
+            assert_all_writers_released(&self.world);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let world = fixture();
+    let competitor = capture(world.block());
+    let mut original = world.block();
+    mutate(&mut original, 19, "deferred_world_wake");
+    let prepared = prepare(capture(original), &world);
+    let (_, error, _cleanup) = competitor
+        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .err()
+        .unwrap();
+    drop(_cleanup);
+    let WorldPublicationError::Field(FieldRefusal {
+        cause: PublicationPreparationError::Busy(wait),
+        ..
+    }) = error
+    else {
+        panic!("exact original World field must exclude the competitor");
+    };
+    let fence = Arc::new(std::sync::Mutex::new(()));
+    let probe = Arc::new(Probe {
+        world: Arc::clone(&world),
+        fence: Arc::clone(&fence),
+        calls: AtomicUsize::new(0),
+    });
+    let waker = Waker::from(Arc::clone(&probe));
+    let mut context = Context::from_waker(&waker);
+    let mut wait = wait.wait_for_release();
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    let held = fence.lock().unwrap();
+    let published = prepared.publish();
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    drop(held);
+    drop(published);
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+    assert!(Pin::new(&mut wait).poll(&mut context).is_ready());
+    assert_eq!(
+        world
+            .smart_contract_state
+            .view()
+            .get(&path("capture/value")),
+        Some(&vec![19])
+    );
 }
 
 #[test]
@@ -180,7 +252,7 @@ fn complete_world_abort_and_drop_keep_original_events_and_current_undo_cut() {
     let journal = capture(original);
     let expected = journal.fields().collect::<Vec<_>>();
     let custody = physical_custody(&journal);
-    let journal = prepare(journal, &world).abort();
+    let journal = prepare(journal, &world).abort().0;
     assert_eq!(physical_custody(&journal), custody);
     assert_eq!(journal.external_events().as_ptr(), events);
     assert_eq!(journal.dataspace_catalog(), &catalog());
@@ -218,10 +290,11 @@ fn every_busy_world_field_releases_all_earlier_writers_and_retains_complete_retr
     let custody = physical_custody(&journal);
     for (name, hold) in holders {
         let held = hold(&world);
-        let (retained, error) = journal
+        let (retained, error, _cleanup) = journal
             .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
             .err()
             .expect("busy original field");
+        drop(_cleanup);
         let WorldPublicationError::Field(refusal) = error else {
             panic!("exact field refusal")
         };
@@ -266,10 +339,11 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
     let journal = capture(world.block());
     let expected = journal.fields().collect::<Vec<_>>();
     let custody = physical_custody(&journal);
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&world, |_, _| Err::<(), _>("capacity"))
         .err()
         .expect("capacity refusal");
+    drop(_cleanup);
     assert!(matches!(
         error,
         WorldPublicationError::Admission("capacity")
@@ -292,7 +366,7 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
     let (name, invalidate) = invalidators.last().unwrap();
     assert_eq!(*name, last.name);
     let dropped = Arc::new(AtomicBool::new(false));
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&world, |_, target| {
             invalidate(target);
             Ok::<_, ()>(Installation {
@@ -302,6 +376,7 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
         })
         .err()
         .expect("last original owner changed during admission");
+    drop(_cleanup);
     let WorldPublicationError::Field(refusal) = error else {
         panic!("exact changed field")
     };
@@ -344,14 +419,16 @@ fn world_publication_hands_original_extras_and_both_resource_guards_to_aggregate
         match operation {
             "drop" => drop(prepared),
             "abort" => {
-                let journal = prepared.abort();
+                let journal = prepared.abort().0;
                 assert!(installed.load(Ordering::SeqCst));
                 assert!(!captured.load(Ordering::SeqCst));
                 assert_eq!(journal.external_events().as_ptr(), events);
                 drop(journal);
             }
             "publish" => {
-                let (alias_context, returned_events, admission, installation) = prepared.publish();
+                let (alias_context, returned_events, retirement, admission, installation) =
+                    prepared.publish();
+                drop(retirement);
                 assert_eq!(alias_context, catalog());
                 assert_eq!(returned_events.as_ptr(), events);
                 assert!(!captured.load(Ordering::SeqCst));
@@ -408,8 +485,10 @@ impl RetainedWorldField for UnwindField {
     fn try_prepare<'target>(
         self: Box<Self>,
         target: &'target World,
-    ) -> Result<Box<dyn PreparedWorldField + 'target>, (Box<dyn RetainedWorldField>, FieldRefusal)>
-    {
+    ) -> Result<
+        Box<dyn PreparedWorldField + 'target>,
+        (Box<dyn PreparedWorldField + 'target>, FieldRefusal),
+    > {
         if matches!(self.boundary, Some(UnwindBoundary::Prepare)) {
             panic!("injected failure after the preceding real field acquired its writers");
         }
@@ -425,7 +504,7 @@ impl RetainedWorldField for UnwindField {
                 dropped,
             })),
             Err((original, error)) => Err((
-                Box::new(Self {
+                Box::new(UnwindPreparedField {
                     original,
                     boundary,
                     dropped,
@@ -437,23 +516,22 @@ impl RetainedWorldField for UnwindField {
 }
 
 impl PreparedWorldField for UnwindPreparedField<'_> {
-    fn abort(self: Box<Self>) -> Box<dyn RetainedWorldField> {
+    fn release(&mut self) {
+        self.original.release();
+    }
+
+    fn abort(&mut self) -> Box<dyn RetainedWorldField> {
         if matches!(self.boundary, Some(UnwindBoundary::Abort)) {
             panic!("injected failure after the preceding real field returned to retry custody");
         }
-        let Self {
-            original,
-            boundary,
-            dropped,
-        } = *self;
         Box::new(UnwindField {
-            original: original.abort(),
-            boundary,
-            dropped,
+            original: self.original.abort(),
+            boundary: self.boundary,
+            dropped: OriginalFieldDrop(self.dropped.0.take()),
         })
     }
 
-    fn publish(self: Box<Self>) {
+    fn publish(&mut self) {
         self.original.publish();
     }
 }
@@ -477,6 +555,7 @@ fn world_publication_unwind_retains_both_admissions_until_original_fields_drop()
     for boundary in [UnwindBoundary::Prepare, UnwindBoundary::Abort] {
         let world = fixture();
         let before = all_images(&world);
+        let retained = world.smart_contract_state.snapshot();
         let field_dropped = Arc::new(AtomicBool::new(false));
         let capture_refund = Arc::new(AtomicUsize::new(0));
         let installation_refund = Arc::new(AtomicUsize::new(0));
@@ -552,10 +631,10 @@ fn world_publication_unwind_retains_both_admissions_until_original_fields_drop()
             let name = field.summary().name;
             let poisoned = match boundary {
                 UnwindBoundary::Prepare => index == 0,
-                UnwindBoundary::Abort => index != 0,
+                UnwindBoundary::Abort => false,
             };
             match field.try_prepare(&world) {
-                Ok(prepared) => {
+                Ok(mut prepared) => {
                     assert!(
                         !poisoned,
                         "{boundary:?}: unwound {name} must require recovery"
@@ -576,6 +655,231 @@ fn world_publication_unwind_retains_both_admissions_until_original_fields_drop()
                 }
             }
         }
-        assert_eq!(all_images(&world), before);
+        let original_image = format!(
+            "{:?}",
+            (
+                retained.current().iter().collect::<Vec<_>>(),
+                retained.revert_map().iter().collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            original_image,
+            before
+                .iter()
+                .find(|(name, _)| *name == "smart_contract_state")
+                .unwrap()
+                .1
+        );
+        match boundary {
+            UnwindBoundary::Prepare => {
+                // Only the first EBR field was acquired before this cut. Its
+                // writer is poisoned, but no map reader mutex was held.
+                assert_eq!(all_images(&world), before);
+            }
+            UnwindBoundary::Abort => {
+                // Joint release precedes the fallible retry-box transfer, so a
+                // later cleanup panic cannot poison already unlocked readers.
+                assert_eq!(all_images(&world), before);
+            }
+        }
     }
+}
+
+#[test]
+fn world_abort_retains_all_original_boxes_and_notifications_until_aggregate_unlock() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Wake, Waker},
+    };
+    struct Probe {
+        world: Arc<World>,
+        fence: Arc<std::sync::Mutex<()>>,
+        calls: AtomicUsize,
+    }
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            assert!(
+                self.fence.try_lock().is_ok(),
+                "aggregate fence must release before callbacks"
+            );
+            assert_all_writers_released(&self.world);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let world = fixture();
+    let competitor = capture(world.block());
+    let mut original = world.block();
+    mutate(&mut original, 19, "deferred_world_wake");
+    let prepared = prepare(capture(original), &world);
+    let (_, error, _cleanup) = competitor
+        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .err()
+        .unwrap();
+    drop(_cleanup);
+    let WorldPublicationError::Field(FieldRefusal {
+        cause: PublicationPreparationError::Busy(wait),
+        ..
+    }) = error
+    else {
+        panic!("exact original World field must exclude the competitor");
+    };
+    let fence = Arc::new(std::sync::Mutex::new(()));
+    let probe = Arc::new(Probe {
+        world: Arc::clone(&world),
+        fence: Arc::clone(&fence),
+        calls: AtomicUsize::new(0),
+    });
+    let waker = Waker::from(Arc::clone(&probe));
+    let mut context = Context::from_waker(&waker);
+    let mut wait = wait.wait_for_release();
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    let held = fence.lock().unwrap();
+    let published = prepared.abort();
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
+    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    drop(held);
+    drop(published);
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+    assert!(Pin::new(&mut wait).poll(&mut context).is_ready());
+    assert_eq!(
+        world
+            .smart_contract_state
+            .view()
+            .get(&path("capture/value")),
+        Some(&vec![1])
+    );
+}
+
+#[test]
+fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_fence() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::Mutex,
+        task::{Context, Wake, Waker},
+    };
+    struct Probe {
+        world: Arc<World>,
+        fence: Arc<Mutex<()>>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            assert!(
+                self.fence.try_lock().is_ok(),
+                "enclosing fence precedes callback"
+            );
+            assert_all_writers_released(&self.world);
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    // Observe a real first-field release only after the earlier prefix has been
+    // acquired. The separate original probe journal never includes this hook.
+    struct ObservePrefix {
+        original: Box<dyn RetainedWorldField>,
+        journal: DetachedWorld<()>,
+        future: Arc<Mutex<Option<concread::release::ReleaseFuture>>>,
+        callback: Arc<Probe>,
+    }
+    impl RetainedWorldField for ObservePrefix {
+        fn summary(&self) -> FieldSummary {
+            self.original.summary()
+        }
+        fn matches_current(&self, target: &World) -> bool {
+            self.original.matches_current(target)
+        }
+        fn try_prepare<'target>(
+            self: Box<Self>,
+            target: &'target World,
+        ) -> Result<
+            Box<dyn PreparedWorldField + 'target>,
+            (Box<dyn PreparedWorldField + 'target>, FieldRefusal),
+        > {
+            let Self {
+                original,
+                journal,
+                future,
+                callback,
+            } = *self;
+            let (_, error, cleanup) = journal
+                .try_prepare_publication(target, |_, _| Ok::<_, ()>(()))
+                .err()
+                .expect("earlier original field is held");
+            drop(cleanup);
+            let WorldPublicationError::Field(FieldRefusal {
+                cause: PublicationPreparationError::Busy(wait),
+                ..
+            }) = error
+            else {
+                panic!("actual first-field lock observation");
+            };
+            let mut wait = wait.wait_for_release();
+            let waker = Waker::from(callback);
+            assert!(
+                Pin::new(&mut wait)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+            *future.lock().unwrap() = Some(wait);
+            original.try_prepare(target)
+        }
+    }
+    let world = fixture();
+    let before = all_images(&world);
+    let probe_journal = capture(world.block());
+    let mut block = world.block();
+    mutate(&mut block, 23, "refused_world");
+    let mut journal = capture(block);
+    let custody = physical_custody(&journal);
+    assert!(
+        journal
+            .fields()
+            .position(|field| field.name == "smart_contract_state")
+            .unwrap()
+            > 1
+    );
+    let fence = Arc::new(Mutex::new(()));
+    let callback = Arc::new(Probe {
+        world: Arc::clone(&world),
+        fence: Arc::clone(&fence),
+        wakes: AtomicUsize::new(0),
+    });
+    let future = Arc::new(Mutex::new(None));
+    let original = journal.fields.remove(1);
+    journal.fields.insert(
+        1,
+        Box::new(ObservePrefix {
+            original,
+            journal: probe_journal,
+            future: Arc::clone(&future),
+            callback: Arc::clone(&callback),
+        }),
+    );
+    let outer = fence.lock().unwrap();
+    let blocked = world.smart_contract_state.block();
+    let (journal, error, cleanup) = journal
+        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .err()
+        .expect("late field refuses the complete original World");
+    let WorldPublicationError::Field(refusal) = error else {
+        panic!("late component refusal");
+    };
+    assert_eq!(refusal.field, "smart_contract_state");
+    assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
+    assert_eq!(physical_custody(&journal), custody);
+    drop(blocked);
+    assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
+    drop(outer);
+    drop(cleanup);
+    assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
+    let mut wait = future.lock().unwrap().take().unwrap();
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready()
+    );
+    assert_eq!(all_images(&world), before);
+    assert!(journal.matches_current(&world));
+    drop(prepare(journal, &world).abort());
 }

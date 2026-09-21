@@ -20,6 +20,10 @@ require the packaged ABI-23 Rust bridge for the current runtime identifier. Priv
 and native SoraFS validation use the same bridge. Transport-only anonymous reads do
 not construct account identities.
 
+Privacy archive queries and validation run on the caller's ordinary stack. They
+do not create enlarged-stack threads. Native result bounds, owned input snapshots
+and native-buffer cleanup apply on that same call path.
+
 Exact12 capability admission requires authenticated HTTPS Torii reads, the configured
 `NetworkId`, and native validation of the complete signed qualification. The SDK
 retains that exact network on the manifest and admission token, checks the deployment

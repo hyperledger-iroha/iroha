@@ -136,15 +136,16 @@ reviewed deployment context. Missing, substituted, or mismatched qualification
 input blocks the lane.
 
 The independently signed topology companion is also schema-closed. Its
-`signer_authentication_kind` is exactly `external-ed25519`, `signer_backend` is
-exactly `software`, and `signature_algorithm` is exactly `ed25519`. The
+`signer_authentication_kind` is exactly `external-ed25519`, and
+`signature_algorithm` is exactly `ed25519`. The
 signature covers the distinct service and administrator identities, positive
 key and policy revisions, non-zero policy digest, public-key fingerprint, and
-the exact topology binding. Local or non-software backends, same-identity
+the exact topology binding. Untrusted signers, same-identity
 administration, and key reuse with a resilience, lane, or promotion signer fail
-qualification even when a detached signature is otherwise valid. Iroha has no
-HSM-specific backend or migration mode; deployment-owned custody behind the
-external signer must not relabel this release.
+qualification even when a detached signature is otherwise valid. Key storage
+is the operator's choice; the envelope has no backend or key-storage
+qualification field. The pending independent signer-authorization and
+completed-operation integration remains a final production-promotion blocker.
 
 The binding also carries the exact Taira network, chain ID, discriminator, and
 SHA-256 of the canonical ordered four-validator identity array.

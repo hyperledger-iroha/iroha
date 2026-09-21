@@ -26,7 +26,8 @@ pub use crate::internals::bptree::allocation::{NodeCloning, NodeFunding};
 pub use crate::internals::bptree::tracking::{FixedTrackingBuffer, TrackingBuffer};
 pub use crate::internals::lincowcell::Untracked;
 pub use admission::{
-    AllocationDemand, BptreeMapCheckpoint, CheckpointRetirement, ClonePlanning, MapAdmissionError,
+    AllocationDemand, BptreeMapCheckpoint, BptreeMapPreparedInsert, BptreeMapPreparedKeyCopyInsert,
+    BptreeMapPreparedOptionalCopyInsert, CheckpointRetirement, ClonePlanning, MapAdmissionError,
     PairInsertError, PairRemoveError, PlanningError,
 };
 pub use mode::{MapMode, Prepaid};
@@ -307,6 +308,12 @@ where
         BptreeMapReadTxn { inner }
     }
 
+    /// Observe the original active-reader mutex before probing read or commit
+    /// preparation. Retained snapshots and writer releases cannot satisfy it.
+    pub fn observe_reader_release(&self) -> crate::release::ReleaseWait {
+        self.inner.observe_reader_release()
+    }
+
     /// Retain the original current reader without waiting or allocating.
     /// `Busy` and `Poisoned` describe the reader lock, not a writer lease.
     pub fn try_read(&self) -> Result<BptreeMapReadTxn<'_, K, V, M>, OwnedWriteError> {
@@ -471,6 +478,18 @@ where
         BptreeMapWriteTxn {
             inner: self.inner.abort(),
         }
+    }
+
+    /// Return the original writer while retaining the released reader notification.
+    /// Aggregate abort must unlock its remaining participants before dropping it.
+    pub fn abort_retaining(
+        self,
+    ) -> (
+        BptreeMapWriteTxn<'a, K, V, M>,
+        crate::release::DeferredRelease,
+    ) {
+        let (inner, release) = self.inner.abort_retaining();
+        (BptreeMapWriteTxn { inner }, release)
     }
 
     /// Publish original nodes without allocation or user destruction.

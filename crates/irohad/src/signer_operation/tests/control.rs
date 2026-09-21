@@ -172,7 +172,12 @@ fn enrollment_requires_independent_successor_configuration_authority_and_exact_s
     assert!(
         fixture
             .coordinator
-            .prepare_custody_activation(wrong, record.clone(), fixture.coordinator.trust.clone())
+            .prepare_custody_activation(
+                fixture.source.as_ref(),
+                wrong,
+                record.clone(),
+                fixture.coordinator.trust.clone()
+            )
             .is_err()
     );
     let mut trust = fixture.coordinator.trust.clone();
@@ -180,7 +185,12 @@ fn enrollment_requires_independent_successor_configuration_authority_and_exact_s
     assert!(
         fixture
             .coordinator
-            .prepare_custody_activation(fixture.source.binding.clone(), record, trust)
+            .prepare_custody_activation(
+                fixture.source.as_ref(),
+                fixture.source.binding.clone(),
+                record,
+                trust
+            )
             .is_err()
     );
     assert_eq!(fixture.provider.calls.load(Ordering::Relaxed), 0);
@@ -214,7 +224,12 @@ fn exact_key_renewal_new_policy_and_new_key_activate_only_after_old_key_terminal
         let record = successor(&fixture, binding.clone());
         let prepared = fixture
             .coordinator
-            .prepare_custody_activation(binding.clone(), record, fixture.coordinator.trust.clone())
+            .prepare_custody_activation(
+                fixture.source.as_ref(),
+                binding.clone(),
+                record,
+                fixture.coordinator.trust.clone(),
+            )
             .expect("qualified successor");
         let digest = prepared.record_digest();
         let mut operation = fixture
@@ -232,7 +247,7 @@ fn exact_key_renewal_new_policy_and_new_key_activate_only_after_old_key_terminal
             )
             .expect("old-key terminal audit");
         let completed = operation
-            .finish_custody_activation(prepared, commitment().audit)
+            .finish_custody_activation(fixture.source.as_ref(), prepared, commitment().audit)
             .expect("activate exact successor");
         assert_eq!(completed.action(), SignerOperationActionV1::ActivateCustody);
         assert_eq!(completed.audit(), commitment().audit);
@@ -283,7 +298,12 @@ fn successor_identity_alias_and_revision_rollback_are_rejected_before_provider_i
         assert!(
             fixture
                 .coordinator
-                .prepare_custody_activation(binding, record, fixture.coordinator.trust.clone())
+                .prepare_custody_activation(
+                    fixture.source.as_ref(),
+                    binding,
+                    record,
+                    fixture.coordinator.trust.clone()
+                )
                 .is_err()
         );
         assert_eq!(fixture.provider.calls.load(Ordering::Relaxed), 0);
@@ -307,7 +327,7 @@ fn revocation_finalizes_audit_without_provenance_response_or_post_revocation_key
         )
         .expect("terminal audit");
     let completed = operation
-        .finish_custody_revocation([0x91; 32], commitment().audit)
+        .finish_custody_revocation(fixture.source.as_ref(), [0x91; 32], commitment().audit)
         .expect("finalized revocation");
     assert_eq!(completed.action(), SignerOperationActionV1::RevokeCustody);
     assert!(completed.activation().is_none());
@@ -331,6 +351,51 @@ fn revocation_finalizes_audit_without_provenance_response_or_post_revocation_key
     assert_eq!(state.audit, commitment().audit);
     assert_eq!(state.transition_commits, 1);
 }
+
+#[test]
+fn explicit_control_source_must_own_the_exact_original_reservation() {
+    let original = fixture();
+    let substituted = fixture();
+    let old_audit = original.source.state.lock().expect("source lock").audit;
+    let mut operation = original
+        .coordinator
+        .begin(terminal_intent(
+            &original,
+            SignerOperationActionV1::RevokeCustody,
+            [0x91; 32],
+        ))
+        .expect("reserve only on the original authority");
+    operation
+        .sign(
+            SignerKeyOperationPurposeV1::AuditRecord,
+            &commitment().audit.signing_message(),
+        )
+        .expect("prepare the exact old-key audit");
+    assert!(matches!(
+        operation.finish_custody_revocation(
+            substituted.source.as_ref(),
+            [0x91; 32],
+            commitment().audit,
+        ),
+        Err(SignerOperationErrorV1::ReservationConflict)
+    ));
+    for source in [&original.source, &substituted.source] {
+        let state = source.state.lock().expect("source lock");
+        assert_eq!(state.transition_commits, 0);
+        assert_eq!(state.audit, old_audit);
+        assert!(!state.context.signer_revoked);
+    }
+    assert!(
+        original
+            .source
+            .state
+            .lock()
+            .expect("source lock")
+            .reservation
+            .is_some()
+    );
+    assert_eq!(original.provider.calls.load(Ordering::Relaxed), 1);
+}
 #[test]
 fn terminal_actions_cannot_escape_through_ordinary_completion_or_substituted_audit_reason() {
     for kind in 0..4 {
@@ -353,7 +418,11 @@ fn terminal_actions_cannot_escape_through_ordinary_completion_or_substituted_aud
             0 => assert!(operation.finish(commitment()).is_err()),
             1 => assert!(
                 operation
-                    .finish_custody_revocation([0x93; 32], commitment().audit)
+                    .finish_custody_revocation(
+                        fixture.source.as_ref(),
+                        [0x93; 32],
+                        commitment().audit
+                    )
                     .is_err()
             ),
             2 => {
@@ -361,7 +430,7 @@ fn terminal_actions_cannot_escape_through_ordinary_completion_or_substituted_aud
                 audit.digest[0] ^= 1;
                 assert!(
                     operation
-                        .finish_custody_revocation([0x91; 32], audit)
+                        .finish_custody_revocation(fixture.source.as_ref(), [0x91; 32], audit)
                         .is_err()
                 );
             }
@@ -369,7 +438,11 @@ fn terminal_actions_cannot_escape_through_ordinary_completion_or_substituted_aud
                 fixture.source.state.lock().expect("lock").fail_transition = true;
                 assert!(
                     operation
-                        .finish_custody_revocation([0x91; 32], commitment().audit)
+                        .finish_custody_revocation(
+                            fixture.source.as_ref(),
+                            [0x91; 32],
+                            commitment().audit
+                        )
                         .is_err()
                 );
             }
@@ -401,7 +474,7 @@ fn control_drift_during_terminal_audit_prevents_activation_or_revocation_commit(
     );
     assert!(
         operation
-            .finish_custody_revocation([0x91; 32], commitment().audit)
+            .finish_custody_revocation(fixture.source.as_ref(), [0x91; 32], commitment().audit)
             .is_err()
     );
     assert_eq!(
@@ -485,6 +558,7 @@ fn completed_response_cannot_be_relabelled_after_same_key_custody_renewal() {
     let prepared = fixture
         .coordinator
         .prepare_custody_activation(
+            fixture.source.as_ref(),
             binding.clone(),
             record.clone(),
             fixture.coordinator.trust.clone(),
@@ -510,7 +584,7 @@ fn completed_response_cannot_be_relabelled_after_same_key_custody_renewal() {
         )
         .expect("terminal audit");
     let activated = renewal
-        .finish_custody_activation(prepared, audit)
+        .finish_custody_activation(fixture.source.as_ref(), prepared, audit)
         .expect("activate renewal");
     let new_custody =
         SignerOperationCustodyV1::from_verified(activated.activation().expect("new custody"));
@@ -562,6 +636,7 @@ fn terminal_final_observation_rejects_post_commit_custody_drift_without_old_key_
                     fixture
                         .coordinator
                         .prepare_custody_activation(
+                            fixture.source.as_ref(),
                             fixture.source.binding.clone(),
                             record,
                             fixture.coordinator.trust.clone(),
@@ -591,8 +666,16 @@ fn terminal_final_observation_rejects_post_commit_custody_drift_without_old_key_
                 .expect("lock")
                 .mutate_on_transition_observe = Some(mutation);
             let result = match prepared {
-                Some(prepared) => operation.finish_custody_activation(prepared, commitment().audit),
-                None => operation.finish_custody_revocation(digest, commitment().audit),
+                Some(prepared) => operation.finish_custody_activation(
+                    fixture.source.as_ref(),
+                    prepared,
+                    commitment().audit,
+                ),
+                None => operation.finish_custody_revocation(
+                    fixture.source.as_ref(),
+                    digest,
+                    commitment().audit,
+                ),
             };
             assert!(result.is_err());
             assert_eq!(

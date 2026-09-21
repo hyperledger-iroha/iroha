@@ -5027,7 +5027,7 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog_on_consen
             .is_none(),
         "failed source construction remains fail-closed"
     );
-    let notification = mv::ReleaseNotification::default();
+    let notification = concread::release::ReleaseNotification::default();
     let original = notification.observe();
     let mut attempts = 0;
     let refused =

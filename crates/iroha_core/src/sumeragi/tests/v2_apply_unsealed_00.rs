@@ -2948,7 +2948,7 @@ fn retired_merge_carrier_startup_fixture() -> RetiredMergeCarrierStartupFixture 
 #[test]
 fn lane_lifecycle_local_storage_and_publication_busy_never_reject_proposals() {
     use crate::state::LaneLifecycleError;
-    let release = mv::ReleaseNotification::default();
+    let release = concread::release::ReleaseNotification::default();
     for error in [
         LaneLifecycleError::Storage("tiered owner requires recovery".to_owned()),
         LaneLifecycleError::GeometryStorage(crate::kura::Error::IO(
@@ -2980,7 +2980,7 @@ fn committed_state_geometry_refusal_retains_source_and_requires_recovery() {
     use crate::state::{LaneLifecycleError, storage_transactions::TransactionsBlockError};
     use std::error::Error as _;
 
-    let release = mv::ReleaseNotification::default();
+    let release = concread::release::ReleaseNotification::default();
     let observation = release.observe();
     let error = V2ApplyError::CommittedStatePublication(TransactionsBlockError::from(
         LaneLifecycleError::PublicationBusy {

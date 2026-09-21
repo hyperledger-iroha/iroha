@@ -93,7 +93,7 @@ mod strict_verifying_key_preparation_tests {
         let id = VerifyingKeyId::new(ZK_BACKEND_STARK_FRI_V1, "generic-binding-air");
         let mut record = VerifyingKeyRecord::new(
             1,
-            "generic-binding-air",
+            format!("{ZK_BACKEND_STARK_FRI_V1}:generic-binding-air"),
             iroha_data_model::zk::BackendTag::Stark,
             "goldilocks",
             [0x51; 32],

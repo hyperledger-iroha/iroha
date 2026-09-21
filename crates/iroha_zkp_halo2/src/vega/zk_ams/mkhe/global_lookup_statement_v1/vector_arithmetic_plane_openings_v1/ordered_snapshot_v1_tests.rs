@@ -259,7 +259,12 @@ impl Drop for DirectoryV1 {
     }
 }
 fn tiny_writer_v1(directory: &Path) -> OrderedPlaneSpoolWriterV1 {
-    OrderedPlaneSpoolWriterV1::create_with_plan_v1(directory, tiny_plan_v1()).unwrap()
+    OrderedPlaneSpoolWriterV1::create_with_plan_v1(
+        directory,
+        tiny_plan_v1(),
+        &mut OrderedStorageSessionBudgetV1::new_v1(),
+    )
+    .unwrap()
 }
 fn tiny_snapshot_v1(directory: &Path) -> OrderedPlaneSpoolSnapshotV1 {
     let mut writer = tiny_writer_v1(directory);
@@ -342,7 +347,7 @@ fn duplicate_missing_malformed_writes_and_failed_second_seal_discard_both() {
 fn swapped_leaf_replayed_execution_and_changed_expected_context_poison_whole_pair() {
     let directory = DirectoryV1::new_v1();
     let mut swapped = tiny_snapshot_v1(&directory.0);
-    swapped.live.as_mut().unwrap().swap(0, 1);
+    swapped.live.as_mut().unwrap().spools.swap(0, 1);
     assert!(matches!(
         swapped.read_slot_v1(0),
         Err(OrderedSnapshotErrorV1::Context)
@@ -351,8 +356,8 @@ fn swapped_leaf_replayed_execution_and_changed_expected_context_poison_whole_pai
     let mut first = tiny_snapshot_v1(&directory.0);
     let mut second = tiny_snapshot_v1(&directory.0);
     std::mem::swap(
-        &mut first.live.as_mut().unwrap()[0],
-        &mut second.live.as_mut().unwrap()[0],
+        &mut first.live.as_mut().unwrap().spools[0],
+        &mut second.live.as_mut().unwrap().spools[0],
     );
     assert!(matches!(
         first.read_slot_v1(0),
@@ -389,9 +394,9 @@ fn authenticated_but_semantically_invalid_tail_is_rejected_on_read() {
         if global == 65 {
             chunk.as_mut_slice_v1()[16383] = 1;
         }
-        writer.live.as_mut().unwrap()[segment]
-            .write_slot_v1(local, chunk)
-            .unwrap();
+        let live = writer.live.as_mut().unwrap();
+        live.reservation.charge_reserved_io_v1(16_400).unwrap();
+        live.spools[segment].write_slot_v1(local, chunk).unwrap();
     }
     writer.next_slot = 66;
     let mut snapshot = writer.seal_v1().unwrap();
@@ -415,12 +420,16 @@ fn writer_unwind_and_malformed_plan_return_no_owner() {
     }));
     assert!(unwind.is_err());
     assert!(directory.0.read_dir().unwrap().next().is_none());
-    // A malformed plan fails before either file is created. No test hook or
-    // alternate crypto constructor is introduced for second-file I/O failure.
+    // A malformed plan fails before either file is created or reserved. The
+    // budget suite separately exercises genuine second-leaf creation failure.
     let mut malformed = tiny_plan_v1();
     malformed.layouts.swap(0, 1);
     assert!(matches!(
-        OrderedPlaneSpoolWriterV1::create_with_plan_v1(&directory.0, malformed),
+        OrderedPlaneSpoolWriterV1::create_with_plan_v1(
+            &directory.0,
+            malformed,
+            &mut OrderedStorageSessionBudgetV1::new_v1()
+        ),
         Err(OrderedSnapshotErrorV1::Shape)
     ));
     assert!(directory.0.read_dir().unwrap().next().is_none());

@@ -428,10 +428,14 @@ fn source_consumer_is_normal_registered_and_preserves_all_authority_and_poison_b
     let emission = emission.split_whitespace().collect::<String>();
     assert!(
         emission.find("self.live.take()").unwrap()
-            < emission.find("live.values.emit_next_v1").unwrap()
+            < emission
+                .find("live.opening.emit_next_value_chunk_v1")
+                .unwrap()
     );
     assert!(
-        emission.find("live.values.emit_next_v1").unwrap()
+        emission
+            .find("live.opening.emit_next_value_chunk_v1")
+            .unwrap()
             < emission.find("self.live=Some(live)").unwrap()
     );
     let finish = source
@@ -442,7 +446,7 @@ fn source_consumer_is_normal_registered_and_preserves_all_authority_and_poison_b
         .next()
         .unwrap();
     assert!(
-        finish.find("live.values.finish_v1()?").unwrap()
+        finish.find("live.opening.finish_v1()?").unwrap()
             < finish.find("source.next_comparator_plane =").unwrap()
     );
 }
@@ -502,6 +506,7 @@ fn invalid_source_v1(
         record,
         materialization_seal,
         next_comparator_plane: 0,
+        ordered_writer: None,
     }
 }
 
@@ -518,6 +523,17 @@ fn consuming_source_entry_rejects_missing_evidence_and_exhausted_cursor() {
 }
 
 #[cfg(unix)]
+fn failure_opening_fixture_v1() -> PreparedPlaneOpeningV1 {
+    PreparedPlaneOpeningV1::from_committed_v1(
+        expand_comparator_values_v1(packed_chunk_v1(1), comparator_coordinate_v1(0).unwrap())
+            .unwrap(),
+        super::super::super::source_algebra::PreparedPlaneOpeningTailV1::test_wire_fixture_v1(0),
+        0,
+    )
+    .unwrap()
+}
+
+#[cfg(unix)]
 #[test]
 fn outer_chunk_errors_and_early_finish_drop_the_entire_unadmitted_source_owner() {
     let _guard = super::super::tests::radix_witness_test_guard_v2();
@@ -526,11 +542,7 @@ fn outer_chunk_errors_and_early_finish_drop_the_entire_unadmitted_source_owner()
         let mut prepared = PreparedComparatorPlaneV1 {
             live: Some(PreparedComparatorPlaneLiveV1 {
                 source: invalid_source_v1(&directory),
-                values: expand_comparator_values_v1(
-                    packed_chunk_v1(1),
-                    comparator_coordinate_v1(0).unwrap(),
-                )
-                .unwrap(),
+                opening: failure_opening_fixture_v1(),
             }),
         };
         let before = zeroizing_t256_scalar_vec_drop_count_v1();
@@ -543,16 +555,42 @@ fn outer_chunk_errors_and_early_finish_drop_the_entire_unadmitted_source_owner()
     let prepared = PreparedComparatorPlaneV1 {
         live: Some(PreparedComparatorPlaneLiveV1 {
             source: invalid_source_v1(&directory),
-            values: expand_comparator_values_v1(
-                packed_chunk_v1(1),
-                comparator_coordinate_v1(0).unwrap(),
-            )
-            .unwrap(),
+            opening: failure_opening_fixture_v1(),
         }),
     };
     let before = zeroizing_t256_scalar_vec_drop_count_v1();
     assert!(prepared.finish_v1().is_err());
     assert_eq!(zeroizing_t256_scalar_vec_drop_count_v1(), before + 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn prepared_opening_tail_outer_error_and_missing_tail_close_source_before_handoff() {
+    let _guard = super::super::tests::radix_witness_test_guard_v2();
+    let directory = DirectoryV1::new_v1();
+    for early_tail in [false, true] {
+        // An unadmitted source is intentional: only outer failure ownership is
+        // tested here. This fixture cannot provide production source authority.
+        let mut prepared = PreparedComparatorPlaneV1 {
+            live: Some(PreparedComparatorPlaneLiveV1 {
+                source: invalid_source_v1(&directory),
+                opening: failure_opening_fixture_v1(),
+            }),
+        };
+        let before = zeroizing_t256_scalar_vec_drop_count_v1();
+        if early_tail {
+            assert!(prepared.emit_opening_tail_v1().is_err());
+            assert!(prepared.live.is_none());
+            assert!(prepared.emit_next_value_chunk_v1(0).is_err());
+        } else {
+            for chunk in 0..32 {
+                drop(prepared.emit_next_value_chunk_v1(chunk).unwrap());
+            }
+        }
+        assert!(prepared.finish_v1().is_err());
+        assert_eq!(zeroizing_t256_scalar_vec_drop_count_v1(), before + 1);
+        assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 0);
+    }
 }
 
 #[cfg(unix)]
@@ -563,11 +601,7 @@ fn unwind_after_owner_take_drops_retained_values_and_does_not_restore_source() {
     let mut prepared = PreparedComparatorPlaneV1 {
         live: Some(PreparedComparatorPlaneLiveV1 {
             source: invalid_source_v1(&directory),
-            values: expand_comparator_values_v1(
-                packed_chunk_v1(1),
-                comparator_coordinate_v1(0).unwrap(),
-            )
-            .unwrap(),
+            opening: failure_opening_fixture_v1(),
         }),
     };
     let before = zeroizing_t256_scalar_vec_drop_count_v1();
@@ -642,5 +676,76 @@ fn shared_radix_emitter_rejects_inexact_values_and_zeros_owned_buffers() {
         let before = zeroizing_t256_scalar_vec_drop_count_v1();
         assert!(PreparedRadixValuesV1::from_exact_values_v1(values).is_err());
         assert_eq!(zeroizing_t256_scalar_vec_drop_count_v1(), before + 1);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn materialized_storage_outer_store_advances_original_source_only_after_all_33_writes() {
+    use crate::vega::zk_ams::mkhe::global_lookup_statement_v1::{
+        OrderedPlaneSpoolWriterV1, OrderedStorageSessionBudgetV1,
+    };
+    let directory = DirectoryV1::new_v1();
+    let mut source = invalid_source_v1(&directory);
+    let identity = *source.snapshot.snapshot_digest_v1();
+    let mut budget = OrderedStorageSessionBudgetV1::new_v1();
+    source.ordered_writer = Some(
+        OrderedPlaneSpoolWriterV1::create_tiny_for_test_v1(&directory.0, [7; 32], &mut budget)
+            .unwrap(),
+    );
+    let prepared = PreparedComparatorPlaneV1 {
+        live: Some(PreparedComparatorPlaneLiveV1 {
+            source,
+            opening: failure_opening_fixture_v1(),
+        }),
+    };
+    let source = match prepared.store_v1() {
+        Ok(source) => source,
+        Err(_) => panic!("exact prepared stream failed"),
+    };
+    assert_eq!(source.next_comparator_plane, 1);
+    assert_eq!(*source.snapshot.snapshot_digest_v1(), identity);
+    source
+        .ordered_writer
+        .as_ref()
+        .unwrap()
+        .require_next_slot_v1(33)
+        .unwrap();
+    assert_eq!(budget.test_usage_words_v1()[3], 33 * 16_400);
+    // The enclosing fixture deliberately lacks source authority; local writes
+    // cannot promote it into the genuine completed source/sealed replay owner.
+    assert!(source.seal_ordered_storage_v1().is_err());
+    assert_eq!(budget.test_usage_words_v1()[0], 0);
+}
+
+#[test]
+#[cfg(unix)]
+fn materialized_storage_outer_finish_rejects_emitted_but_dropped_chunks() {
+    use crate::vega::zk_ams::mkhe::global_lookup_statement_v1::{
+        OrderedPlaneSpoolWriterV1, OrderedStorageSessionBudgetV1,
+    };
+    let directory = DirectoryV1::new_v1();
+    for emitted in [0, 32, 33] {
+        let mut source = invalid_source_v1(&directory);
+        let mut budget = OrderedStorageSessionBudgetV1::new_v1();
+        source.ordered_writer = Some(
+            OrderedPlaneSpoolWriterV1::create_tiny_for_test_v1(&directory.0, [7; 32], &mut budget)
+                .unwrap(),
+        );
+        let mut prepared = PreparedComparatorPlaneV1 {
+            live: Some(PreparedComparatorPlaneLiveV1 {
+                source,
+                opening: failure_opening_fixture_v1(),
+            }),
+        };
+        for index in 0..emitted.min(32) {
+            drop(prepared.emit_next_value_chunk_v1(index).unwrap());
+        }
+        if emitted == 33 {
+            drop(prepared.emit_opening_tail_v1().unwrap());
+        }
+        assert!(prepared.finish_v1().is_err());
+        assert_eq!(budget.test_usage_words_v1()[0], 0);
+        assert_eq!(budget.test_usage_words_v1()[3], 0);
     }
 }

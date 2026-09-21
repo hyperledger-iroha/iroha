@@ -31,6 +31,8 @@ fn plain_ballot_emits_open_event_with_window() {
     cfg.plain_voting_enabled = true;
     cfg.min_bond_amount = 0_u64.into();
     cfg.conviction_step_blocks = 1;
+    cfg.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+    cfg.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
     state.set_gov(cfg);
     let rid = "plain-open-event".to_string();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
@@ -44,6 +46,12 @@ fn plain_ballot_emits_open_event_with_window() {
         Grant::account_permission(ballot_perm, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant ballot permission");
+        iroha_core::query::standalone_plain_test_fixture::fund_voter(
+            &mut stx,
+            &iroha_test_samples::ALICE_ID,
+            1_000_000_u64.into(),
+            0,
+        );
         stx.world.governance_referenda_mut().insert(
             rid.clone(),
             GovernanceReferendumRecord {
@@ -51,6 +59,11 @@ fn plain_ballot_emits_open_event_with_window() {
                 h_end: 6,
                 status: GovernanceReferendumStatus::Proposed,
                 mode: iroha_core::state::GovernanceReferendumMode::Plain,
+                plain_context: iroha_core::query::standalone_plain_test_fixture::context(
+                    &stx.gov, 0,
+                ),
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
             },
         );
         stx.apply();

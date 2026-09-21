@@ -1738,6 +1738,7 @@ struct ServerTestNativeSigner {
     handle: &'static str,
     seed: u8,
     mode: ServerTestNativeSignerMode,
+    probe_calls: AtomicU64,
     sign_calls: AtomicU64,
     signed: AtomicBool,
 }
@@ -1748,6 +1749,7 @@ impl ServerTestNativeSigner {
             handle: native_test_handle(role),
             seed: native_test_seed(role),
             mode: ServerTestNativeSignerMode::Exact,
+            probe_calls: AtomicU64::new(0),
             sign_calls: AtomicU64::new(0),
             signed: AtomicBool::new(false),
         }
@@ -1831,18 +1833,22 @@ const fn native_test_seed(role: iroha_torii::SorafsNativeTransactionSignerRoleV1
 }
 impl iroha_torii::SorafsNativeTransactionSignerProviderV1 for ServerTestNativeSigner {
     fn role(&self) -> iroha_torii::SorafsNativeTransactionSignerRoleV1 {
+        self.probe_calls.fetch_add(1, Ordering::Relaxed);
         self.role
     }
     fn handle(&self) -> &str {
+        self.probe_calls.fetch_add(1, Ordering::Relaxed);
         self.handle
     }
     fn authority(&self) -> AccountId {
+        self.probe_calls.fetch_add(1, Ordering::Relaxed);
         AccountId::new(self.keypair().public_key().clone())
     }
     fn public_key(
         &self,
     ) -> Result<iroha_crypto::PublicKey, iroha_torii::SorafsNativeTransactionSignerProbeErrorV1>
     {
+        self.probe_calls.fetch_add(1, Ordering::Relaxed);
         Ok(self.keypair().public_key().clone())
     }
     fn qualification(
@@ -1851,6 +1857,7 @@ impl iroha_torii::SorafsNativeTransactionSignerProviderV1 for ServerTestNativeSi
         iroha_torii::SorafsNativeTransactionSignerQualificationV1,
         iroha_torii::SorafsNativeTransactionSignerProbeErrorV1,
     > {
+        self.probe_calls.fetch_add(1, Ordering::Relaxed);
         let revision = if self.signed.load(Ordering::Acquire) {
             8
         } else {

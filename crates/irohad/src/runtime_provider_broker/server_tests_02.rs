@@ -502,21 +502,7 @@ fn native_signer_test_backends() -> RuntimeProviderBrokerBackendsV1 {
         .with_reserve_transaction_signer(Arc::new(ServerTestNativeSigner::exact(Role::Reserve)))
         .with_orderbook_transaction_signer(Arc::new(ServerTestNativeSigner::exact(Role::Orderbook)))
 }
-fn native_signer_test_payload_for_network(
-    network_id: NetworkId,
-    authority: AccountId,
-) -> TransactionPayload {
-    TransactionBuilder::new(
-        network_id,
-        authority,
-        FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .into_payload()
-    .expect("build native signer test payload")
-}
-fn native_signer_test_payload(authority: AccountId) -> TransactionPayload {
-    native_signer_test_payload_for_network(network_id(), authority)
-}
+include!("native_signer_test_support.rs");
 fn provider_ingest_completion_test_keypair() -> KeyPair {
     KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
         .expect("provider-ingest completion test key")
@@ -601,7 +587,7 @@ fn moderation_transaction_signer_test_payload() -> TransactionPayload {
     let public_key = ServerTestModerationTransactionSigner::keypair()
         .public_key()
         .clone();
-    native_signer_test_payload(AccountId::new(public_key))
+    transaction_signer_test_payload_for_network(network_id(), AccountId::new(public_key))
 }
 fn moderation_transaction_signer_test_state(
     signer: Arc<dyn test_moderation_runtime::ModerationSignedTransactionSignerV1>,
@@ -1706,7 +1692,7 @@ fn signer_binding() -> ProviderBindingWireV1 {
         revision: Some(7),
         policy_digest: Some(TEST_POLICY_DIGEST),
         bootle_lantern_issuance_bindings: None,
-        stream_token_hardware_binding: None,
+        stream_token_signer_binding: None,
         stream_token_gateway_admission_qualification: None,
         stream_token_gateway_admission_max_pending: None,
         stream_token_gateway_admission_max_tracked_tokens: None,
@@ -1740,14 +1726,14 @@ fn signer_binding() -> ProviderBindingWireV1 {
     }
 }
 fn token_signer_binding() -> ProviderBindingWireV1 {
-    let hardware = stream_token_hardware_test_support::hardware_binding();
+    let signer_backend = stream_token_signer_test_support::signer_binding();
     let mut binding = runtime_binding(
         IrohaRuntimeProviderSlotV1::StreamTokenSigner,
-        &hardware.custody().runtime_handle,
+        &signer_backend.custody().runtime_handle,
     );
-    binding.revision = Some(hardware.custody().key_revision);
-    binding.policy_digest = Some(hardware.custody().policy_digest);
-    binding.stream_token_hardware_binding = Some(hardware);
+    binding.revision = Some(signer_backend.custody().key_revision);
+    binding.policy_digest = Some(signer_backend.custody().policy_digest);
+    binding.stream_token_signer_binding = Some(signer_backend);
     binding
 }
 fn runtime_binding(slot: IrohaRuntimeProviderSlotV1, handle: &str) -> ProviderBindingWireV1 {
@@ -1797,7 +1783,7 @@ fn bootle_binding() -> ProviderBindingWireV1 {
 fn bootle_lantern_test_state(backend: Arc<ServerTestBootleLanternBackend>) -> BrokerServerStateV1 {
     let binding = bootle_binding();
     let backends = RuntimeProviderBrokerBackendsV1::new().with_bootle_lantern_issuance(backend);
-    let observation = make_server_observation(&binding, &backends)
+    let observation = make_server_observation(network_id(), &binding, &backends)
         .expect("observe exact Bootle/Lantern test backend");
     singleton_state("server-test-chain", binding, observation, backends)
 }
@@ -2028,7 +2014,8 @@ fn bootle_lantern_backend_set_rejects_drift_unavailability_and_substitution() {
         RuntimeProviderBrokerBackendsV1::new().with_bootle_lantern_issuance(backend.clone());
     validate_exact_backend_set(std::slice::from_ref(&binding), &backends)
         .expect("accept exact slot-56 backend set");
-    make_server_observation(&binding, &backends).expect("observe exact slot-56 backend");
+    make_server_observation(network_id(), &binding, &backends)
+        .expect("observe exact slot-56 backend");
     let mutations: [fn(&mut ProviderBindingWireV1); 4] = [
         |binding: &mut ProviderBindingWireV1| binding.revision = Some(8),
         |binding: &mut ProviderBindingWireV1| {
@@ -2048,13 +2035,13 @@ fn bootle_lantern_backend_set_rejects_drift_unavailability_and_substitution() {
     for mutate in mutations {
         let mut substituted = binding.clone();
         mutate(&mut substituted);
-        assert!(make_server_observation(&substituted, &backends).is_err());
+        assert!(make_server_observation(network_id(), &substituted, &backends).is_err());
     }
     backend.revision.store(8, Ordering::Release);
-    assert!(make_server_observation(&binding, &backends).is_err());
+    assert!(make_server_observation(network_id(), &binding, &backends).is_err());
     backend.revision.store(7, Ordering::Release);
     backend.unavailable.store(true, Ordering::Release);
-    assert!(make_server_observation(&binding, &backends).is_err());
+    assert!(make_server_observation(network_id(), &binding, &backends).is_err());
     backend.unavailable.store(false, Ordering::Release);
     assert!(
         validate_exact_backend_set(
@@ -2086,7 +2073,7 @@ fn appeal_finance_signer_test_state(
         .expect("accept exact appeal-finance transaction signer binding");
     let backends =
         RuntimeProviderBrokerBackendsV1::new().with_appeal_finance_transaction_signer(signer);
-    let observation = make_server_observation(&binding, &backends)
+    let observation = make_server_observation(network_id(), &binding, &backends)
         .expect("observe exact appeal-finance transaction signer");
     singleton_state("server-test-chain", binding, observation, backends)
 }
@@ -2467,7 +2454,7 @@ fn assert_backend_fixture(
         validate_exact_backend_set(std::slice::from_ref(binding), backends),
         Ok(())
     );
-    make_server_observation(binding, backends).expect(qualification_message);
+    make_server_observation(network_id(), binding, backends).expect(qualification_message);
     assert_eq!(
         validate_exact_backend_set(&[], backends),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
@@ -2628,7 +2615,7 @@ fn start_broker(
     Arc<RuntimeProviderBrokerLifecycleV1>,
     thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
 ) {
-    let directory = broker_socket_test_directory().expect(diagnostics[0]);
+    let directory = new_broker_socket_test_directory();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).expect(diagnostics[1]);
     let path = directory.path().join("runtime-provider-broker-v1.sock");
     let policy = BrokerTestEndpoint::for_test(path.clone());
@@ -2802,5 +2789,6 @@ fn signer_binding_for_server() -> ProviderBindingWireV1 {
 }
 include!("server_source_tests.rs");
 include!("codec_signer_tests.rs");
+include!("native_role_authorization_tests.rs");
 
-include!("stream_token_hardware_test_support.rs");
+include!("stream_token_signer_test_support.rs");

@@ -9,7 +9,7 @@ pub(super) fn stream_token_sign_or_recover(
     let requalify =
         || qualify_server_binding(state, &request.binding, request.provider_metadata_digest);
     let (body, expected) = prepare_stream_token_broker_request(&request.binding, &request.payload)?;
-    let client = broker_backend!(state, stream_token_hardware_client);
+    let client = broker_backend!(state, stream_token_signer_client);
     let mutating = request.operation == OPERATION_STREAM_TOKEN_SIGN_V1;
     let receipt = if mutating {
         client.sign(&expected, &body)

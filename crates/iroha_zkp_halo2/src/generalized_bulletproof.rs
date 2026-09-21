@@ -4,6 +4,7 @@
 //! concrete curves, generator derivation domains, and entropy providers remain
 //! explicit adapters so a protocol can freeze its own consensus bytes.
 pub(crate) mod exact_small_coefficient_source_v1;
+pub(crate) mod secret_u15_msm_v1;
 use exact_small_coefficient_source_v1::{
     ExactSmallCoefficientAggregatesV1, ExactSmallCoefficientConstraintSourceV1,
 };

@@ -153,10 +153,11 @@ def test_incomplete_rust_bridge_platform_closure_is_rejected(tmp_path: Path) -> 
         MODULE.audit(root)
 
 
-def test_private_settlement_bridge_cannot_hide_an_unreviewed_privacy_export(tmp_path: Path) -> None:
+@pytest.mark.parametrize("part", MODULE._RUST_BRIDGE_PLATFORM_JNI_PARTS)
+def test_bridge_part_cannot_hide_an_unreviewed_privacy_export(tmp_path: Path, part: str) -> None:
     root = _minimal_safe_tree(tmp_path)
     _write(
-        root / "crates/connect_norito_bridge/src/platform_jni/private_settlement.rs",
+        root / part,
         '#[unsafe(no_mangle)] pub extern "C" fn iroha_privacy_unchecked_v1() {}\n',
     )
     with pytest.raises(MODULE.AuditError, match="exact approved six"):
@@ -353,8 +354,20 @@ def test_javascript_offline_decoder_cannot_install_admission_callback(
         ),
         (
             MODULE._JAVASCRIPT_NATIVE_BROWSER,
-            'throw nativeBindingError("iroha_js_host is unavailable in browser builds.");',
+            "throw error;",
             "return globalThis.__IROHA_NATIVE_BINDING__;",
+            "browser_fail_closed",
+        ),
+        (
+            MODULE._JAVASCRIPT_NATIVE_BROWSER,
+            "throw error;",
+            "return {};",
+            "browser_fail_closed",
+        ),
+        (
+            MODULE._JAVASCRIPT_NATIVE_BROWSER,
+            'nativeStatus: { value: "browser_unavailable", enumerable: true }',
+            'nativeStatus: { value: "available", enumerable: true }',
             "browser_fail_closed",
         ),
         (

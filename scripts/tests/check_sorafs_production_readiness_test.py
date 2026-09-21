@@ -296,7 +296,6 @@ def foundational_summary(
         "signature": {
             "administrator_id": FOUNDATIONAL_SIGNER_ADMINISTRATOR_ID,
             "algorithm": "ed25519",
-            "backend": "software",
             "key_revision": FOUNDATIONAL_SIGNER_KEY_REVISION,
             "policy_digest_sha256": FOUNDATIONAL_SIGNER_POLICY_DIGEST,
             "policy_revision": FOUNDATIONAL_SIGNER_POLICY_REVISION,
@@ -1503,6 +1502,17 @@ def _write_complete_lane_fixture_summary(
         written_evidence if isinstance(written_evidence, Path) else evidence_root
     )
     normalize_fixture_evidence_context(gate_evidence_root)
+    if gate_name == "reference_sdk_release":
+        from sorafs_reference_sdk_aggregate_test_support import (
+            install_synthetic_manifest_source_result,
+        )
+
+        install_synthetic_manifest_source_result(
+            fixture_module,
+            gate_evidence_root,
+            deployment_id=DEPLOYMENT_ID,
+            environment=ENVIRONMENT,
+        )
     topology_args = topology_only_cli_args(root)
 
     if gate_name == "pop_credentials":
@@ -16590,7 +16600,6 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
         {
             "schema",
             "status",
-            "signer_qualification",
             "required_gates",
             "thresholds",
             "summary_file_count",
@@ -16621,7 +16630,6 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "environment",
             "release_sequence",
             "previous_envelope_sha256",
-            "signer_backend",
             "signer_service_id",
             "signer_administrator_id",
             "signer_key_revision",
@@ -16648,7 +16656,7 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
     )
     assert MODULE.RESILIENCE_QUALIFICATION_AUTHENTICATION_FIELDS == frozenset(
         {
-            "kind", "algorithm", "backend", "service_id",
+            "kind", "algorithm", "service_id",
             "administrator_id", "key_revision", "policy_revision",
             "policy_digest_sha256", "public_key_fingerprint_sha256",
             "signature_hex",
@@ -16658,7 +16666,7 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
         {
             "schema", "summary_sha256", "receipt_sha256",
             "canonical_receipt_sha256", "receipt_generated_at_unix",
-            "signer_backend", "signer_service_id",
+            "signer_service_id",
             "signer_administrator_id", "signer_key_revision",
             "signer_policy_revision", "signer_policy_digest_sha256",
             "signer_public_key_fingerprint_sha256",

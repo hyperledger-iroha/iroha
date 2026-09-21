@@ -1,4 +1,4 @@
-// Prepared-window commitments use actual signed custody and receipts; no hardware qualification.
+// Prepared-window commitments use actual signed authorizations and receipts.
 
 fn window_request_oracle(f: &Fixture) -> Vec<u8> {
     let flags = norito::core::default_encode_flags();

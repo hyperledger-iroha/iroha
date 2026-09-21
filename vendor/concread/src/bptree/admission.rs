@@ -112,6 +112,11 @@ impl AllocationDemand {
 /// freshly cloned leaf key as a separator. Returned copies must preserve key ordering.
 /// Values are copied at most once during a closed edit. Existing incoming
 /// payloads already own their storage; the plan funds new copies only.
+/// A successful bound must remain valid for the complete lifetime of the
+/// immutable source borrow held by a preparation. Shared or interior-mutable
+/// payloads whose copied allocation demand can increase during that lifetime
+/// must return `UnsupportedPayload`; a read-only reference alone does not make
+/// their nested allocation demand stable.
 pub trait ClonePlanning<K, V>: NodeCloning<K, V> {
     /// Add all nested layouts owned by a key copy and copies of that key.
     fn plan_key(key: &K, demand: &mut AllocationDemand) -> Result<(), PlanningError>;
@@ -873,26 +878,21 @@ where
 // Consume only a plan made under this same held original writer. No caller can
 // mutate its tree/tracking between planning and execution; a private checkpoint
 // may advance only its generation, covered by the full-path clone bound.
-fn execute_edit<K, V, P>(
-    cursor: &mut CursorWrite<K, V, Prepaid<P>>,
+fn execute_edit<'a, K, V, P>(
+    cursor: &'a mut CursorWrite<K, V, Prepaid<P>>,
     key: K,
     value: V,
-    mut provider: P,
+    provider: P,
     plan: EditPlan,
-    saved: Option<&mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
+    saved: Option<&'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
 ) -> Option<V>
 where
     K: Clone + Ord + Debug,
     V: Clone,
     P: ClonePlanning<K, V>,
 {
-    let first = allocate_tracking::<K, V, P>(plan.first, &mut provider);
-    let last = allocate_tracking::<K, V, P>(plan.last, &mut provider);
-    cursor.begin_admitted_edit();
-    cursor.resume_admitted_funding(provider, first, last, saved);
-    cursor
-        .try_insert(key, value)
-        .unwrap_or_else(|_| unreachable!("complete tracking bound planned under original writer"))
+    let (started, provider) = start_insert(cursor, saved, plan, provider);
+    started.execute(key, value, provider, false)
 }
 
 impl<K, V, P> BptreeMapOwned<K, V, Prepaid<P>>
@@ -1077,6 +1077,334 @@ where
     Ok(previous)
 }
 
+/// One checked insertion retaining its exact original cursor, checkpoint and input.
+///
+/// Preparation allocates and mutates nothing. The exclusive borrow prevents any
+/// intervening edit from invalidating the plan. Several disjoint preparations
+/// may have their demands combined before one original reservation is split
+/// into providers. A prepared insertion grants no allocation or publication
+/// authority by itself. Dropping it releases its owned input without editing.
+#[must_use = "consume the preparation with original funding or recover its input"]
+pub struct BptreeMapPreparedInsert<'a, K, V, P>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    prepared: PreparedInsertCursor<'a, K, V, P>,
+    input: (K, V),
+}
+
+impl<K, V, P> BptreeMapPreparedInsert<'_, K, V, P>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    /// Complete checked demand for this retained insertion, before any allocation.
+    pub fn demand(&self) -> AllocationDemand {
+        self.prepared.plan.demand
+    }
+
+    /// Borrow the original incoming key without copying or releasing its owner.
+    pub fn input_key(&self) -> &K {
+        &self.input.0
+    }
+
+    /// Borrow the corresponding current preimage from this exact retained cursor.
+    ///
+    /// The reference retains the preparation's exclusive cursor borrow. A
+    /// dependent copy preparation must complete or be dropped before this
+    /// insertion can consume its input or edit the current tree.
+    pub fn previous_value(&self) -> Option<&V> {
+        self.prepared.cursor.search(&self.input.0)
+    }
+
+    /// Cancel without editing or allocating, returning the exact original input.
+    pub fn into_input(self) -> (K, V) {
+        self.input
+    }
+
+    /// Consume the preparation using a provider from the original prepaid demand.
+    ///
+    /// The provider must cover `demand()` and may only split its existing owner;
+    /// it must not acquire more pool credit during this operation. Incoming
+    /// payloads already own their storage. Every new node, nested copy and
+    /// tracking buffer retains its own charge until actual reclamation.
+    ///
+    /// Keep the original writer and this operation inside the original budget's
+    /// synchronous refund-notification deferral scope. An edit or cleanup panic
+    /// poisons the original cursor; its checkpoint still owns rollback, and the
+    /// parent writer must be abandoned rather than published.
+    pub fn execute(self, provider: P) -> Option<V> {
+        let (started, provider) = self.prepared.start(provider);
+        started.execute(self.input.0, self.input.1, provider, true)
+    }
+}
+
+/// An insertion borrowing its original key and owning its incoming value.
+///
+/// The checked demand includes the incoming key copy as well as the tree edit.
+/// The source key stays borrowed until execution or cancellation; it cannot be
+/// replaced after planning. No key copy occurs before original admission.
+#[must_use = "consume the preparation with original funding or recover its value"]
+pub struct BptreeMapPreparedKeyCopyInsert<'a, 's, K, V, P>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    prepared: PreparedInsertCursor<'a, K, V, P>,
+    key: &'s K,
+    value: V,
+}
+
+impl<K, V, P> BptreeMapPreparedKeyCopyInsert<'_, '_, K, V, P>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    /// Checked tree demand plus the incoming key's actual nested copy layouts.
+    pub fn demand(&self) -> AllocationDemand {
+        self.prepared.plan.demand
+    }
+
+    /// Cancel without copying or editing, returning the exact owned value.
+    pub fn into_value(self) -> V {
+        self.value
+    }
+
+    /// Copy the retained key and insert using the original complete admission.
+    ///
+    /// The provider may only split already reserved credit. Keep execution and
+    /// cleanup inside its original refund-notification deferral scope. Any
+    /// copy, edit or cleanup unwind makes the original cursor unpublishable.
+    pub fn execute(self, provider: P) -> Option<V> {
+        let (started, mut provider) = self.prepared.start(provider);
+        let key = provider.clone_key(self.key);
+        started.execute(key, self.value, provider, true)
+    }
+}
+
+/// An undo insertion retaining an original key and optional original preimage.
+///
+/// `None` is a real absent-value preimage, stored as an entry in the target tree.
+/// It is distinct from the target having no entry. All source copies and the
+/// target tree edit are planned before allocation. The two payload policies
+/// share the provider's one original charge type and reservation.
+#[must_use = "consume the preparation with original funding or drop it unchanged"]
+pub struct BptreeMapPreparedOptionalCopyInsert<'a, 's, K, V, P>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    prepared: PreparedInsertCursor<'a, K, Option<V>, P>,
+    key: &'s K,
+    value: Option<&'s V>,
+}
+
+impl<K, V, P> BptreeMapPreparedOptionalCopyInsert<'_, '_, K, V, P>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    /// Checked target-tree demand plus the incoming key and optional value copies.
+    pub fn demand(&self) -> AllocationDemand {
+        self.prepared.plan.demand
+    }
+
+    /// Construct the exact retained optional preimage under original admission.
+    ///
+    /// No substitute source is accepted. The provider may only split its original
+    /// reserved credit, and returned copies must retain their nested charges.
+    /// Execute and reclaim inside the original refund-notification deferral
+    /// scope. Copy, edit or cleanup unwind poisons the original target cursor.
+    pub fn execute(self, provider: P) -> Option<Option<V>> {
+        let (started, mut provider) = self.prepared.start(provider);
+        let key = <P as NodeCloning<K, Option<V>>>::clone_key(&mut provider, self.key);
+        let value = self
+            .value
+            .map(|value| <P as NodeCloning<K, V>>::clone_value(&mut provider, value));
+        started.execute(key, value, provider, true)
+    }
+}
+
+// All input forms retain this same original cursor, checkpoint buffers and
+// checked tree plan. There is one insertion executor and no input factory.
+struct PreparedInsertCursor<'a, K, V, P>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    cursor: &'a mut CursorWrite<K, V, Prepaid<P>>,
+    saved: Option<&'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
+    plan: EditPlan,
+}
+
+// Starting marks the original cursor before any tracking or incoming copy can
+// unwind. Dropping this owner cannot turn an interrupted edit into a retry.
+struct StartedInsert<'a, K, V, P>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: ClonePlanning<K, V>,
+{
+    cursor: &'a mut CursorWrite<K, V, Prepaid<P>>,
+    saved: Option<&'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
+    first: Option<FixedTrackingBuffer<*mut Node<K, V, P::Charge>, P::Charge>>,
+    last: Option<FixedTrackingBuffer<*mut Node<K, V, P::Charge>, P::Charge>>,
+}
+
+fn start_insert<'a, K, V, P>(
+    cursor: &'a mut CursorWrite<K, V, Prepaid<P>>,
+    saved: Option<&'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
+    plan: EditPlan,
+    mut provider: P,
+) -> (StartedInsert<'a, K, V, P>, P)
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: ClonePlanning<K, V>,
+{
+    cursor.begin_admitted_edit();
+    let first = allocate_tracking::<K, V, P>(plan.first, &mut provider);
+    let last = allocate_tracking::<K, V, P>(plan.last, &mut provider);
+    (
+        StartedInsert {
+            cursor,
+            saved,
+            first,
+            last,
+        },
+        provider,
+    )
+}
+
+impl<'a, K, V, P> PreparedInsertCursor<'a, K, V, P>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    fn start(self, provider: P) -> (StartedInsert<'a, K, V, P>, P) {
+        start_insert(self.cursor, self.saved, self.plan, provider)
+    }
+}
+
+impl<K, V, P> StartedInsert<'_, K, V, P>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: ClonePlanning<K, V>,
+{
+    fn execute(self, key: K, value: V, provider: P, finish: bool) -> Option<V> {
+        self.cursor
+            .resume_admitted_funding(provider, self.first, self.last, self.saved);
+        let previous = self.cursor.try_insert(key, value).unwrap_or_else(|_| {
+            unreachable!("complete tracking bound retained under original writer")
+        });
+        // Joint edits retain their failed state until both roots and all cleanup
+        // complete. A standalone prepared insertion owns its complete cleanup.
+        if finish {
+            self.cursor.finish_admitted_funding();
+        }
+        previous
+    }
+}
+
+fn prepare_insert_cursor<'a, K, V, P>(
+    cursor: &'a mut CursorWrite<K, V, Prepaid<P>>,
+    key: &K,
+    saved: Option<&'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
+) -> Result<PreparedInsertCursor<'a, K, V, P>, PlanningError>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    let plan = plan_edit(cursor, key)?;
+    Ok(PreparedInsertCursor {
+        cursor,
+        saved,
+        plan,
+    })
+}
+
+fn prepare_insert<'a, K, V, P>(
+    cursor: &'a mut CursorWrite<K, V, Prepaid<P>>,
+    key: K,
+    value: V,
+    saved: Option<&'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
+) -> Result<BptreeMapPreparedInsert<'a, K, V, P>, ((K, V), PlanningError)>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    match prepare_insert_cursor(cursor, &key, saved) {
+        Ok(prepared) => Ok(BptreeMapPreparedInsert {
+            prepared,
+            input: (key, value),
+        }),
+        Err(error) => Err(((key, value), error)),
+    }
+}
+
+fn prepare_key_copy_insert<'a, 's, K, V, P>(
+    cursor: &'a mut CursorWrite<K, V, Prepaid<P>>,
+    key: &'s K,
+    value: V,
+    saved: Option<&'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
+) -> Result<BptreeMapPreparedKeyCopyInsert<'a, 's, K, V, P>, (V, PlanningError)>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    let prepare = || {
+        let mut prepared = prepare_insert_cursor(cursor, key, saved)?;
+        P::plan_key(key, &mut prepared.plan.demand)?;
+        Ok(prepared)
+    };
+    match prepare() {
+        Ok(prepared) => Ok(BptreeMapPreparedKeyCopyInsert {
+            prepared,
+            key,
+            value,
+        }),
+        Err(error) => Err((value, error)),
+    }
+}
+
+fn prepare_optional_copy_insert<'a, 's, K, V, P>(
+    cursor: &'a mut CursorWrite<K, Option<V>, Prepaid<P>>,
+    key: &'s K,
+    value: Option<&'s V>,
+    saved: Option<
+        &'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, Option<V>, Prepaid<P>>,
+    >,
+) -> Result<BptreeMapPreparedOptionalCopyInsert<'a, 's, K, V, P>, PlanningError>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    let mut prepared = prepare_insert_cursor(cursor, key, saved)?;
+    <P as ClonePlanning<K, Option<V>>>::plan_key(key, &mut prepared.plan.demand)?;
+    if let Some(value) = value {
+        <P as ClonePlanning<K, V>>::plan_value(value, &mut prepared.plan.demand)?;
+    }
+    Ok(BptreeMapPreparedOptionalCopyInsert {
+        prepared,
+        key,
+        value,
+    })
+}
+
 /// An exclusive transaction-start checkpoint of an original map writer.
 ///
 /// Dropping this guard aborts its private edits without allocating or obtaining
@@ -1140,6 +1468,30 @@ where
     V: Clone + Send + Sync + 'static,
     P: ClonePlanning<K, V>,
 {
+    /// Prepare an insertion while exclusively retaining this original writer.
+    ///
+    /// Returns the unchanged owned input on planning refusal. Successful
+    /// preparation does not allocate, clone payloads, mutate or reserve credit.
+    pub fn prepare_insert_admitted(
+        &mut self,
+        key: K,
+        value: V,
+    ) -> Result<BptreeMapPreparedInsert<'_, K, V, P>, ((K, V), PlanningError)> {
+        prepare_insert(self.inner.as_mut(), key, value, None)
+    }
+
+    /// Prepare an insertion borrowing its key and retaining its owned value.
+    ///
+    /// Planning includes the incoming key copy and returns the original value on
+    /// refusal. The retained source is only copied after complete admission.
+    pub fn prepare_key_copy_insert_admitted<'a, 's>(
+        &'a mut self,
+        key: &'s K,
+        value: V,
+    ) -> Result<BptreeMapPreparedKeyCopyInsert<'a, 's, K, V, P>, (V, PlanningError)> {
+        prepare_key_copy_insert(self.inner.as_mut(), key, value, None)
+    }
+
     /// Inspect the checked allocation upper bound for inserting this key.
     ///
     /// Planning borrows the original held writer without allocating, cloning,
@@ -1338,6 +1690,33 @@ where
     V: Clone + Send + Sync + 'static,
     P: ClonePlanning<K, V>,
 {
+    /// Prepare an insertion retaining this checkpoint's exact rollback ownership.
+    ///
+    /// The move-only result borrows the same original cursor and displaced
+    /// tracking-buffer guards until execution or cancellation. It cannot be
+    /// applied to another checkpoint or supplied a replacement key or value.
+    pub fn prepare_insert_admitted(
+        &mut self,
+        key: K,
+        value: V,
+    ) -> Result<BptreeMapPreparedInsert<'_, K, V, P>, ((K, V), PlanningError)> {
+        let (cursor, buffers) = self.inner.edit_parts();
+        prepare_insert(cursor, key, value, Some(buffers))
+    }
+
+    /// Prepare a key copy while retaining this checkpoint's exact rollback owner.
+    ///
+    /// No copy occurs during planning. Refusal returns the unchanged owned value;
+    /// the source key stays borrowed until this preparation is consumed.
+    pub fn prepare_key_copy_insert_admitted<'a, 's>(
+        &'a mut self,
+        key: &'s K,
+        value: V,
+    ) -> Result<BptreeMapPreparedKeyCopyInsert<'a, 's, K, V, P>, (V, PlanningError)> {
+        let (cursor, buffers) = self.inner.edit_parts();
+        prepare_key_copy_insert(cursor, key, value, Some(buffers))
+    }
+
     /// Inspect insertion demand from this checkpoint's current private tree.
     ///
     /// This allocation-free observation retains the original parent and current
@@ -1382,6 +1761,45 @@ where
     ) -> Result<Option<V>, ((K, V), MapAdmissionError<E>)> {
         let (cursor, buffers) = self.inner.edit_parts();
         edit_admitted(cursor, key, value, admit, Some(buffers))
+    }
+}
+
+impl<K, V, P> BptreeMapWriteTxn<'_, K, Option<V>, Prepaid<P>>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    /// Prepare an exact optional preimage copy under this original writer.
+    ///
+    /// Source key/value copies and the target-tree edit share one checked demand.
+    /// An absent preimage produces an actual stored `None`, not a missing entry.
+    pub fn prepare_optional_copy_insert_admitted<'a, 's>(
+        &'a mut self,
+        key: &'s K,
+        value: Option<&'s V>,
+    ) -> Result<BptreeMapPreparedOptionalCopyInsert<'a, 's, K, V, P>, PlanningError> {
+        prepare_optional_copy_insert(self.inner.as_mut(), key, value, None)
+    }
+}
+
+impl<K, V, P> BptreeMapCheckpoint<'_, K, Option<V>, Prepaid<P>>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    /// Prepare an optional preimage copy under this exact rollback checkpoint.
+    ///
+    /// Both source references remain retained through admission and execution.
+    /// Dropping the preparation does not copy, mutate or acquire credit.
+    pub fn prepare_optional_copy_insert_admitted<'a, 's>(
+        &'a mut self,
+        key: &'s K,
+        value: Option<&'s V>,
+    ) -> Result<BptreeMapPreparedOptionalCopyInsert<'a, 's, K, V, P>, PlanningError> {
+        let (cursor, buffers) = self.inner.edit_parts();
+        prepare_optional_copy_insert(cursor, key, value, Some(buffers))
     }
 }
 

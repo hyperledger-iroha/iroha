@@ -41,7 +41,7 @@ pub struct TransactionsStorage {
     // The opaque identity covers both the hot tip and the historical map.
     // It rotates while the writer is held, never from a caller-provided scalar.
     write_lock: Mutex<Arc<()>>,
-    released: mv::ReleaseNotification,
+    released: concread::release::ReleaseNotification,
 }
 #[derive(Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
 struct BlockInfo {
@@ -58,7 +58,7 @@ impl TransactionsStorage {
             latest_block: ArcSwapOption::empty(),
             blocks: DashMap::new(),
             write_lock: Mutex::new(Arc::new(())),
-            released: mv::ReleaseNotification::default(),
+            released: concread::release::ReleaseNotification::default(),
         }
     }
     /// Create persistent view of storage at certain point in time
@@ -76,7 +76,7 @@ impl TransactionsStorage {
             .map_or(0, |block| block.height.get())
     }
     /// Seed canonical entrypoint membership without constructing fixture blocks.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn record_committed_entrypoint_membership_for_tests(
         &self,
         entrypoints: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
@@ -296,7 +296,8 @@ mod block {
         /// References to [`TransactionsStorage`] struct
         pub(super) latest_block_ref: &'storage ArcSwapOption<BlockInfo>,
         pub(super) blocks_ref: &'storage DashMap<Key, Value>,
-        pub(super) _guard: mv::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>,
+        pub(super) _guard:
+            concread::release::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>,
         /// Own fields
         pub(super) revert: bool,
         pub(super) current_block: Option<Arc<BlockInfo>>,
@@ -334,6 +335,27 @@ mod block {
     pub(crate) struct PreparedDetachedTransactionsBlock<'storage, Installation> {
         prepared: PreparedTransactionsBlock<'storage>,
         installation: Installation,
+    }
+
+    /// Original membership payloads and notification after its physical unlock.
+    /// The enclosing publisher retires this only after all its fences release.
+    pub(crate) struct TransactionsPublicationRetirement {
+        _tip: Option<Arc<BlockInfo>>,
+        _staged: Option<Arc<BlockInfo>>,
+        _identity: Arc<()>,
+        _release: concread::release::DeferredRelease,
+    }
+
+    /// Original abort release retained with its installation reservation.
+    pub(crate) struct AbortedTransactions<Installation> {
+        _release: concread::release::DeferredRelease,
+        _installation: Installation,
+    }
+
+    /// Published membership cleanup retained with its installation admission.
+    pub(crate) struct PublishedTransactions<Installation> {
+        _retirement: TransactionsPublicationRetirement,
+        _installation: Installation,
     }
 
     /// A short observation, never authorization to publish a detached journal.
@@ -477,6 +499,15 @@ mod block {
         /// This adds no collection allocation or copy. Snapshot/checkpoint
         /// projections must already have consumed the original locked reader.
         pub(crate) fn detach(self) -> DetachedTransactionsBlock {
+            self.detach_retaining().0
+        }
+
+        fn detach_retaining(
+            self,
+        ) -> (
+            DetachedTransactionsBlock,
+            concread::release::DeferredRelease,
+        ) {
             let Self {
                 block,
                 publication,
@@ -490,8 +521,15 @@ mod block {
                 publication,
                 next_identity,
             };
-            drop(block);
-            detached
+            let TransactionsBlock {
+                _guard,
+                current_block,
+                ..
+            } = block;
+            let ((), release) = _guard.release_deferred(drop);
+            // The detached journal owns the original staged allocation.
+            drop(current_block);
+            (detached, release)
         }
 
         /// Borrow immutable staged membership and its actual predecessor.
@@ -503,37 +541,51 @@ mod block {
         ///
         /// All semantic refusal happened during preparation. The retained mutex
         /// prevents any other membership writer from changing the admitted cut.
-        pub(crate) fn publish(self) {
+        /// The returned owner defers payload cleanup and retry callbacks until
+        /// the caller has released every enclosing publication fence.
+        pub(crate) fn publish(self) -> TransactionsPublicationRetirement {
             let Self {
                 mut block,
                 publication,
                 next_identity,
             } = self;
             let changes_identity = !matches!(&publication, MembershipPublication::Repeated);
-            match publication {
-                MembershipPublication::Repeated => {
-                    // Do not promote a repeated tip into history: replacement
-                    // must still recover the actual older membership.
-                }
+            let tip = match publication {
+                MembershipPublication::Repeated => None,
                 MembershipPublication::Replace { current } => {
                     block
                         .blocks_ref
                         .retain(|_, height| *height < current.height);
-                    block.latest_block_ref.store(Some(current));
+                    block.latest_block_ref.swap(Some(current))
                 }
                 MembershipPublication::Advance { previous, current } => {
-                    if let Some(previous) = previous {
+                    if let Some(previous) = &previous {
                         for &transaction in &previous.transactions {
                             block.blocks_ref.insert(transaction, previous.height);
                         }
                     }
-                    block.latest_block_ref.store(Some(current));
+                    // The returned original tip retains the same allocation as
+                    // previous until cleanup outside the enclosing State fences.
+                    block.latest_block_ref.swap(Some(current))
                 }
+            };
+            let identity = if changes_identity {
+                std::mem::replace(&mut **block._guard, next_identity)
+            } else {
+                next_identity
+            };
+            let TransactionsBlock {
+                current_block,
+                _guard,
+                ..
+            } = block;
+            let ((), release) = _guard.release_deferred(drop);
+            TransactionsPublicationRetirement {
+                _tip: tip,
+                _staged: current_block,
+                _identity: identity,
+                _release: release,
             }
-            if changes_identity {
-                **block._guard = next_identity;
-            }
-            drop(block);
         }
     }
     #[cfg_attr(
@@ -652,27 +704,36 @@ mod block {
     }
     impl<Installation> PreparedDetachedTransactionsBlock<'_, Installation> {
         /// Release the physical writer and recover the same admitted journal.
-        pub(crate) fn abort(self) -> DetachedTransactionsBlock {
+        pub(crate) fn abort(
+            self,
+        ) -> (DetachedTransactionsBlock, AbortedTransactions<Installation>) {
             let Self {
                 prepared,
                 installation,
             } = self;
-            let journal = prepared.detach();
-            drop(installation);
-            journal
+            let (journal, release) = prepared.detach_retaining();
+            (
+                journal,
+                AbortedTransactions {
+                    _release: release,
+                    _installation: installation,
+                },
+            )
         }
 
-        /// Consume the original admitted action and return its installation guard.
+        /// Consume the original action and retain cleanup with installation admission.
         ///
         /// The caller must already hold all other component writers and the
         /// exact aggregate publication authorization before calling this method.
-        pub(crate) fn publish(self) -> Installation {
+        pub(crate) fn publish(self) -> PublishedTransactions<Installation> {
             let Self {
                 prepared,
                 installation,
             } = self;
-            prepared.publish();
-            installation
+            PublishedTransactions {
+                _retirement: prepared.publish(),
+                _installation: installation,
+            }
         }
     }
     impl TransactionsReadOnly for PreparedTransactionsBlock<'_> {
@@ -1143,7 +1204,7 @@ mod serialization {
                 latest_block: ArcSwapOption::from(latest_block),
                 blocks: dash,
                 write_lock: Mutex::new(Arc::new(())),
-                released: mv::ReleaseNotification::default(),
+                released: concread::release::ReleaseNotification::default(),
             })
         }
     }
@@ -1444,7 +1505,7 @@ mod tests {
             task::{Context, Waker},
         };
 
-        let release = mv::ReleaseNotification::default();
+        let release = concread::release::ReleaseNotification::default();
         let original_owner = release.guard(());
         let observation = release.observe();
         let error = TransactionsBlockError::from(LaneLifecycleError::PublicationBusy {

@@ -51,6 +51,8 @@ pub enum Command {
     ReleaseManifest(validation::ReleaseManifestArgs),
     /// Verify release evidence against independently pinned policy and trust inputs.
     ReleaseManifestReceipt(validation::release_manifest_receipt::Args),
+    /// Verify final-promotion signing evidence against independent custody and state trust.
+    FinalPromotionReceipt(validation::final_promotion_receipt::Args),
     /// Validate the complete official timed-OVN release audit artifact set.
     TimedOvnReleaseAudit(validation::TimedOvnReleaseAuditArgs),
 }
@@ -82,6 +84,7 @@ impl Command {
                 | Self::Sign(_)
                 | Self::ReleaseManifest(_)
                 | Self::ReleaseManifestReceipt(_)
+                | Self::FinalPromotionReceipt(_)
                 | Self::TimedOvnReleaseAudit(_)
         )
     }
@@ -96,6 +99,7 @@ impl Command {
             Self::Sign(args) => validation::run_sign(args),
             Self::ReleaseManifest(args) => validation::run_release_manifest(args),
             Self::ReleaseManifestReceipt(args) => validation::release_manifest_receipt::run(args),
+            Self::FinalPromotionReceipt(args) => validation::final_promotion_receipt::run(args),
             Self::TimedOvnReleaseAudit(args) => validation::run_timed_ovn_release_audit(args),
             Self::Compile(_) | Self::Pack(_) => Err(validation::CliError::Config(
                 "compile and pack are separate toolkit operations".to_owned(),

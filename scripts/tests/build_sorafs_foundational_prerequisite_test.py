@@ -32,6 +32,7 @@ SPEC.loader.exec_module(MODULE)
 import check_sorafs_production_readiness as CHECKER  # noqa: E402
 import sorafs_production_readiness_contract as CONTRACT  # noqa: E402
 import sorafs_software_signer_receipt as RECEIPT  # noqa: E402
+import sorafs_verifier_process as VERIFIER_PROCESS  # noqa: E402
 import sccp_release_common as RELEASE_CRYPTO  # noqa: E402
 import sorafs_l1_lane_evidence_inventory as LANE_INVENTORY  # noqa: E402
 from sorafs_l1_lane_inventory_test_support import (  # noqa: E402
@@ -49,6 +50,20 @@ from check_sorafs_production_readiness_test import (  # noqa: E402
     gate_summary as complete_gate_summary,
 )
 from sorafs_rollout_runner_test_support import signed_topology_cli_args  # noqa: E402
+
+
+def test_receipt_verifier_rejects_unresolved_private_directory(monkeypatch):
+    monkeypatch.setattr(RECEIPT, "resolve_path_identity", lambda *args: None)
+    result, errors = RECEIPT.run_offline_receipt_verifier(
+        verifier=b"synthetic unexecuted verifier",
+        binding=b"binding",
+        payload=b"payload",
+        signature=b"s" * 64,
+        receipt=b"receipt",
+        operation_id_hex="12" * 32,
+    )
+    assert result is None
+    assert errors == ["external software signer receipt verifier could not run"]
 
 
 NOW_UNIX = 1_800_900_000
@@ -285,7 +300,6 @@ validation = dict(
     payload_length=len(payload),
     signature_digest_blake3_hex="22" * 32,
     binding_digest_blake3_hex="33" * 32,
-    backend="software",
     service_id=SETTINGS["service_id"],
     administrator_id=SETTINGS["administrator_id"],
     role="promotion",
@@ -920,7 +934,6 @@ def test_prepare_and_finalize_external_signer_roundtrip(
     assert unsigned["signature"] == {
         "administrator_id": SIGNER_ADMINISTRATOR_ID,
         "algorithm": "ed25519",
-        "backend": "software",
         "key_revision": SIGNER_KEY_REVISION,
         "policy_digest_sha256": SIGNER_POLICY_DIGEST_SHA256,
         "policy_revision": SIGNER_POLICY_REVISION,
@@ -1120,8 +1133,10 @@ def test_receipt_verifier_rejects_bounded_payload_free_diagnostics(
     """Noisy stdout/stderr is bounded, killed, and never reflected in errors."""
 
     secret = b"verifier-controlled-sensitive-diagnostic"
-    monkeypatch.setattr(RECEIPT, "MAX_RECEIPT_VERIFIER_DIAGNOSTIC_BYTES", 64)
-    monkeypatch.setattr(RECEIPT, "RECEIPT_VERIFIER_TIMEOUT_SECS", 0.5)
+    # Exercise the diagnostic byte limit even when process startup is scheduled
+    # under concurrent build/test load. The separate timeout tests enforce the
+    # hard deadline and descendant cleanup with their own short limits.
+    monkeypatch.setattr(VERIFIER_PROCESS, "VERIFIER_TIMEOUT_SECS", 5)
     validation, errors = _run_test_receipt_verifier(
         b"#!/usr/bin/env python3\n"
         b"import os\n"
@@ -1137,7 +1152,7 @@ def test_receipt_verifier_hard_timeout_reaps_process(
 ) -> None:
     """A silent verifier cannot outlive the hard replay deadline."""
 
-    monkeypatch.setattr(RECEIPT, "RECEIPT_VERIFIER_TIMEOUT_SECS", 0.15)
+    monkeypatch.setattr(VERIFIER_PROCESS, "VERIFIER_TIMEOUT_SECS", 0.15)
     started = time.monotonic()
     validation, errors = _run_test_receipt_verifier(
         b"#!/usr/bin/env python3\nimport time\ntime.sleep(60)\n"
@@ -1154,7 +1169,7 @@ def test_receipt_verifier_timeout_kills_inherited_pipe_descendant(
     """A descendant holding diagnostics open is killed with its process group."""
 
     process_ids = tmp_path / "verifier-process-ids"
-    monkeypatch.setattr(RECEIPT, "RECEIPT_VERIFIER_TIMEOUT_SECS", 1.0)
+    monkeypatch.setattr(VERIFIER_PROCESS, "VERIFIER_TIMEOUT_SECS", 1.0)
     validation, errors = _run_test_receipt_verifier(
         (
             "#!/usr/bin/env python3\n"

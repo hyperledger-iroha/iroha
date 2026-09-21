@@ -237,8 +237,13 @@ fn governance_referendum_fixture_publishes_schedule_without_finality() {
         h_end: 100,
         status: GovernanceReferendumStatus::Open,
         mode: GovernanceReferendumMode::Plain,
+        plain_context: standalone_plain_test_fixture::context(&state.gov, 0),
+        plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
     };
-    insert_gov_referendum_for_test(&mut state, id.clone(), record);
+    record
+        .validate_context()
+        .expect("valid frozen PLAIN context");
+    insert_gov_referendum_for_test(&mut state, id.clone(), record.clone());
     assert_no_finality(&state);
     assert_eq!(
         state.view().world().governance_referenda().get(&id),

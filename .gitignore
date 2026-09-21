@@ -226,6 +226,10 @@ fixtures/sccp/release_evidence_v1/artifacts/phases/*
 .clean_copy/*
 clean_copy/*
 test_*
+# Keep native protocol fixture sources required by tracked test modules.
+!crates/fastpq_prover/src/backend/compact_protocol/test_fixture.rs
+!crates/iroha_sccp/src/test_fixtures/
+!crates/iroha_sccp/src/test_fixtures/*.rs
 # Keep Python test sources discoverable without force-adding each new test.
 !pytests/**/test_*.py
 # Keep the extracted Kotodama session test helper fixture tracked.

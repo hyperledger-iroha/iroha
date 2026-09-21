@@ -22,6 +22,14 @@ from iroha_python.sorafs import SorafsAliasPolicy
 from .helpers import RecordingSession, StubResponse
 
 
+def test_prebuffered_stub_response_supports_requests_streaming() -> None:
+    response = StubResponse(payload={"drafted": True, "tx_instructions": []})
+    assert response.raw is None
+    assert response._content_consumed
+    assert b"".join(response.iter_content(chunk_size=3)) == response.content
+    assert response.json() == {"drafted": True, "tx_instructions": []}
+
+
 def _canonical_owner_literal() -> str:
     public_key = Ed25519KeyPair.from_private_key(bytes([0x11]) * 32).public_key
     address = AccountAddress.from_account(public_key=public_key)
@@ -911,7 +919,7 @@ def test_governance_lock_record_rejects_noncanonical_slashed_quantity(
 
 
 def test_governance_submit_plain_ballot_requires_canonical_quantity() -> None:
-    session = RecordingSession(StubResponse(payload={"ok": True}))
+    session = RecordingSession(StubResponse(payload=_governance_ballot_draft_response()))
     client = _governance_client(session)
     payload = {
         "authority": CANONICAL_AUTHORITY,
@@ -949,7 +957,7 @@ def test_governance_submit_plain_ballot_requires_canonical_quantity() -> None:
 
 
 def test_governance_submit_plain_ballot_dispatches_zero_as_canonical_decimal() -> None:
-    session = RecordingSession(StubResponse(payload={"ok": True}))
+    session = RecordingSession(StubResponse(payload=_governance_ballot_draft_response()))
     client = _governance_client(session)
 
     client.governance_submit_plain_ballot(
@@ -1124,7 +1132,7 @@ def test_governance_submit_zk_ballot_proof_v1_rejects_noncanonical_owner() -> No
 
 
 def test_governance_submit_zk_ballot_proof_v1_normalizes_hex_hints() -> None:
-    session = RecordingSession(StubResponse(payload={"ok": True}))
+    session = RecordingSession(StubResponse(payload=_governance_ballot_draft_response()))
     client = _governance_client(session)
 
     client.governance_submit_zk_ballot_proof_v1(
@@ -1164,7 +1172,7 @@ def test_governance_zk_v1_durations_emit_full_u64_json_integers(
     method_name: str,
     duration_blocks: Any,
 ) -> None:
-    session = RecordingSession(StubResponse(payload={"ok": True}))
+    session = RecordingSession(StubResponse(payload=_governance_ballot_draft_response()))
     client = _governance_client(session)
     direction = "Nay" if method_name == "governance_submit_zk_ballot_v1" else "Abstain"
     lock_hints = {
@@ -1223,7 +1231,7 @@ def test_governance_zk_v1_durations_reject_non_u64_values_before_dispatch(
 
 
 def test_governance_submit_zk_ballot_v1_normalizes_hex_hints() -> None:
-    session = RecordingSession(StubResponse(payload={"ok": True}))
+    session = RecordingSession(StubResponse(payload=_governance_ballot_draft_response()))
     client = _governance_client(session)
 
     client.governance_submit_zk_ballot_v1(

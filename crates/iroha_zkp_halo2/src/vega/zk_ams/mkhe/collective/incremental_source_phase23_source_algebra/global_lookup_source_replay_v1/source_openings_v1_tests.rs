@@ -5,7 +5,6 @@ use crate::{
 };
 use std::sync::OnceLock;
 const PRODUCTION_SOURCE_V1: &str = include_str!("source_openings_v1.rs");
-const CANONICAL_REOPEN_SOURCE_V1: &str = include_str!("source_openings_v1/canonical_reopen_v1.rs");
 const REPLAY_SOURCE_V1: &str = include_str!("../global_lookup_source_replay_v1.rs");
 const EXTERNAL_SOURCE_V1: &str = include_str!("../../../phase23_rns_link_external_source.rs");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,9 +71,6 @@ fn opening_record_v1() -> SourceOpeningRecordV1 {
         blinding_file_bytes: SOURCE_OPENING_BLINDING_FILE_BYTES_V1,
         blinding_write_and_seal_read_bytes: SOURCE_OPENING_BLINDING_WRITE_AND_SEAL_READ_BYTES_V1,
         current_replay_io_bytes: SOURCE_OPENING_CURRENT_REPLAY_IO_BYTES_V1,
-        later_canonical_plaintext_bytes: CANONICAL_REOPEN_PLAINTEXT_BYTES_V1,
-        later_canonical_authenticated_read_bytes: CANONICAL_REOPEN_AUTHENTICATED_READ_BYTES_V1,
-        total_lifecycle_io_bytes: SOURCE_OPENING_LIFECYCLE_IO_BYTES_V1,
         new_scalar_mirror_file_bytes: SOURCE_OPENING_NEW_SCALAR_MIRROR_FILE_BYTES_V1,
         source_opening_materialized: true,
         source_same_opening_proved: false,
@@ -103,14 +99,8 @@ fn exact_group_commitment_and_corrected_io_accounting_are_frozen() {
     assert_eq!(SOURCE_OPENING_BLINDING_FILE_BYTES_V1, 344 * (32 + 16));
     assert_eq!(SOURCE_OPENING_BLINDING_WRITE_AND_SEAL_READ_BYTES_V1, 33_024);
     assert_eq!(SOURCE_OPENING_CURRENT_REPLAY_IO_BYTES_V1, 350_120_448);
-    assert_eq!(CANONICAL_REOPEN_BLOCK_COUNT_V1, 22_016);
-    assert_eq!(CANONICAL_REOPEN_PLAINTEXT_BYTES_V1, 180_355_072);
-    assert_eq!(CANONICAL_REOPEN_AUTHENTICATED_READ_BYTES_V1, 180_707_328);
     assert_eq!(TOTAL_REPLAY_IO_BYTES_V1, 350_087_424);
-    assert_eq!(SOURCE_OPENING_LIFECYCLE_IO_BYTES_V1, 530_827_776);
     assert_eq!(SOURCE_OPENING_NEW_SCALAR_MIRROR_FILE_BYTES_V1, 0);
-    assert_eq!(WEIGHTED_COLUMN_NAMED_HEAP_BYTES_V1, 1_067_776);
-    assert!(WEIGHTED_COLUMN_NAMED_HEAP_BYTES_V1 < 2_700_000);
 }
 #[test]
 fn tiny_commitment_kat_uses_secret_msm_and_identity_is_rejected() {
@@ -190,7 +180,7 @@ fn receipt_kat_and_mutations_keep_every_proof_authority_and_release_gate_false()
     record.record_digest = source_opening_record_digest_v1(&record).unwrap();
     assert_eq!(
         hex::encode(record.record_digest),
-        "fdba02d7adcdf5d759ca21ebc7edc36b1fd6f8f3981b9fefa9f1c70395939b19"
+        "66dee7e78fb5061f71e60e7a966691a6a471248b8c9d67cce855951d4248d07d"
     );
     validate_source_opening_record_v1(&record).unwrap();
     let mutations: [fn(&mut SourceOpeningRecordV1); 18] = [
@@ -216,8 +206,8 @@ fn receipt_kat_and_mutations_keep_every_proof_authority_and_release_gate_false()
         |record| record.blinding_write_and_seal_read_bytes -= 1,
         |record| record.blinding_file_bytes -= 1,
         |record| record.current_replay_io_bytes -= 1,
-        |record| record.later_canonical_authenticated_read_bytes -= 1,
-        |record| record.total_lifecycle_io_bytes -= 1,
+        |record| record.first_pass_replay_io_bytes -= 1,
+        |record| record.retained_blinding_bytes -= 1,
         |record| record.new_scalar_mirror_file_bytes = 1,
         |record| record.source_same_opening_proved = true,
         |record| record.packing_same_opening_proved = true,
@@ -232,56 +222,6 @@ fn receipt_kat_and_mutations_keep_every_proof_authority_and_release_gate_false()
         changed.record_digest = source_opening_record_digest_v1(&changed).unwrap();
         assert!(validate_source_opening_record_v1(&changed).is_err());
     }
-}
-#[test]
-fn private_sink_accepts_zero_weights_rejects_bad_shape_and_has_no_coordinate_arguments() {
-    let mut zero_weights = ZeroizingT256ScalarVecV1::with_capacity(SOURCE_OPENING_GROUP_COUNT_V1);
-    for _ in 0..SOURCE_OPENING_GROUP_COUNT_V1 {
-        zero_weights.push(Scalar::zero());
-    }
-    let zero_sink = WeightedOpeningColumnsSinkV1::from_seal_v1(
-        GlobalLookupCanonicalReopenSealV1::TestOnly(zero_weights),
-    )
-    .unwrap();
-    assert_eq!(zero_sink.group_weights.len(), 344);
-    assert!(
-        zero_sink
-            .group_weights
-            .as_slice()
-            .iter()
-            .copied()
-            .all(Scalar::is_zero)
-    );
-    let mut short_weights =
-        ZeroizingT256ScalarVecV1::with_capacity(SOURCE_OPENING_GROUP_COUNT_V1 - 1);
-    for _ in 0..SOURCE_OPENING_GROUP_COUNT_V1 - 1 {
-        short_weights.push(Scalar::one());
-    }
-    assert!(
-        WeightedOpeningColumnsSinkV1::from_seal_v1(GlobalLookupCanonicalReopenSealV1::TestOnly(
-            short_weights,
-        ))
-        .is_err()
-    );
-    let sink = WeightedOpeningColumnsSinkV1::from_seal_v1(
-        GlobalLookupCanonicalReopenSealV1::deterministic_test_v1(),
-    )
-    .unwrap();
-    assert_eq!(sink.group_weights.len(), 344);
-    assert_eq!(sink.source_column.len(), 16_384);
-    assert_eq!(sink.packing_column.len(), 16_384);
-    let trait_source = PRODUCTION_SOURCE_V1
-        .split("trait PurposeBoundCanonicalOpeningSinkV1")
-        .nth(1)
-        .unwrap()
-        .split("struct WeightedOpeningColumnsSinkV1")
-        .next()
-        .unwrap();
-    assert!(trait_source.contains("scalar: &ZeroizingT256ScalarCopyV1"));
-    assert!(!trait_source.contains("record:"));
-    assert!(!trait_source.contains("group:"));
-    assert!(!trait_source.contains("block:"));
-    assert!(!trait_source.contains("index:"));
 }
 #[test]
 fn source_identity_write_seal_poison_and_privacy_guards_are_structural() {
@@ -301,8 +241,6 @@ fn source_identity_write_seal_poison_and_privacy_guards_are_structural() {
         "let mut live = self\n            .live\n            .take()",
         "panic_after_take_for_test_v1",
         "source_opening_materialized: SOURCE_OPENING_MATERIALIZED_V1",
-        "post_rho_verifier_weights: Infallible",
-        "PurposeBoundCanonicalOpeningSinkV1",
         "SOURCE_OPENING_NEW_SCALAR_MIRROR_FILE_BYTES_V1",
         "ConfidentialSpoolLayoutV1::new_v1(",
         "ConfidentialSpoolWriterV1::create_in_v1(directory, blinding_layout)",
@@ -339,17 +277,6 @@ fn source_identity_write_seal_poison_and_privacy_guards_are_structural() {
     assert!(!PRODUCTION_SOURCE_V1.contains("Result<Point, ZkAmsMkheErrorV1>"));
     assert!(!PRODUCTION_SOURCE_V1.contains("commitment.to_non_identity_wire_bytes()"));
     for required in [
-        "let mut replay = self\n            .replay\n            .take()",
-        "read_canonical_plaintext_block_v1(record, block)",
-        "source_receipt_digest != replay.record.source_receipt_digest",
-        "after_source_receipt != source_receipt_digest",
-    ] {
-        assert!(
-            CANONICAL_REOPEN_SOURCE_V1.contains(required),
-            "missing canonical-reopen guard: {required}"
-        );
-    }
-    for required in [
         "validate_canonical_source_block_v1(bytes)?;",
         ".absorb_next_canonical_block_v1(record, block, bytes)?;",
         "writer.seal_v1()",
@@ -380,12 +307,10 @@ fn source_identity_write_seal_poison_and_privacy_guards_are_structural() {
         "Encode",
         "Decode",
     ] {
-        for source in [PRODUCTION_SOURCE_V1, CANONICAL_REOPEN_SOURCE_V1] {
-            assert!(
-                !source.contains(forbidden),
-                "forbidden source-opening surface: {forbidden}"
-            );
-        }
+        assert!(
+            !PRODUCTION_SOURCE_V1.contains(forbidden),
+            "forbidden source-opening surface: {forbidden}"
+        );
     }
     assert!(EXTERNAL_SOURCE_V1.contains("snapshot_identity"));
     assert!(EXTERNAL_SOURCE_V1.contains("main_snapshot_digest"));

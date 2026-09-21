@@ -3,6 +3,8 @@
 use super::*;
 use std::ops::{Deref, DerefMut};
 
+pub(super) use crate::runtime_provider_broker::socket_fixture_directory::new_broker_socket_test_directory;
+
 pub(super) fn new_test_process_pool() -> Arc<DecodeResourcePoolV1> {
     Arc::new(DecodeResourcePoolV1::new(MAX_BROKER_SHARED_DECODE_BYTES_V1))
 }
@@ -333,10 +335,7 @@ mod tests {
 
     #[test]
     fn accepted_fake_connections_share_the_fixture_broker_process() {
-        let directory = tempfile::Builder::new()
-            .prefix(".pool-")
-            .tempdir_in(".")
-            .expect("create bounded fake broker socket path");
+        let directory = new_broker_socket_test_directory();
         let path = directory.path().join("broker.sock");
         let fixture = BrokerTestEndpoint::for_test(path.clone());
         let listener = fixture.fake_listener(UnixListener::bind(&path).expect("bind fake broker"));

@@ -631,7 +631,7 @@ replay the authority to refresh the canonical manifest and current alias:
                  --output-dir <absolute-private-tmp>/openapi \
                  --unsigned-manifest \
                  --signing-payload <absolute-operator-staging>/openapi-manifest-v2.payload
-  release attach after the authenticated external software Ed25519 signer signs
+  release attach after the authenticated external Ed25519 signer signs
   those exact bytes:
                bash ci/run_openapi_generator.sh \
                  --output-dir <absolute-private-tmp>/openapi \
@@ -640,11 +640,10 @@ replay the authority to refresh the canonical manifest and current alias:
                  --version=current --latest \
                  --allowed-signers=<absolute-operator-allowlist-path> \
                  --output-dir=<absolute-private-tmp>/openapi
-The V1 release policy fixes signing_provider=authenticated_external_signer and
-signing_backend=software; successfully verified release output is
-signer_qualification=software-key-qualified. Iroha exposes no HSM-specific
-backend or qualification mode; custody behind the external signer is
-deployment-owned and does not change this provider-neutral contract.
+The V1 release policy requires signing_provider=authenticated_external_signer.
+Verification authenticates the exact manifest signature against the governed
+public-key allowlist. Signer implementation and key storage are operator choices;
+the release contract does not claim to observe software or hardware custody.
 Local private-key signing is intentionally unavailable; release signing is detached-only.
 For an operator release, set OPENAPI_REQUIRE_SIGNED=1 and
 OPENAPI_ALLOWED_SIGNERS_FILE=<absolute-operator-allowlist-path> when running this gate.

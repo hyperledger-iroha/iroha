@@ -380,3 +380,6 @@ pub(crate) mod execution_witness_publication;
 #[cfg(test)]
 #[path = "decision_binding_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use physical_publication::publish_governance_fixture;

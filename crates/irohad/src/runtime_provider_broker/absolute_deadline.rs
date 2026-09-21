@@ -86,48 +86,35 @@ pub(super) fn read_unix_before(
     buffer: &mut [u8],
 ) -> io::Result<usize> {
     let deadline = BrokerDeadlineV1 { expires_at };
-    loop {
-        deadline.io_remaining()?;
-        if buffer.is_empty() {
-            return Ok(0);
-        }
-        match rustix::net::recv(stream, &mut *buffer, rustix::net::RecvFlags::DONTWAIT) {
-            Ok((read, _)) => {
-                deadline.io_remaining()?;
-                return Ok(read);
-            }
-            Err(rustix::io::Errno::INTR) => continue,
-            Err(rustix::io::Errno::AGAIN) => {}
-            Err(error) => return Err(error.into()),
-        }
-        let timeout = rustix::event::Timespec::try_from(
-            deadline
-                .io_remaining()?
-                .min(Duration::from_millis(i32::MAX as u64)),
-        )
-        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
-        let mut fds = [rustix::event::PollFd::new(
-            stream,
-            rustix::event::PollFlags::IN,
-        )];
-        match rustix::event::poll(&mut fds, Some(&timeout)) {
-            Ok(_) if fds[0].revents().contains(rustix::event::PollFlags::NVAL) => {
-                return Err(rustix::io::Errno::BADF.into());
-            }
-            Ok(_) | Err(rustix::io::Errno::INTR) => {}
-            Err(error) => return Err(error.into()),
-        }
-        // HUP may accompany unread bytes. Only recv establishes exact EOF.
+    deadline.io_remaining()?;
+    if buffer.is_empty() {
+        return Ok(0);
     }
+    socket_io_before(stream, deadline, rustix::event::PollFlags::IN, || {
+        rustix::net::recv(stream, &mut *buffer, rustix::net::RecvFlags::DONTWAIT)
+            .map(|(read, _)| read)
+    })
 }
 
 impl Write for DeadlineUnixStreamV1<'_> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.stream
-            .set_write_timeout(Some(self.deadline.io_remaining()?))?;
-        let result = self.stream.write(buffer);
         self.deadline.io_remaining()?;
-        result
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        // macOS has no MSG_NOSIGNAL. Fail closed if its socket-level equivalent
+        // cannot be established; never rely on the process's signal disposition.
+        #[cfg(target_os = "macos")]
+        rustix::net::sockopt::set_socket_nosigpipe(&*self.stream, true)?;
+        let flags = rustix::net::SendFlags::DONTWAIT;
+        #[cfg(target_os = "linux")]
+        let flags = flags | rustix::net::SendFlags::NOSIGNAL;
+        socket_io_before(
+            self.stream,
+            self.deadline,
+            rustix::event::PollFlags::OUT,
+            || rustix::net::send(&*self.stream, buffer, flags),
+        )
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -135,6 +122,48 @@ impl Write for DeadlineUnixStreamV1<'_> {
         let result = self.stream.flush();
         self.deadline.io_remaining()?;
         result
+    }
+}
+
+// Per-call nonblocking I/O never changes the descriptor's mode. In particular,
+// do not reconfigure SO_RCVTIMEO after peer close: macOS can return EINVAL while
+// the peer's final authenticated response remains buffered in the socket.
+fn socket_io_before(
+    stream: &UnixStream,
+    deadline: BrokerDeadlineV1,
+    readiness: rustix::event::PollFlags,
+    mut operation: impl FnMut() -> rustix::io::Result<usize>,
+) -> io::Result<usize> {
+    loop {
+        deadline.io_remaining()?;
+        let result = operation();
+        deadline.io_remaining()?;
+        match result {
+            Ok(count) => return Ok(count),
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(rustix::io::Errno::AGAIN) => {}
+            Err(error) => return Err(error.into()),
+        }
+        // macOS poll accepts at most i32::MAX milliseconds. Bounded slices
+        // retain the same absolute deadline for longer source-stream limits.
+        let timeout = rustix::event::Timespec::try_from(
+            deadline
+                .io_remaining()?
+                .min(Duration::from_millis(i32::MAX as u64)),
+        )
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "broker poll timeout"))?;
+        let mut fds = [rustix::event::PollFd::new(stream, readiness)];
+        let result = rustix::event::poll(&mut fds, Some(&timeout));
+        deadline.io_remaining()?;
+        match result {
+            Ok(_) if fds[0].revents().contains(rustix::event::PollFlags::NVAL) => {
+                return Err(rustix::io::Errno::BADF.into());
+            }
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            Err(error) => return Err(error.into()),
+        }
+        // Readiness, including HUP, is not authenticated EOF: recv must drain
+        // the remaining bytes and report EOF itself before the same deadline.
     }
 }
 

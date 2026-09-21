@@ -28,7 +28,7 @@ ALL_PHASES=(
   python-sdk
   swift-sdk
   kotlin-sdk
-  java-android
+  java-source-kotlin
   dotnet-sdk
   contract-smoke
   tvm-contract-smoke
@@ -70,7 +70,7 @@ Environment:
                                target/java/jdk-21/Contents/Home, then
                                /usr/libexec/java_home -v 21 on macOS, then
                                Homebrew openjdk@21 installations.
-  ANDROID_HOME                 Android SDK for the Java Android phase.
+  ANDROID_HOME                 Android SDK for Kotlin-owned Java consumers.
                                Defaults to ~/Library/Android/sdk when present.
   ANDROID_SDK_ROOT             Defaults to ANDROID_HOME when unset.
   DOTNET_ROOT                  .NET SDK root for the native C# SCCP phase.
@@ -112,7 +112,7 @@ list_phases() {
 
 is_known_phase() {
   case "$1" in
-    rust-sccp|evidence-scripts|js-sdk|python-sdk|swift-sdk|kotlin-sdk|java-android|dotnet-sdk|contract-smoke|tvm-contract-smoke|core-admission|runtime-api)
+    rust-sccp|evidence-scripts|js-sdk|python-sdk|swift-sdk|kotlin-sdk|java-source-kotlin|dotnet-sdk|contract-smoke|tvm-contract-smoke|core-admission|runtime-api)
       return 0
       ;;
     *)
@@ -1490,7 +1490,7 @@ resolve_android_home() {
     return 0
   fi
 
-  echo "Android SDK not found. Set ANDROID_HOME for the java-android phase." >&2
+  echo "Android SDK not found. Set ANDROID_HOME for the java-source-kotlin phase." >&2
   return 1
 }
 
@@ -1583,31 +1583,93 @@ phase_swift_sdk() {
     swift test --disable-automatic-resolution --filter SccpV1Tests --disable-swift-testing
 }
 
+ensure_sccp_jvm_native_artifact() {
+  local target_dir
+  local host_triple
+  local native_file
+  target_dir="$CARGO_TARGET_DIR/sccp-jvm-native"
+  case "$target_dir" in
+    /*) ;;
+    *) target_dir="$ROOT/$target_dir" ;;
+  esac
+  reject_symlinked_existing_path_components "$target_dir" "SCCP JVM native output"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    host_triple="<rustc-host-triple>"
+    native_file="libconnect_norito_bridge.<host-library-extension>"
+  else
+    host_triple="$(rustc -vV | sed -n 's/^host: //p')"
+    [[ "$host_triple" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+      echo "SCCP JVM bridge needs one canonical compiler host triple." >&2
+      return 1
+    }
+    case "$host_triple" in
+      *-apple-*) native_file="libconnect_norito_bridge.dylib" ;;
+      *-windows-*) native_file="connect_norito_bridge.dll" ;;
+      *) native_file="libconnect_norito_bridge.so" ;;
+    esac
+  fi
+  SCCP_JVM_NATIVE_ARTIFACT="$target_dir/debug/$native_file"
+  SCCP_JVM_NATIVE_MANIFEST="$target_dir/sccp-jvm-native-abi23.json"
+  run_cmd cargo build --locked -p connect_norito_bridge --lib --target-dir "$target_dir"
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -I -S scripts/check_native_sdk_abi23_artifact.py record \
+    --artifact "$SCCP_JVM_NATIVE_ARTIFACT" --manifest "$SCCP_JVM_NATIVE_MANIFEST" \
+    --source-root "$ROOT" --sdk c-jni --target "$host_triple"
+  verify_sccp_jvm_native_artifact
+  export IROHA_NATIVE_LIBRARY_PATH="$target_dir/debug"
+}
+
+verify_sccp_jvm_native_artifact() {
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -I -S scripts/check_native_sdk_abi23_artifact.py verify \
+    --artifact "$SCCP_JVM_NATIVE_ARTIFACT" --manifest "$SCCP_JVM_NATIVE_MANIFEST" \
+    --source-root "$ROOT"
+}
+
 phase_kotlin_sdk() {
   local java_home
   java_home="$(resolve_java_home)"
   run_java_version_check "$java_home"
+  ensure_sccp_jvm_native_artifact
   run_in_dir "$ROOT/kotlin" \
     env "JAVA_HOME=$java_home" "GRADLE_OPTS=$SCCP_GRADLE_OPTS" "PATH=$java_home/bin:$PATH" \
-    ./gradlew :core-jvm:test --console=plain \
+    "IROHA_NATIVE_LIBRARY_PATH=$IROHA_NATIVE_LIBRARY_PATH" \
+    ./gradlew :core-jvm:test --rerun-tasks --no-build-cache --console=plain \
       --tests 'org.hyperledger.iroha.sdk.sccp.*' \
       --tests 'org.hyperledger.iroha.sdk.client.SccpClientExactTest'
+  verify_sccp_jvm_native_artifact
 }
 
-phase_java_android() {
+phase_java_source_kotlin() {
   local java_home
   local android_home
   local android_sdk_root
-  local android_harness_mains
   java_home="$(resolve_java_home)"
   android_home="$(resolve_android_home)"
   android_sdk_root="${ANDROID_SDK_ROOT:-$android_home}"
-  android_harness_mains="org.hyperledger.iroha.android.sccp.SccpV1Tests,org.hyperledger.iroha.android.client.SccpClientExactTests"
   run_java_version_check "$java_home"
-  run_in_dir "$ROOT/java/iroha_android" \
-    env "JAVA_HOME=$java_home" "ANDROID_HOME=$android_home" "ANDROID_SDK_ROOT=$android_sdk_root" "GRADLE_OPTS=$SCCP_GRADLE_OPTS" "PATH=$java_home/bin:$PATH" \
-    "ANDROID_HARNESS_MAINS=$android_harness_mains" \
-    ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests
+  ensure_sccp_jvm_native_artifact
+  run_in_dir "$ROOT/kotlin" \
+    env "JAVA_HOME=$java_home" "ANDROID_HOME=$android_home" "ANDROID_SDK_ROOT=$android_sdk_root" \
+    "GRADLE_OPTS=$SCCP_GRADLE_OPTS" "PATH=$java_home/bin:$PATH" \
+    "IROHA_NATIVE_LIBRARY_PATH=$IROHA_NATIVE_LIBRARY_PATH" \
+    ./gradlew :core-jvm:test --rerun-tasks --no-build-cache --console=plain \
+      --tests 'org.hyperledger.iroha.sdk.sccp.SccpV1JavaConsumerTest' \
+      --tests 'org.hyperledger.iroha.sdk.client.SccpClientExactJavaConsumerTest'
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/check_sccp_java_consumer_contract.py \
+    --jdk-home "$java_home" --main-classes "$ROOT/kotlin/core-jvm/build/classes/kotlin/main" \
+    --test-classes "$ROOT/kotlin/core-jvm/build/classes/java/test" \
+    --reports "$ROOT/kotlin/core-jvm/build/test-results/test"
+  run_in_dir "$ROOT/kotlin" \
+    env "JAVA_HOME=$java_home" "ANDROID_HOME=$android_home" "ANDROID_SDK_ROOT=$android_sdk_root" \
+    "GRADLE_OPTS=$SCCP_GRADLE_OPTS" "PATH=$java_home/bin:$PATH" \
+    "IROHA_NATIVE_LIBRARY_PATH=$IROHA_NATIVE_LIBRARY_PATH" \
+    ./gradlew :client-android:testDebugHostNative --rerun-tasks --no-build-cache --console=plain \
+      --tests 'org.hyperledger.iroha.sdk.sccp.SccpV1JavaConsumerTest' \
+      --tests 'org.hyperledger.iroha.sdk.client.SccpClientExactJavaConsumerTest'
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/check_sccp_java_consumer_contract.py \
+    --jdk-home "$java_home" --main-classes "$ROOT/kotlin/core-jvm/build/classes/kotlin/main" \
+    --test-classes "$ROOT/kotlin/client-android/build/intermediates/javac/debugUnitTest/compileDebugUnitTestJavaWithJavac/classes" \
+    --reports "$ROOT/kotlin/client-android/build/test-results/testDebugHostNative"
+  verify_sccp_jvm_native_artifact
 }
 
 phase_dotnet_sdk() {
@@ -2095,8 +2157,8 @@ main() {
       kotlin-sdk)
         phase_kotlin_sdk
         ;;
-      java-android)
-        phase_java_android
+      java-source-kotlin)
+        phase_java_source_kotlin
         ;;
       dotnet-sdk)
         phase_dotnet_sdk

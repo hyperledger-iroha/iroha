@@ -20,12 +20,12 @@ impl Wake for WakeCount {
     }
 }
 
-fn poll(wait: &mut mv::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
+fn poll(wait: &mut concread::release::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
     let waker = Waker::from(Arc::clone(count));
     Pin::new(wait).poll(&mut Context::from_waker(&waker))
 }
 
-fn waiting<T>(index: &ArchiveIndexLock<T>) -> mv::ReleaseFuture {
+fn waiting<T>(index: &ArchiveIndexLock<T>) -> concread::release::ReleaseFuture {
     match index.try_write() {
         Err(ArchiveIndexLockError::Busy(wait)) => wait.wait_for_release(),
         outcome => panic!("expected actual physical contention: {outcome:?}"),

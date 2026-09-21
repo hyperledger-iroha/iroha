@@ -28,7 +28,7 @@ struct Fixture {
     authority: AccountId,
     other: AccountId,
     provider: ProviderId,
-    policy: StreamTokenCustodyPolicyV1,
+    policy: SignerCustodyPolicyV1,
     attester: KeyPair,
 }
 fn fixture() -> Fixture {
@@ -56,7 +56,7 @@ fn fixture() -> Fixture {
         LiveQueryStore::start_test(),
     );
     let attester = key(7);
-    let policy = StreamTokenCustodyPolicyV1 {
+    let policy = SignerCustodyPolicyV1 {
         binding: SignerCustodyBindingV1 {
             chain_id: state.view().chain_id().to_string(),
             network_id: *state.view().network_id().as_bytes(),
@@ -163,11 +163,7 @@ fn attest(f: &Fixture, now: u64) -> Vec<u8> {
         predecessor_digest: snapshot.state.predecessor_digest,
         issued_at_unix_ms: now,
         expires_at_unix_ms: now + 5_000,
-        hardware_identity_digest: [8; 32],
         evidence_digest: [9; 32],
-        generated_in_hardware: true,
-        exportable: false,
-        ever_exported: false,
         revoked: false,
     };
     let signature = Signature::try_new(
@@ -229,6 +225,45 @@ fn committed_configuration_enrollment_and_history_use_exact_native_anchor() {
         renewed.state.active_head.expect("head").approved_anchor,
         enrolled.anchor
     );
+}
+#[test]
+fn shared_deployment_policy_cannot_enter_native_stream_token_authority() {
+    let mut f = fixture();
+    let mut deployment = f.policy.clone();
+    deployment.binding.role = SignerRoleV1::FinalPromotionProvenance;
+    deployment.binding.purpose = SignerPurposeBindingV1::FinalPromotionProvenance {
+        deployment_id: "production-primary".into(),
+    };
+    deployment
+        .validate()
+        .expect("valid generic deployment policy");
+    let bytes = encode(&deployment).expect("shared policy frame");
+    transact(&mut f.state, 1_000, |tx| {
+        let before = tx
+            .world
+            .smart_contract_state
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        assert!(
+            instruction(tx, f.provider, Action::Configure(bytes))
+                .execute(&f.authority, tx)
+                .is_err()
+        );
+        assert_eq!(
+            tx.world
+                .smart_contract_state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>(),
+            before
+        );
+        assert!(
+            read_active(tx.world(), f.provider)
+                .expect("coherent state")
+                .is_none()
+        );
+    });
 }
 #[test]
 fn exact_permission_provider_and_predecessor_are_required_before_any_write() {

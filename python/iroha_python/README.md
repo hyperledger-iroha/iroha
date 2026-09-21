@@ -1851,7 +1851,11 @@ unlock_stats_typed = client.get_governance_unlock_stats_typed(
     canonical_auth=canonical_auth
 )
 print("Referendum found:", referendum.found)
-print("Aye votes:", tally.approve)
+if tally is None:
+    print("No tally: referendum not found")
+else:
+    print("Aye votes:", tally.approve)
+    print("Evaluated block:", tally.evaluated_block_height, tally.evaluated_block_hash)
 print("Lock owners:", list(locks.locks))
 print("Expired locks:", unlock_stats_typed.expired_locks_now)
 print("Governed contract:", governed_contract.contract_address, governed_contract.code_hash_hex)
@@ -1861,6 +1865,10 @@ print("Protected namespaces:", protected)
 Governance mutation mappings are closed and validated before dispatch.
 Parliament ballot decisions use only the exact lowercase labels `approve`,
 `reject`, and `abstain`; case or whitespace aliases are rejected.
+The raw and typed tally helpers share the low-level Torii client's exact
+response reader and `GovernanceTally` model. Missing referenda return `None`;
+successful responses retain all three `u128` totals and their evaluated block
+height and hash without numeric coercion.
 
 ## Runtime upgrades and ABI helpers
 

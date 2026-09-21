@@ -1,14 +1,15 @@
 //! AEAD key-envelope handling with explicit in-memory secret scrubbing.
 use super::protocol::{
-    SIGNER_KEY_MAGIC_V1, SIGNER_MAX_PRIVATE_KEY_BYTES_V1, SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1,
-    SIGNER_PROTOCOL_VERSION_V1, SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1,
-    digest_canonical, digest_parts, public_key_digest, scrub, valid_identity,
+    SIGNER_KEY_MAGIC_V1, SIGNER_MAX_ID_BYTES_V1, SIGNER_MAX_PRIVATE_KEY_BYTES_V1,
+    SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1, SIGNER_PROTOCOL_VERSION_V1, SignerKeyAlgorithmV1,
+    SignerPurposeBindingV1, SignerRoleV1, digest_canonical, digest_parts, public_key_digest, scrub,
     valid_software_signer_handle,
 };
 use iroha_crypto::{
     KeyPair, PrivateKey,
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
 };
+use iroha_primitives::production_identity::is_production_identity_v1;
 use norito::codec::{Decode, Encode};
 use std::fmt;
 const KEY_ENVELOPE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.key-envelope.v1";
@@ -42,8 +43,8 @@ pub(super) struct SoftwareSignerKeyEnvelopeAadV1 {
 impl SoftwareSignerKeyEnvelopeAadV1 {
     pub(super) fn validate(&self) -> Result<(), SoftwareSignerEnvelopeErrorV1> {
         if self.backend != super::protocol::ExternalSignerBackendV1::Software
-            || !valid_identity(&self.service_id)
-            || !valid_identity(&self.administrator_id)
+            || !is_production_identity_v1(&self.service_id, SIGNER_MAX_ID_BYTES_V1)
+            || !is_production_identity_v1(&self.administrator_id, SIGNER_MAX_ID_BYTES_V1)
             || self.service_id == self.administrator_id
             || self.service_uid == self.client_uid
             || self.service_uid == self.administrator_uid

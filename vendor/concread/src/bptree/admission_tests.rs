@@ -2258,3 +2258,344 @@ mod writer_start {
         assert_eq!(map.read().get(&2), Some(&6));
     }
 }
+
+#[test]
+fn prepared_writer_and_checkpoint_planning_refuse_without_copying_original_inputs() {
+    let map =
+        BptreeMap::<Box<usize>, Box<usize>, Prepaid<UnknownPayload>>::try_new_with_node_custody(
+            |_| Ok::<_, ()>(UnknownPayload),
+        )
+        .unwrap();
+    let mut writer = map
+        .try_write_admitted(|_| Ok::<_, ()>(UnknownPayload))
+        .unwrap();
+    let cursor = writer.inner.as_ref() as *const _;
+    let key = Box::new(7);
+    let value = Box::new(21);
+    let pointers = (&*key as *const usize, &*value as *const usize);
+    let ((key, value), error) = without_allocations(|| {
+        writer
+            .prepare_insert_admitted(key, value)
+            .err()
+            .expect("unknown demand")
+    });
+    assert_eq!(error, PlanningError::UnsupportedPayload);
+    assert_eq!((&*key as *const usize, &*value as *const usize), pointers);
+    assert_eq!(writer.inner.as_ref() as *const _, cursor);
+    assert!(writer.is_empty());
+    let mut checkpoint = writer.checkpoint().unwrap();
+    let ((key, value), error) = without_allocations(|| {
+        checkpoint
+            .prepare_insert_admitted(key, value)
+            .err()
+            .expect("same unknown demand")
+    });
+    assert_eq!(error, PlanningError::UnsupportedPayload);
+    assert_eq!((&*key as *const usize, &*value as *const usize), pointers);
+    assert!(checkpoint.is_empty());
+    without_allocations(|| checkpoint.apply());
+    assert_eq!(writer.inner.as_ref() as *const _, cursor);
+    assert!(writer.is_empty());
+    without_allocations(|| writer.commit());
+    assert!(map.read().is_empty());
+    assert!(!map.is_poisoned());
+}
+
+impl NodeCloning<usize, Option<usize>> for ScalarPolicy {
+    fn clone_key(&mut self, key: &usize) -> usize {
+        *key
+    }
+    fn clone_value(&mut self, value: &Option<usize>) -> Option<usize> {
+        *value
+    }
+}
+impl ClonePlanning<usize, Option<usize>> for ScalarPolicy {
+    fn plan_key(_: &usize, _: &mut AllocationDemand) -> Result<(), PlanningError> {
+        Ok(())
+    }
+    fn plan_value(_: &Option<usize>, _: &mut AllocationDemand) -> Result<(), PlanningError> {
+        Ok(())
+    }
+}
+impl NodeCloning<Box<usize>, Option<Box<usize>>> for UnknownPayload {
+    fn clone_key(&mut self, _: &Box<usize>) -> Box<usize> {
+        panic!("unplanned key copy")
+    }
+    fn clone_value(&mut self, _: &Option<Box<usize>>) -> Option<Box<usize>> {
+        panic!("unplanned optional copy")
+    }
+}
+impl ClonePlanning<Box<usize>, Option<Box<usize>>> for UnknownPayload {
+    fn plan_key(_: &Box<usize>, _: &mut AllocationDemand) -> Result<(), PlanningError> {
+        Err(PlanningError::UnsupportedPayload)
+    }
+    fn plan_value(_: &Option<Box<usize>>, _: &mut AllocationDemand) -> Result<(), PlanningError> {
+        Err(PlanningError::UnsupportedPayload)
+    }
+}
+
+#[test]
+fn copied_key_planning_refusal_keeps_the_source_and_original_owned_value() {
+    let map =
+        BptreeMap::<Box<usize>, Box<usize>, Prepaid<UnknownPayload>>::try_new_with_node_custody(
+            |_| Ok::<_, ()>(UnknownPayload),
+        )
+        .unwrap();
+    let mut writer = map
+        .try_write_admitted(|_| Ok::<_, ()>(UnknownPayload))
+        .unwrap();
+    let key = Box::new(7);
+    let value = Box::new(21);
+    let pointers = (&*key as *const usize, &*value as *const usize);
+    let (value, error) = without_allocations(|| {
+        writer
+            .prepare_key_copy_insert_admitted(&key, value)
+            .err()
+            .expect("unknown demand")
+    });
+    assert_eq!(error, PlanningError::UnsupportedPayload);
+    assert_eq!((&*key as *const usize, &*value as *const usize), pointers);
+    let mut checkpoint = writer.checkpoint().unwrap();
+    let (value, error) = without_allocations(|| {
+        checkpoint
+            .prepare_key_copy_insert_admitted(&key, value)
+            .err()
+            .expect("unknown demand")
+    });
+    assert_eq!(error, PlanningError::UnsupportedPayload);
+    assert_eq!((&*key as *const usize, &*value as *const usize), pointers);
+    without_allocations(|| checkpoint.apply());
+    assert!(writer.is_empty());
+    without_allocations(|| writer.commit());
+    assert!(!map.is_poisoned());
+}
+
+#[test]
+fn optional_copy_planning_refusal_does_not_clone_sources_or_edit_either_guard() {
+    let map = BptreeMap::<Box<usize>, Option<Box<usize>>, Prepaid<UnknownPayload>>::try_new_with_node_custody(|_| Ok::<_, ()>(UnknownPayload)).unwrap();
+    let mut writer = map
+        .try_write_admitted(|_| Ok::<_, ()>(UnknownPayload))
+        .unwrap();
+    let key = Box::new(7);
+    let value = Box::new(21);
+    for source in [None, Some(&value)] {
+        let error = without_allocations(|| {
+            writer
+                .prepare_optional_copy_insert_admitted(&key, source)
+                .err()
+                .expect("unknown demand")
+        });
+        assert_eq!(error, PlanningError::UnsupportedPayload);
+        let mut checkpoint = writer.checkpoint().unwrap();
+        let error = without_allocations(|| {
+            checkpoint
+                .prepare_optional_copy_insert_admitted(&key, source)
+                .err()
+                .expect("unknown demand")
+        });
+        assert_eq!(error, PlanningError::UnsupportedPayload);
+        without_allocations(|| checkpoint.apply());
+    }
+    assert_eq!((*key, *value), (7, 21));
+    assert!(writer.is_empty());
+    without_allocations(|| writer.commit());
+    assert!(!map.is_poisoned());
+}
+
+#[test]
+fn optional_none_is_an_existing_preimage_and_checkpoint_abort_restores_it() {
+    let map =
+        BptreeMap::<usize, Option<usize>, Prepaid<ScalarPolicy>>::try_new_with_node_custody(|_| {
+            Ok::<_, ()>(ScalarPolicy)
+        })
+        .unwrap();
+    let mut writer = map
+        .try_write_admitted(|_| Ok::<_, ()>(ScalarPolicy))
+        .unwrap();
+    let key = 7;
+    let value = 21;
+    let prepared = without_allocations(|| {
+        writer
+            .prepare_optional_copy_insert_admitted(&key, None)
+            .unwrap()
+    });
+    assert!(prepared.demand().bytes() > 0);
+    assert_eq!(prepared.execute(ScalarPolicy), None);
+    assert_eq!(writer.get(&key), Some(&None));
+    {
+        let mut child = writer.checkpoint().unwrap();
+        let prepared = without_allocations(|| {
+            child
+                .prepare_optional_copy_insert_admitted(&key, Some(&value))
+                .unwrap()
+        });
+        assert_eq!(prepared.execute(ScalarPolicy), Some(None));
+        assert_eq!(child.get(&key), Some(&Some(value)));
+        assert_eq!(child.get_before(&key), Some(&None));
+        without_allocations(|| drop(child));
+    }
+    assert_eq!(writer.get(&key), Some(&None));
+    without_allocations(|| writer.commit());
+    assert_eq!(map.read().get(&key), Some(&None));
+}
+
+#[test]
+fn original_preparation_retains_key_and_preimage_through_dependent_copy_then_cancel() {
+    let source =
+        BptreeMap::<usize, usize, Prepaid<ScalarPolicy>>::try_new_with_node_custody(|_| {
+            Ok::<_, ()>(ScalarPolicy)
+        })
+        .unwrap();
+    let mut original = source
+        .try_write_admitted(|_| Ok::<_, ()>(ScalarPolicy))
+        .unwrap();
+    original
+        .try_insert_admitted(7, 21, |_| Ok::<_, ()>(ScalarPolicy))
+        .unwrap();
+    let target =
+        BptreeMap::<usize, Option<usize>, Prepaid<ScalarPolicy>>::try_new_with_node_custody(|_| {
+            Ok::<_, ()>(ScalarPolicy)
+        })
+        .unwrap();
+    let mut undo = target
+        .try_write_admitted(|_| Ok::<_, ()>(ScalarPolicy))
+        .unwrap();
+    let current = without_allocations(|| {
+        original
+            .prepare_insert_admitted(7, 99)
+            .unwrap_or_else(|_| panic!("scalar plan"))
+    });
+    assert_eq!(current.input_key(), &7);
+    assert_eq!(current.previous_value(), Some(&21));
+    let copied = without_allocations(|| {
+        undo.prepare_optional_copy_insert_admitted(current.input_key(), current.previous_value())
+            .unwrap()
+    });
+    assert_eq!(copied.execute(ScalarPolicy), None);
+    assert_eq!(without_allocations(|| current.into_input()), (7, 99));
+    assert_eq!(original.get(&7), Some(&21));
+    assert_eq!(undo.get(&7), Some(&Some(21)));
+    let missing = without_allocations(|| {
+        original
+            .prepare_insert_admitted(8, 88)
+            .unwrap_or_else(|_| panic!("scalar plan"))
+    });
+    assert_eq!(missing.previous_value(), None);
+    assert_eq!(without_allocations(|| missing.into_input()), (8, 88));
+}
+
+#[test]
+fn key_copy_cancel_returns_original_value_and_checkpoint_copy_uses_same_cursor() {
+    let map = BptreeMap::<usize, usize, Prepaid<ScalarPolicy>>::try_new_with_node_custody(|_| {
+        Ok::<_, ()>(ScalarPolicy)
+    })
+    .unwrap();
+    let mut writer = map
+        .try_write_admitted(|_| Ok::<_, ()>(ScalarPolicy))
+        .unwrap();
+    let key = 7;
+    let prepared = without_allocations(|| {
+        writer
+            .prepare_key_copy_insert_admitted(&key, 21)
+            .unwrap_or_else(|_| panic!("scalar plan"))
+    });
+    assert!(prepared.demand().bytes() > 0);
+    assert_eq!(without_allocations(|| prepared.into_value()), 21);
+    assert!(writer.is_empty());
+    let mut child = writer.checkpoint().unwrap();
+    let prepared = without_allocations(|| {
+        child
+            .prepare_key_copy_insert_admitted(&key, 21)
+            .unwrap_or_else(|_| panic!("scalar plan"))
+    });
+    assert_eq!(prepared.execute(ScalarPolicy), None);
+    assert_eq!(child.get(&key), Some(&21));
+    without_allocations(|| child.apply());
+    assert_eq!(writer.get(&key), Some(&21));
+    without_allocations(|| writer.commit());
+    assert_eq!(map.read().get(&key), Some(&21));
+}
+
+// A shared mutable backing can change demand while only immutably borrowed.
+// This policy deliberately refuses a copy rather than claiming a stale bound.
+type SharedBytes = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
+struct UnstableCopy;
+impl NodeFunding for UnstableCopy {
+    type Charge = Untracked;
+    fn take_node_charge(&mut self, _: Layout) -> Untracked {
+        Untracked
+    }
+}
+impl NodeCloning<usize, SharedBytes> for UnstableCopy {
+    fn clone_key(&mut self, key: &usize) -> usize {
+        *key
+    }
+    fn clone_value(&mut self, _: &SharedBytes) -> SharedBytes {
+        panic!("unstable copy admitted")
+    }
+}
+impl NodeCloning<usize, Option<SharedBytes>> for UnstableCopy {
+    fn clone_key(&mut self, key: &usize) -> usize {
+        *key
+    }
+    fn clone_value(&mut self, _: &Option<SharedBytes>) -> Option<SharedBytes> {
+        panic!("unstable optional copy admitted")
+    }
+}
+impl ClonePlanning<usize, SharedBytes> for UnstableCopy {
+    fn plan_key(_: &usize, _: &mut AllocationDemand) -> Result<(), PlanningError> {
+        Ok(())
+    }
+    fn plan_value(_: &SharedBytes, _: &mut AllocationDemand) -> Result<(), PlanningError> {
+        Err(PlanningError::UnsupportedPayload)
+    }
+}
+impl ClonePlanning<usize, Option<SharedBytes>> for UnstableCopy {
+    fn plan_key(_: &usize, _: &mut AllocationDemand) -> Result<(), PlanningError> {
+        Ok(())
+    }
+    fn plan_value(
+        value: &Option<SharedBytes>,
+        _: &mut AllocationDemand,
+    ) -> Result<(), PlanningError> {
+        if value.is_some() {
+            Err(PlanningError::UnsupportedPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+#[test]
+fn incoming_shared_mutable_preimage_refuses_when_its_borrow_cannot_freeze_copy_demand() {
+    let map =
+        BptreeMap::<usize, Option<SharedBytes>, Prepaid<UnstableCopy>>::try_new_with_node_custody(
+            |_| Ok::<_, ()>(UnstableCopy),
+        )
+        .unwrap();
+    let mut writer = map
+        .try_write_admitted(|_| Ok::<_, ()>(UnstableCopy))
+        .unwrap();
+    let source = std::sync::Arc::new(std::sync::Mutex::new(vec![1]));
+    for length in [1, 1024] {
+        source.lock().unwrap().resize(length, 2);
+        let error = without_allocations(|| {
+            writer
+                .prepare_optional_copy_insert_admitted(&7, Some(&source))
+                .err()
+                .expect("unstable incoming value must refuse")
+        });
+        assert_eq!(error, PlanningError::UnsupportedPayload);
+        assert_eq!(source.lock().unwrap().len(), length);
+        assert_eq!(std::sync::Arc::strong_count(&source), 1);
+        assert!(writer.is_empty());
+    }
+    let absent = without_allocations(|| {
+        writer
+            .prepare_optional_copy_insert_admitted(&7, None)
+            .unwrap()
+    });
+    assert!(absent.execute(UnstableCopy).is_none());
+    assert!(matches!(writer.get(&7), Some(None)));
+    without_allocations(|| writer.commit());
+    assert!(!map.is_poisoned());
+}

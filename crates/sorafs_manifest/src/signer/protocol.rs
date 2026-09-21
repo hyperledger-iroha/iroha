@@ -1,9 +1,11 @@
 //! Canonical public signer roles, purpose bindings and deterministic framing.
 
 use iroha_crypto::Algorithm;
+use iroha_primitives::production_identity::is_production_identity_v1;
 use norito::codec::{Decode, Encode};
 use std::{fmt, str::FromStr};
-const SIGNER_MAX_ID_BYTES_V1: usize = 128;
+/// Maximum public signer/deployment identity length, checked before native allocation.
+pub const SIGNER_MAX_ID_BYTES_V1: usize = 128;
 
 /// Signature algorithms admitted by the external signer V1 protocol.
 #[derive(norito::NoritoSchema)]
@@ -63,7 +65,7 @@ impl fmt::Display for SignerKeyAlgorithmV1 {
         })
     }
 }
-/// Least-privilege signing domains served by the canonical hardware signer.
+/// Least-privilege signing domains served by an independently authorized signer.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::signer::protocol::SignerRoleV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
@@ -95,6 +97,14 @@ pub enum SignerRoleV1 {
     PopCredentials = 12,
     /// Exact aggregate release-manifest bytes, separate from foundational promotion.
     ReleaseManifest = 13,
+    /// Exact final production-promotion provenance, separate from prerequisite and release roles.
+    FinalPromotionProvenance = 14,
+    /// Authorized account transactions for one final-promotion deployment.
+    ///
+    /// This account key is separate from the role-14 provenance receipt key.
+    FinalPromotionAccountTransaction = 15,
+    /// Reviewed deployment topology configuration for one exact release candidate.
+    TopologyApproval = 16,
 }
 impl SignerRoleV1 {
     /// Stable role label.
@@ -114,6 +124,9 @@ impl SignerRoleV1 {
             Self::StreamToken => "stream_token",
             Self::PopCredentials => "pop_credentials",
             Self::ReleaseManifest => "release_manifest",
+            Self::FinalPromotionProvenance => "final_promotion_provenance",
+            Self::FinalPromotionAccountTransaction => "final_promotion_account_transaction",
+            Self::TopologyApproval => "topology_approval",
         }
     }
     /// Exact signing domain enforced before any key operation.
@@ -133,6 +146,13 @@ impl SignerRoleV1 {
             Self::StreamToken => "sorafs.stream-token.signature.v1",
             Self::PopCredentials => "sorafs.pop.issuer-signature.v1",
             Self::ReleaseManifest => "sorafs.release-manifest.signature.v1",
+            Self::FinalPromotionProvenance => {
+                "sorafs.production-readiness.final-promotion-provenance.v1"
+            }
+            Self::FinalPromotionAccountTransaction => {
+                "sorafs.native-transaction.final-promotion-account.v1"
+            }
+            Self::TopologyApproval => "sorafs.production-readiness.topology-approval.v1",
         }
     }
     /// Whether this isolated role admits the requested key algorithm.
@@ -148,7 +168,10 @@ impl SignerRoleV1 {
             | Self::EvidenceViewer
             | Self::StreamToken
             | Self::PopCredentials
-            | Self::ReleaseManifest => {
+            | Self::ReleaseManifest
+            | Self::FinalPromotionProvenance
+            | Self::FinalPromotionAccountTransaction
+            | Self::TopologyApproval => {
                 matches!(algorithm, SignerKeyAlgorithmV1::Ed25519)
             }
         }
@@ -171,6 +194,9 @@ impl FromStr for SignerRoleV1 {
             "stream_token" => Ok(Self::StreamToken),
             "pop_credentials" => Ok(Self::PopCredentials),
             "release_manifest" => Ok(Self::ReleaseManifest),
+            "final_promotion_provenance" => Ok(Self::FinalPromotionProvenance),
+            "final_promotion_account_transaction" => Ok(Self::FinalPromotionAccountTransaction),
+            "topology_approval" => Ok(Self::TopologyApproval),
             _ => Err(SignerValueParseErrorV1),
         }
     }
@@ -189,8 +215,8 @@ impl fmt::Display for SignerRoleV1 {
 #[norito_schema(name = "sorafs_manifest::signer::protocol::SignerPurposeBindingV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum SignerPurposeBindingV1 {
-    /// Native transaction and promotion roles carry their authority in the
-    /// signed payload or the public key itself.
+    /// The four ordinary native transaction roles and foundational promotion
+    /// carry their authority in the signed payload or public key itself.
     NativeOrPromotion,
     /// Exact aggregate release deployment and reviewed release-policy subject.
     ReleaseManifest {
@@ -221,7 +247,7 @@ pub enum SignerPurposeBindingV1 {
     },
     /// Evidence-viewer authority is the binding handle and Ed25519 key.
     EvidenceViewer,
-    /// Exact provider whose stream tokens this hardware custody may sign.
+    /// Exact provider whose stream tokens this signer authorization permits.
     StreamToken {
         /// Nonzero provider identity authorized for the token body.
         provider_id: [u8; 32],
@@ -230,6 +256,23 @@ pub enum SignerPurposeBindingV1 {
     PopCredentials {
         /// Stable public `PoP` credential issuer identity.
         issuer_id: String,
+    },
+    /// Exact deployment whose complete final promotion statement may be signed.
+    FinalPromotionProvenance {
+        /// Canonical deployment identity governed by the signing policy.
+        deployment_id: String,
+    },
+    /// Exact deployment whose independently qualified account may sign native transactions.
+    ///
+    /// Typed native action and reviewed-request authorization remain the account signer owner.
+    FinalPromotionAccountTransaction {
+        /// Canonical deployment identity governed by the account-key signing policy.
+        deployment_id: String,
+    },
+    /// Exact deployment whose candidate-bound topology configuration may be approved.
+    TopologyApproval {
+        /// Canonical deployment identity governed by the topology signing policy.
+        deployment_id: String,
     },
 }
 impl SignerPurposeBindingV1 {
@@ -249,8 +292,17 @@ impl SignerPurposeBindingV1 {
             (SignerRoleV1::StreamToken, Self::StreamToken { provider_id }) => {
                 *provider_id != [0; 32]
             }
-            (SignerRoleV1::ReleaseManifest, Self::ReleaseManifest { deployment_id }) => {
-                valid_identity(deployment_id)
+            (SignerRoleV1::ReleaseManifest, Self::ReleaseManifest { deployment_id })
+            | (
+                SignerRoleV1::FinalPromotionProvenance,
+                Self::FinalPromotionProvenance { deployment_id },
+            )
+            | (
+                SignerRoleV1::FinalPromotionAccountTransaction,
+                Self::FinalPromotionAccountTransaction { deployment_id },
+            )
+            | (SignerRoleV1::TopologyApproval, Self::TopologyApproval { deployment_id }) => {
+                is_production_identity_v1(deployment_id, SIGNER_MAX_ID_BYTES_V1)
             }
             (SignerRoleV1::GovernanceDag, Self::GovernanceDag { publisher_peer_id }) => {
                 !publisher_peer_id.is_empty()
@@ -266,24 +318,14 @@ impl SignerPurposeBindingV1 {
                 },
             ) => *signer_id != [0; 32] && *provider_id != [0; 32] && signer_id != provider_id,
             (SignerRoleV1::BillingStatement, Self::BillingStatement { signer_id }) => {
-                valid_identity(signer_id)
+                is_production_identity_v1(signer_id, SIGNER_MAX_ID_BYTES_V1)
             }
             (SignerRoleV1::PopCredentials, Self::PopCredentials { issuer_id }) => {
-                valid_identity(issuer_id)
+                is_production_identity_v1(issuer_id, SIGNER_MAX_ID_BYTES_V1)
             }
             _ => false,
         }
     }
-}
-
-pub(super) fn valid_identity(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= SIGNER_MAX_ID_BYTES_V1
-        && !value.as_bytes().contains(&0)
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
-        && !value.to_ascii_lowercase().contains("test")
 }
 
 pub(super) fn digest_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
@@ -310,7 +352,26 @@ const INTENT_DOMAIN: &[u8] = b"iroha.sorafs.signer.operation.intent.v1";
 /// Terminal administrative transitions are deliberately not ordinary active-key operations.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationActionV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    PartialOrd,
+    Ord,
+    iroha_schema::IntoSchema,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum SignerOperationActionV1 {
     /// One role-authorized payload signature and its audit/provenance/response.
     Sign,
@@ -342,7 +403,21 @@ pub enum SignerKeyOperationPurposeV1 {
 /// Independently expected audit predecessor or successor.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationAuditHeadV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    PartialOrd,
+    Ord,
+    iroha_schema::IntoSchema,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct SignerOperationAuditHeadV1 {
     /// Monotonic audit record sequence; zero only before genesis.
     pub sequence: u64,
@@ -363,7 +438,20 @@ impl SignerOperationAuditHeadV1 {
 /// Exact service action admitted before any provider I/O.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationIntentV1")]
-#[derive(Clone, Copy, PartialEq, Eq, Decode, Encode)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    PartialOrd,
+    Ord,
+    iroha_schema::IntoSchema,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct SignerOperationIntentV1 {
     /// Exact aggregate action, determining the required sub-signature sequence.
     pub action: SignerOperationActionV1,
@@ -374,20 +462,35 @@ pub struct SignerOperationIntentV1 {
     /// Independently expected authoritative journal predecessor.
     pub previous_audit: SignerOperationAuditHeadV1,
 }
+
+/// Failure to commit a bounded, canonical signer operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SignerOperationDigestErrorV1 {
+    /// The operation identity or original audit predecessor is incoherent.
+    #[error("invalid signer operation coordinates")]
+    InvalidCoordinates,
+    /// The ordered signature collection exceeds its declared bounds or is empty.
+    #[error("invalid signer operation signature bounds")]
+    InvalidSignatureBounds,
+    /// Canonical Norito encoding failed.
+    #[error("signer operation canonical encoding failed")]
+    Encoding,
+}
+
 impl SignerOperationIntentV1 {
     /// Canonical intent commitment; rejects inert or incoherent request coordinates.
     ///
     /// # Errors
     /// Returns an error for invalid coordinates or canonical encoding failure.
-    pub fn digest(&self) -> Result<[u8; 32], ()> {
+    pub fn digest(&self) -> Result<[u8; 32], SignerOperationDigestErrorV1> {
         if self.operation_id == [0; 32]
             || self.request_digest == [0; 32]
             || self.previous_audit.sequence == u64::MAX
             || (self.previous_audit.sequence == 0) != (self.previous_audit.digest == [0; 32])
         {
-            return Err(());
+            return Err(SignerOperationDigestErrorV1::InvalidCoordinates);
         }
-        digest_canonical(INTENT_DOMAIN, self).map_err(|_| ())
+        digest_canonical(INTENT_DOMAIN, self).map_err(|_| SignerOperationDigestErrorV1::Encoding)
     }
 }
 impl fmt::Debug for SignerOperationIntentV1 {
@@ -405,7 +508,20 @@ impl fmt::Debug for SignerOperationIntentV1 {
 /// constructed and the source must authenticate its exact ownership on every reserved observation.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationReservationV1")]
-#[derive(Clone, Copy, PartialEq, Eq, Decode, Encode)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    PartialOrd,
+    Ord,
+    iroha_schema::IntoSchema,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct SignerOperationReservationV1 {
     /// Unique nonzero durable reservation id.
     pub reservation_id: [u8; 32],
@@ -426,7 +542,21 @@ impl fmt::Debug for SignerOperationReservationV1 {
 /// Public commitments prepared internally by the service before authoritative completion CAS.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationCommitmentV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    PartialOrd,
+    Ord,
+    iroha_schema::IntoSchema,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct SignerOperationCommitmentV1 {
     /// The exact next immutable audit record, persisted before completion can be acknowledged.
     pub audit: SignerOperationAuditHeadV1,
@@ -441,7 +571,21 @@ pub struct SignerOperationCommitmentV1 {
 /// record. These are public claims until compared with an independently verified observation.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationCustodyV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    PartialOrd,
+    Ord,
+    iroha_schema::IntoSchema,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct SignerOperationCustodyV1 {
     /// Exact independently qualified record used by the original operation.
     pub record_digest: [u8; 32],
@@ -505,14 +649,14 @@ pub fn signer_operation_message_digest_v1(message: &[u8]) -> [u8; 32] {
 /// Rejects empty/oversized signature collections or canonical serialization failures.
 pub fn signer_operation_signatures_digest_v1(
     signatures: &[SignerOperationSignatureV1],
-) -> Result<[u8; 32], ()> {
+) -> Result<[u8; 32], SignerOperationDigestErrorV1> {
     if signatures.is_empty()
         || signatures.len() > 4
         || signatures
             .iter()
             .any(|signature| signature.signature.is_empty() || signature.signature.len() > 4096)
     {
-        return Err(());
+        return Err(SignerOperationDigestErrorV1::InvalidSignatureBounds);
     }
     let manifest = signatures
         .iter()
@@ -528,11 +672,66 @@ pub fn signer_operation_signatures_digest_v1(
         })
         .collect::<Vec<_>>();
     digest_canonical(b"iroha.sorafs.signer.operation.signatures.v1", &manifest)
+        .map_err(|_| SignerOperationDigestErrorV1::Encoding)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn intent_digest_rejects_incoherent_coordinates_without_relabeling_them() {
+        let intent = SignerOperationIntentV1 {
+            action: SignerOperationActionV1::Sign,
+            operation_id: [1; 32],
+            request_digest: [2; 32],
+            previous_audit: SignerOperationAuditHeadV1 {
+                sequence: 0,
+                digest: [0; 32],
+            },
+        };
+        let expected = intent.digest().expect("coherent first operation");
+        let mut next = intent;
+        next.previous_audit.sequence = 1;
+        next.previous_audit.digest = [3; 32];
+        assert_ne!(next.digest().unwrap(), expected);
+        for changed in [
+            SignerOperationIntentV1 {
+                operation_id: [0; 32],
+                ..intent
+            },
+            SignerOperationIntentV1 {
+                request_digest: [0; 32],
+                ..intent
+            },
+            SignerOperationIntentV1 {
+                previous_audit: SignerOperationAuditHeadV1 {
+                    sequence: 0,
+                    digest: [1; 32],
+                },
+                ..intent
+            },
+            SignerOperationIntentV1 {
+                previous_audit: SignerOperationAuditHeadV1 {
+                    sequence: 1,
+                    digest: [0; 32],
+                },
+                ..intent
+            },
+            SignerOperationIntentV1 {
+                previous_audit: SignerOperationAuditHeadV1 {
+                    sequence: u64::MAX,
+                    digest: [1; 32],
+                },
+                ..intent
+            },
+        ] {
+            assert_eq!(
+                changed.digest(),
+                Err(SignerOperationDigestErrorV1::InvalidCoordinates)
+            );
+        }
+    }
 
     #[test]
     fn canonical_role_labels_domains_and_release_purpose_are_distinct() {
@@ -550,6 +749,8 @@ mod tests {
             SignerRoleV1::StreamToken,
             SignerRoleV1::PopCredentials,
             SignerRoleV1::ReleaseManifest,
+            SignerRoleV1::FinalPromotionProvenance,
+            SignerRoleV1::FinalPromotionAccountTransaction,
         ];
         let mut domains = std::collections::BTreeSet::new();
         for role in roles {
@@ -604,7 +805,10 @@ mod tests {
             signer_operation_signatures_digest_v1(&[signature.clone(), other.clone()]).unwrap(),
             expected
         );
-        assert!(signer_operation_signatures_digest_v1(&[]).is_err());
+        assert_eq!(
+            signer_operation_signatures_digest_v1(&[]),
+            Err(SignerOperationDigestErrorV1::InvalidSignatureBounds)
+        );
         assert!(signer_operation_signatures_digest_v1(&vec![signature.clone(); 5]).is_err());
         other.signature = vec![0; 4097];
         assert!(signer_operation_signatures_digest_v1(&[other]).is_err());
@@ -621,3 +825,15 @@ mod stream_token_purpose_tests;
 
 #[cfg(test)]
 include!("protocol/captured_owner_identity_tests.rs");
+
+#[cfg(test)]
+#[path = "protocol/final_promotion_purpose_tests.rs"]
+mod final_promotion_purpose_tests;
+
+#[cfg(test)]
+#[path = "protocol/final_promotion_account_purpose_tests.rs"]
+mod final_promotion_account_purpose_tests;
+
+#[cfg(test)]
+#[path = "protocol/production_identity_tests.rs"]
+mod production_identity_tests;

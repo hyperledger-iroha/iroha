@@ -173,6 +173,36 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
         Ok(())
     }
 
+    /// Atomically bind actual prepared values to the original source session.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn commit_prepared_difference_digit_v1(
+        &mut self,
+        statement: &super::super::super::radix_range_v2::PreparedDifferenceDigitStatementV1<'_>,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        let mut evidence = self
+            .evidence
+            .take()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        evidence.validate_radix_materialization_source_v1(
+            self.replay_record_digest,
+            self.source_receipt_digest,
+        )?;
+        let schedule = self
+            .schedule
+            .as_ref()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        statement.validate_origin_and_read_position_v1(
+            self.replay_record_digest,
+            self.source_receipt_digest,
+            schedule.next_record,
+            schedule.next_block,
+        )?;
+        evidence
+            .openings
+            .commit_prepared_difference_digit_v1(statement)?;
+        self.evidence = Some(evidence);
+        Ok(())
+    }
+
     /// Restricted evidence return shared by the compact and D/S-low consumers.
     /// Each consuming invocation requires all `43 * 512` authenticated reads.
     pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn complete_authenticated_source_replay_v1(

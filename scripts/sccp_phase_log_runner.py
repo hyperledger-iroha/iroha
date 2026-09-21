@@ -22,7 +22,7 @@ _PHASE_LOG_LIMITS = {
     "python-sdk": 64 * 1024 * 1024,
     "swift-sdk": 256 * 1024 * 1024,
     "kotlin-sdk": 256 * 1024 * 1024,
-    "java-android": 256 * 1024 * 1024,
+    "java-source-kotlin": 256 * 1024 * 1024,
     "dotnet-sdk": 256 * 1024 * 1024,
     "contract-smoke": 64 * 1024 * 1024,
     "tvm-contract-smoke": 64 * 1024 * 1024,

@@ -1,11 +1,11 @@
 //! Real producer/journal simulations through the complete-receipt transport trait.
 use super::*;
 use iroha_torii::sorafs::{
-    StreamTokenHardwareCallErrorV1 as Error, StreamTokenHardwareClientV1 as Client,
+    StreamTokenSignerCallErrorV1 as Error, StreamTokenSignerClientV1 as Client,
 };
 
 #[test]
-fn hardware_transport_uses_exact_body_and_recovers_identical_bytes_without_key_use() {
+fn signer_transport_uses_exact_body_and_recovers_identical_bytes_without_key_use() {
     let harness = Harness::new();
     let body = body(30);
     let expected = harness.source.register(&body);

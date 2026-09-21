@@ -1,292 +1,141 @@
-//! Audit coverage for vote tally proofs: ensure the production Halo2/IPA circuit accepts valid envelopes and rejects tampering.
-#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#![cfg(feature = "zk-tests")]
-#[cfg(all(
+//! Raw development-membership proof checks and explicit production rejection.
+//! These tests do not qualify credential-linked ballots or sound election tallies.
+#![cfg(all(
+    feature = "zk-tests",
     feature = "halo2-dev-tests",
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
+#[path = "common/governance_closed_state.rs"]
+mod closed_state;
 #[path = "zk_testkit.rs"]
 mod zk_testkit;
-#[cfg(all(
-    feature = "halo2-dev-tests",
-    any(feature = "zk-halo2", feature = "zk-halo2-ipa")
-))]
-mod tests {
-    use super::zk_testkit;
-    use iroha_core::{
-        executor::Executor,
-        kura::Kura,
-        query::store::LiveQueryStore,
-        smartcontracts::Execute,
-        state::{State, World},
-        zk as zk_backend,
-    };
-    use iroha_data_model::{
-        Registrable, ValidationFail,
-        account::Account,
-        asset::AssetDefinition,
-        block::BlockHeader,
-        domain::Domain,
-        isi::{Grant, verifying_keys, zk as zk_isi},
-        permission::Permission,
-        prelude::InstructionBox,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyId, VerifyingKeyRecord},
-    };
-    use iroha_primitives::json::Json;
-    use iroha_test_samples::ALICE_ID;
-    use nonzero_ext::nonzero;
-    #[test]
-    fn vote_tally_proof_verifies_with_vk_bytes() {
-        let bundle = zk_testkit::vote_merkle8_bundle();
-        let backend = bundle.backend;
-        let proof_box = ProofBox::new(backend.into(), bundle.proof_bytes.clone());
-        let vk_box = bundle
-            .vk_record
-            .key
-            .as_ref()
-            .expect("bundle must include verifying key bytes")
-            .clone();
-        assert!(
-            zk_backend::verify_backend(backend, &proof_box, Some(&vk_box)),
-            "expected untampered proof to verify"
-        );
-    }
-    #[test]
-    fn vote_tally_proof_rejects_commit_tampering() {
-        let bundle = zk_testkit::vote_merkle8_bundle();
-        let backend = bundle.backend;
-        let vk_box = bundle
-            .vk_record
-            .key
-            .as_ref()
-            .expect("bundle must include verifying key bytes")
-            .clone();
-        let tampered_bytes = tamper_instance_column(bundle.proof_bytes.clone(), 0);
-        let proof_box = ProofBox::new(backend.into(), tampered_bytes);
-        assert!(
-            !zk_backend::verify_backend(backend, &proof_box, Some(&vk_box)),
-            "commit column tampering must be rejected"
-        );
-    }
-    #[test]
-    fn vote_tally_proof_rejects_root_tampering() {
-        let bundle = zk_testkit::vote_merkle8_bundle();
-        let backend = bundle.backend;
-        let vk_box = bundle
-            .vk_record
-            .key
-            .as_ref()
-            .expect("bundle must include verifying key bytes")
-            .clone();
-        let tampered_bytes = tamper_instance_column(bundle.proof_bytes.clone(), 1);
-        let proof_box = ProofBox::new(backend.into(), tampered_bytes);
-        assert!(
-            !zk_backend::verify_backend(backend, &proof_box, Some(&vk_box)),
-            "root column tampering must be rejected"
-        );
-    }
-    #[test]
-    fn vote_tally_proof_verifies_with_registered_vk() {
-        let state = new_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        grant_manage_vk(&mut block);
-        let exec = Executor::default();
-        let bundle = zk_testkit::vote_merkle8_bundle();
-        register_vk(&exec, &mut block, &bundle.vk_id, &bundle.vk_record);
-        let proof = ProofBox::new(bundle.backend.into(), bundle.proof_bytes.clone());
-        let attachment =
-            ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
-        execute_verify_proof(&mut block, attachment, bundle.vk_record.commitment)
-            .expect("canonical vote tally proof should verify");
-    }
-    #[test]
-    fn vote_tally_schema_hash_guard_rejects_commit_tamper() {
-        let state = new_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        grant_manage_vk(&mut block);
-        let exec = Executor::default();
-        let bundle = zk_testkit::vote_merkle8_bundle();
-        register_vk(&exec, &mut block, &bundle.vk_id, &bundle.vk_record);
-        let tampered = tamper_instance_column(bundle.proof_bytes.clone(), 0);
-        let proof = ProofBox::new(bundle.backend.into(), tampered);
-        let attachment =
-            ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
-        let err = execute_verify_proof(&mut block, attachment, bundle.vk_record.commitment)
-            .expect_err("tampered commit must be rejected");
-        assert_schema_hash_violation(err);
-    }
-    #[test]
-    fn vote_tally_schema_hash_guard_rejects_root_tamper() {
-        let state = new_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        grant_manage_vk(&mut block);
-        let exec = Executor::default();
-        let bundle = zk_testkit::vote_merkle8_bundle();
-        register_vk(&exec, &mut block, &bundle.vk_id, &bundle.vk_record);
-        let tampered = tamper_instance_column(bundle.proof_bytes.clone(), 1);
-        let proof = ProofBox::new(bundle.backend.into(), tampered);
-        let attachment =
-            ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
-        let err = execute_verify_proof(&mut block, attachment, bundle.vk_record.commitment)
-            .expect_err("tampered root must be rejected");
-        assert_schema_hash_violation(err);
-    }
-    #[test]
-    fn vote_tally_schema_hash_guard_rejects_registry_tamper() {
-        let state = new_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        grant_manage_vk(&mut block);
-        let exec = Executor::default();
-        let bundle = zk_testkit::vote_merkle8_bundle();
-        let mut record: VerifyingKeyRecord = bundle.vk_record.clone();
-        record.public_inputs_schema_hash = [0xEE; 32];
-        register_vk(&exec, &mut block, &bundle.vk_id, &record);
-        let proof = ProofBox::new(bundle.backend.into(), bundle.proof_bytes.clone());
-        let attachment =
-            ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
-        let err = execute_verify_proof(&mut block, attachment, bundle.vk_record.commitment)
-            .expect_err("registry hash tamper must be rejected");
-        assert_schema_hash_violation(err);
-    }
-    /// Flip the lowest byte of the requested public input column (0 = commit, 1 = root).
-    ///
-    /// For `halo2/ipa` proofs this tampers both the outer `OpenVerifyEnvelope.public_inputs`
-    /// bytes and the inner ZK1 instance column.
-    fn tamper_instance_column(envelope: Vec<u8>, column_index: usize) -> Vec<u8> {
-        if let Ok(mut env) =
-            norito::decode_from_bytes::<iroha_data_model::zk::OpenVerifyEnvelope>(&envelope)
-        {
-            let offset = column_index
-                .checked_mul(32)
-                .expect("public input offset must not overflow");
-            let target = env
-                .public_inputs
-                .get_mut(offset)
-                .expect("public input column within envelope bounds");
-            *target ^= 0x01;
-            env.proof_bytes = tamper_zk1_instance_column(env.proof_bytes, column_index);
-            return norito::to_bytes(&env)
-                .expect("tampered OpenVerifyEnvelope must serialize with Norito");
+use iroha_core::{smartcontracts::Execute, state::WorldReadOnly, zk};
+use iroha_data_model::{
+    block::BlockHeader,
+    isi::{
+        error::{InstructionExecutionError, InvalidParameterError},
+        verifying_keys::RegisterVerifyingKey,
+        zk::VerifyProof,
+    },
+    proof::{ProofAttachment, ProofBox},
+    zk::OpenVerifyEnvelope,
+};
+use iroha_test_samples::ALICE_ID;
+use mv::storage::StorageReadOnly;
+use nonzero_ext::nonzero;
+fn assert_closed_registry(error: InstructionExecutionError) {
+    assert_eq!(
+        error,
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "Halo2 OpenVerify circuit_id is not in the production circuit registry".into()
+        ))
+    );
+}
+#[test]
+fn development_membership_raw_proof_verifies() {
+    let bundle = zk_testkit::dev_vote_merkle8_bundle();
+    assert!(bundle.verify_raw(bundle.raw_proof(), bundle.commit, bundle.root));
+}
+#[test]
+fn development_membership_raw_proof_rejects_commit_tampering() {
+    let bundle = zk_testkit::dev_vote_merkle8_bundle();
+    assert!(!bundle.verify_raw(
+        bundle.raw_proof(),
+        bundle.commit + halo2_proofs::halo2curves::pasta::Fp::one(),
+        bundle.root
+    ));
+}
+#[test]
+fn development_membership_raw_proof_rejects_root_tampering() {
+    let bundle = zk_testkit::dev_vote_merkle8_bundle();
+    assert!(!bundle.verify_raw(
+        bundle.raw_proof(),
+        bundle.commit,
+        bundle.root + halo2_proofs::halo2curves::pasta::Fp::one()
+    ));
+}
+#[test]
+fn development_membership_raw_proof_rejects_transcript_tampering() {
+    let bundle = zk_testkit::dev_vote_merkle8_bundle();
+    let mut proof = bundle.raw_proof().to_vec();
+    proof[0] ^= 1;
+    assert!(!bundle.verify_raw(&proof, bundle.commit, bundle.root));
+    assert!(!bundle.verify_raw(&proof[..proof.len() / 2], bundle.commit, bundle.root));
+}
+#[test]
+fn development_membership_proof_is_rejected_by_production_dispatch() {
+    let bundle = zk_testkit::dev_vote_merkle8_bundle();
+    let key = bundle.vk_record.key.as_ref().unwrap();
+    let proof = ProofBox::new(bundle.backend.into(), bundle.proof_bytes.clone());
+    assert!(!zk::verify_backend(bundle.backend, &proof, Some(key)));
+}
+#[test]
+fn development_membership_key_and_schema_mutation_cannot_register() {
+    let state = closed_state::state();
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    let bundle = zk_testkit::dev_vote_merkle8_bundle();
+    for mutated_schema in [false, true] {
+        let mut transaction = block.transaction();
+        closed_state::grant_permissions(&mut transaction, "dev-membership");
+        let mut record = bundle.vk_record.clone();
+        if mutated_schema {
+            record.public_inputs_schema_hash[0] ^= 1;
         }
-        tamper_zk1_instance_column(envelope, column_index)
-    }
-    fn tamper_zk1_instance_column(mut envelope: Vec<u8>, column_index: usize) -> Vec<u8> {
-        const TAG: &[u8; 4] = b"I10P";
-        let tag_pos = envelope
-            .windows(TAG.len())
-            .position(|window| window == TAG)
-            .expect("I10P TLV not found in proof envelope");
-        let length_start = tag_pos + TAG.len();
-        let length = u32::from_le_bytes(
-            envelope[length_start..length_start + 4]
-                .try_into()
-                .expect("length bytes"),
-        ) as usize;
-        let payload_start = length_start + 4;
-        let payload_end = payload_start + length;
+        assert_closed_registry(
+            RegisterVerifyingKey {
+                id: bundle.vk_id.clone(),
+                record,
+            }
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("development key must not register"),
+        );
         assert!(
-            payload_end <= envelope.len(),
-            "I10P payload truncated: length {}, buffer {}",
-            length,
-            envelope.len()
+            transaction
+                .world
+                .verifying_keys()
+                .get(&bundle.vk_id)
+                .is_none()
         );
-        let cols = u32::from_le_bytes(
-            envelope[payload_start..payload_start + 4]
-                .try_into()
-                .expect("columns bytes"),
-        ) as usize;
-        let rows = u32::from_le_bytes(
-            envelope[payload_start + 4..payload_start + 8]
-                .try_into()
-                .expect("rows bytes"),
-        ) as usize;
-        assert_eq!(rows, 1, "vote tally bundle should expose a single row");
-        assert!(
-            column_index < cols,
-            "column {} out of bounds (cols = {})",
-            column_index,
-            cols
-        );
-        let scalars_start = payload_start + 8;
-        let offset = scalars_start + column_index * 32;
-        let target = envelope
-            .get_mut(offset)
-            .expect("scalar column within envelope bounds");
-        *target ^= 0x01;
-        envelope
+        assert!(transaction.world.take_external_events().is_empty());
     }
-    fn assert_schema_hash_violation(err: ValidationFail) {
-        match err {
-            ValidationFail::InstructionFailed(
-                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(msg),
-            ) => assert!(
-                msg.contains("schema hash"),
-                "expected schema hash violation, got: {msg}"
-            ),
-            other => panic!("unexpected error: {other:?}"),
+}
+#[test]
+fn development_membership_verify_isi_rejects_missing_and_retained_keys() {
+    let state = closed_state::state();
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    let bundle = zk_testkit::dev_vote_merkle8_bundle();
+    // Preserve both original public-input mutation controls without attributing registry
+    // rejection to a fictitious schema verifier. Actual raw-proof binding is tested above.
+    for tamper_column in [None, Some(0_usize), Some(1)] {
+        for retained_key in [false, true] {
+            let mut transaction = block.transaction();
+            let mut envelope: OpenVerifyEnvelope =
+                norito::decode_from_bytes(&bundle.proof_bytes).unwrap();
+            if let Some(column) = tamper_column {
+                envelope.public_inputs[column * 32] ^= 1;
+            }
+            let proof = ProofBox::new(bundle.backend.into(), norito::to_bytes(&envelope).unwrap());
+            if retained_key {
+                // Explicit adversarial retained state, never successful registration.
+                transaction
+                    .world
+                    .verifying_keys_mut_for_testing()
+                    .insert(bundle.vk_id.clone(), bundle.vk_record.clone());
+            }
+            let proof_id = iroha_data_model::proof::ProofId {
+                backend: bundle.backend.into(),
+                proof_hash: zk::hash_proof(&proof),
+            };
+            let mut attachment =
+                ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
+            attachment.vk_commitment = Some(bundle.vk_record.commitment);
+            assert_closed_registry(
+                VerifyProof::new(attachment)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .expect_err("development envelope must stay outside VerifyProof"),
+            );
+            assert!(transaction.world.proofs().get(&proof_id).is_none());
+            assert!(transaction.world.take_external_events().is_empty());
         }
-    }
-    fn new_state() -> State {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let alice_id = (*ALICE_ID).clone();
-        let domain_id: iroha_model_base::domain::DomainId =
-            iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain");
-        let domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let alice = Account::new(alice_id.clone()).build(&alice_id);
-        let world = World::with([domain], [alice], Vec::<AssetDefinition>::new());
-        let mut state = State::new_for_testing(world, kura, query_handle);
-        state.zk.halo2.enabled = true;
-        state.zk.verify_timeout = std::time::Duration::ZERO;
-        state
-    }
-    fn grant_manage_vk(block: &mut iroha_core::state::StateBlock<'_>) {
-        let mut stx = block.transaction();
-        let perm = Permission::new(
-            "CanManageVerifyingKeys"
-                .parse()
-                .expect("permission identifier"),
-            Json::new(()),
-        );
-        Grant::account_permission(perm, ALICE_ID.clone())
-            .execute(&ALICE_ID.clone(), &mut stx)
-            .expect("grant manage verifying keys");
-        stx.apply();
-    }
-    fn register_vk(
-        exec: &Executor,
-        block: &mut iroha_core::state::StateBlock<'_>,
-        id: &VerifyingKeyId,
-        record: &VerifyingKeyRecord,
-    ) {
-        let mut stx = block.transaction();
-        let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
-            id: id.clone(),
-            record: record.clone(),
-        }
-        .into();
-        exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-            .expect("register verifying key");
-        stx.apply();
-    }
-    fn execute_verify_proof(
-        block: &mut iroha_core::state::StateBlock<'_>,
-        mut attachment: ProofAttachment,
-        vk_commitment: [u8; 32],
-    ) -> Result<(), ValidationFail> {
-        attachment.vk_commitment = Some(vk_commitment);
-        let mut stx = block.transaction();
-        let isi: InstructionBox = zk_isi::VerifyProof::new(attachment).into();
-        let res = isi
-            .execute(&ALICE_ID.clone(), &mut stx)
-            .map_err(ValidationFail::InstructionFailed);
-        if res.is_ok() {
-            stx.apply();
-        }
-        res
     }
 }

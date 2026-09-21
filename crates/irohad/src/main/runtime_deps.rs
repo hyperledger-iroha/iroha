@@ -47,7 +47,7 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn sorafs_node::GovernanceDagRequestAuthenticator>>,
     sorafs_governance_dag_checkpoint_store:
         Option<Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>>,
-    sorafs_stream_token_hardware_client: Option<Arc<dyn iroha_torii::sorafs::StreamTokenHardwareClientV1>>,
+    sorafs_stream_token_signer_client: Option<Arc<dyn iroha_torii::sorafs::StreamTokenSignerClientV1>>,
     sorafs_stream_token_state_observer: Option<Arc<dyn iroha_torii::sorafs::StreamTokenStateObserverClientV1>>,
     sorafs_stream_token_approved_anchor: Option<iroha_torii::sorafs::StreamTokenApprovedCustodyAnchorV1>,
     sorafs_stream_token_gateway_admission:
@@ -376,7 +376,7 @@ impl IrohaRuntimeDeps {
             && self.sorafs_governance_dag_ipfs_authenticator.is_none()
             && self.sorafs_governance_dag_head_authenticator.is_none()
             && self.sorafs_governance_dag_checkpoint_store.is_none()
-            && self.sorafs_stream_token_hardware_client.is_none()
+            && self.sorafs_stream_token_signer_client.is_none()
             && self.sorafs_stream_token_state_observer.is_none()
             && self.sorafs_stream_token_approved_anchor.is_none()
             && self.sorafs_stream_token_gateway_admission.is_none()
@@ -527,11 +527,11 @@ impl IrohaRuntimeDeps {
         with_sorafs_governance_dag_checkpoint_store(
             checkpoint_store: Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>,
         ) => sorafs_governance_dag_checkpoint_store;
-        /// Attach the opaque hardware client for exact prepared stream-token operations.
+        /// Attach the opaque signer client for exact prepared stream-token operations.
         /// Raw replies require independent challenged evidence before token release.
-        with_sorafs_stream_token_hardware_client(
-            client: Arc<dyn iroha_torii::sorafs::StreamTokenHardwareClientV1>,
-        ) => sorafs_stream_token_hardware_client;
+        with_sorafs_stream_token_signer_client(
+            client: Arc<dyn iroha_torii::sorafs::StreamTokenSignerClientV1>,
+        ) => sorafs_stream_token_signer_client;
         /// Attach the separately routed state observer; its replies confer no authority alone.
         with_sorafs_stream_token_state_observer(
             observer: Arc<dyn iroha_torii::sorafs::StreamTokenStateObserverClientV1>,

@@ -12,7 +12,6 @@ fn source_axes_v1() -> PlaneOpeningSourceContextV1 {
     PlaneOpeningSourceContextV1 {
         source_replay_record_digest: [0x11; 32],
         source_opening_record_digest: [0x22; 32],
-        canonical_reopen_record_digest: [0x33; 32],
         radix_range_record_digest: [0x44; 32],
     }
 }
@@ -239,7 +238,7 @@ fn ordered_plan_fits_without_changing_the_exact_single_file_cap_deficit() {
     assert_eq!(plan.slot_count_v1(), SNAPSHOT_SLOT_COUNT_V1);
     assert_eq!(
         hex::encode(plan.descriptor_digest_v1()),
-        "d2ed7749c88a42e46acdf66882b1d3f5aa8af9851ec2df93ac14f853fbd8e092"
+        "7f4b2e87b22ca38b1225c29870f6835f8dbe13dcd0819ed9853d1e733df9f6be"
     );
     assert_eq!(
         plan,
@@ -307,6 +306,10 @@ fn source_context_is_ordered_nonzero_and_swap_hostile() {
     let axes = source_axes_v1();
     let digest = plane_context_digest_v1(axes).unwrap();
     assert_eq!(digest, plane_context_digest_v1(axes).unwrap());
+    assert_eq!(
+        hex::encode(digest),
+        "ee8e26c5e94f1234947a027894ab7e23ed4e4ec9fbe22a14b651c498c0805a86"
+    );
     assert_ne!(digest, plane_mapping_digest_v1().unwrap());
 
     let mut swapped = axes;
@@ -316,15 +319,24 @@ fn source_context_is_ordered_nonzero_and_swap_hostile() {
     );
     assert_ne!(digest, plane_context_digest_v1(swapped).unwrap());
 
-    let mut zero = axes;
-    zero.canonical_reopen_record_digest = [0; 32];
-    assert_eq!(
-        plane_context_digest_v1(zero),
-        Err(PlaneOpeningErrorV1::Context)
-    );
+    let substitutions: [fn(&mut PlaneOpeningSourceContextV1, [u8; 32]); 3] = [
+        |axes, value| axes.source_replay_record_digest = value,
+        |axes, value| axes.source_opening_record_digest = value,
+        |axes, value| axes.radix_range_record_digest = value,
+    ];
+    for substitute in substitutions {
+        let mut changed = axes;
+        substitute(&mut changed, [0; 32]);
+        assert_eq!(
+            plane_context_digest_v1(changed),
+            Err(PlaneOpeningErrorV1::Context)
+        );
+        substitute(&mut changed, [0x55; 32]);
+        assert_ne!(digest, plane_context_digest_v1(changed).unwrap());
+    }
     for literal in [
         b"native40-inventory,basis,mapping".as_slice(),
-        b"source-replay-record,source-opening-record,canonical-reopen-record",
+        b"source-replay-record,source-opening-record",
         b"radix-range-record",
     ] {
         assert!(

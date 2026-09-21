@@ -1600,7 +1600,7 @@ v2_apply_test!(
         let (wake_sender, wake_receiver) = std::sync::mpsc::sync_channel(1);
         fixture.service.queue.set_sumeragi_wake(wake_sender);
         for case in 0..6 {
-            let notification = mv::ReleaseNotification::default();
+            let notification = concread::release::ReleaseNotification::default();
             let pool = mv::allocation::AllocationBudget::new(1);
             let occupied = pool.try_reserve_bytes(1).unwrap();
             let refusal = match case {

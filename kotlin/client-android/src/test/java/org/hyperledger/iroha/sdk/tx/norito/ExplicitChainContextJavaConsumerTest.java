@@ -25,8 +25,10 @@ import org.hyperledger.iroha.sdk.norito.NoritoEncoder;
 import org.hyperledger.iroha.sdk.sccp.SccpV1;
 import org.hyperledger.iroha.sdk.tx.SignedTransaction;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Tag;
 
 /** Java Android consumers retain explicit, isolated I105 codec contexts and canonical envelopes. */
+@Tag("host-native")
 class ExplicitChainContextJavaConsumerTest {
   private static final int TAIRA = SccpV1.TAIRA_I105_DISCRIMINANT_V1;
   private static final int OTHER = AccountAddress.DEFAULT_I105_DISCRIMINANT;

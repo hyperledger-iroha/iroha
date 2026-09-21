@@ -161,7 +161,7 @@ fn prepaid_tip_fill_and_publication_need_no_further_pool_credit() {
         let prepared = detached
             .try_prepare_publication(&owner, |_, _| Ok::<_, ()>(()))
             .unwrap_or_else(|_| panic!("all publication storage was prepaid"));
-        let detached = prepared.abort();
+        let detached = prepared.abort().0;
         assert_eq!(
             std::ptr::from_ref(detached.last().unwrap()),
             original_pointer
@@ -295,7 +295,7 @@ fn empty_fast_history_is_read_only_and_uses_no_mutable_tree_credit() {
 
 #[test]
 fn only_releasable_local_refusals_expose_an_original_wait() {
-    let notification = mv::ReleaseNotification::default();
+    let notification = concread::release::ReleaseNotification::default();
     let wait = notification.observe();
     assert_eq!(
         BlockHashAdmissionError::Busy(wait.clone()).release_wait(),

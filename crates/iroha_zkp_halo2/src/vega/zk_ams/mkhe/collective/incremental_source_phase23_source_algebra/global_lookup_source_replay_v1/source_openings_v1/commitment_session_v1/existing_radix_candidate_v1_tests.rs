@@ -27,7 +27,7 @@ const FIRST_CANDIDATE_BLINDING_KAT_V1: [u8; 32] =
 const FIRST_CANDIDATE_TOKEN_KAT_V1: [u8; 32] =
     hex!("4a0d1d9e1b6ee952ddea6be0f56193f64b21ae9f252d24a16a4e0c19cc86f14f");
 
-fn patterned_points_v1() -> [Point; 3] {
+pub(super) fn patterned_points_v1() -> [Point; 3] {
     [
         Point::canonical_generator().expect("canonical generator"),
         Point::from_non_identity_wire_bytes_exact(&hex!(

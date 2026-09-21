@@ -358,7 +358,10 @@ fn private_settlement_operations_are_typed_authenticated_and_redacted() {
             }
             PrivateSettlementAuthContract::Public => {
                 assert!(headers.is_empty(), "{}", contract.path);
-                assert!(operation.get("security").is_none());
+                assert_eq!(
+                    operation["security"],
+                    norito::json!([{}, {"IrohaApiToken": []}])
+                );
                 assert!(operation.get("x-iroha-canonical-auth-v1").is_none());
                 assert!(operation.get("x-iroha-identity-bound-auth-v1").is_none());
                 assert!(!private_settlement_response_is_private_no_store(

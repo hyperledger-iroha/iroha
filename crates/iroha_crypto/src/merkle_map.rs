@@ -110,6 +110,10 @@ impl MerkleMap {
     /// distinct. Returns `false` for an exact no-op. Errors leave the map intact.
     /// A successful update copies at most 256 branches and one leaf, with no
     /// whole-map reconstruction. Hashing uses the existing portable `Hash` path.
+    ///
+    /// # Errors
+    /// Rejects a mismatched expected value or an update whose entry count cannot
+    /// be represented by the commitment format.
     pub fn replace(
         &mut self,
         key: Hash,
@@ -137,10 +141,12 @@ impl MerkleMap {
 
 /// MSB-first shared prefix length, including all 256 bits for equal keys.
 fn common_bits(a: &Hash, b: &Hash) -> u16 {
-    for (index, (&a, &b)) in a.as_ref().iter().zip(b.as_ref()).enumerate() {
+    for (index, (&a, &b)) in (0_u16..).zip(a.as_ref().iter().zip(b.as_ref())) {
         let differing = a ^ b;
         if differing != 0 {
-            return (index * 8) as u16 + differing.leading_zeros() as u16;
+            return index * 8
+                + u16::try_from(differing.leading_zeros())
+                    .expect("an eight-bit prefix length fits u16");
         }
     }
     256
@@ -154,7 +160,7 @@ fn key_bit(key: &Hash, bit: u16) -> bool {
 fn prefix(key: &Hash, bit: u16) -> [u8; Hash::LENGTH] {
     let mut prefix = *key.as_ref();
     let byte = usize::from(bit / 8);
-    prefix[byte] = if bit % 8 == 0 {
+    prefix[byte] = if bit.is_multiple_of(8) {
         0
     } else {
         prefix[byte] & (0xff << (8 - bit % 8))
@@ -210,15 +216,15 @@ fn replace_node(node: Option<&Arc<Node>>, key: Hash, after: Option<Hash>) -> Opt
         NodeKind::Branch { bit, left, right } => {
             // A removal collapses its unary branch; no tombstone/history remains.
             Some(if key_bit(&key, *bit) {
-                match replace_node(Some(right), key, after) {
-                    Some(new) => branch(*bit, Arc::clone(left), new),
-                    None => Arc::clone(left),
-                }
+                replace_node(Some(right), key, after).map_or_else(
+                    || Arc::clone(left),
+                    |new| branch(*bit, Arc::clone(left), new),
+                )
             } else {
-                match replace_node(Some(left), key, after) {
-                    Some(new) => branch(*bit, new, Arc::clone(right)),
-                    None => Arc::clone(right),
-                }
+                replace_node(Some(left), key, after).map_or_else(
+                    || Arc::clone(right),
+                    |new| branch(*bit, new, Arc::clone(right)),
+                )
             })
         }
     }

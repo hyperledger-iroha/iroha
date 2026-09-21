@@ -99,9 +99,10 @@ by this generic Iroha 3 release pipeline.
 
 ## External dependencies
 
-- Reviewed `authenticated_external_signer` Ed25519 adapter, exact `software`
-  backend, independently administered runtime-only credentials, and
-  `software-key-qualified` verification receipt.
+- Reviewed `authenticated_external_signer` Ed25519 adapter, independently
+  administered runtime-only credentials, and a verified signer-authority receipt.
+  Software signing is supported; optional hardware storage does not change
+  release eligibility or establish an extra qualification.
 - Out-of-band approval of the raw public-key fingerprint.
 - Packaged `iroha` candidate plus independent approval of its exact
   executable path and lowercase SHA-256 digest.

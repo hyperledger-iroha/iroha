@@ -68,6 +68,12 @@ fn signed_conflicting_second_ballot_retains_actual_slash_and_rejection_fee() {
                 h_end: 50,
                 status: GovernanceReferendumStatus::Open,
                 mode: GovernanceReferendumMode::Plain,
+                plain_context: crate::query::standalone_plain_test_fixture::context(
+                    &transaction.gov,
+                    0,
+                ),
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
             },
         );
         let permission: Permission = CanSubmitGovernanceBallot {

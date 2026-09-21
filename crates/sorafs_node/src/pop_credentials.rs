@@ -3363,9 +3363,11 @@ impl PopCredentialService {
             proof,
             &root,
             &revocations,
-            challenge_digest,
-            verifier_context,
-            presentation_binding_digest,
+            sorafs_manifest::pop_credentials::PopMembershipPresentationV1 {
+                challenge_digest,
+                verifier_context,
+                presentation_binding_digest,
+            },
             now_epoch,
             &self.state.seen_nullifiers,
         )
@@ -4203,9 +4205,11 @@ impl PopWalletVault {
             &root,
             &revocations,
             witness.as_ref(),
-            challenge_digest,
-            verifier_context,
-            presentation_binding_digest,
+            sorafs_manifest::pop_credentials::PopMembershipPresentationV1 {
+                challenge_digest,
+                verifier_context,
+                presentation_binding_digest,
+            },
             now_epoch,
         )
         .map_err(|_| PopCredentialServiceError::InvalidMembershipProof)

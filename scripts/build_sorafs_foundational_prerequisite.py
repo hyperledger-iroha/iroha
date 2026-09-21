@@ -1224,7 +1224,6 @@ def build_unsigned_envelope(
         "lane_summaries": lane_summaries,
         "signature": {
             "algorithm": "ed25519",
-            "backend": "software",
             "service_id": args.signer_service_id,
             "administrator_id": args.signer_administrator_id,
             "key_revision": args.signer_key_revision,
@@ -1924,7 +1923,6 @@ def validate_finalize_inputs(
     if unsigned is not None:
         signature = unsigned.get("signature")
         expected_signer_binding = {
-            "backend": "software",
             "service_id": args.expected_signer_service_id,
             "administrator_id": args.expected_signer_administrator_id,
             "key_revision": args.expected_signer_key_revision,

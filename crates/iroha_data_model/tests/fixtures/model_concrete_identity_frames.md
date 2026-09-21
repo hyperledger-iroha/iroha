@@ -24,6 +24,15 @@ payload, complete frame, frame digest and header flag to the original record.
 Roundtrips, incorrect schema headers and truncated frames are also checked.
 Temporary capture writers have been removed.
 
+The context and signed genesis fixture builders share explicit pins for all five
+confidential-feature fields. The policy hash is fixed codec input, independent of
+the current genesis-policy default. Direct regressions compare the captured
+context header and the final stream-block header and signature; both the genesis
+proposal and result-bearing block check all five fields. The separate
+`block_header_defaults_confidential_digest` and `genesis_defaults_confidential_digest`
+tests cover the current production default. Updating that default must not
+silently change the input to these identity fixtures.
+
 BlockMessageSend delegates its root frame to BlockMessage. The private borrowed
 reputation adapter delegates to ReputationJournalEntryV1 after clearing the event
 ID. These adapters remain encoding-only: the tests decode through their owning

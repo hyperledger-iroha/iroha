@@ -130,9 +130,113 @@ The ordered two-file plan binds 306,504 slots and 5,026,665,600 encrypted bytes,
 with the existing per-file and whole-proof limits unchanged.
 
 The source and D/S inventory ordinals remain 0..12,040. D/S production order is
-group-major (17 D-low then 17 S-low); inventory storage is purpose-major. A
-later consuming driver must also produce all 5,848 delta commitments between
-`bS` and `beta`. Reconciled descriptors and storage permits do not mint source
-authority, supply production entropy, or complete that driver. The source
-session, authenticated source-to-storage handoff, and complete opening checks
-retain their explicit unfinished gates.
+group-major (17 D-low then 17 S-low); inventory storage is purpose-major. The
+consuming difference-digit driver now fills all 5,848 delta inventory positions
+12,728..18,576 after the 688 `bD`/`bS` commitments. It rereads the original
+canonical source in order, checks all three sealed comparator lanes against
+that source, and derives the 17 base-2^15 subtraction digits per group. Each
+point is the actual prepared-value MSM with rho sampled and retained by the
+same original session before value emission; external points and randomness
+cannot enter this transition. Integer underflow or an out-of-range delta
+rejects before a field residue can conceal a malformed borrow.
+
+The original source returns only after every delta plane emits its 32 canonical
+value chunks and the complete authenticated source-read schedule matches the
+materialization record. Only this exact completed delta owner admits the next
+sealed-value comparator phase: 6,192 beta and 344 m commitments occupy physical
+inventory 18,576..25,112 and retain another 209,152 bytes of original-session
+blindings. Incomplete delta, wrong/repeated logical ordinals and occupied slots
+reject before commitment work. The exact completed continuation now admits
+1,032 signed source commitments and then 1,032 negative-magnitude commitments
+at physical inventory 25,112..27,176. These read the original authenticated
+compact signed slots in natural `1024*local_block+i` order, enforce the existing
+role bounds, and retain another 66,048 bytes of original-session blindings.
+The positive point and mask are derived by addition; a derived identity rejects
+the owner without replacing randomness. The original-S stream now owns the
+canonical uniform coefficients, same original entropy source, authenticated S
+file and 6,400 original digit masks at inventory 27,176..33,576. Its named
+complement consumer reads that same file once and computes the integer
+`Sbar=q_l-1-S` before extracting four base-2^15 digits. It appends 6,400 actual
+`sum_i G_i*dbar_i + H*rho` tickets at 33,576..39,976 using the same table, RNG
+and inventory. The final S coefficient is zero; its complement is `q_l-1`.
+Cursor 39,976 is `Multiplicity`, ordinal zero. No digitwise complement,
+replacement randomness, caller point, parallel replay facade or new inventory
+is admitted.
+
+The complement phase reserves all 204,800 bytes of retained scalar payload
+and exact owner metadata before allocation, then all four evaluator lifetimes
+before each block. The same storage owner charges 131,200 read bytes before
+any of that block's eight physical reads. Only pre-I/O capacity refusal returns
+the unchanged original owner; authentication, coordinate, entropy, arithmetic
+or post-read allocation failure consumes the phase. The terminal owner retains
+both original mask sets and the immutable S file for later separately funded
+P~/H~/qPCS consumers. No generic reset or raw-secret extraction exists.
+
+These producers do not establish complete authenticated native40 source,
+packing/governed parameters, same-opening relations or whole-proof admission.
+The existing 38-limb source cannot be relabelled native40. Whole 6,400-ticket
+complement execution, combined resource/work qualification and the numeric
+handoff's production seal remain open. Bounded first/final commitment fixtures
+with synthetic prior tickets do not discharge those gates.
+
+Each comparator/signed commitment now also mints its opaque canonical tail from
+the just-admitted original inventory ticket and retained rho. The same prepared
+source sequence emits 32 ordered value slots followed by exactly one 16,384-byte
+`rho_BE32 || point33 || zero-padding16319` tail. Source handoff requires all 33
+emissions; early/repeated tails, wrong value order and missing tails consume the
+owner. The value vector is erased before tail-chunk allocation. This adds one
+32-byte scalar guard and the public point/ordinal while retaining the existing
+inventory masks, with no extra sampled blinding or inventory slot. These named
+payload counts do not qualify RSS or whole-proof resources. The consuming
+ordered two-file writer and authenticated complete-pair reopen remain TODOs;
+emitting a chunk does not prove it was durably stored.
+The retained snapshot plan is unchanged: delta planes are not added to the
+9,288 comparator/sign planes. The driver introduces one further full canonical
+source reread and one read of each compact comparator slot; these must be
+included in eventual whole-proof lifecycle accounting. No existing resource
+cap or qualification flag changes. See the source-coupled
+[difference preparation contract](../../crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_radix_range_v2/prepared_difference_digit_plane_v1.md).
+The two additional signed-source compact passes contribute 33,849,600
+authenticated read bytes to that same pending accounting; see the
+[signed preparation contract](../../crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_radix_range_v2/prepared_small_signed_plane_v1.md).
+
+The actual ordered storage owner now requires one caller-retained spool/I/O
+issuer. Before either leaf is created, it reserves the complete 5,026,665,600-byte
+pair and 10,053,331,200 bytes for its writes and full seal authentication pass.
+Every later authenticated record read is charged against the same retained
+ledger, including repeated reads. Local capacity refusal preserves the original
+snapshot without I/O or invalid-proof classification; another writer dropping
+unspent reservations can make the retry admissible. Failed/partial attempted
+I/O is never refunded. Cancellation closes both already-unlinked files before
+releasing live-file credits. The 16 GiB spool and 64 GiB I/O ceilings are unchanged.
+This integration covers actual pair lifetimes, not all production source/qPCS
+consumers, resident memory, allocator/control overhead or full-size qualification.
+Those consumers still must share the eventual proof-session issuer; separate
+issuers do not enforce a whole-proof cap. See the
+[ordered storage resource contract](../../crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/global_lookup_statement_v1/vector_arithmetic_plane_openings_v1/ordered_snapshot_v1/resource_budget_v1.md).
+
+The unused 344-weight canonical-reopen placeholder is removed from the sole V1
+source path and local plane context. It had no consuming proof equation or
+transcript-derived production weights. The remaining local context binds the
+actual source-replay, source-opening and radix materialization records; local
+storage identities add no public transcript inputs. All original 344 source
+commitments, blindings, inventory ownership and actual authenticated source
+replay requirements remain. The existing 1,376-owner source/packing same-opening
+relation and its transcript are unchanged. The completed original signed session
+now privately prepares its 344 radix-derived D masks and 1,032 signed masks,
+retaining the same inventory and its exact verifier point root without new
+entropy or transcript frames. This bounded preparation adds 44,032 named secret
+payload bytes; it does not inhabit the final authenticated derived-mask provider.
+The native40 source/context join, actual source-to-storage writer/replay and
+production source qualification remain required: the upstream 38-limb lineage
+is not a 40-limb proof. See the
+[derived-opening contract](../../crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1/commitment_session_v1/existing_radix_candidate_v1/prepared_source_packing_openings_v1.md), the
+[source dependency audit](../../crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/global_lookup_statement_v1/vector_arithmetic_plane_openings_v1/canonical_reopen_reconciliation_audit_v1.md)
+and [storage ownership proposal](../../crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/global_lookup_statement_v1/vector_arithmetic_plane_openings_v1/storage_context_schedule_proposal_v1.md).
+
+This bounded implementation has arithmetic and session-transition tests, not a
+complete authenticated-source proof or executed full delta/signed MSM inventories.
+Reconciled descriptors and storage permits do not mint source authority or
+complete source-to-storage handoff. Production scratch-sink/proof authority,
+complete opening checks, and resource/hardware qualification retain their
+explicit unfinished gates.

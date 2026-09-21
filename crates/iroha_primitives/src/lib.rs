@@ -39,6 +39,7 @@ pub mod json;
 pub mod must_use;
 pub mod numeric;
 pub mod numeric_abi;
+pub mod production_identity;
 pub mod small;
 pub mod soradns;
 pub mod time;

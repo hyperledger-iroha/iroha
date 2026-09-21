@@ -7,6 +7,8 @@
 pub mod types {
     pub use crate::parliament_types::*;
 }
+/// Exact frozen economics for the existing public standalone conviction ballot.
+pub mod conviction;
 /// Maximum encoded length of a canonical V1 governance selector.
 pub const GOVERNANCE_SELECTOR_V1_MAX_BYTES: usize = 128;
 /// OpenAPI/SDK grammar for canonical V1 governance selectors.

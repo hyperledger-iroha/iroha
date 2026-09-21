@@ -102,10 +102,10 @@ class Ed25519PublicKeyAdmissionTest {
                 IdentifierJsonParser.parsePolicyList(identifierPolicyJson(rawLiteral))
                 RamLfeJsonParser.parsePolicyList(ramLfePolicyJson(rawLiteral))
             } else {
-                assertFailsWith<IllegalArgumentException>(vector.name) {
+                assertInvalidPublicKey(vector.name) {
                     encodePublicKeyMultihash(0x01, vector.key)
                 }
-                assertFailsWith<IllegalArgumentException>(vector.name) {
+                assertInvalidPublicKey(vector.name) {
                     compactPublicKeyPayload(0x01, vector.key)
                 }
                 assertFailsWith<IllegalArgumentException>(vector.name) {
@@ -163,7 +163,7 @@ class Ed25519PublicKeyAdmissionTest {
             }
         }
 
-        val secpLiteral = encodePublicKeyMultihash(0x04, ByteArray(33) { (it + 1).toByte() })
+        val secpLiteral = encodePublicKeyMultihash(0x04, NativeAccountFixtures.singleKey("secp256k1"))
         assertEquals(0x04, assertNotNull(decodePublicKeyLiteral("secp256k1:$secpLiteral")).curveId)
         assertNull(decodePublicKeyLiteral("ed25519:$secpLiteral"))
     }

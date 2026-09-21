@@ -1,5 +1,4 @@
 use norito::{
-    SerializePayload,
     codec::encode_with_header_flags,
     decode_from_bytes,
     json::{self, Value},

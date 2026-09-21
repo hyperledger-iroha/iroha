@@ -10,7 +10,9 @@ use super::{
         SignerCustodyActiveHeadV1, SignerCustodyAnchorV1, SignerCustodyAuthorityV1,
         SignerCustodyBindingV1, SignerCustodyTrustV1, SignerCustodyUseContextV1,
     },
-    protocol::{SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1, valid_identity},
+    protocol::{
+        SIGNER_MAX_ID_BYTES_V1, SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1,
+    },
     receipt::{
         SignerCompletedOperationV1, SignerReceiptErrorV1, SignerReleaseManifestExpectedV1,
         VerifiedReleaseManifestSignerReceiptV1, signer_release_manifest_digest_v1,
@@ -24,6 +26,7 @@ use super::{
 #[cfg(test)]
 use iroha_crypto::Signature;
 use iroha_crypto::{Algorithm, PublicKey, sha256};
+use iroha_primitives::production_identity::is_production_identity_v1;
 use norito::codec::{Decode, Encode};
 use std::fmt;
 
@@ -66,15 +69,15 @@ impl SignerReleaseEvidencePolicyV1 {
 pub struct SignerReleaseEvidenceTrustV1 {
     /// Sole V1 marker; obtain it with [`Self::magic`].
     pub magic: [u8; 8],
-    /// Exact independent hardware attestation authority and policy.
+    /// Exact independent signer authorization authority and policy.
     pub custody_authority: SignerCustodyAuthorityV1,
-    /// Pinned Ed25519 hardware attestation public key.
+    /// Pinned Ed25519 signer authorization public key.
     pub custody_public_key: PublicKey,
     /// Inclusive beginning of attestation-key eligibility.
     pub custody_active_from_unix_ms: u64,
     /// Exclusive end of attestation-key eligibility.
     pub custody_active_until_unix_ms: u64,
-    /// Maximum hardware record lifetime, checked by the custody verifier.
+    /// Maximum authorization record lifetime, checked by the custody verifier.
     pub custody_max_validity_ms: u64,
     /// Separate state-observation authority and governance policy.
     pub state_authority: SignerCustodyAuthorityV1,
@@ -123,7 +126,7 @@ pub struct SignerReleaseStateObservationBodyV1 {
     pub active_head: SignerCustodyActiveHeadV1,
     /// Current authoritative signer revocation flag.
     pub signer_revoked: bool,
-    /// Current authoritative hardware attester revocation flag.
+    /// Current authoritative signer authority revocation flag.
     pub attester_revoked: bool,
     /// Exact completed operation, authenticated under its finalized journal anchor.
     pub completed_operation: SignerCompletedOperationV1,
@@ -141,10 +144,10 @@ impl SignerReleaseStateObservationBodyV1 {
     pub fn signing_payload(&self) -> Result<Vec<u8>, SignerReleaseEvidenceErrorV1> {
         if self.magic != STATE_MAGIC
             || self.reviewed_policy_sha256 == [0; 32]
-            || !valid_identity(&self.deployment_id)
+            || !is_production_identity_v1(&self.deployment_id, SIGNER_MAX_ID_BYTES_V1)
             || iroha_primitives::chain_id::validate_chain_id(&self.chain_id).is_err()
-            || !valid_identity(&self.authority.service_id)
-            || !valid_identity(&self.authority.administrator_id)
+            || !is_production_identity_v1(&self.authority.service_id, SIGNER_MAX_ID_BYTES_V1)
+            || !is_production_identity_v1(&self.authority.administrator_id, SIGNER_MAX_ID_BYTES_V1)
             || self.authority.key_revision == 0
             || self.authority.policy_revision == 0
             || self.authority.policy_digest == [0; 32]
@@ -217,7 +220,7 @@ pub enum SignerReleaseEvidenceErrorV1 {
     InvalidTrust,
     /// Observation signature, identity, finality lower bound, freshness or status is invalid.
     InvalidState,
-    /// The authenticated state does not establish this exact hardware signing receipt.
+    /// The authenticated state does not establish this exact signing receipt.
     Receipt(SignerReceiptErrorV1),
 }
 impl fmt::Display for SignerReleaseEvidenceErrorV1 {
@@ -227,9 +230,7 @@ impl fmt::Display for SignerReleaseEvidenceErrorV1 {
             Self::SourceMismatch => "release evidence differs from independently reviewed inputs",
             Self::InvalidTrust => "release evidence lacks independent observer trust",
             Self::InvalidState => "release evidence lacks authenticated fresh finalized state",
-            Self::Receipt(_) => {
-                "release evidence does not verify the exact hardware signing receipt"
-            }
+            Self::Receipt(_) => "release evidence does not verify the exact signing receipt",
         })
     }
 }

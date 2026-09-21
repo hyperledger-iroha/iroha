@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Hyperledger.Iroha;
 using Hyperledger.Iroha.Address;
+using Hyperledger.Iroha.Crypto;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
 
@@ -98,8 +99,9 @@ public sealed class AddressFixtureTests
     [Fact]
     public void NumericI105SentinelRejectsOverflowAndNonAsciiDigitForms()
     {
+        using var keyPair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x22, 32).ToArray());
         var literal = AccountAddress
-            .FromPublicKey(Enumerable.Repeat((byte)0x22, 32).ToArray())
+            .FromPublicKey(keyPair.PublicKey)
             .ToI105(5);
         Assert.StartsWith("n5", literal, StringComparison.Ordinal);
 
@@ -126,11 +128,12 @@ public sealed class AddressFixtureTests
     [Fact]
     public void NumericI105SentinelRejectsLeadingZeroAliases()
     {
+        using var keyPair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x33, 32).ToArray());
         var customLiteral = AccountAddress
-            .FromPublicKey(Enumerable.Repeat((byte)0x33, 32).ToArray())
+            .FromPublicKey(keyPair.PublicKey)
             .ToI105(5);
         var devLiteral = AccountAddress
-            .FromPublicKey(Enumerable.Repeat((byte)0x44, 32).ToArray())
+            .FromPublicKey(keyPair.PublicKey)
             .ToI105(AccountAddress.DevChainDiscriminant);
 
         foreach (var noncanonical in new[]
@@ -150,7 +153,8 @@ public sealed class AddressFixtureTests
     [Fact]
     public void AccountAddressSnapshotsInputAndReturnedByteArrays()
     {
-        var publicKey = Enumerable.Range(1, 32).Select(static value => (byte)value).ToArray();
+        using var keyPair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x11, 32).ToArray());
+        var publicKey = keyPair.PublicKey;
         var expectedPublicKeyHex = Convert.ToHexString(publicKey);
         var address = AccountAddress.FromPublicKey(publicKey);
         var expectedCanonicalBytes = address.CanonicalBytes();
@@ -184,8 +188,9 @@ public sealed class AddressFixtureTests
     [Fact]
     public void ParsedAccountAddressesHaveCanonicalValueEquality()
     {
+        using var keyPair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x42, 32).ToArray());
         var literal = AccountAddress
-            .FromPublicKey(Enumerable.Repeat((byte)0x42, 32).ToArray())
+            .FromPublicKey(keyPair.PublicKey)
             .ToI105();
         var first = AccountAddress.Parse(literal);
         var second = AccountAddress.FromCanonicalBytes(first.CanonicalBytes());
@@ -312,8 +317,9 @@ public sealed class AddressFixtureTests
     [Fact]
     public void RetiredDomainSelectorPrefixIsRejected()
     {
+        using var keyPair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x01, 32).ToArray());
         var canonical = AccountAddress
-            .FromPublicKey(Enumerable.Repeat((byte)0x01, 32).ToArray())
+            .FromPublicKey(keyPair.PublicKey)
             .CanonicalBytes();
         var selectorPrefixed = new byte[canonical.Length + 13];
         selectorPrefixed[0] = canonical[0];

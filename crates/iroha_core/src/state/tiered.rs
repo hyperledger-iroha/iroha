@@ -3745,6 +3745,14 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.h_end.measured_bytes_extra());
             total = total.saturating_add(self.status.measured_bytes_extra());
             total = total.saturating_add(self.mode.measured_bytes_extra());
+            if let iroha_data_model::governance::conviction::PlainVotingContextV1::Conviction(
+                policy,
+            ) = &self.plain_context
+            {
+                total = total.saturating_add(policy.minimum_bond.measured_bytes_extra());
+                total = total.saturating_add(policy.bond_escrow_account.measured_bytes_extra());
+                total = total.saturating_add(policy.slash_receiver_account.measured_bytes_extra());
+            }
             total
         }
     }

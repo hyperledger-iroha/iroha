@@ -275,7 +275,6 @@
         "height",
         "prev_block_hash",
         "merkle_root",
-        "result_merkle_root",
         "da_proof_policies_hash",
         "da_commitments_hash",
         "da_pin_intents_hash",
@@ -292,7 +291,6 @@
       "values": [
         "prev_block_hash",
         "merkle_root",
-        "result_merkle_root",
         "da_proof_policies_hash",
         "da_commitments_hash",
         "da_pin_intents_hash",
@@ -375,7 +373,8 @@
         "bls_aggregate_signature",
         "mmr_root",
         "mmr_leaf_index",
-        "mmr_peaks"
+        "mmr_peaks",
+        "result_merkle_root"
       ]
     },
     {
@@ -384,7 +383,6 @@
         "height",
         "prev_block_hash",
         "merkle_root",
-        "result_merkle_root",
         "da_proof_policies_hash",
         "da_commitments_hash",
         "da_pin_intents_hash",

@@ -1,5 +1,9 @@
 //! Iroha schema generation support library. Contains the `build_schemas` `fn`, which is the
 //! function which decides which types are included in the schema.
+//!
+//! Dynamic native instructions need explicit roots because `InstructionBox` has opaque metadata.
+//! Nested public types are expanded through their canonical `IntoSchema` implementations.
+//! Regenerate the checked-in reference with `bash scripts/tests/consistency.sh --update schema`.
 use iroha_data_model::{
     block::stream::{BlockMessage, BlockSubscriptionRequest},
     query::{QueryResponse, SignedQuery},
@@ -54,6 +58,11 @@ macro_rules! schema_types {
             iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1,
             iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1,
             iroha_data_model::fastpq::FastpqSourceExecutionEntryV1,
+            // Torii qualification is an opaque response owner and needs an explicit public root.
+            iroha_data_model::privacy::PrivacyExact12QualificationRecordV1,
+            // Frozen public conviction context and immutable closed result are query/snapshot values.
+            iroha_data_model::governance::conviction::PlainVotingContextV1,
+            iroha_data_model::governance::conviction::PlainVotingResultV1,
             // Never referenced, but present in type signature. Like `PhantomData<X>`
             MerkleTree<SignedTransaction>,
             // Default permissions
@@ -94,6 +103,22 @@ macro_rules! schema_types {
             iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk,
             iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
             iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
+            // Native provider custody uses opaque framed Manifest policy/enrollment payloads.
+            iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody,
+            iroha_data_model::sorafs::stream_token_custody::StreamTokenCustodyControlRecordV1,
+            iroha_executor_data_model::permission::sorafs::CanManageSorafsStreamTokenCustody,
+            // Native deployment authority and commitment-only retained histories.
+            iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority,
+            iroha_data_model::sorafs::final_promotion_authority::FinalPromotionCustodyRecordV1,
+            iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationRecordV1,
+            iroha_executor_data_model::permission::sorafs::CanManageSorafsFinalPromotionCustody,
+            iroha_executor_data_model::permission::sorafs::CanOperateSorafsFinalPromotion,
+            iroha_executor_data_model::permission::sorafs::CanCheckSorafsFinalPromotion,
+            // Distinct account custody reuses opaque canonical Manifest frames.
+            iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAccountCustody,
+            iroha_data_model::sorafs::final_promotion_account_custody::FinalPromotionAccountCustodyRecordV1,
+            iroha_executor_data_model::permission::sorafs::CanManageSorafsFinalPromotionAccountCustody,
+            iroha_executor_data_model::permission::sorafs::CanCheckSorafsFinalPromotionAccountCustody,
             // Multi-signature operations
             iroha_executor_data_model::isi::multisig::MultisigInstructionBox,
             // Multi-signature account metadata
@@ -183,6 +208,10 @@ pub mod complete_data_model {
 mod tests {
     use super::{IntoSchema, complete_data_model::*};
     use iroha_schema::{MetaMap, Metadata};
+    mod final_promotion;
+    mod final_promotion_account_custody;
+    mod stream_token_custody;
+    mod privacy_qualification;
     fn generate_test_map() -> BTreeMap<core::any::TypeId, String> {
         let mut map = BTreeMap::new();
         macro_rules! insert_into_test_map {
@@ -475,6 +504,40 @@ mod tests {
         <Vec<PublicKey>>::update_schema_map(&mut schemas);
         <BTreeSet<SignedTransaction>>::update_schema_map(&mut schemas);
     }
+    #[test]
+    fn public_conviction_context_and_result_have_complete_schema_entries() {
+        use iroha_data_model::governance::conviction::{
+            PlainConvictionPolicyV1, PlainVotingContextV1, PlainVotingDecisionV1,
+            PlainVotingResultV1,
+        };
+        let schemas = super::build_schemas();
+        assert!(schemas.contains_key::<PlainVotingContextV1>());
+        assert!(schemas.contains_key::<PlainVotingResultV1>());
+        assert!(schemas.contains_key::<PlainVotingDecisionV1>());
+        let Some(Metadata::Struct(policy)) = schemas.get::<PlainConvictionPolicyV1>() else {
+            panic!("frozen public conviction policy is absent from the canonical schema");
+        };
+        assert_eq!(
+            policy
+                .declarations
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "asset_definition_id",
+                "asset_scale",
+                "conviction_step_blocks",
+                "max_conviction",
+                "approval_threshold_numerator",
+                "approval_threshold_denominator",
+                "minimum_turnout",
+                "minimum_bond",
+                "bond_escrow_account",
+                "slash_receiver_account",
+            ]
+        );
+    }
+
     #[test]
     fn fastpq_types_have_schema_entries() {
         use iroha_data_model::fastpq::{

@@ -34,6 +34,7 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::state_path::StatePath;
 use iroha_model_base::topology::LaneId;
 use mv::{
+    allocation::{AllocationBudget, ChargedByteBuffer, ChargedByteBufferError},
     cell::Cell,
     storage::{Storage, StorageReadOnly},
 };
@@ -747,6 +748,8 @@ pub struct SnapshotMaker {
     max_payload_bytes: NonZeroUsize,
     /// Typed decode and transient resource limits used for restart parity.
     resource_policy: SnapshotResourcePolicy,
+    /// Original startup pool, shared by all authenticated payload read buffers.
+    read_buffer_budget: AllocationBudget,
 }
 impl SnapshotMaker {
     /// Start supervised storage maintenance after successful startup recovery.
@@ -851,6 +854,7 @@ impl SnapshotMaker {
             let merkle_chunk_size = self.merkle_chunk_size;
             let max_payload_bytes = self.max_payload_bytes;
             let resource_policy = self.resource_policy;
+            let read_buffer_budget = self.read_buffer_budget.clone();
             let result = tokio::task::block_in_place(move || {
                 try_write_snapshot_with_limit_and_policy(
                     &state,
@@ -859,6 +863,7 @@ impl SnapshotMaker {
                     merkle_chunk_size,
                     max_payload_bytes,
                     resource_policy,
+                    &read_buffer_budget,
                 )
             });
             match result {
@@ -883,8 +888,15 @@ impl SnapshotMaker {
     }
     /// Create from [`Config`].
     ///
+    /// Retain the same configured allocation pool that authenticated the startup
+    /// snapshot; all writer generation-validation reads share that finite pool.
     /// Might return [`None`] if the configuration is not suitable for _making_ snapshots.
-    pub fn from_config(config: &Config, state: Arc<State>, signing_key: KeyPair) -> Option<Self> {
+    pub fn from_config(
+        config: &Config,
+        state: Arc<State>,
+        signing_key: KeyPair,
+        read_buffer_budget: AllocationBudget,
+    ) -> Option<Self> {
         if let Mode::ReadWrite = config.mode {
             let latest_block_hash = state.latest_block_hash_fast();
             Some(Self {
@@ -896,6 +908,7 @@ impl SnapshotMaker {
                 merkle_chunk_size: config.merkle_chunk_size_bytes,
                 max_payload_bytes: config.max_payload_bytes,
                 resource_policy: config.resources,
+                read_buffer_budget,
             })
         } else {
             None
@@ -1126,20 +1139,19 @@ fn bind_snapshot_file_handle_with_digest(
 }
 fn read_bound_snapshot_payload(
     binding: &BoundSnapshotFile,
-) -> Result<(Vec<u8>, [u8; 32]), TryReadError> {
+    read_buffer_budget: &AllocationBudget,
+) -> Result<(ChargedByteBuffer, [u8; 32]), TryReadError> {
     #[cfg(test)]
     SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| passes.set(passes.get() + 1));
     let capacity = bounded_snapshot_read_capacity(binding.len, binding.max_bytes)
         .map_err(|error| TryReadError::IO(error, binding.path.clone()))?;
-    let mut bytes = Vec::new();
-    bytes.try_reserve_exact(capacity).map_err(|error| {
-        TryReadError::IO(
-            std::io::Error::other(format!(
-                "failed to reserve memory for authenticated snapshot payload: {error}"
-            )),
-            binding.path.clone(),
-        )
-    })?;
+    let mut bytes =
+        ChargedByteBuffer::new(capacity, read_buffer_budget).map_err(|error| match error {
+            ChargedByteBufferError::Admission(refusal) => TryReadError::PayloadAllocation(refusal),
+            ChargedByteBufferError::Allocator { requested_bytes } => {
+                TryReadError::PayloadAllocatorFailure { requested_bytes }
+            }
+        })?;
     let mut reader = binding.handle.as_ref();
     reader
         .seek(std::io::SeekFrom::Start(0))
@@ -1155,7 +1167,9 @@ fn read_bound_snapshot_payload(
         if read == 0 {
             return Err(TryReadError::SnapshotBindingChanged(binding.path.clone()));
         }
-        bytes.extend_from_slice(&buffer[..read]);
+        bytes
+            .append(&buffer[..read])
+            .map_err(|error| TryReadError::IO(error, binding.path.clone()))?;
         Digest::update(&mut digest, &buffer[..read]);
         remaining -= read;
     }
@@ -2641,6 +2655,7 @@ fn try_read_snapshot_bundle<F>(
     bootstrap_policy: &SnapshotBootstrapPolicy,
     initialize_state: &F,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
+    read_buffer_budget: &AllocationBudget,
 ) -> Result<SnapshotReadOutcome, TryReadError>
 where
     F: Fn(&mut State) -> Result<(), TryReadError>,
@@ -2757,7 +2772,7 @@ where
         }
         Err(error) => return Err(error),
     };
-    let payload = read_bound_snapshot_payload(&generation.payload)?.0;
+    let payload = read_bound_snapshot_payload(&generation.payload, read_buffer_budget)?.0;
     let bytes = payload.as_slice();
     let bytes_len = bytes.len();
     let payload_preview = snapshot_payload_preview(bytes);
@@ -2936,7 +2951,9 @@ where
 }
 /// Deserialize a heap-owned [`State`] and install the actual runtime ZK configuration
 /// before snapshot reconciliation is allowed to mutate Kura. The caller supplies
-/// the immutable configured manifest baseline before any restored State view.
+/// the immutable configured manifest baseline before any restored State view,
+/// plus the original configured allocation pool retained by [`SnapshotMaker`].
+/// Local allocation refusal preserves the authenticated on-disk candidate.
 ///
 /// # Errors
 ///
@@ -2957,6 +2974,7 @@ pub fn try_read_snapshot(
     expected_network_id: &NetworkId,
     zk: &iroha_config::parameters::actual::Zk,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
+    read_buffer_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError> {
     let bootstrap_policy = SnapshotBootstrapPolicy::default();
     try_read_snapshot_with_bootstrap_policy(
@@ -2974,6 +2992,7 @@ pub fn try_read_snapshot(
         &bootstrap_policy,
         #[cfg(feature = "telemetry")]
         telemetry,
+        read_buffer_budget,
     )
 }
 /// Read and verify a snapshot with an explicit audited hash-only bootstrap policy.
@@ -2997,6 +3016,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
     zk: &iroha_config::parameters::actual::Zk,
     bootstrap_policy: &SnapshotBootstrapPolicy,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
+    read_buffer_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError> {
     try_read_snapshot_with_initializer(
         store_dir,
@@ -3017,6 +3037,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
         },
         #[cfg(feature = "telemetry")]
         telemetry,
+        read_buffer_budget,
     )
 }
 #[allow(clippy::too_many_lines)]
@@ -3036,53 +3057,57 @@ fn try_read_snapshot_with_initializer<F>(
     bootstrap_policy: &SnapshotBootstrapPolicy,
     initialize_state: &F,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
+    read_buffer_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError>
 where
     F: Fn(&mut State) -> Result<(), TryReadError>,
 {
-    let store_dir = store_dir.as_ref();
-    if matches!(
-        std::fs::symlink_metadata(store_dir),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    ) {
-        return Err(TryReadError::NotFound);
-    }
-    let payload_limit = u64::try_from(
-        max_payload_bytes
-            .get()
-            .min(resource_policy.max_transient_bytes.get()),
-    )
-    .unwrap_or(u64::MAX);
-    let emergency_fast = kura.emergency_fast_startup_enabled();
-    let generation = if emergency_fast {
-        bind_current_snapshot_generation_emergency_fast(
-            store_dir,
-            payload_limit,
+    read_buffer_budget.with_deferred_refund_notifications(|_| {
+        let store_dir = store_dir.as_ref();
+        if matches!(
+            std::fs::symlink_metadata(store_dir),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        ) {
+            return Err(TryReadError::NotFound);
+        }
+        let payload_limit = u64::try_from(
+            max_payload_bytes
+                .get()
+                .min(resource_policy.max_transient_bytes.get()),
+        )
+        .unwrap_or(u64::MAX);
+        let emergency_fast = kura.emergency_fast_startup_enabled();
+        let generation = if emergency_fast {
+            bind_current_snapshot_generation_emergency_fast(
+                store_dir,
+                payload_limit,
+                merkle_chunk_size,
+            )?
+        } else {
+            bind_current_snapshot_generation(store_dir, payload_limit, merkle_chunk_size)?
+        };
+        let live_query_store = live_query_store_lazy();
+        let outcome = try_read_snapshot_bundle(
+            &generation,
+            kura,
+            lane_manifests,
+            &live_query_store,
+            block_count,
             merkle_chunk_size,
-        )?
-    } else {
-        bind_current_snapshot_generation(store_dir, payload_limit, merkle_chunk_size)?
-    };
-    let live_query_store = live_query_store_lazy();
-    let outcome = try_read_snapshot_bundle(
-        &generation,
-        kura,
-        lane_manifests,
-        &live_query_store,
-        block_count,
-        merkle_chunk_size,
-        resource_policy,
-        verification_key,
-        expected_network_id,
-        bootstrap_policy,
-        initialize_state,
-        #[cfg(feature = "telemetry")]
-        telemetry,
-    )?;
-    if !emergency_fast {
-        generation.verify_generation_unchanged()?;
-    }
-    Ok(outcome.state)
+            resource_policy,
+            verification_key,
+            expected_network_id,
+            bootstrap_policy,
+            initialize_state,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+            read_buffer_budget,
+        )?;
+        if !emergency_fast {
+            generation.verify_generation_unchanged()?;
+        }
+        Ok(outcome.state)
+    })
 }
 fn snapshot_publication_error(context: &str, error: impl std::fmt::Display) -> TryWriteError {
     TryWriteError::PublicationIntegrity(format!("{context}: {error}"))
@@ -3212,7 +3237,8 @@ fn snapshot_generation_is_canonical_for_gc(
     max_payload_bytes: NonZeroUsize,
     merkle_chunk_size: NonZeroUsize,
     verification_key: &PublicKey,
-) -> bool {
+    read_buffer_budget: &AllocationBudget,
+) -> Result<bool, TryWriteError> {
     let validate = || -> Result<(), TryReadError> {
         let directory_identity = direct_snapshot_directory_identity(path)?;
         if !snapshot_generation_has_exact_artifact_inventory(path)? {
@@ -3281,9 +3307,9 @@ fn snapshot_generation_is_canonical_for_gc(
                 reason: "Merkle metadata is not canonical JSON".to_owned(),
             });
         }
-        let payload_bytes = read_bound_snapshot_payload(&payload)?.0;
+        let payload_bytes = read_bound_snapshot_payload(&payload, read_buffer_budget)?.0;
         metadata
-            .verify_against_bytes(&payload_bytes, merkle_chunk_size)
+            .verify_against_bytes(payload_bytes.as_slice(), merkle_chunk_size)
             .map_err(|error| merkle_err_to_try_read(error, merkle_file.path.clone()))?;
         if direct_snapshot_directory_identity(path)? != directory_identity
             || !snapshot_generation_has_exact_artifact_inventory(path)?
@@ -3304,7 +3330,16 @@ fn snapshot_generation_is_canonical_for_gc(
         }
         Ok(())
     };
-    validate().is_ok()
+    match validate() {
+        Ok(()) => Ok(true),
+        Err(TryReadError::PayloadAllocation(refusal)) => {
+            Err(TryWriteError::PayloadAllocation(refusal))
+        }
+        Err(TryReadError::PayloadAllocatorFailure { requested_bytes }) => {
+            Err(TryWriteError::PayloadAllocatorFailure { requested_bytes })
+        }
+        Err(_) => Ok(false),
+    }
 }
 fn bind_snapshot_generation_gc_removal(
     generations_dir: &Path,
@@ -3494,6 +3529,7 @@ fn plan_snapshot_generation_gc(
     max_payload_bytes: NonZeroUsize,
     merkle_chunk_size: NonZeroUsize,
     verification_key: &PublicKey,
+    read_buffer_budget: &AllocationBudget,
 ) -> Result<SnapshotGenerationGcPlan, TryWriteError> {
     generation.verify_unchanged()?;
     let mut entries = Vec::with_capacity(SNAPSHOT_GENERATION_GC_MAX_ENTRIES.min(64));
@@ -3518,28 +3554,32 @@ fn plan_snapshot_generation_gc(
         // predecessor. If a crash or operator intervention left multiple
         // authenticated extras, chronology is unknowable from the v1 pointer;
         // preserve all of them and fail instead of selecting by directory order.
-        let authenticated_extras = entries
-            .iter()
-            .filter_map(|entry| {
-                let name = entry.file_name();
-                let name = name.to_str()?;
-                if name == generation.name || !canonical_snapshot_digest_name(name) {
-                    return None;
-                }
-                let file_type = entry.file_type().ok()?;
-                if !file_type.is_dir() || file_type.is_symlink() {
-                    return None;
-                }
-                snapshot_generation_is_canonical_for_gc(
-                    &entry.path(),
-                    name,
-                    max_payload_bytes,
-                    merkle_chunk_size,
-                    verification_key,
-                )
-                .then(|| name.to_owned())
-            })
-            .collect::<Vec<_>>();
+        let mut authenticated_extras = Vec::new();
+        for entry in &entries {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if name == generation.name || !canonical_snapshot_digest_name(name) {
+                continue;
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() || file_type.is_symlink() {
+                continue;
+            }
+            if snapshot_generation_is_canonical_for_gc(
+                &entry.path(),
+                name,
+                max_payload_bytes,
+                merkle_chunk_size,
+                verification_key,
+                read_buffer_budget,
+            )? {
+                authenticated_extras.push(name.to_owned());
+            }
+        }
         if authenticated_extras.len() > 1 {
             return Err(snapshot_publication_error(
                 "snapshot generation GC",
@@ -3587,7 +3627,8 @@ fn plan_snapshot_generation_gc(
                 max_payload_bytes,
                 merkle_chunk_size,
                 verification_key,
-            ) {
+                read_buffer_budget,
+            )? {
                 continue;
             }
             // Semantic authentication and removal binding are separate checks:
@@ -4048,6 +4089,7 @@ fn publish_snapshot_current_pointer(
     max_payload_bytes: NonZeroUsize,
     merkle_chunk_size: NonZeroUsize,
     verification_key: &PublicKey,
+    read_buffer_budget: &AllocationBudget,
 ) -> Result<(), TryWriteError> {
     generation.verify_unchanged()?;
     if direct_snapshot_directory_identity(store_dir)
@@ -4084,7 +4126,8 @@ fn publish_snapshot_current_pointer(
                 max_payload_bytes,
                 merkle_chunk_size,
                 verification_key,
-            ) {
+                read_buffer_budget,
+            )? {
                 return Err(snapshot_publication_error(
                     "validate current generation before replacement",
                     "current points to an invalid or incomplete immutable generation",
@@ -4101,6 +4144,7 @@ fn publish_snapshot_current_pointer(
         max_payload_bytes,
         merkle_chunk_size,
         verification_key,
+        read_buffer_budget,
     )?;
     generation.verify_unchanged()?;
     if let Err(error) = verify_bound_snapshot_destination(&pointer_path, &replaced) {
@@ -4261,6 +4305,9 @@ fn try_write_snapshot_with_limit(
         merkle_chunk_size,
         max_payload_bytes,
         SnapshotResourcePolicy::default(),
+        &AllocationBudget::new(
+            iroha_config::parameters::defaults::snapshot::MAX_READ_BUFFER_BYTES.get(),
+        ),
     )
     .map(|_| ())
 }
@@ -4271,21 +4318,25 @@ fn try_write_snapshot_with_limit_and_policy(
     merkle_chunk_size: NonZeroUsize,
     max_payload_bytes: NonZeroUsize,
     resource_policy: SnapshotResourcePolicy,
+    read_buffer_budget: &AllocationBudget,
 ) -> Result<CapturedSnapshotIdentity, TryWriteError> {
-    let _publication_guard = SNAPSHOT_PUBLICATION_LOCK.lock();
-    // TODO: Add a `Write`-backed Norito JSON sink so production can emit this
-    // canonical payload directly into the authenticated staging descriptor.
-    let captured = CapturedStateSnapshot::capture(state).map_err(TryWriteError::Capture)?;
-    try_write_snapshot_payload_with_limit_locked(
-        state,
-        store_dir,
-        signing_key,
-        merkle_chunk_size,
-        max_payload_bytes,
-        resource_policy,
-        captured.json.into_bytes(),
-        captured.identity,
-    )
+    read_buffer_budget.with_deferred_refund_notifications(|_| {
+        let _publication_guard = SNAPSHOT_PUBLICATION_LOCK.lock();
+        // TODO: Add a `Write`-backed Norito JSON sink so production can emit this
+        // canonical payload directly into the authenticated staging descriptor.
+        let captured = CapturedStateSnapshot::capture(state).map_err(TryWriteError::Capture)?;
+        try_write_snapshot_payload_with_limit_locked(
+            state,
+            store_dir,
+            signing_key,
+            merkle_chunk_size,
+            max_payload_bytes,
+            resource_policy,
+            captured.json.into_bytes(),
+            captured.identity,
+            read_buffer_budget,
+        )
+    })
 }
 #[cfg(test)]
 fn try_write_snapshot_payload_with_limit(
@@ -4296,24 +4347,30 @@ fn try_write_snapshot_payload_with_limit(
     max_payload_bytes: NonZeroUsize,
     snapshot_bytes: Vec<u8>,
 ) -> Result<(), TryWriteError> {
-    // This test-only seam accepts caller-supplied bytes, unlike the production writer whose
-    // payload is emitted directly from the typed State. Keep the full restart dry run here so
-    // adversarial fixture bytes cannot exercise post-publication geometry compaction.
-    validate_generated_snapshot_for_restart(state, &snapshot_bytes)
-        .map_err(TryWriteError::RestartValidation)?;
-    let captured = CapturedStateSnapshot::capture(state).map_err(TryWriteError::Capture)?;
-    let _publication_guard = SNAPSHOT_PUBLICATION_LOCK.lock();
-    try_write_snapshot_payload_with_limit_locked(
-        state,
-        store_dir,
-        signing_key,
-        merkle_chunk_size,
-        max_payload_bytes,
-        SnapshotResourcePolicy::default(),
-        snapshot_bytes,
-        captured.identity,
-    )
-    .map(|_| ())
+    let read_buffer_budget = &AllocationBudget::new(
+        iroha_config::parameters::defaults::snapshot::MAX_READ_BUFFER_BYTES.get(),
+    );
+    read_buffer_budget.with_deferred_refund_notifications(|_| {
+        // This test-only seam accepts caller-supplied bytes, unlike the production writer whose
+        // payload is emitted directly from the typed State. Keep the full restart dry run here so
+        // adversarial fixture bytes cannot exercise post-publication geometry compaction.
+        validate_generated_snapshot_for_restart(state, &snapshot_bytes)
+            .map_err(TryWriteError::RestartValidation)?;
+        let captured = CapturedStateSnapshot::capture(state).map_err(TryWriteError::Capture)?;
+        let _publication_guard = SNAPSHOT_PUBLICATION_LOCK.lock();
+        try_write_snapshot_payload_with_limit_locked(
+            state,
+            store_dir,
+            signing_key,
+            merkle_chunk_size,
+            max_payload_bytes,
+            SnapshotResourcePolicy::default(),
+            snapshot_bytes,
+            captured.identity,
+            read_buffer_budget,
+        )
+        .map(|_| ())
+    })
 }
 fn try_write_snapshot_payload_with_limit_locked(
     state: &State,
@@ -4324,6 +4381,7 @@ fn try_write_snapshot_payload_with_limit_locked(
     resource_policy: SnapshotResourcePolicy,
     snapshot_bytes: Vec<u8>,
     identity: CapturedSnapshotIdentity,
+    read_buffer_budget: &AllocationBudget,
 ) -> Result<CapturedSnapshotIdentity, TryWriteError> {
     ensure_snapshot_identity_is_backed_by_kura(state, &identity)?;
     if snapshot_bytes.len() > max_payload_bytes.get() {
@@ -4431,6 +4489,7 @@ fn try_write_snapshot_payload_with_limit_locked(
         max_payload_bytes,
         merkle_chunk_size,
         signing_key.public_key(),
+        read_buffer_budget,
     )?;
     match state
         .kura()
@@ -5134,4 +5193,5 @@ mod tests {
     include!("snapshot/support_policy_tests.rs");
     include!("snapshot/write_roundtrip_tests.rs");
     include!("snapshot/reconciliation_generation_tests.rs");
+    include!("snapshot/read_buffer_custody_tests.rs");
 }

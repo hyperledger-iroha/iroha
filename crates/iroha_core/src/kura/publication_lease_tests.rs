@@ -28,12 +28,12 @@ impl Wake for WakeCount {
     }
 }
 
-fn poll(wait: &mut mv::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
+fn poll(wait: &mut concread::release::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
     let waker = Waker::from(Arc::clone(count));
     Pin::new(wait).poll(&mut Context::from_waker(&waker))
 }
 
-fn busy(kura: &Kura, expected: &str) -> mv::ReleaseWait {
+fn busy(kura: &Kura, expected: &str) -> concread::release::ReleaseWait {
     match kura.try_publication_lease() {
         Err(KuraPublicationPreparationError::Busy { field, wait }) => {
             assert_eq!(field, expected);
@@ -242,5 +242,73 @@ fn cancellation_of_one_waiter_does_not_consume_another_waiters_release() {
         assert_eq!(canceled_count.0.load(Ordering::SeqCst), 0);
         assert_eq!(retained_count.0.load(Ordering::SeqCst), 1);
         assert!(poll(&mut retained, &retained_count).is_ready());
+    }
+}
+
+#[test]
+fn deferred_kura_lease_unlocks_every_original_fence_before_reentrant_callbacks() {
+    struct Reenter {
+        kura: Arc<Kura>,
+        outer: Arc<PublicationMutex>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for Reenter {
+        fn wake(self: Arc<Self>) {
+            assert!(
+                self.outer.try_lock_or_wait().is_ok(),
+                "enclosing fence released"
+            );
+            for (name, lock) in fences(&self.kura) {
+                assert!(lock.try_lock_or_wait().is_ok(), "original {name} released");
+            }
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    for unwind in [false, true] {
+        let kura = Kura::blank_kura_for_testing();
+        let outer = Arc::new(PublicationMutex::default());
+        let guard = outer.lock();
+        let lease = kura.try_publication_lease().unwrap();
+        let probe = Arc::new(Reenter {
+            kura: Arc::clone(&kura),
+            outer: Arc::clone(&outer),
+            wakes: AtomicUsize::new(0),
+        });
+        let waker = Waker::from(Arc::clone(&probe));
+        let mut waits: Vec<_> = fences(&kura)
+            .into_iter()
+            .map(|(_, lock)| lock.try_lock_or_wait().err().unwrap().wait_for_release())
+            .collect();
+        for wait in &mut waits {
+            assert!(
+                Pin::new(wait)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+        }
+        let released = lease.release_deferred();
+        assert_eq!(probe.wakes.load(Ordering::SeqCst), 0);
+        if unwind {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let _released = released;
+                    let _outer = guard;
+                    panic!("Kura completion unwind");
+                }))
+                .is_err()
+            );
+        } else {
+            drop(guard);
+            drop(released);
+        }
+        assert_eq!(probe.wakes.load(Ordering::SeqCst), 4);
+        for wait in &mut waits {
+            assert!(
+                Pin::new(wait)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_ready()
+            );
+        }
+        assert_eq!(kura.exact_durable_blocks_count().unwrap(), 0);
     }
 }

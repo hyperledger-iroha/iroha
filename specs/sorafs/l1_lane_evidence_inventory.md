@@ -2,8 +2,10 @@
 
 This contract authenticates the exact 17 Taira qualification summaries without
 copying evidence payloads, filesystem paths, credentials, or signer secrets into
-the promotion record. It is a software-key-qualified contract. It does not make
-an HSM-qualified claim.
+the promotion record. Key storage is the operator's choice; this contract has no
+backend or key-storage qualification field. The pending independent
+signer-authorization and completed-operation integration remains a final
+production-promotion blocker.
 
 ## Input contract
 
@@ -67,7 +69,7 @@ The schema is `sorafs.l1.lane_evidence_inventory.v1`. It contains only:
 
 The signer binding is schema closed. It requires role
 `l1-lane-evidence-inventory`, service kind `authenticated-external-signer`,
-algorithm `ed25519`, backend `software`, distinct production service and
+algorithm `ed25519`, distinct production service and
 administrator identities, positive key and policy revisions, a non-zero policy
 SHA-256, and the SHA-256 fingerprint of the operator-trusted public key.
 

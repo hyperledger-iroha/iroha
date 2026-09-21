@@ -24,9 +24,9 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
    replay_cache_capacity = 4096
 
    ```
-   Merge the complete [public-pin template](sorafs/snippets/stream_token_hardware_binding.toml)
+   Merge the complete [public-pin template](sorafs/snippets/stream_token_signer_binding.toml)
    for storage and stream tokens. Its trust placeholders are deliberately invalid;
-   obtain reviewed hardware, attester and observer pins before enabling issuance.
+   obtain reviewed signer, attester and observer pins before enabling issuance.
    Keep the allow-list limited to the exact runtime operator keys. The issuance
    route accepts no API-token or session fallback.
    For Soracloud remote hydration, list every consuming daemon's configured
@@ -38,11 +38,11 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
    `sorafs.storage.native_transaction_signers`, and inject all four matching
    live providers. Storage startup requires them even when the corresponding
    new-work generation flags are disabled.
-3. Inject separate opaque hardware and independently signed observer clients plus
-   the independently approved full custody anchor. The key must be generated in
-   hardware, non-exportable and never previously exported. Credentials, sessions
+3. Inject separate opaque signer and independently signed observer clients plus
+   the independently approved full custody anchor. Software and optional hardware
+   signers use the same public authorization. Credentials, sessions
    and PINs remain runtime-only; TOML is the only activation control.
-4. Follow the [hardware custody contract](sorafs/stream_token_hardware_custody.md):
+4. Follow the [signer custody contract](sorafs/stream_token_signer_custody.md):
    authenticate fresh startup and per-operation state, retain one exact body across
    one Sign or bounded read-only recovery, and require separate `AfterCommit` and
    `BeforeRelease` evidence with local Core finality and expiry fences. Missing,
@@ -98,7 +98,7 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
 - Update fixtures when governance publishes new dataset.
 - Review observability dashboards weekly, ensure alert routing functioning.
 - Reconcile the complete signer/attester/observer configuration digest, public-key
-  fingerprints and sole `hardware.key_revision` with approved deployment inventory.
+  fingerprints and sole `signer.key_revision` with approved deployment inventory.
 
 ## 6. Automation & Incident Playbooks
 
@@ -141,9 +141,9 @@ Recommended automation pattern:
 
 ### 6.2 Signing-key rotation
 
-1. Generate the replacement inside qualified hardware and obtain independent
-   attestation and governed activation under the [custody contract](sorafs/stream_token_hardware_custody.md).
-2. Atomically update the complete hardware pins, independent approved anchor and
+1. Generate the replacement with the operator-selected signer and obtain independent
+   authorization and governed activation under the [custody contract](sorafs/stream_token_signer_custody.md).
+2. Atomically update the complete signer pins, independent approved anchor and
    authenticated provider inventory. Require fresh signed startup and final
    completed-operation evidence before releasing a probe token.
 3. Switch each descriptor's pinned `gateway-key` and matching token together.

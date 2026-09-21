@@ -80,6 +80,12 @@ impl ExternalSoftwareSignerNativeAdapterV1 {
         if payload.authority() != self.native_binding.authority() {
             return Err(ExternalSoftwareSignerAdapterErrorV1::InputAuthorityMismatch);
         }
+        if !iroha_torii::sorafs::native_transaction_signer::sorafs_native_transaction_payload_matches_role_v1(
+            self.native_binding.role(),
+            payload,
+        ) {
+            return Err(ExternalSoftwareSignerAdapterErrorV1::Refused);
+        }
         let builder = TransactionBuilder::from_payload(payload.clone())
             .map_err(|_| ExternalSoftwareSignerAdapterErrorV1::Refused)?;
         let encoded = builder.encode_payload();
@@ -230,7 +236,10 @@ impl ExternalSoftwareSignerNativeBackendsV1 {
             | SignerRoleV1::EvidenceViewer
             | SignerRoleV1::StreamToken
             | SignerRoleV1::PopCredentials
-            | SignerRoleV1::ReleaseManifest => {
+            | SignerRoleV1::ReleaseManifest
+            | SignerRoleV1::FinalPromotionProvenance
+            | SignerRoleV1::FinalPromotionAccountTransaction
+            | SignerRoleV1::TopologyApproval => {
                 return Err(ExternalSoftwareSignerAdapterErrorV1::RoleMismatch);
             }
         };

@@ -110,3 +110,6 @@ impl<'state> PreparedCarrier<'state> {
 #[cfg(test)]
 #[path = "carrier_preparation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use journals::publish_governance_fixture;

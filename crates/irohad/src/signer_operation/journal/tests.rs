@@ -12,6 +12,10 @@ fn private_directory() -> tempfile::TempDir {
 fn closed_receipt_purposes_select_exact_public_limits_and_retain_exclusive_ownership() {
     for (purpose, limit) in [
         (
+            SignerReceiptPurposeV1::FinalPromotionProvenance,
+            SIGNER_FINAL_PROMOTION_RECEIPT_MAX_BYTES_V1,
+        ),
+        (
             SignerReceiptPurposeV1::ReleaseManifest,
             SIGNER_RELEASE_MANIFEST_RECEIPT_MAX_BYTES_V1,
         ),
@@ -26,6 +30,7 @@ fn closed_receipt_purposes_select_exact_public_limits_and_retain_exclusive_owner
         let journal = SignerReceiptJournalV1::open(&path, purpose).expect("private journal");
         assert_eq!(journal.purpose(), purpose);
         for competing in [
+            SignerReceiptPurposeV1::FinalPromotionProvenance,
             SignerReceiptPurposeV1::ReleaseManifest,
             SignerReceiptPurposeV1::StreamToken,
         ] {
@@ -49,6 +54,7 @@ fn closed_receipt_purposes_select_exact_public_limits_and_retain_exclusive_owner
 #[test]
 fn every_purpose_enforces_exact_stage_recovery_and_inventory_byte_ceiling() {
     for purpose in [
+        SignerReceiptPurposeV1::FinalPromotionProvenance,
         SignerReceiptPurposeV1::ReleaseManifest,
         SignerReceiptPurposeV1::StreamToken,
     ] {
@@ -134,3 +140,5 @@ fn neutral_journal_errors_reveal_no_input_path_or_receipt_bytes() {
         super::super::release_manifest::SignerReleaseManifestErrorV1::Journal
     );
 }
+
+mod reader;

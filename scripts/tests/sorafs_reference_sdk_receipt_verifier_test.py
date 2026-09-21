@@ -1,4 +1,4 @@
-"""Process-contract doubles for receipt parsing; these do not qualify hardware custody.
+"""Process-contract doubles for receipt parsing; cryptographic verification is native.
 
 Actual cryptographic receipt/observer/custody validation belongs to the native
 suite and separately recorded native-process replay with public simulated data.
@@ -32,7 +32,7 @@ def _native_result(context):
         "operation_id": "22" * 32, "custody_record_digest": "33" * 32,
         "policy_digest": "44" * 32, "key_revision": 7, "policy_revision": 9,
         "service_id": "release-signer", "administrator_id": "release-administrator",
-        "role": "release_manifest", "backend": "hardware",
+        "role": "release_manifest",
         "deployment_id": "release-sdk-primary", "chain_id": "release-chain",
         "network_id": "55" * 32, "finalized_height": 101,
         "finalized_block_hash": "66" * 32, "verified_at_unix_ms": NOW * 1000,
@@ -103,6 +103,10 @@ def test_exact_native_contract_derives_canary_and_checker_reauthenticates(receip
     assert dict(verified.native_fields) == result
     payload = _claims(verified)
     assert "verified_at_unix_ms" not in payload  # trusted clock is fresh on each recheck
+    assert payload["signer_authority_verified"] is True
+    assert "hardware_custody_verified" not in payload
+    assert "signing_backend" not in payload
+    assert "backend" not in dict(verified.native_fields)
     assert checker.validate_evidence_payload(payload, _options(path, pin)) == ("signed_manifest", [])
     assert not list(path.parent.glob(".sf11-*-*"))
 
@@ -135,6 +139,33 @@ def test_native_result_requires_every_exact_field(source_context, field):
         sources.authenticate_signed_manifest_sources(path, pin, NOW)
 
 
+@pytest.mark.parametrize("field,value", (
+    ("backend", "hardware"), ("backend", "software"),
+    ("hardware_custody_verified", True), ("generated_in_hardware", True),
+))
+def test_native_result_rejects_server_custody_claims(source_context, field, value):
+    path, context, _ = source_context
+    result = _native_result(context)
+    result[field] = value
+    pin = _install_receipt_double(path, context, json.dumps(result).encode())
+    with pytest.raises(sources.SignedManifestSourceError, match="closed schema"):
+        sources.authenticate_signed_manifest_sources(path, pin, NOW)
+
+
+@pytest.mark.parametrize("field,value", (
+    ("signing_backend", "hardware"), ("signing_backend", "software"),
+    ("hardware_custody_verified", True),
+))
+def test_canary_rejects_backend_claims_even_with_verified_authority(receipt_context, field, value):
+    path, _, _, pin = receipt_context
+    verified = sources.authenticate_signed_manifest_sources(path, pin, NOW)
+    payload = _claims(verified)
+    payload[field] = value
+    kind, errors = checker.validate_evidence_payload(payload, _options(path, pin))
+    assert kind == "signed_manifest"
+    assert errors
+
+
 @pytest.mark.parametrize("field", sorted(sources.NATIVE_SOURCE_FIELDS))
 def test_native_result_cannot_retarget_any_pinned_source(source_context, field):
     path, context, _ = source_context
@@ -147,7 +178,7 @@ def test_native_result_cannot_retarget_any_pinned_source(source_context, field):
 
 @pytest.mark.parametrize("field,value", (
     ("schema", "sorafs.external_software_signer.signature_receipt_validation.v1"),
-    ("status", "passed"), ("role", "promotion"), ("backend", "software"),
+    ("status", "passed"), ("role", "promotion"),
     ("manifest_size", 1), ("verified_at_unix_ms", NOW * 1000 - 1),
     ("key_revision", True), ("policy_revision", 0), ("finalized_height", 1.5),
     ("manifest_size", 1 << 64), ("operation_id", "00" * 32),

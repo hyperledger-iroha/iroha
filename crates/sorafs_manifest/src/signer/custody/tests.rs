@@ -1,6 +1,7 @@
-//! Adversarial tests of independent hardware-custody attestations, not hardware qualification.
+//! Adversarial tests of independent signer authorization and provider-neutral custody records.
 
 mod active_use;
+mod final_promotion_account;
 
 use super::*;
 use iroha_crypto::KeyPair;
@@ -42,8 +43,8 @@ fn custody_fixture() -> Fixture {
         binding: SignerCustodyBindingV1 {
             chain_id: "sorafs-reference".parse().expect("canonical chain id"),
             network_id: network(0x11),
-            runtime_handle: "hsm://sorafs/promotion/primary".into(),
-            key_handle: "pkcs11:production/promotion/key-7".into(),
+            runtime_handle: "software://sorafs/promotion/primary".into(),
+            key_handle: "software://production/promotion/key-7".into(),
             service_id: "promotion-primary".into(),
             administrator_id: "promotion-security-primary".into(),
             role: SignerRoleV1::Promotion,
@@ -60,11 +61,7 @@ fn custody_fixture() -> Fixture {
         predecessor_digest: [0; 32],
         issued_at_unix_ms: 1_000,
         expires_at_unix_ms: 2_000,
-        hardware_identity_digest: [0x53; 32],
         evidence_digest: [0x55; 32],
-        generated_in_hardware: true,
-        exportable: false,
-        ever_exported: false,
         revoked: false,
     };
     let trust = SignerCustodyTrustV1 {
@@ -280,26 +277,25 @@ fn wrong_role_purpose_algorithm_or_key_shape_is_rejected_before_attestation() {
 }
 
 #[test]
-fn software_imported_exportable_and_previously_exported_keys_cannot_qualify() {
-    let fixture = custody_fixture();
-    let mutations: &[fn(&mut SignerCustodyStatementV1)] = &[
-        |statement| statement.generated_in_hardware = false,
-        |statement| statement.exportable = true,
-        |statement| statement.ever_exported = true,
-    ];
-    for mutate in mutations {
-        let mut statement = fixture.statement.clone();
-        mutate(&mut statement);
+fn software_and_optional_hardware_handles_share_authorization_semantics() {
+    for scheme in ["software", "signer", "hsm", "kms", "pkcs11"] {
+        let mut fixture = custody_fixture();
+        fixture.statement.binding.runtime_handle = format!("{scheme}://sorafs/promotion/primary");
+        fixture.statement.binding.key_handle = format!("{scheme}://production/promotion/key-7");
+        let bytes = attest_unchecked(fixture.statement.clone(), &fixture.attester);
+        let verified = verify(&bytes, &fixture).expect("independently authorized provider");
+        assert_eq!(verified.statement(), &fixture.statement);
+        let mut mismatched = fixture.statement.binding.clone();
+        mismatched.key_handle.push_str("-other");
         assert_eq!(
-            statement
-                .signing_payload()
-                .expect_err("invalid signing profile"),
-            SignerCustodyErrorV1::HardwareCustodyRequired
-        );
-        assert_error(
-            &attest_unchecked(statement, &fixture.attester),
-            &fixture,
-            SignerCustodyErrorV1::HardwareCustodyRequired,
+            verify_signer_custody_enrollment_v1(
+                &bytes,
+                &mismatched,
+                &fixture.trust,
+                &fixture.context
+            )
+            .unwrap_err(),
+            SignerCustodyErrorV1::BindingMismatch
         );
     }
 }
@@ -542,7 +538,6 @@ fn canonical_bounds_reject_truncated_trailing_oversized_and_unknown_version_reco
         |statement| statement.binding.service_id = "a".repeat(129),
         |statement| statement.anchor.height = 0,
         |statement| statement.anchor.state_digest = [0; 32],
-        |statement| statement.hardware_identity_digest = [0; 32],
         |statement| statement.evidence_digest = [0; 32],
         |statement| statement.predecessor_digest = [0x69; 32],
         |statement| statement.sequence = 0,
@@ -570,7 +565,7 @@ fn validated_chain_and_key_types_cannot_be_bypassed_by_well_framed_wire_bytes() 
     let record: SignerCustodyRecordV1 = norito::decode_canonical(&bytes).expect("record");
     let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let payload = record.encode();
-    let chain_bytes = fixture.statement.binding.chain_id.as_str().as_bytes();
+    let chain_bytes = fixture.statement.binding.chain_id.as_bytes();
     let chain_offset = payload
         .windows(chain_bytes.len())
         .position(|window| window == chain_bytes)
@@ -599,16 +594,15 @@ fn validated_chain_and_key_types_cannot_be_bypassed_by_well_framed_wire_bytes() 
 }
 
 #[test]
-fn hardware_handles_reject_software_credentials_aliases_and_test_markers() {
+fn custody_handles_reject_credentials_aliases_and_test_markers() {
     for accepted in [
         "hsm://sorafs/promotion/primary",
         "kms:production/key-1",
         "pkcs11:production/key-2",
     ] {
-        assert!(valid_hardware_handle(accepted));
+        assert!(valid_custody_handle(accepted));
     }
     for rejected in [
-        "software://sorafs/promotion/primary",
         "file:private-key",
         "hsm://user:secret@host",
         "pkcs11:token=production;pin-value=secret",
@@ -625,7 +619,7 @@ fn hardware_handles_reject_software_credentials_aliases_and_test_markers() {
         "hsm:production/key:credential",
         "hsm:production/key/",
     ] {
-        assert!(!valid_hardware_handle(rejected));
+        assert!(!valid_custody_handle(rejected));
     }
 }
 
@@ -656,6 +650,6 @@ fn debug_and_errors_never_echo_handles_identity_strings_or_attestation_bytes() {
     assert!(!format!("{valid:?}").contains(sentinel));
     assert_eq!(
         SignerCustodyErrorV1::InvalidAttestation.to_string(),
-        "hardware custody attestation is invalid"
+        "signer custody attestation is invalid"
     );
 }

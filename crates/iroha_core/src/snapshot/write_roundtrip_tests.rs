@@ -31,6 +31,7 @@ async fn can_read_snapshot_after_writing() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     )
     .unwrap();
     assert_eq!(snapshot_state.chain_id, expected_chain_id);
@@ -93,6 +94,7 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     ) {
         Ok(_) => panic!("normal snapshot restore must reject overdue pending evidence"),
         Err(error) => error,
@@ -393,6 +395,7 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("read signed snapshot without canonical payload drift");
     let roundtrip = CapturedStateSnapshot::capture(&restored)
@@ -482,6 +485,7 @@ async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("snapshot read");
     let restored = snapshot_state.sccp_registry_snapshot();
@@ -553,6 +557,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
+            &snapshot_read_budget_for_testing(),
         ) {
             Ok(_) => panic!("signed snapshot with an unknown field must fail closed"),
             Err(error) => error,
@@ -595,6 +600,7 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         &state.zk_snapshot(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("an exact signed snapshot must match its Kura WSV checkpoint");
     assert_eq!(
@@ -637,6 +643,7 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         &state.zk_snapshot(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     ) {
         Ok(_) => panic!("a signature cannot replace the canonical Kura WSV checkpoint"),
         Err(error) => error,
@@ -724,6 +731,7 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
+            &snapshot_read_budget_for_testing(),
         );
         match result {
             Err(TryReadError::InvalidSccpRegistry(error)) => {
@@ -965,6 +973,7 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
             &state.zk_snapshot(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
+            &snapshot_read_budget_for_testing(),
         ) {
             Ok(_) => panic!("hostile {mutation:?} revert must fail closed"),
             Err(error) => error,
@@ -1031,6 +1040,7 @@ async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("snapshot read");
     let restored = snapshot_state
@@ -1086,6 +1096,7 @@ async fn incompatible_sccp_caps_reject_snapshot_without_mutating_kura() {
         &incompatible,
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     ) {
         Ok(_) => panic!("incompatible actual SCCP cap must reject the authentic snapshot"),
         Err(error) => error,
@@ -1219,6 +1230,7 @@ async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     ) else {
         panic!("snapshot with wrong-key signature should be rejected")
     };
@@ -1247,6 +1259,7 @@ async fn snapshot_read_rejects_noncanonical_uppercase_signature_hex() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     ) else {
         panic!("uppercase signature hex must not be accepted");
     };
@@ -1276,6 +1289,7 @@ async fn snapshot_read_rejects_all_zero_signature_sidecar_before_verification() 
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     ) else {
         panic!("snapshot with all-zero signature should be rejected")
     };
@@ -1317,6 +1331,7 @@ async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
+            &snapshot_read_budget_for_testing(),
         ) else {
             panic!("snapshot with malformed Ed25519 signature R should be rejected")
         };
@@ -1368,6 +1383,7 @@ async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verifica
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
+            &snapshot_read_budget_for_testing(),
         ) else {
             panic!("snapshot with malformed ML-DSA signature length should be rejected")
         };
@@ -1405,6 +1421,7 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("snapshot read");
     let manifests = snapshot_state.world.space_directory_manifests.view();
@@ -1450,6 +1467,7 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     ) {
         Ok(_) => panic!("missing canonical manifest section must not be reconstructed"),
         Err(error) => error,
@@ -1482,6 +1500,7 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     ) {
         Ok(_) => panic!("non-empty snapshot must carry its canonical manifest section"),
         Err(error) => error,

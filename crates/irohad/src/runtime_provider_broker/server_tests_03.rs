@@ -863,19 +863,19 @@ fn stream_token_signer_binding_and_qualification_frames_are_exact() {
         OPERATION_QUALIFY_V1,
         encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1).expect("encode qualification request"),
     );
-    let hardware = stream_token_hardware_test_support::hardware_binding();
-    let exact = encode_canonical(&hardware, MAX_STREAM_TOKEN_METADATA_BYTES_V1)
+    let signer_backend = stream_token_signer_test_support::signer_binding();
+    let exact = encode_canonical(&signer_backend, MAX_STREAM_TOKEN_METADATA_BYTES_V1)
         .expect("encode exact metadata claim");
     assert_eq!(
         validate_operation_result(&request, STATUS_OK_V1, &exact, &network_id()),
         Ok(())
     );
-    let mut custody = hardware.custody().clone();
+    let mut custody = signer_backend.custody().clone();
     custody.key_revision = 8;
-    let changed = StreamTokenHardwareRuntimeBindingV1::new(
+    let changed = StreamTokenSignerRuntimeBindingV1::new(
         custody,
-        hardware.observer_handle().to_owned(),
-        hardware.trust_pins_digest(),
+        signer_backend.observer_handle().to_owned(),
+        signer_backend.trust_pins_digest(),
     )
     .unwrap();
     let substituted = encode_canonical(&changed, MAX_STREAM_TOKEN_METADATA_BYTES_V1)
@@ -892,7 +892,7 @@ fn stream_token_server_observation_rejects_drift_and_test_markers() {
         drift: bool,
         calls: AtomicU64,
     }
-    impl iroha_torii::sorafs::StreamTokenHardwareClientV1 for SignerProbe {
+    impl iroha_torii::sorafs::StreamTokenSignerClientV1 for SignerProbe {
         fn handle(&self) -> &str {
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
             if self.drift && call != 0 {
@@ -905,15 +905,15 @@ fn stream_token_server_observation_rejects_drift_and_test_markers() {
             &self,
             _: &SignerStreamTokenExpectedV1,
             _: &sorafs_manifest::StreamTokenBodyV1,
-        ) -> Result<StreamTokenHardwareReceiptV1, StreamTokenHardwareCallErrorV1> {
-            Err(StreamTokenHardwareCallErrorV1::Refused)
+        ) -> Result<StreamTokenSignerReceiptV1, StreamTokenSignerCallErrorV1> {
+            Err(StreamTokenSignerCallErrorV1::Refused)
         }
         fn recover(
             &self,
             _: &SignerStreamTokenExpectedV1,
             _: &sorafs_manifest::StreamTokenBodyV1,
-        ) -> Result<StreamTokenHardwareReceiptV1, StreamTokenHardwareCallErrorV1> {
-            Err(StreamTokenHardwareCallErrorV1::Refused)
+        ) -> Result<StreamTokenSignerReceiptV1, StreamTokenSignerCallErrorV1> {
+            Err(StreamTokenSignerCallErrorV1::Refused)
         }
     }
     struct ObserverProbe {
@@ -927,7 +927,7 @@ fn stream_token_server_observation_rejects_drift_and_test_markers() {
         fn observe(
             &self,
             _: &SignerStreamTokenObservationRequestV1,
-        ) -> Result<StreamTokenObserverReplyV1, StreamTokenHardwareCallErrorV1> {
+        ) -> Result<StreamTokenObserverReplyV1, StreamTokenSignerCallErrorV1> {
             panic!("metadata must not fabricate or request custody qualification")
         }
     }
@@ -941,9 +941,9 @@ fn stream_token_server_observation_rejects_drift_and_test_markers() {
         calls: AtomicU64::new(0),
     });
     let backends = RuntimeProviderBrokerBackendsV1::new()
-        .with_stream_token_hardware_client(exact.clone())
+        .with_stream_token_signer_client(exact.clone())
         .with_stream_token_state_observer(observer.clone());
-    make_server_observation(&binding, &backends)
+    make_server_observation(network_id(), &binding, &backends)
         .expect("observe exact non-authorizing routing metadata twice");
     assert_eq!(exact.calls.load(Ordering::SeqCst), 2);
     assert_eq!(observer.calls.load(Ordering::SeqCst), 2);
@@ -960,10 +960,10 @@ fn stream_token_server_observation_rejects_drift_and_test_markers() {
         },
     ] {
         let backends = RuntimeProviderBrokerBackendsV1::new()
-            .with_stream_token_hardware_client(Arc::new(provider))
+            .with_stream_token_signer_client(Arc::new(provider))
             .with_stream_token_state_observer(observer.clone());
         assert!(matches!(
-            make_server_observation(&binding, &backends),
+            make_server_observation(network_id(), &binding, &backends),
             Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         ));
     }
@@ -1934,7 +1934,8 @@ fn pop_acme_and_compliance_bindings_are_exact_and_drift_checked() {
         Ok(())
     );
     for binding in [&pop, &acme, &compliance] {
-        make_server_observation(binding, &backends).expect("stable exact backend qualifies twice");
+        make_server_observation(network_id(), binding, &backends)
+            .expect("stable exact backend qualifies twice");
     }
     let mut substituted_pop = pop.clone();
     substituted_pop
@@ -2003,7 +2004,7 @@ fn pop_acme_and_compliance_bindings_are_exact_and_drift_checked() {
         ),
     ] {
         assert_eq!(
-            make_server_observation(&binding, &backends),
+            make_server_observation(network_id(), &binding, &backends),
             Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         );
     }
@@ -2026,7 +2027,7 @@ fn privacy_cycle_prf_binding_is_exact_and_drift_checked() {
     let drifted = RuntimeProviderBrokerBackendsV1::new()
         .with_privacy_cycle_prf_provider(Arc::new(ServerTestPrivacyCyclePrfProvider::drifting()));
     assert_eq!(
-        make_server_observation(&binding, &drifted),
+        make_server_observation(network_id(), &binding, &drifted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
 }
@@ -2041,7 +2042,7 @@ fn privacy_cycle_prf_operation_is_canonical_bounded_and_read_only() {
     let provider = Arc::new(ServerTestPrivacyCyclePrfProvider::exact());
     let backends =
         RuntimeProviderBrokerBackendsV1::new().with_privacy_cycle_prf_provider(provider.clone());
-    let observed = make_server_observation(&binding, &backends)
+    let observed = make_server_observation(network_id(), &binding, &backends)
         .expect("qualify stable threshold-PRF provider");
     let state = singleton_state(
         "privacy-cycle-prf-test-chain",
@@ -2142,8 +2143,8 @@ fn transparency_leader_lease_operations_are_canonical_fenced_and_bounded() {
     let provider = Arc::new(ServerTestTransparencyLeaderLeaseProvider::exact());
     let backends = RuntimeProviderBrokerBackendsV1::new()
         .with_transparency_leader_lease_provider(provider.clone());
-    let observed =
-        make_server_observation(&binding, &backends).expect("qualify stable leader-lease provider");
+    let observed = make_server_observation(network_id(), &binding, &backends)
+        .expect("qualify stable leader-lease provider");
     let state = singleton_state(
         "transparency-leader-lease-test-chain",
         binding.clone(),
@@ -2322,13 +2323,13 @@ fn fenced_privacy_publisher_binding_is_exact_and_drift_checked() {
     let substituted = RuntimeProviderBrokerBackendsV1::new()
         .with_fenced_privacy_publisher(Arc::new(ServerTestFencedPrivacyPublisher::substituted()));
     assert_eq!(
-        make_server_observation(&binding, &substituted),
+        make_server_observation(network_id(), &binding, &substituted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
     let drifted = RuntimeProviderBrokerBackendsV1::new()
         .with_fenced_privacy_publisher(Arc::new(ServerTestFencedPrivacyPublisher::drifting()));
     assert_eq!(
-        make_server_observation(&binding, &drifted),
+        make_server_observation(network_id(), &binding, &drifted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
 }
@@ -2540,7 +2541,7 @@ fn fenced_privacy_publisher_operation_is_canonical_bounded_and_read_back() {
     let provider = Arc::new(ServerTestFencedPrivacyPublisher::exact());
     let backends =
         RuntimeProviderBrokerBackendsV1::new().with_fenced_privacy_publisher(provider.clone());
-    let observed = make_server_observation(&binding, &backends)
+    let observed = make_server_observation(network_id(), &binding, &backends)
         .expect("qualify stable fenced privacy publisher");
     let state = singleton_state(
         "fenced-privacy-publisher-test-chain",
@@ -2616,8 +2617,9 @@ fn fenced_privacy_publisher_operation_is_canonical_bounded_and_read_back() {
     let substituted_provider = Arc::new(ServerTestFencedPrivacyPublisher::substituted_receipt());
     let substituted_backends = RuntimeProviderBrokerBackendsV1::new()
         .with_fenced_privacy_publisher(substituted_provider.clone());
-    let substituted_observed = make_server_observation(&binding, &substituted_backends)
-        .expect("qualify publisher whose receipt is substituted");
+    let substituted_observed =
+        make_server_observation(network_id(), &binding, &substituted_backends)
+            .expect("qualify publisher whose receipt is substituted");
     let substituted_state = singleton_state(
         "fenced-privacy-substituted-receipt-test-chain",
         binding,

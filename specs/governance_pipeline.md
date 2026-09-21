@@ -503,16 +503,38 @@ closure emits `ReferendumDecided` with the original selector and exact tally;
 it never emits a proposal lifecycle event, and the Torii governance stream
 therefore publishes only referendum/lock/tally updates for that decision.
 
-PLAIN admission accepts only direction `0` (Aye), `1` (Nay), or `2`
-(Abstain), and rejects a replacement before mutation if its exact quadratic
-category tally or total turnout would exceed `u128`. Both conviction parameters
-must be nonzero, and the retained voter-lock corpus is capped at 1,000 so the
-exact scan is consensus-bounded. Restore rechecks the same PLAIN record shape
-and loaded conviction policy before execution resumes without applying the
-integer tally domain to fractional ZK bonds. Minimum
-turnout includes abstentions, while the approval fraction is
-`Aye / (Aye + Nay)`; an empty decisive tally rejects. Threshold products use an
-exact 192-bit comparison rather than saturation. For standalone ZK voting,
+PLAIN uses a required `PlainVotingContextV1::Conviction` supplied by authoritative
+creation/bootstrap before voting. Its asset ID, smallest-unit scale, custody,
+minimum bond, conviction step/cap, approval fraction and minimum turnout are
+immutable. There is no first-voter initialization or live-policy fallback.
+Weight is `floor(sqrt(exact_smallest_units)) * min(1 + duration / step, cap)`;
+conversion and aggregate arithmetic reject fractional frozen units and overflow.
+Every positive PLAIN bond transfers actual funds into escrow, including when the
+minimum is zero. A replacement preserves choice and cannot reduce quantity,
+requested duration or absolute expiry; it must increase quantity or absolute
+expiry. A shorter remaining duration representing the same absolute expiry is
+rejected. Only the latest retained position contributes, and only an increase in
+quantity transfers an additional escrow delta. Slash/restitution retain exact
+frozen units even if a live asset specification permits more precision.
+Restitution rechecks the complete retained corpus before moving funds because
+later ballots may have consumed the aggregate headroom freed by a slash; it
+does not recompute a closed decision.
+
+PLAIN accepts direction `0` (Aye), `1` (Nay), or `2` (Abstain). Its corpus is capped
+at 1,000; owner/custody bindings, each category and total turnout are checked in
+one canonical Core tally consumer shared by Torii. Restore validates the required
+context/result pairing and the same arithmetic without applying PLAIN rules to
+ZK bonds. Minimum turnout includes abstentions; the approval fraction is
+`Aye / (Aye + Nay)`, with an empty decisive tally rejecting and exact 192-bit
+threshold comparisons. Closure stores a required immutable `Decided` result
+before unlock, including for an empty proposed referendum. Torii reads that
+result after funds and live lock records are released. Missing closed results
+are invalid, and current policy cannot recompute or change a retained decision.
+
+These public-account correctness rules do not implement anonymous standalone
+ballots, credential-linked confidential positions or the reviewed complete-corpus
+tally relation. Production creation/admission of that private protocol remains
+unresolved. For standalone ZK voting,
 closure without a finalized tally durably records `Closed` and emits no
 decision; a later verified finalization emits that deferred
 `ReferendumDecided` exactly once, while finalization before closure leaves the

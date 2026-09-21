@@ -63,3 +63,8 @@ path = "tests/linear_allocation_custody.rs"
 [[test]]
 name = "admitted_map_custody"
 path = "tests/admitted_map_custody.rs"
+
+# Exercise the real byte owner with an isolated observed global allocator.
+[[test]]
+name = "charged_byte_buffer_custody"
+path = "tests/charged_byte_buffer_custody.rs"

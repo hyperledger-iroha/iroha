@@ -41,14 +41,14 @@ exact ordered coverage of all five native targets, with binary smoke,
 deterministic archive replay, installation, rollback, yank, SBOM, zero
 critical/high vulnerability, OIDC identity, and cosign provenance checks for
 every target. Signed-manifest evidence requires the exact raw Ed25519 signature
-and a hardware `release_manifest` operation receipt. The builder and checker
+and an authenticated `release_manifest` operation receipt. The builder and checker
 independently authenticate the SHA-256-pinned source context, exact policy and
 custody trust, separately signed finalized-state observation, and completed
 operation through `iroha app sorafs toolkit release-manifest-receipt`. Every canary
-identity, digest, revision, and hardware/custody fact comes from that closed
-native result. Caller-supplied signer labels, software receipts, or metadata
+identity, digest, revision, and signer-authority fact comes from that closed
+native result. Caller-supplied signer labels, unattested receipts, or metadata
 claims cannot qualify a release. The service producer and verifier are
-implemented; genuine hardware and finalized-state adapters and the remaining
+implemented; deployed signer and finalized-state adapters and the remaining
 release coordinator integration are open G02 work in the closure ledger. The
 `scripts/run_sorafs_reference_sdk_release_evidence.py` provides the reviewed
 collection planner/runner with dry-run `evidence_contract` output for each
@@ -484,7 +484,7 @@ convert decoded or raw Norito payloads into the shared validation functions.
   smoke checks, records per-file, binary, FFI-header, archive, and manifest
   digests under an untracked output directory. It emits no signature or public
   key. The release coordinator adds every target manifest and checksum to the
-  final aggregate `release_manifest.json`. Qualification requires the hardware
+  final aggregate `release_manifest.json`. Qualification requires the configured
   release-manifest producer to sign those exact bytes and commit its receipt,
   followed by the pinned native signature and receipt verifiers. The remaining
   coordinator and deployment adapters are recorded as open G02 work.
@@ -602,15 +602,17 @@ and the `release_manifest_digest_hex` it was built against.
   evidence input is final. `scripts/release_manifest_signing.py` authenticates
   the exact raw signature and independently reviewed public-key fingerprint
   through the SHA-256-pinned native `iroha app sorafs toolkit release-manifest` verifier.
-  SF-11 additionally requires `release-manifest-receipt` to verify hardware
-  custody, independent attester and state-observer trust, current revocation
+  SF-11 additionally requires `release-manifest-receipt` to verify signer
+  authority, independent attester and state-observer trust, current revocation
   state, and the exact finalized completion. Its independently pinned source
   context supplies all eight input identities, including the native executable;
   the caller supplies the trusted current clock separately. The daemon's
   purpose-bound producer retains a private immutable receipt before committing
-  the operation and never retries hardware during completed-operation recovery.
-  Hardware keys must be generated non-exportable and never previously exported.
-  Genuine vendor and finalized-state adapters, plus coordinator integration,
+  the operation and never retries signing during completed-operation recovery.
+  Key storage is the operator's choice. The V1 result carries no backend,
+  hardware-generation or exportability assertion; `signer_authority_verified`
+  means the independently pinned authorization and receipt checks succeeded.
+  Deployed signer and finalized-state adapters, plus coordinator integration,
   remain open; raw signature verification alone cannot close this release gate.
 - The mandatory native release matrix is
   `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
@@ -658,8 +660,8 @@ targets, duplicate or unknown release-target entries, `target_count` values that
 match the unique target list, missing binary/archive checksums, missing
 deterministic-archive proof, tracked generated `dist/*` artifacts beyond
 `dist/.gitkeep`, unsigned or unverified release manifests, missing governed
-release-key fingerprints, unauthenticated hardware custody, mismatched or
-revoked completed operations, stale state observations, exported private keys, incomplete five-target binary
+release-key fingerprints, unauthenticated signer authority, mismatched or
+revoked completed operations, stale state observations, disclosed private keys, incomplete five-target binary
 smoke/install/rollback/yank or
 archive replay, missing per-target SBOMs, non-zero critical/high vulnerability
 counts, missing OIDC identity or cosign provenance verification, missing
@@ -718,9 +720,9 @@ closed to unknown values,
 duplicate-free target/package inventories
 whose count fields match their unique entries, release-manifest digest bindings,
 positive integer threshold-reviewed smoke duration, and an independently
-pinned signed-manifest source context. Signed-manifest policy, key, hardware
-backend, positive revisions, and finalized operation anchors are derived only
-from a freshly verified native hardware receipt. Governance approval separately
+pinned signed-manifest source context. Signed-manifest policy, key, positive
+revisions, and finalized operation anchors are derived only
+from a freshly verified native operation receipt. Governance approval separately
 requires policy and `--public-key-fingerprint-hex` inputs,
 governed-release approval markers, and checker-backed validation before
 atomically writing JSON without following output symlinks or output directories.
@@ -781,7 +783,7 @@ Implemented locally:
 - Release-packaging helper that stages binary/archive/manifest digests and
   unsigned package manifests under untracked
   `dist/iroha-release/`. It rejects retired per-package signature
-  inputs. Hardware signature and completed-operation receipt qualification
+  inputs. Authenticated signature and completed-operation receipt qualification
   apply to the final aggregate manifest after every target and evidence input
   is fixed; deployment and coordinator integration remain open.
 - Published operator, metrics, and binding-generation guidance for packaging,

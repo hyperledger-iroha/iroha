@@ -161,7 +161,11 @@ pub struct LinCowCell<T, R, U, Charge = Untracked> {
     updater: PhantomData<U>,
     write: Shared<Mutex<WriteState<T, R, Charge>>, Charge>,
     active: Mutex<Shared<LinCowCellInner<R, Charge>, Charge>>,
+    active_released: crate::release::ReleaseNotification,
 }
+
+type ActiveGuard<'a, R, Charge> =
+    crate::release::ReleaseGuard<'a, MutexGuard<'a, Shared<LinCowCellInner<R, Charge>, Charge>>>;
 
 /// Opaque custody of one original charged physical root allocation.
 /// Cloning this handle retains that allocation without allocating a new identity.
@@ -271,7 +275,7 @@ pub struct LinCowCellWriteTxn<'a, T, R, U, Charge = Untracked> {
 pub struct LinCowCellPreparedCommit<'a, T, R, U, Charge = Untracked> {
     caller: &'a LinCowCell<T, R, U, Charge>,
     guard: MutexGuard<'a, WriteState<T, R, Charge>>,
-    active: MutexGuard<'a, Shared<LinCowCellInner<R, Charge>, Charge>>,
+    active: ActiveGuard<'a, R, Charge>,
     work: Shared<U, Charge>,
     next: Reserved<LinCowCellInner<R, Charge>, Charge>,
     base: Shared<LinCowCellInner<R, Charge>, Charge>,
@@ -283,6 +287,9 @@ pub struct LinCowCellCommitRetirement<R, Retirement, Charge = Untracked> {
     _engine: Retirement,
     _base: Shared<LinCowCellInner<R, Charge>, Charge>,
     _cursor_charge: Charge,
+    // LAST: native wake callbacks follow real cursor/reader cleanup and remain
+    // with the aggregate owner after both physical locks have been released.
+    active_release: Option<crate::release::DeferredRelease>,
 }
 
 /// Published cell retaining both physical locks and all original cleanup custody.
@@ -292,7 +299,7 @@ where
     T: LinCowCellRetainedCommit<R, U>,
 {
     guard: MutexGuard<'a, WriteState<T, R, Charge>>,
-    active: MutexGuard<'a, Shared<LinCowCellInner<R, Charge>, Charge>>,
+    active: ActiveGuard<'a, R, Charge>,
     retirement: LinCowCellCommitRetirement<R, T::Retirement, Charge>,
 }
 
@@ -369,6 +376,32 @@ impl<R, Charge> Drop for LinCowCellInner<R, Charge> {
     }
 }
 
+impl<T, R, U, Charge> LinCowCell<T, R, U, Charge> {
+    /// Observe the actual active-reader mutex before a nonblocking probe.
+    /// Releasing a writer or a pinned reader does not complete this wait. Every
+    /// successful active-reader acquisition notifies after its mutex unlocks.
+    pub fn observe_reader_release(&self) -> crate::release::ReleaseWait {
+        self.active_released.observe()
+    }
+
+    fn lock_active(&self) -> ActiveGuard<'_, R, Charge> {
+        self.active_released.poisoning_guard(
+            self.active_released
+                .with_acquisition_unwind_notification(|| {
+                    self.active.lock().expect("original reader lock poisoned")
+                }),
+        )
+    }
+
+    fn try_lock_active(&self) -> Result<ActiveGuard<'_, R, Charge>, OwnedWriteError> {
+        match self.active.try_lock() {
+            Ok(active) => Ok(self.active_released.poisoning_guard(active)),
+            Err(TryLockError::WouldBlock) => Err(OwnedWriteError::Busy),
+            Err(TryLockError::Poisoned(_)) => Err(OwnedWriteError::Poisoned),
+        }
+    }
+}
+
 impl<T, R, U, Charge> LinCowCell<T, R, U, Charge>
 where
     T: LinCowCellCapable<R, U>,
@@ -421,6 +454,7 @@ where
             updater: PhantomData,
             write,
             active,
+            active_released: crate::release::ReleaseNotification::default(),
         }
     }
 
@@ -433,7 +467,7 @@ where
 
     /// Begin a read transaction retaining the original generation and its charge.
     pub fn read(&self) -> LinCowCellReadTxn<'_, T, R, U, Charge> {
-        let rwguard = self.active.lock().unwrap();
+        let rwguard = self.lock_active();
         LinCowCellReadTxn {
             _caller: self,
             work: rwguard.clone(),
@@ -443,11 +477,7 @@ where
     /// Retain the current original generation without waiting or allocating.
     /// `Busy` and `Poisoned` refer to the active-reader lock, not a writer lease.
     pub fn try_read(&self) -> Result<LinCowCellReadTxn<'_, T, R, U, Charge>, OwnedWriteError> {
-        let active = match self.active.try_lock() {
-            Ok(active) => active,
-            Err(TryLockError::WouldBlock) => return Err(OwnedWriteError::Busy),
-            Err(TryLockError::Poisoned(_)) => return Err(OwnedWriteError::Poisoned),
-        };
+        let active = self.try_lock_active()?;
         Ok(LinCowCellReadTxn {
             _caller: self,
             work: active.clone(),
@@ -565,7 +595,7 @@ where
 
         // Perform every lock and ownership check before pre_commit transfers
         // node ownership. The shell stays private until it is initialized.
-        let mut rwguard = self.active.lock().unwrap();
+        let mut rwguard = self.lock_active();
         assert!(Shared::ptr_eq(&base, &guard.current));
         assert!(Shared::ptr_eq(&base, &rwguard));
         assert!(base.pin.get().is_none());
@@ -583,12 +613,12 @@ where
             .set(new_inner.clone())
             .unwrap_or_else(|_| unreachable!("original generation already has a successor"));
         guard.current = new_inner.clone();
-        *rwguard = new_inner;
+        **rwguard = new_inner;
         // No user charge destructor runs between ownership transfer and reader
         // publication, or under either physical lock. Its shell was already
         // freed before pre_commit.
-        drop(rwguard);
         drop(guard);
+        drop(rwguard);
         drop(base);
         drop(cursor_charge);
     }
@@ -622,7 +652,7 @@ where
     /// No allocation or user cleanup occurs on successful preparation.
     pub fn prepare_commit(self) -> LinCowCellPreparedCommit<'a, T, R, U, Charge> {
         let caller = self.caller;
-        let active = caller.active.lock().expect("original reader lock poisoned");
+        let active = caller.lock_active();
         self.prepare_with_active(active)
     }
 
@@ -632,17 +662,16 @@ where
         self,
     ) -> Result<LinCowCellPreparedCommit<'a, T, R, U, Charge>, (Self, OwnedWriteError)> {
         let caller = self.caller;
-        let active = match caller.active.try_lock() {
+        let active = match caller.try_lock_active() {
             Ok(active) => active,
-            Err(TryLockError::WouldBlock) => return Err((self, OwnedWriteError::Busy)),
-            Err(TryLockError::Poisoned(_)) => return Err((self, OwnedWriteError::Poisoned)),
+            Err(error) => return Err((self, error)),
         };
         Ok(self.prepare_with_active(active))
     }
 
     fn prepare_with_active(
         self,
-        active: MutexGuard<'a, Shared<LinCowCellInner<R, Charge>, Charge>>,
+        active: ActiveGuard<'a, R, Charge>,
     ) -> LinCowCellPreparedCommit<'a, T, R, U, Charge> {
         // Keep both guards before all cleanup owners if validation unwinds.
         let Self {
@@ -680,6 +709,19 @@ where
     /// Undo preparation without abandoning or reconstructing the original writer.
     /// Only the active-reader guard is released; the original writer stays held.
     pub fn abort(self) -> LinCowCellWriteTxn<'a, T, R, U, Charge> {
+        let (writer, release) = self.abort_retaining();
+        drop(release);
+        writer
+    }
+
+    /// Release the reader lock while retaining its notification for aggregate abort.
+    /// The returned writer owns the exact unpublished cursor and remains locked.
+    pub fn abort_retaining(
+        self,
+    ) -> (
+        LinCowCellWriteTxn<'a, T, R, U, Charge>,
+        crate::release::DeferredRelease,
+    ) {
         let Self {
             caller,
             guard,
@@ -688,14 +730,17 @@ where
             next,
             base,
         } = self;
-        drop(active);
-        LinCowCellWriteTxn {
-            caller,
-            guard,
-            work,
-            next,
-            base,
-        }
+        let ((), release) = active.release_deferred(drop);
+        (
+            LinCowCellWriteTxn {
+                caller,
+                guard,
+                work,
+                next,
+                base,
+            },
+            release,
+        )
     }
 
     /// Install the prepared successor without running any user destructor.
@@ -720,7 +765,7 @@ where
         // Each displaced Shared still has the original base owner, so these
         // assignments cannot reclaim a payload or invoke a charge destructor.
         guard.current = new_inner.clone();
-        *active = new_inner;
+        **active = new_inner;
         LinCowCellPublished {
             guard,
             active,
@@ -728,6 +773,7 @@ where
                 _engine: engine,
                 _base: base,
                 _cursor_charge: cursor_charge,
+                active_release: None,
             },
         }
     }
@@ -743,10 +789,10 @@ where
         let Self {
             guard,
             active,
-            retirement,
+            mut retirement,
         } = self;
-        drop(active);
         drop(guard);
+        retirement.active_release = Some(active.release_deferred(drop).1);
         retirement
     }
 }
@@ -819,11 +865,7 @@ impl<T, R, U, Charge> LinCowCellOwned<T, R, U, Charge> {
         if !Shared::ptr_eq(&self.root, &target.write) {
             return Ok(false);
         }
-        let active = match target.active.try_lock() {
-            Ok(active) => active,
-            Err(TryLockError::WouldBlock) => return Err(OwnedWriteError::Busy),
-            Err(TryLockError::Poisoned(_)) => return Err(OwnedWriteError::Poisoned),
-        };
+        let active = target.try_lock_active()?;
         Ok(Shared::ptr_eq(&self.base, &active))
     }
 }
@@ -1506,6 +1548,206 @@ mod identity_preparation_tests {
     fn tree() -> TreeCell {
         // The unique original tree is immediately installed in its linear owner.
         LinCowCell::new(unsafe { SuperBlock::new() })
+    }
+
+    #[test]
+    fn reader_wait_survives_refused_writer_release_and_registration_races() {
+        use std::{
+            future::Future,
+            pin::Pin,
+            task::{Context, Waker},
+        };
+        let cell = tree();
+        let foreign = tree();
+        let pinned = cell.read();
+        let active = cell.lock_active();
+        let observation = without_allocations(|| cell.observe_reader_release());
+        let mut wait = observation.clone().wait_for_release();
+        assert!(Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending());
+        let mut writer = cell.write();
+        writer.insert(1, 7);
+        let cursor = &*writer.work as *const _;
+        let (writer, error) = without_allocations(|| writer.try_prepare_commit())
+            .err()
+            .expect("actual reader mutex held");
+        assert_eq!(error, OwnedWriteError::Busy);
+        let owned = without_allocations(|| writer.detach());
+        assert_eq!(owned.as_ref() as *const _, cursor);
+        drop(pinned);
+        drop(foreign.read());
+        assert!(
+            Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending(),
+            "neither writer release, snapshot retirement nor another map releases this mutex"
+        );
+        let mut late = observation.wait_for_release();
+        drop(active);
+        assert!(Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready());
+        assert!(Pin::new(&mut late)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready());
+        let writer = cell
+            .try_write_owned(owned)
+            .unwrap_or_else(|_| panic!("same original owner"));
+        assert_eq!(&*writer.work as *const _, cursor);
+        drop(
+            writer
+                .try_prepare_commit()
+                .unwrap_or_else(|_| panic!("reader released"))
+                .publish()
+                .release(),
+        );
+        assert_eq!(cell.read().search(&1), Some(&7));
+        drop((cell, foreign));
+        assert_released();
+    }
+
+    #[test]
+    fn reader_release_covers_reads_advice_abort_and_both_commit_paths() {
+        use std::{
+            future::Future,
+            pin::Pin,
+            task::{Context, Waker},
+        };
+        let cell = tree();
+        let owned = cell.write().detach();
+        for mode in 0..6 {
+            let prepared = (mode >= 3).then(|| cell.write().prepare_commit());
+            let mut wait = cell.observe_reader_release().wait_for_release();
+            assert!(Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending());
+            match mode {
+                0 => drop(cell.read()),
+                1 => drop(cell.try_read().expect("native try read")),
+                2 => assert_eq!(owned.try_matches_current(&cell), Ok(true)),
+                3 => drop(prepared.unwrap().abort()),
+                4 => drop(prepared.unwrap()),
+                _ => {
+                    let retirement = without_allocations(|| prepared.unwrap().publish().release());
+                    assert!(cell.active.try_lock().is_ok());
+                    assert!(cell.write.try_lock().is_ok());
+                    assert!(
+                        Pin::new(&mut wait)
+                            .poll(&mut Context::from_waker(Waker::noop()))
+                            .is_pending(),
+                        "release retains notification with aggregate retirement"
+                    );
+                    drop(retirement);
+                }
+            }
+            assert!(Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready());
+        }
+        let mut wait = cell.observe_reader_release().wait_for_release();
+        cell.write().commit();
+        assert!(Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready());
+        drop((owned, cell));
+        assert_released();
+    }
+
+    #[test]
+    fn reader_abort_retains_notification_until_the_original_writer_releases() {
+        use std::{
+            future::Future,
+            pin::Pin,
+            task::{Context, Waker},
+        };
+        let cell = tree();
+        let mut writer = cell.write();
+        writer.insert(1, 17);
+        let cursor = &*writer.work as *const _;
+        let prepared = writer.prepare_commit();
+        let mut wait = cell.observe_reader_release().wait_for_release();
+        assert!(Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending());
+        let (writer, release) = without_allocations(|| prepared.abort_retaining());
+        assert_eq!(&*writer.work as *const _, cursor);
+        assert!(cell.active.try_lock().is_ok());
+        assert!(cell.write.try_lock().is_err());
+        assert!(Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending());
+        let owned = without_allocations(|| writer.detach());
+        assert!(cell.write.try_lock().is_ok());
+        assert!(Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending());
+        drop(release);
+        assert!(Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready());
+        let writer = cell
+            .try_write_owned(owned)
+            .unwrap_or_else(|_| panic!("original retry"));
+        assert_eq!(&*writer.work as *const _, cursor);
+        drop(writer.prepare_commit().publish().release());
+        assert_eq!(cell.read().search(&1), Some(&17));
+        drop(cell);
+        assert_released();
+    }
+
+    #[test]
+    fn reader_wake_unwind_preserves_physical_poison_and_original_commit() {
+        use std::{
+            future::Future,
+            pin::Pin,
+            task::{Context, Wake, Waker},
+        };
+        struct Probe {
+            cell: Arc<TreeCell>,
+            calls: AtomicUsize,
+        }
+        impl Wake for Probe {
+            fn wake(self: Arc<Self>) {
+                assert!(self.cell.active.try_lock().is_ok());
+                assert!(self.cell.write.try_lock().is_ok());
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                panic!("native reader wake interruption");
+            }
+        }
+        for retained in [false, true] {
+            let cell = Arc::new(tree());
+            let mut writer = cell.write();
+            writer.insert(1, 7);
+            let observation = cell.observe_reader_release();
+            let mut wait = observation.clone().wait_for_release();
+            let probe = Arc::new(Probe {
+                cell: Arc::clone(&cell),
+                calls: AtomicUsize::new(0),
+            });
+            let waker = Waker::from(Arc::clone(&probe));
+            assert!(Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending());
+            assert!(catch_unwind(AssertUnwindSafe(|| {
+                if retained {
+                    drop(writer.prepare_commit().publish().release());
+                } else {
+                    writer.commit();
+                }
+            }))
+            .is_err());
+            assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+            assert!(!cell.active.is_poisoned());
+            assert!(!cell.is_poisoned());
+            assert!(!observation.is_poisoned());
+            assert!(Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready());
+            assert_eq!(cell.read().search(&1), Some(&7));
+            drop((waker, probe, cell));
+            assert_released();
+        }
     }
 
     #[test]

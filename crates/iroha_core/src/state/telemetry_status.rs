@@ -325,7 +325,7 @@ mod tests {
         state
             .block_hashes
             .budget
-            .with_deferred_refund_notifications(|| {
+            .with_deferred_refund_notifications(|_| {
                 let map = state.block_hashes.map().unwrap();
                 let (work, _) = map
                     .try_insert_admitted(63, hash(73), |d| state.block_hashes.admit(d))

@@ -171,7 +171,7 @@ pub struct SignerCompletedOperationV1 {
     pub operation_id: [u8; 32],
     /// Exact original canonical action/request/audit-predecessor commitment.
     pub intent_digest: [u8; 32],
-    /// Original independent hardware-custody identity; retained through any later renewal.
+    /// Original independently approved signer identity; retained through any later renewal.
     pub original_custody: SignerOperationCustodyV1,
     /// Exact exclusive reservation under which completion committed.
     pub reservation: SignerOperationReservationV1,
@@ -365,7 +365,7 @@ pub fn signer_release_manifest_response_digest_v1(
 /// `completion` must already be authenticated against a pinned finalized operation-state source;
 /// `current` must come from an independently authenticated fresh custody source and trusted clock.
 /// Neither may be filled from candidate receipt fields or inferred from the role-key signature.
-/// The verifier performs no I/O and neither acquires nor imports a hardware/private key.
+/// The verifier performs no I/O and neither acquires nor imports a private key.
 ///
 /// # Errors
 /// Rejects malformed/tampered bytes, wrong purpose/key/manifest, self-attested or inactive custody,

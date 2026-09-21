@@ -2709,3 +2709,6 @@ fn storage_writer_identity_refusal_precedes_policies_and_preserves_retry() {
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[path = "capture.rs"]
+mod capture;

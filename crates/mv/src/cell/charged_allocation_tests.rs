@@ -155,7 +155,7 @@ fn detached_abort_keeps_original_journal_and_publish_never_returns_generation_ch
         .unwrap_or_else(|_| panic!("complete paid installation"));
     assert_eq!(budget.reserved_bytes(), 2 * pair);
     assert_eq!(*cell.view(), 10);
-    let journal = prepared.abort();
+    let journal = prepared.abort().0;
     assert_eq!(budget.reserved_bytes(), 2 * pair);
     assert_eq!(
         std::ptr::from_ref(journal.touched_value().unwrap().before),
@@ -333,6 +333,7 @@ fn refusal_and_writer_contention_return_original_charged_journal_without_extra_c
         Err((
             journal,
             PublicationPreparationError::Admission(AllocationRefusal::Capacity { .. }),
+            _,
         )) => journal,
         _ => panic!("finite refusal must return original journal"),
     };
@@ -347,7 +348,7 @@ fn refusal_and_writer_contention_return_original_charged_journal_without_extra_c
     copies.store(0, SeqCst);
     let before = budget.reserved_bytes();
     let journal = match journal.try_prepare_publication(&cell, |_, _| Ok::<_, ()>(())) {
-        Err((journal, PublicationPreparationError::Busy(_))) => journal,
+        Err((journal, PublicationPreparationError::Busy(_), _)) => journal,
         _ => panic!("first writer contention must return original journal"),
     };
     assert_eq!(copies.load(SeqCst), 0);
@@ -361,7 +362,7 @@ fn refusal_and_writer_contention_return_original_charged_journal_without_extra_c
     copies.store(0, SeqCst);
     let before = budget.reserved_bytes();
     let journal = match journal.try_prepare_publication(&cell, |_, _| Ok::<_, ()>(())) {
-        Err((journal, PublicationPreparationError::Busy(_))) => journal,
+        Err((journal, PublicationPreparationError::Busy(_), _)) => journal,
         _ => panic!("second writer contention must return original journal"),
     };
     assert_eq!(
@@ -472,10 +473,11 @@ fn first_undo_clone_panic_wakes_existing_busy_waiter_and_retains_original_succes
             4 * pair,
             "both charges were admitted before the first clone"
         );
-        let (journal, error) = journal
+        let (journal, error, _cleanup) = journal
             .try_prepare_publication(&cell, |_, _| Ok::<_, ()>(()))
             .err()
             .expect("original undo writer is still inside Clone");
+        drop(_cleanup);
         let PublicationPreparationError::Busy(observation) = error else {
             panic!("must observe busy before the clone panic");
         };
@@ -494,10 +496,11 @@ fn first_undo_clone_panic_wakes_existing_busy_waiter_and_retains_original_succes
         assert!(Pin::new(&mut wait).poll(&mut context).is_ready());
         journal
     });
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&cell, |_, _| Ok::<_, ()>(()))
         .err()
         .expect("poisoned original writer requires recovery");
+    drop(_cleanup);
     assert_eq!(error, PublicationPreparationError::Poisoned);
     assert_eq!(
         std::ptr::from_ref(journal.touched_value().unwrap().before),

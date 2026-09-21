@@ -303,6 +303,9 @@ Verifier behavior (native STARK)
 	- `ProofBox.bytes` (outer payload): Norito `OpenVerifyEnvelope` with:
 	  - `backend = BackendTag::Stark`
 	  - `circuit_id = "stark/fri/<profile>:<circuit>"` (application-level identifier)
+	  - The only profile is `poseidon-x7-goldilocks-6x64-v1`. Generic admission requires the exact backend-prefixed colon form with a nonempty portable circuit suffix. Bare, slash-separated and whitespace-padded forms are rejected.
+	  - Registry circuit IDs, verifier-key payload IDs, envelope IDs and native AIR IDs compare byte-for-byte; the key cache retains that exact identity. No normalization or alias lookup occurs.
+	  - Typed BFV and Soracloud keys retain their exact protocol-owned bare IDs and dedicated native verifier contracts. Profile-prefixed copies of those typed registry IDs are rejected even if their record and key payload agree. Typed keys confer no generic OpenVerify admission. A typed Soracloud binding AIR uses the exact profile-qualified projection of its already validated protocol ID, with no normalization of proof bytes.
 	  - `vk_hash = sha256("iroha:zk:v1:vk" || len(backend) || backend || len(vk_bytes) || vk_bytes)`
 	  - `public_inputs = schema descriptor bytes` (stable policy-defined layout commitment)
 	  - `proof_bytes = norito(StarkFriOpenProofV1 { version, public_inputs, envelope_bytes })`

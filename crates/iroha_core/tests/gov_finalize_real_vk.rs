@@ -5,6 +5,8 @@
 
 #[path = "common/governance_closed_registry.rs"]
 mod closed_registry;
+#[path = "common/governance_closed_state.rs"]
+mod closed_state;
 
 use iroha_core::{smartcontracts::Execute, state::WorldReadOnly, zk::ZK_BACKEND_HALO2_IPA};
 use iroha_data_model::{
@@ -18,11 +20,11 @@ use nonzero_ext::nonzero;
 
 #[test]
 fn zk_finalize_rejects_unqualified_tally_keys_without_mutating_state() {
-    let state = closed_registry::state();
+    let state = closed_state::state();
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     for circuit_id in ["halo2/pasta/ipa/vote-tally", "halo2/pasta/tiny-add-public"] {
         let mut transaction = block.transaction();
-        closed_registry::grant_permissions(&mut transaction, "ref-final");
+        closed_state::grant_permissions(&mut transaction, "ref-final");
         let (id, record) = closed_registry::unqualified_key(circuit_id);
         let mut retained = closed_registry::retained_election(&id, &record);
         retained.ballot_nullifiers.insert([0x44; 32]);

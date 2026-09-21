@@ -548,7 +548,7 @@ async fn authenticated_bound_payload_rejects_in_place_change_before_decode() {
         .and_then(|mut file| file.write_all(b"malicious"))
         .expect("replace bytes in the already-open inode");
     assert!(matches!(
-        read_bound_snapshot_payload(&binding),
+        read_bound_snapshot_payload(&binding, &snapshot_read_budget_for_testing()),
         Err(TryReadError::SnapshotBindingChanged(changed)) if changed == path
     ));
 }
@@ -634,6 +634,7 @@ async fn snapshot_publication_defers_without_checkpoint_and_selects_nothing() {
             &state.zk_snapshot(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
+            &snapshot_read_budget_for_testing(),
         )
         .is_err(),
         "restart must not select a rejected unpublished generation"
@@ -738,6 +739,7 @@ async fn snapshot_publication_accepts_complete_authenticated_tuple() {
         &state.zk_snapshot(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("post-height snapshot must remain exactly restart-readable");
     SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| {
@@ -1639,6 +1641,7 @@ pub(super) fn write_snapshot_bundle_from_bytes(
         defaults::snapshot::MAX_PAYLOAD_BYTES,
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("publish canonical test pointer");
 }
@@ -1675,4 +1678,8 @@ fn seed_snapshot_genesis_resolver_checkpoint(state: &State) {
             .insert(revision, checkpoint);
     }
     world.commit();
+}
+
+fn snapshot_read_budget_for_testing() -> AllocationBudget {
+    AllocationBudget::new(iroha_config::parameters::defaults::snapshot::MAX_READ_BUFFER_BYTES.get())
 }

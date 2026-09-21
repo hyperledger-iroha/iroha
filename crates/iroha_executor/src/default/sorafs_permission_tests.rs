@@ -931,4 +931,6 @@ mod sorafs_permission_tests {
     include!("sccp_route_governance_permission_tests.rs");
     include!("governance_query_tail_tests.rs");
     include!("stream_token_custody_permission_tests.rs");
+    include!("final_promotion_permission_tests.rs");
+    include!("final_promotion_account_permission_tests.rs");
 }

@@ -1,4 +1,4 @@
-//! Exact shared payload admission; structural claims do not qualify hardware or token release.
+//! Exact shared payload admission; structural claims do not authorize token release.
 use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
 
@@ -19,8 +19,8 @@ fn fixture() -> (StreamTokenBodyV1, SignerCustodyBindingV1) {
     let binding = SignerCustodyBindingV1 {
         chain_id: "sorafs-reference".into(),
         network_id: [0x11; 32],
-        runtime_handle: "hsm://sorafs/stream/primary".into(),
-        key_handle: "pkcs11:production/stream/key-7".into(),
+        runtime_handle: "software://sorafs/stream/primary".into(),
+        key_handle: "software://production/stream/key-7".into(),
         service_id: "stream-primary".into(),
         administrator_id: "stream-security-primary".into(),
         role: SignerRoleV1::StreamToken,

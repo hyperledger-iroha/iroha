@@ -1,6 +1,58 @@
 //! Exact historical selection, bounded canonical decoding and no-write read regressions.
 use super::*;
 #[test]
+fn orphan_first_use_key_indexes_reject_fresh_custody_configuration() {
+    for keep_signer in [false, true] {
+        let mut f = fixture();
+        configure(&mut f);
+        let mut next = f.policy.clone();
+        next.binding.public_key = key(8).public_key().clone();
+        next.attester_public_key = key(9).public_key().clone();
+        transact(&mut f.state, 2_000, |tx| {
+            let old = read_active(tx.world(), f.provider).unwrap().unwrap();
+            for key in [
+                head_key(f.provider),
+                record_key(f.provider, 1),
+                height_key(f.provider, old.index.height, old.index.ordinal),
+                key_path(
+                    f.provider,
+                    !keep_signer,
+                    if keep_signer {
+                        &f.policy.attester_public_key
+                    } else {
+                        &f.policy.binding.public_key
+                    },
+                )
+                .unwrap(),
+            ] {
+                tx.world.smart_contract_state.remove(key);
+            }
+            assert!(read_active(tx.world(), f.provider).is_err());
+            let before = tx
+                .world()
+                .smart_contract_state()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            let fresh = MutateSorafsStreamTokenCustody {
+                provider_id: f.provider,
+                expected_revision: 0,
+                expected_digest: [0; 32],
+                action: Action::Configure(encode(&next).unwrap()),
+            };
+            assert!(fresh.execute(&f.authority, tx).is_err());
+            assert_eq!(
+                tx.world()
+                    .smart_contract_state()
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+                before
+            );
+        });
+    }
+}
+#[test]
 fn reader_rejects_wrong_scope_missing_height_and_does_not_mutate_on_repeated_admission() {
     let mut f = fixture();
     configure(&mut f);
@@ -34,6 +86,28 @@ fn reader_rejects_wrong_scope_missing_height_and_does_not_mutate_on_repeated_adm
     assert_eq!(
         read_stream_token_custody_control_at_v1(&f.state.view(), &f.policy.binding, 2),
         Err(Error::HeightUnavailable)
+    );
+    let mut wrong = f.policy.binding.clone();
+    wrong.role = SignerRoleV1::FinalPromotionProvenance;
+    assert_eq!(
+        read_stream_token_custody_control_at_v1(&f.state.view(), &wrong, 1),
+        Err(Error::BindingMismatch)
+    );
+    wrong.purpose = SignerPurposeBindingV1::FinalPromotionProvenance {
+        deployment_id: "production-primary".into(),
+    };
+    assert_eq!(
+        read_stream_token_custody_control_at_v1(&f.state.view(), &wrong, 1),
+        Err(Error::BindingMismatch)
+    );
+    let mut wrong = f.policy.binding.clone();
+    wrong.purpose = SignerPurposeBindingV1::StreamToken {
+        provider_id: [88; 32],
+    };
+    assert_eq!(
+        read_stream_token_custody_control_at_v1(&f.state.view(), &wrong, 1),
+        Ok(None),
+        "an unconfigured provider must not resolve another provider's custody"
     );
     let mut wrong = f.policy.binding.clone();
     wrong.network_id = [88; 32];

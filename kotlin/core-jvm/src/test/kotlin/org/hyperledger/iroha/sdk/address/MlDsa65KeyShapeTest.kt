@@ -169,12 +169,14 @@ class MlDsa65KeyShapeTest {
         assertContentEquals(valid, decodedCompact.keyBytes)
 
         for ((name, invalid) in invalidMlDsa65Keys()) {
-            assertFailsWith<IllegalArgumentException>(name) {
+            val literalError = assertFailsWith<AccountAddressException>(name) {
                 encodePublicKeyMultihash(0x02, invalid)
             }
-            assertFailsWith<IllegalArgumentException>(name) {
+            assertEquals(AccountAddressErrorCode.INVALID_PUBLIC_KEY, literalError.code, name)
+            val compactError = assertFailsWith<AccountAddressException>(name) {
                 compactPublicKeyPayload(0x02, invalid)
             }
+            assertEquals(AccountAddressErrorCode.INVALID_PUBLIC_KEY, compactError.code, name)
             assertNull(decodePublicKeyLiteral(rawMlDsaLiteral(invalid)), name)
             assertNull(decodeCompactPublicKeyPayload(byteArrayOf(4) + invalid), name)
         }
