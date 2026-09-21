@@ -9,7 +9,9 @@
 use core::fmt::Debug;
 /// Finite prepaid custody for explicitly enumerated allocation layouts.
 pub mod allocation;
+mod capture;
 mod publication;
+pub use capture::{BlockCapture, CaptureCleanup};
 use concread::release::{ReleaseGuard, ReleaseNotification, ReleaseWait};
 pub use publication::{
     BlockPublicationIdentity, PublicationCleanup, PublicationPreparationError,
@@ -66,3 +68,6 @@ pub trait Key: Clone + Ord + Debug + Send + Sync + 'static {}
 pub trait Value: Clone + Send + Sync + 'static {}
 impl<T: Clone + Ord + Debug + Send + Sync + 'static> Key for T {}
 impl<T: Clone + Send + Sync + 'static> Value for T {}
+
+#[cfg(test)]
+mod capture_tests;

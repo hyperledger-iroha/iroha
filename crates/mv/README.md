@@ -246,3 +246,13 @@ CurrentReplacement abandonment, detachment and publication-lock acquisition.
 Known undo poison rejects before waiting for current. Canonical current/undo
 JSON fields are unchanged. See the [Cell custody record](../../docs/history/2026-09-21/cell-pair-custody.md)
 for measured scope and remaining aggregate boundaries.
+
+Aggregates construct every `BlockAcquisitionSlot` before initializing any field.
+`BlockAcquisition::initialize` stores each actual acquisition and completed
+private generation in that caller-owned slot before further fallible work.
+`BlockAcquisition::release` and `BlockRetirement::release_writers` unlock without
+reclaiming retained values or notifying. Release all siblings first, then drop
+their slots/blocks. Explicit retirement is terminal: it does not create detached
+publication authority and cannot resume a failed edit. Ordinary standalone
+constructors use this same kernel. World capture/commit and enclosing State
+transfers still need their own aggregate lifecycle integration.
