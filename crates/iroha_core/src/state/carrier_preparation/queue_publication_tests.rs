@@ -218,3 +218,103 @@ fn assert_signed_retirement_publication(
     drop(queue.try_lock_lane_retirement_observer().unwrap());
     assert!(state.state_commit_lock.try_lock_or_wait().is_ok());
 }
+
+#[test]
+fn state_fence_refusal_defers_callbacks_through_original_queue_and_kura() {
+    struct Reenter {
+        state: Arc<State>,
+        queue: Arc<Queue>,
+        blocked: &'static str,
+        wakes: AtomicUsize,
+    }
+    impl Wake for Reenter {
+        fn wake(self: Arc<Self>) {
+            assert_fences_free_except(&self.state, self.blocked);
+            assert!(self.state.kura.try_publication_lease().is_ok());
+            assert!(
+                self.queue
+                    .try_lock_lane_retirement_observer()
+                    .unwrap()
+                    .try_into_cut()
+                    .is_ok()
+            );
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let (boxed, mut decision, queue) = fixture_lifecycle_decision_with_retirement(Some(false));
+    let state: Arc<State> = boxed.into();
+    let (events, _) = tokio::sync::broadcast::channel(8);
+    let service = V2ApplyService::new(
+        Arc::clone(&state),
+        Arc::clone(&queue),
+        Arc::clone(&state.kura),
+        None,
+        None,
+        state.sumeragi_block_cadence(),
+        iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        events,
+        Vec::new(),
+    );
+    let source = service.carrier_queue_source();
+    let wire = decision.block().encode_wire().unwrap();
+    let generation = state.state_view_generation();
+    for blocked in ["lane_lifecycle_lock", "state_write_lock"] {
+        // Retain the first actual notification, allowing the next acquisition's
+        // release to wake an already registered observer of this same mutex.
+        let first = state.state_commit_lock.lock();
+        let mut wait = state
+            .state_commit_lock
+            .try_lock_or_wait()
+            .err()
+            .unwrap()
+            .wait_for_release();
+        let first_retirement = first.release_deferred();
+        let callback = Arc::new(Reenter {
+            state: Arc::clone(&state),
+            queue: Arc::clone(&queue),
+            blocked,
+            wakes: AtomicUsize::new(0),
+        });
+        let waker = Waker::from(Arc::clone(&callback));
+        assert!(
+            Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        let held = hold(&state, blocked);
+        let (retry, error) = decision
+            .try_prepare_physical(&state, Some(&source), |_, _| Ok::<_, Infallible>(()))
+            .err()
+            .expect("exact State owner is busy");
+        let CarrierPhysicalPreparationError::Fence {
+            field,
+            wait: actual_wait,
+        } = error
+        else {
+            panic!("expected State refusal")
+        };
+        assert_eq!(field, blocked);
+        assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
+        assert!(
+            Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+        );
+        assert_eq!(retry.block().encode_wire().unwrap(), wire);
+        assert_eq!(state.state_view_generation(), generation);
+        drop(held);
+        assert!(
+            Pin::new(&mut actual_wait.wait_for_release())
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+        );
+        drop(wait);
+        drop(first_retirement);
+        decision = retry;
+    }
+    drop(
+        decision
+            .try_prepare_physical(&state, Some(&source), |_, _| Ok::<_, Infallible>(()))
+            .unwrap_or_else(|(_, error)| panic!("same original retry: {error:?}")),
+    );
+}

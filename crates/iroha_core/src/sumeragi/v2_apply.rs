@@ -5151,8 +5151,9 @@ impl V2ApplyService {
             dataspace_id,
             lane_incarnation,
         );
+        let queue_cleanup = queue_retirement_cut.release_deferred();
         drop(lifecycle_guard);
-        drop(queue_retirement_cut);
+        drop(queue_cleanup);
         result
     }
     fn validate_autoscale_retirement_queue_binding(
@@ -6178,6 +6179,109 @@ mod output_validation_diagnostic_tests {
                 panic!("empty failure diagnostics must preserve validation classification")
             };
             assert_eq!(actual, error.to_string());
+        }
+    }
+}
+
+#[cfg(test)]
+mod retirement_release_tests {
+    //! Actual autoscale validation releases Queue and lifecycle before callbacks.
+    use super::*;
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::atomic::{AtomicUsize, Ordering},
+        task::{Context, Wake, Waker},
+    };
+
+    #[test]
+    fn autoscale_queue_scan_and_refusal_release_lifecycle_before_queue_wake() {
+        struct Reenter {
+            state: Arc<State>,
+            queue: Arc<Queue>,
+            wakes: AtomicUsize,
+        }
+        impl Wake for Reenter {
+            fn wake(self: Arc<Self>) {
+                assert!(self.state.try_lock_lane_lifecycle_work_admission().is_ok());
+                assert!(self.queue.try_lock_lane_retirement_observer().is_ok());
+                self.wakes.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        // This check observes Queue ownership and lifecycle only; no carrier
+        // execution, consensus source or publication authorization is supplied.
+        #[inline(never)]
+        fn fixture_state() -> Arc<State> {
+            Arc::new(State::new_for_testing(
+                crate::state::World::default(),
+                Kura::blank_kura_for_testing(),
+                crate::query::store::LiveQueryStore::start_test(),
+            ))
+        }
+        let state = fixture_state();
+        let (events, _) = tokio::sync::broadcast::channel(8);
+        let queue = Arc::new(Queue::from_config(
+            iroha_config::parameters::actual::Queue::default(),
+            events.clone(),
+        ));
+        let service = V2ApplyService::new(
+            Arc::clone(&state),
+            Arc::clone(&queue),
+            state.kura_handle(),
+            None,
+            None,
+            state.sumeragi_block_cadence(),
+            iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            events,
+            Vec::new(),
+        );
+        for held in [None, Some(false), Some(true)] {
+            let observer = queue.try_lock_lane_retirement_observer().unwrap();
+            let mut wait = queue
+                .try_lock_lane_retirement_observer()
+                .err()
+                .unwrap()
+                .wait_for_release();
+            let initial = observer.release_deferred();
+            let lifecycle = state.lock_lane_lifecycle_work_admission();
+            let mut lifecycle_wait = state
+                .try_lock_lane_lifecycle_work_admission()
+                .err()
+                .unwrap()
+                .wait_for_release();
+            let initial_lifecycle = lifecycle.release_deferred();
+            let callback = Arc::new(Reenter {
+                state: Arc::clone(&state),
+                queue: Arc::clone(&queue),
+                wakes: AtomicUsize::new(0),
+            });
+            let waker = Waker::from(Arc::clone(&callback));
+            for waiting in [&mut wait, &mut lifecycle_wait] {
+                assert!(
+                    Pin::new(waiting)
+                        .poll(&mut Context::from_waker(&waker))
+                        .is_pending()
+                );
+            }
+            let result =
+                crate::queue::tests::with_retirement_inner_fence_for_test(&queue, held, || {
+                    service.try_validate_autoscale_retirement_queue_binding(
+                        LaneId::new(1),
+                        DataSpaceId::UNIVERSAL,
+                        Hash::new(b"original incarnation"),
+                    )
+                });
+            assert_eq!(result.is_ok(), held.is_none(), "{result:?}");
+            assert_eq!(callback.wakes.load(Ordering::SeqCst), 2);
+            for waiting in [&mut wait, &mut lifecycle_wait] {
+                assert!(
+                    Pin::new(waiting)
+                        .poll(&mut Context::from_waker(Waker::noop()))
+                        .is_ready()
+                );
+            }
+            drop((wait, lifecycle_wait));
+            drop((initial, initial_lifecycle));
         }
     }
 }

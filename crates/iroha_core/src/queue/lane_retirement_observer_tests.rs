@@ -84,6 +84,43 @@ mod lane_retirement_observer {
     }
 
     #[test]
+    fn refused_cut_retains_original_notifications_through_outer_fence() {
+        use crate::publication_lock::PublicationMutex;
+        struct Reenter { queue: Arc<Queue>, outer: Arc<PublicationMutex>, wakes: AtomicUsize }
+        impl Wake for Reenter {
+            fn wake(self: Arc<Self>) {
+                assert!(self.outer.try_lock_or_wait().is_ok());
+                assert!(self.queue.lane_reservation_transition_lock.try_lock_or_wait().is_ok());
+                assert!(self.queue.push_remove_lock.try_lock_or_wait().is_ok());
+                assert!(self.queue.lane_reservations.try_lock_or_wait().is_ok());
+                self.wakes.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        for reservations in [false, true] {
+            let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+            let queue = Arc::new(Queue::test(config_factory(), &time_source));
+            let outer = Arc::new(PublicationMutex::default());
+            let observer = queue.try_lock_lane_retirement_observer().unwrap();
+            let guard = outer.lock();
+            let mut wait = waiting(&queue).wait_for_release();
+            let callback = Arc::new(Reenter { queue: Arc::clone(&queue), outer: Arc::clone(&outer), wakes: AtomicUsize::new(0) });
+            let waker = Waker::from(Arc::clone(&callback));
+            assert!(Pin::new(&mut wait).poll(&mut Context::from_waker(&waker)).is_pending());
+            let mutation = (!reservations).then(|| queue.push_remove_lock.lock());
+            let reservation = reservations.then(|| queue.lane_reservations.lock());
+            let (error, cleanup) = observer.try_into_cut().err().expect("held inner owner");
+            assert_eq!(error.field, if reservations { "lane_reservations" } else { "push_remove_lock" });
+            assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
+            drop((mutation, reservation));
+            assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
+            drop(guard);
+            drop(cleanup);
+            assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
+            assert!(Pin::new(&mut wait).poll(&mut Context::from_waker(Waker::noop())).is_ready());
+        }
+    }
+
+    #[test]
     fn cut_waits_on_exact_inner_owner_and_releases_every_attempted_guard() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
@@ -888,5 +925,14 @@ mod replay_terminal_custody {
         fixture.assert_restored_fifo_owner();
         assert!(poll_lane_retirement_release(&mut wait).is_pending());
         assert!(!fixture.queue.transaction_selection_durability_faulted());
+    }
+}
+
+/// Run a regression while one actual inner retirement mutex is held.
+pub(crate) fn with_retirement_inner_fence_for_test<R>(queue: &Queue, reservations: Option<bool>, run: impl FnOnce() -> R) -> R {
+    match reservations {
+        Some(true) => { let _held = queue.lane_reservations.lock(); run() },
+        Some(false) => { let _held = queue.push_remove_lock.lock(); run() },
+        None => run(),
     }
 }

@@ -210,8 +210,8 @@ mod tests {
     use iroha_schema::{MetaMap, Metadata};
     mod final_promotion;
     mod final_promotion_account_custody;
-    mod stream_token_custody;
     mod privacy_qualification;
+    mod stream_token_custody;
     fn generate_test_map() -> BTreeMap<core::any::TypeId, String> {
         let mut map = BTreeMap::new();
         macro_rules! insert_into_test_map {

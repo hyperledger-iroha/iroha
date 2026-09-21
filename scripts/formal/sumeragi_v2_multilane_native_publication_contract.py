@@ -47,14 +47,7 @@ BINDINGS = (
         "if usize::try_from(plan.manifest_leaf_count).ok() != Some(identities.len())",
         "Some(Self {\n            original_kura,",
     )),
-    (NATIVE, LEASE, "method", CUSTODY, (
-        "let prune = self.prune_lock.lock();",
-        "let canonical = self.canonical_chain_lock.lock();",
-        "let geometry = self.lane_geometry_lock.lock();",
-        "let sidecar = self.sidecar_lock.lock();",
-        "let result = self.reauthenticate_native_amx_prepublication_under_publication_guards(\n            token, block, manifest, finality, frontiers,\n        );",
-        "drop(sidecar);\n        drop(geometry);\n        drop(canonical);\n        drop(prune);\n        result",
-    )),
+    (NATIVE, LEASE, "method", CUSTODY, ('fn reauthenticate_native_amx_prepublication(\n        &self,\n        token: &super::NativeAmxParticipantApplicationPrepublicationToken,\n        block: &super::SignedBlock,\n        manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,\n        finality: &super::V2FinalityArtifact,\n        frontiers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],\n    ) -> super::Result<()> {\n        self.ensure_canonical_storage_not_poisoned()?;\n        let mut fences = AcquiredKuraPublicationFences::new(self);\n        fences.prune = Some(self.prune_lock.lock());\n        self.ensure_prune_recovery_not_required()?;\n        fences.canonical = Some(self.canonical_chain_lock.lock());\n        fences.geometry = Some(self.lane_geometry_lock.lock());\n        fences.sidecar = Some(self.sidecar_lock.lock());\n        let result = self.reauthenticate_native_amx_prepublication_under_publication_guards(\n            token, block, manifest, finality, frontiers,\n        );\n        drop(fences);\n        result\n    }',)),
     (NATIVE, LEASE, "method", CUSTODY_GUARDED, (
         "if !token.original_kura.matches(self) {\n            return Err(",
         "if !token.authenticates_state_frontiers(block, manifest, finality, frontiers) {\n            return Err(",
@@ -286,12 +279,12 @@ def validate_participant_custody(items, errors):
     """Keep original identity/readback and lock release before live State staging."""
     wrapper = _code(items.get(CUSTODY, ""))
     order = (
-        "let prune = self.prune_lock.lock();",
-        "let canonical = self.canonical_chain_lock.lock();",
-        "let geometry = self.lane_geometry_lock.lock();",
-        "let sidecar = self.sidecar_lock.lock();",
+        "fences.prune = Some(self.prune_lock.lock());",
+        "fences.canonical = Some(self.canonical_chain_lock.lock());",
+        "fences.geometry = Some(self.lane_geometry_lock.lock());",
+        "fences.sidecar = Some(self.sidecar_lock.lock());",
         "let result = self.reauthenticate_native_amx_prepublication_under_publication_guards(",
-        "drop(sidecar);", "drop(geometry);", "drop(canonical);", "drop(prune);",
+        "drop(fences);",
     )
     positions = [wrapper.find(_code(token)) for token in order]
     if -1 in positions or positions != sorted(positions):

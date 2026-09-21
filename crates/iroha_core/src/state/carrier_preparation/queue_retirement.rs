@@ -154,7 +154,9 @@ impl<'queue> CarrierQueueRetirement<'queue> {
             }),
             Err(error) => Err((
                 error,
-                QueueRetirementCleanup(cut.release_deferred().map(Some)),
+                QueueRetirementCleanup {
+                    released: cut.release_deferred().map(Some),
+                },
             )),
         }
     }

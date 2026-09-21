@@ -58,6 +58,19 @@ impl ReleaseNotification {
         }
     }
 
+    /// Retain any number of actual releases of this source in constant space.
+    /// An empty batch emits no notification. Each release must be transferred
+    /// by its original guard; this constructor grants no authority to signal.
+    pub fn deferred_batch(&self) -> DeferredReleaseBatch {
+        DeferredReleaseBatch {
+            notification: ReleaseNotification {
+                state: Arc::clone(&self.state),
+            },
+            released: false,
+            poisoned: false,
+        }
+    }
+
     /// Bind a physical guard to notification after its actual release.
     /// Read guards and locks without poisoning use this form: their unwind does
     /// not turn later ordinary contention into a poisoned-writer failure.
@@ -279,6 +292,26 @@ pub struct DeferredRelease {
     poisoned: bool,
 }
 
+/// Bounded custody of actual releases from one original physical lock.
+///
+/// All recorded releases remain deferred until this owner drops. They coalesce
+/// into one wake hint: waiters must still reacquire and authenticate the lock.
+/// Recording does not allocate, invoke callbacks, or create another source.
+#[must_use = "retain recorded releases through all enclosing physical owners"]
+pub struct DeferredReleaseBatch {
+    notification: ReleaseNotification,
+    released: bool,
+    poisoned: bool,
+}
+
+impl Drop for DeferredReleaseBatch {
+    fn drop(&mut self) {
+        if self.released {
+            self.notification.released(self.poisoned);
+        }
+    }
+}
+
 impl Drop for DeferredRelease {
     fn drop(&mut self) {
         self.notification.released(self.poisoned);
@@ -286,6 +319,42 @@ impl Drop for DeferredRelease {
 }
 
 impl<'owner, T> ReleaseGuard<'owner, T> {
+    /// Release this actual guard into a batch of the same original source.
+    /// A foreign batch returns the unchanged guard without calling `release`.
+    /// The callback must unlock the physical owner on success and unwind;
+    /// returned values may retain cleanup but never the physical guard.
+    /// Acquisition poison is recorded before any later cleanup can unwind.
+    pub fn try_release_into<R>(
+        mut self,
+        batch: &mut DeferredReleaseBatch,
+        release: impl FnOnce(T) -> R,
+    ) -> Result<R, Self> {
+        if !Arc::ptr_eq(&self.notification.state, &batch.notification.state) {
+            return Err(self);
+        }
+        struct Record<'a> {
+            batch: &'a mut DeferredReleaseBatch,
+            poison_on_unwind: bool,
+        }
+        impl Drop for Record<'_> {
+            fn drop(&mut self) {
+                self.batch.released = true;
+                self.batch.poisoned |= self.poison_on_unwind && std::thread::panicking();
+            }
+        }
+        // On callback unwind the original physical owner drops before this
+        // record. The batch remains in its caller's aggregate throughout.
+        let record = Record {
+            batch,
+            poison_on_unwind: self.poison_on_unwind,
+        };
+        let inner = self.inner.take().expect("owned release guard");
+        let _transferred = std::mem::ManuallyDrop::new(self);
+        let result = release(inner);
+        drop(record);
+        Ok(result)
+    }
+
     /// Release a physical owner now, retaining its original notification by value.
     /// The callback must release the physical guard on success and unwind. Normal
     /// release allocates nothing and runs no wake callback; the returned owner is
@@ -302,6 +371,97 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
         let retained = retirement.inner.take().expect("owned release retirement");
         let _transferred = std::mem::ManuallyDrop::new(retirement);
         (retained, notification)
+    }
+
+    /// Release this actual guard into its original batch with an exact poison verdict.
+    /// A foreign batch returns the unchanged guard without invoking either callback.
+    /// `release` must unlock on success and unwind; `observe_poison` must inspect
+    /// only the corresponding native mutex and cannot invoke user code.
+    pub fn try_release_into_observed<R>(
+        mut self,
+        batch: &mut DeferredReleaseBatch,
+        release: impl FnOnce(T) -> R,
+        observe_poison: impl Fn() -> bool,
+    ) -> Result<R, Self> {
+        if !Arc::ptr_eq(&self.notification.state, &batch.notification.state) {
+            return Err(self);
+        }
+        struct Record<'a, F: Fn() -> bool> {
+            batch: &'a mut DeferredReleaseBatch,
+            observe_poison: F,
+        }
+        impl<F: Fn() -> bool> Drop for Record<'_, F> {
+            fn drop(&mut self) {
+                self.batch.released = true;
+                self.batch.poisoned |= (self.observe_poison)();
+            }
+        }
+        let record = Record {
+            batch,
+            observe_poison,
+        };
+        let inner = self.inner.take().expect("original physical guard");
+        let _transferred = std::mem::ManuallyDrop::new(self);
+        let result = release(inner);
+        drop(record);
+        Ok(result)
+    }
+
+    /// Change ownership phase while the caller retains original unwind notification.
+    ///
+    /// The outer error returns a foreign-batch guard untouched. The inner result
+    /// transfers the original notification with either the new or refused guard.
+    /// Only a callee unwind records a release in `batch`, after `consume` has
+    /// destroyed its physical guard. Completed payloads and unused charges must
+    /// already belong to the caller's acquisition slot before another conversion.
+    /// `observe_poison` inspects only this original native mutex and cannot panic.
+    pub fn try_map_preserving_release_into<R, E>(
+        mut self,
+        batch: &mut DeferredReleaseBatch,
+        consume: impl FnOnce(T) -> Result<R, (T, E)>,
+        observe_poison: impl Fn() -> bool,
+    ) -> Result<Result<ReleaseGuard<'owner, R>, (Self, E)>, Self> {
+        if !Arc::ptr_eq(&self.notification.state, &batch.notification.state) {
+            return Err(self);
+        }
+        struct Record<'a, F: Fn() -> bool> {
+            batch: &'a mut DeferredReleaseBatch,
+            observe_poison: F,
+            armed: bool,
+        }
+        impl<F: Fn() -> bool> Drop for Record<'_, F> {
+            fn drop(&mut self) {
+                if self.armed {
+                    self.batch.released = true;
+                    self.batch.poisoned |= (self.observe_poison)();
+                }
+            }
+        }
+        let mut record = Record {
+            batch,
+            observe_poison,
+            armed: true,
+        };
+        let inner = self.inner.take().expect("original physical guard");
+        let transferred = std::mem::ManuallyDrop::new(self);
+        let result = consume(inner);
+        record.armed = false;
+        drop(record);
+        Ok(match result {
+            Ok(inner) => Ok(ReleaseGuard {
+                inner: Some(inner),
+                notification: transferred.notification,
+                poison_on_unwind: transferred.poison_on_unwind,
+            }),
+            Err((inner, error)) => Err((
+                Self {
+                    inner: Some(inner),
+                    notification: transferred.notification,
+                    poison_on_unwind: transferred.poison_on_unwind,
+                },
+                error,
+            )),
+        })
     }
 
     /// Attempt a phase change while retaining the original guard on refusal.
@@ -366,16 +526,66 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
         consume(self.inner.take().expect("owned release guard"))
     }
 
+    /// Release this actual owner and report its physical poison after unlock.
+    /// `consume` must release the lock on success and unwind. Unlike thread-local
+    /// panic state, the observation also preserves poison predating acquisition
+    /// and excludes a later callback panic after a healthy physical release.
+    pub fn release_with_observed_poison<R>(
+        mut self,
+        consume: impl FnOnce(T) -> R,
+        observe_poison: impl Fn() -> bool,
+    ) -> R {
+        struct Signal<'a, F: Fn() -> bool> {
+            notification: &'a ReleaseNotification,
+            observe_poison: F,
+        }
+        impl<F: Fn() -> bool> Drop for Signal<'_, F> {
+            fn drop(&mut self) {
+                self.notification.released((self.observe_poison)());
+            }
+        }
+        let signal = Signal {
+            notification: self.notification,
+            observe_poison,
+        };
+        let inner = self.inner.take().expect("owned release guard");
+        let _transferred = std::mem::ManuallyDrop::new(self);
+        let result = consume(inner);
+        drop(signal);
+        result
+    }
+
     /// Release both original physical owners before either notification runs.
     /// The callback must release both owners on success and unwind; returned
     /// values may retain cleanup, but never physical guards. Observe the actual
     /// two locks' poison state after release, before any arbitrary wake callback.
     pub fn release_pair_with<S, R>(
-        mut self,
-        mut other: ReleaseGuard<'_, S>,
+        self,
+        other: ReleaseGuard<'_, S>,
         consume: impl FnOnce(T, S) -> R,
         observe_poison: impl Fn() -> (bool, bool),
     ) -> R {
+        match self.try_map_pair_preserving_release::<_, (), (), R>(
+            other,
+            |first, second| Err(consume(first, second)),
+            observe_poison,
+        ) {
+            Err(result) => result,
+            Ok(_) => unreachable!("release never transfers physical owners"),
+        }
+    }
+
+    /// Transfer both original guards through one fallible construction phase.
+    /// Success retains both original notifications without invoking callbacks.
+    /// On error or unwind, `consume` must release both physical guards before
+    /// returning or unwinding; neither notification runs until that completes.
+    /// Freeze both physical poison verdicts before any wake callback can panic.
+    pub fn try_map_pair_preserving_release<'other, S, A, B, E>(
+        mut self,
+        mut other: ReleaseGuard<'other, S>,
+        consume: impl FnOnce(T, S) -> Result<(A, B), E>,
+        observe_poison: impl Fn() -> (bool, bool),
+    ) -> Result<(ReleaseGuard<'owner, A>, ReleaseGuard<'other, B>), E> {
         struct Signal<'a> {
             notification: &'a ReleaseNotification,
             poisoned: bool,
@@ -389,9 +599,13 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
             first: &'a ReleaseNotification,
             second: &'b ReleaseNotification,
             observe_poison: F,
+            armed: bool,
         }
         impl<F: Fn() -> (bool, bool)> Drop for PairSignals<'_, '_, F> {
             fn drop(&mut self) {
+                if !self.armed {
+                    return;
+                }
                 let (first, second) = (self.observe_poison)();
                 let first = Signal {
                     notification: self.first,
@@ -408,19 +622,38 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
                 drop(second);
             }
         }
-        let signals = PairSignals {
+        let mut signals = PairSignals {
             first: self.notification,
             second: other.notification,
             observe_poison,
+            armed: true,
         };
         let first = self.inner.take().expect("owned first release guard");
         let second = other.inner.take().expect("owned second release guard");
         // Only empty wrappers remain; the pair owns both original signals.
         let _first = std::mem::ManuallyDrop::new(self);
         let _second = std::mem::ManuallyDrop::new(other);
-        let result = consume(first, second);
-        drop(signals);
-        result
+        match consume(first, second) {
+            Ok((first, second)) => {
+                signals.armed = false;
+                Ok((
+                    ReleaseGuard {
+                        inner: Some(first),
+                        notification: _first.notification,
+                        poison_on_unwind: _first.poison_on_unwind,
+                    },
+                    ReleaseGuard {
+                        inner: Some(second),
+                        notification: _second.notification,
+                        poison_on_unwind: _second.poison_on_unwind,
+                    },
+                ))
+            }
+            Err(error) => {
+                drop(signals);
+                Err(error)
+            }
+        }
     }
 }
 

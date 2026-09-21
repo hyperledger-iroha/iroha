@@ -30,8 +30,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1395 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1573 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1471 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1649 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -76,6 +76,22 @@ def isolate_stage_fixture(stack, *, keep=()):
 
 
 class BeaconGateTests(unittest.TestCase):
+    def test_partial_publication_refusal_controls_are_required_in_both_scopes(self):
+        required = ('queue::tests::lane_retirement_observer::refused_cut_retains_original_notifications_through_outer_fence', 'state::carrier_geometry_preparation::tests::queue_retirement_tests::route_refusal_retains_original_cut_cleanup_through_lifecycle', 'state::carrier_preparation::journals::decision_binding::physical_publication::tests::queue_publication_tests::state_fence_refusal_defers_callbacks_through_original_queue_and_kura', 'sumeragi::v2_apply::retirement_release_tests::autoscale_queue_scan_and_refusal_release_lifecycle_before_queue_wake')
+        required += ('kura::publication_lease::tests::partial_kura_refusal_releases_every_acquired_fence_before_callbacks', 'kura::publication_lease::tests::full_and_partial_kura_abandonment_release_jointly_even_on_unwind', 'kura::publication_lease::tests::cold_kura_sidecar_wakes_after_joint_success_and_real_storage_refusal', 'kura::publication_lease::tests::repeated_cold_kura_lookups_retain_one_batch_through_outer_unwind', 'kura::publication_lease::tests::foreign_cold_batch_returns_original_guard_for_joint_cleanup', 'kura::tests::native_amx_live_custody_wrappers_unlock_together_before_callbacks')
+        required += ('state::block_hashes_publication::tests::stale_hash_refusal_retains_release_and_installation_until_outer_unlock',)
+        required += ('state::block_hashes_admission::tests::successor_reader_contention_wakes_from_original_reader_release',
+                     'state::block_hashes_admission::tests::successor_admission_signals_only_actual_writer_after_unlock')
+        for scope in gate.QUALIFICATION_SCOPES:
+            stages = gate.qualification_stages(scope)["core"]
+            selected = [name for _, names in stages for name in names]
+            for name in required:
+                with self.subTest(scope=scope, regression=name):
+                    self.assertEqual(selected.count(name), 1)
+                    listing = "\n".join(item + ": test" for item in selected if item != name)
+                    with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                        gate.require_tests(listing, stages)
+
     def test_actual_publication_controls_are_unique_and_focused_in_both_scopes(self):
         prefix = 'state::execution_publication_test_support::tests::'
         required = tuple(prefix + leaf for leaf in (
@@ -478,9 +494,13 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                  "crates/mv/src/release_tests.rs",
                  "crates/mv/src/cell.rs", "crates/mv/src/cell/charged_allocation_tests.rs",
                  "crates/mv/src/cell/publication_tests.rs",
+                 "crates/mv/src/cell/fresh_pair_acquisition_tests.rs",
+                 "crates/mv/src/cell/aggregate_acquisition_tests.rs",
+                 "crates/mv/src/storage/aggregate_acquisition_tests.rs",
                  "crates/mv/src/storage.rs", "crates/mv/src/storage/publication_tests.rs",
                  "crates/mv/src/storage/detached_tests.rs", "crates/mv/src/storage/touches.rs",
-                 "crates/mv/src/storage/touches_tests.rs", "crates/mv/src/storage/admitted_tests.rs")
+                 "crates/mv/src/storage/touches_tests.rs", "crates/mv/src/storage/admitted_tests.rs",
+                 "crates/mv/src/storage/fresh_pair_acquisition_tests.rs")
         with tempfile.TemporaryDirectory() as temporary:
             copied = Path(temporary)
             for relative in paths:
@@ -511,10 +531,13 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "allocation::tests::": 7,
             "release_tests::": 8,
             "cell::charged_allocation_tests::": 7,
-            "storage::publication_tests::": 13,
+            "storage::publication_tests::": 15,
             "cell::publication_tests::": 1,
+            "cell::fresh_pair_acquisition_tests::": 9,
+            "cell::aggregate_acquisition_tests::": 3,
+            "storage::aggregate_acquisition_tests::": 2,
             "storage::detached_tests::": 10,
-            "storage::admitted_tests::": 10,
+            "storage::admitted_tests::": 18,
             "storage::touches::tests::": 6,
         }
         for platform in ("darwin", "linux"):
@@ -526,10 +549,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 63)
+                self.assertEqual(len(library), 87)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 63), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 64), ("concread", 126)):
+                for harness, count in (("mv", 87), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 71), ("concread", 151)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -581,7 +604,19 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         capture = names((root / "crates/mv/tests/admitted_map_custody/capture.rs").read_text())
         mapped = names((root / "crates/mv/tests/map_owned_generations.rs").read_text())
         admission_source = (root / "vendor/concread/src/bptree/admission_tests.rs").read_text()
-        ordinary, writer = admission_source.split("mod writer_start {", 1)
+        # Tests may follow the nested module. Use its actual brace boundary,
+        # with comments/literals masked, so those tests retain their root owner.
+        masked_admission = namespace["mask_rust_comments"](admission_source)
+        module_start = masked_admission.index("mod writer_start {")
+        body_start = masked_admission.index("{", module_start)
+        depth = 1
+        module_end = body_start + 1
+        while depth:
+            self.assertLess(module_end, len(masked_admission))
+            depth += (masked_admission[module_end] == "{") - (masked_admission[module_end] == "}")
+            module_end += 1
+        writer = admission_source[body_start + 1:module_end - 1]
+        ordinary = admission_source[:module_start] + admission_source[module_end:]
         checkpoint = names((root / "vendor/concread/src/internals/bptree/checkpoint_tests.rs").read_text())
         replacement = [name for name in names(
             (root / "crates/mv/src/storage/admitted_tests.rs").read_text()
@@ -609,7 +644,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "mv-admitted-map": [*admitted, *("storage_custody::" + name for name in storage),
                                 *("storage_custody::capture::" + name for name in capture)],
             "mv-map": mapped,
-            "concread": [*("release::tests::" + name for name in names((root / "vendor/concread/src/release_tests.rs").read_text())),
+            "concread": [*("ebrcell::acquisition_tests::" + name for name in names((root / "vendor/concread/src/ebrcell/acquisition_tests.rs").read_text())),
+                         *("bptree::acquisition_tests::" + name for name in names((root / "vendor/concread/src/bptree/acquisition_tests.rs").read_text())),
+                         *("release::tests::" + name for name in names((root / "vendor/concread/src/release_tests.rs").read_text())),
                          *("internals::lincowcell::identity_preparation_tests::" + name for name in names((root / "vendor/concread/src/internals/lincowcell/mod.rs").read_text()) if name.startswith("reader_")),
                          *("bptree::admission::tests::" + name for name in names(ordinary)),
                          *("bptree::admission::tests::writer_start::" + name for name in names(writer)),
@@ -622,7 +659,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                          *("bptree::admission::pair_admission::tests::deletion::" + name for name in deletion),
                          *("bptree::admission::pair_admission::tests::deletion::payload::" + name for name in deletion_payload)],
         }
-        self.assertEqual((len(admitted), len(storage), len(mapped), len(names(ordinary)), len(names(writer)), len(checkpoint), len(paired), len(borrowed), len(clear)), (29, 30, 24, 35, 6, 9, 9, 7, 7))
+        self.assertIn('#[path = "acquisition_tests.rs"]\nmod acquisition_tests;',
+                      (root / "vendor/concread/src/ebrcell/mod.rs").read_text())
+        self.assertEqual((len(admitted), len(storage), len(mapped), len(names(ordinary)), len(names(writer)), len(checkpoint), len(paired), len(borrowed), len(clear)), (36, 30, 24, 45, 6, 9, 9, 7, 7))
         self.assertIn('#[path = "admitted_map_custody/storage.rs"]\nmod storage_custody;',
                       (root / "crates/mv/tests/admitted_map_custody.rs").read_text())
         self.assertEqual(len(capture), 5)
@@ -2084,7 +2123,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             requested = tuple(harness + "=" + test for harness in gate.MV_OWNERSHIP_HARNESSES
                               for _, tests in selected[harness] for test in tests)
-            self.assertEqual(len(requested), 282)
+            self.assertEqual(len(requested), 338)
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
             with self.subTest(scope=scope), \
@@ -2108,7 +2147,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
-            self.assertIn("282 focused regressions", output.getvalue())
+            self.assertIn("338 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 

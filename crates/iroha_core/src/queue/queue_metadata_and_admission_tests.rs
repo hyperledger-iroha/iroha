@@ -408,7 +408,7 @@ fn contains_pending_hash_waiting_for_state_does_not_pin_queue_removal() {
         .try_prepare_publication(&state.block_hashes, |_, _| {
             Ok::<_, std::convert::Infallible>(())
         })
-        .unwrap_or_else(|(_, error)| panic!("prepare original hash writer: {error:?}"));
+        .unwrap_or_else(|(_, error, _)| panic!("prepare original hash writer: {error:?}"));
     let (reached_tx, reached_rx) = std::sync::mpsc::sync_channel(1);
     *queue.pending_hash_state_view_handoff.lock() = Some(reached_tx);
     let (lookup_tx, lookup_rx) = std::sync::mpsc::sync_channel(1);

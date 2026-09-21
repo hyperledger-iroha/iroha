@@ -626,10 +626,10 @@ where
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
         out.push_str("\"revert\":");
-        JsonSerialize::json_serialize(self.revert.deref().deref(), out);
+        JsonSerialize::json_serialize(self.original_undo(), out);
         out.push(',');
         out.push_str("\"blocks\":");
-        JsonSerialize::json_serialize(self.blocks.deref().deref(), out);
+        JsonSerialize::json_serialize(self.get(), out);
         out.push('}');
     }
 }

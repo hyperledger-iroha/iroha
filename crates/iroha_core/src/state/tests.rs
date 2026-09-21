@@ -124,6 +124,8 @@ mod committed_hash_journal_tests;
 mod transaction_stack_tests;
 #[path = "world_stack_tests.rs"]
 mod world_stack_tests;
+#[path = "world_complete_drop_tests.rs"]
+mod world_complete_drop_tests;
 macro_rules! let_row { ($($tokens:tt)*) => { let $($tokens)*; }; }
 macro_rules! state_test {
     (consensus_stack $name:ident $($body:tt)*) => {
@@ -1602,7 +1604,7 @@ fn queue_plan_carrier_validation_uses_one_generation_coherent_state_view() {
 }
 state_test! { sync merge_write_set_encoder_mentions_every_persisted_world_block_field
     let source = include_str!("../state.rs");
-    let_row! { struct_start = source .find("pub struct WorldBlock<'world> {") .expect("WorldBlock declaration must remain discoverable") };
+    let_row! { struct_start = source .find("pub struct WorldBlockFields<'world> {") .expect("WorldBlock declaration must remain discoverable") };
     let struct_tail = &source[struct_start..];
     let_row! { struct_end = struct_tail .find("\n}\nimpl WorldBlock<'_>") .expect("WorldBlock declaration terminator must remain discoverable") };
     let struct_body = &struct_tail[..struct_end];
@@ -1644,8 +1646,8 @@ state_test! { sync world_and_world_block_keep_snapshot_skip_annotations_in_sync
         annotations
     }
     let source = include_str!("../state.rs");
-    let_row! { world = source .split_once("pub struct WorldData {") .and_then(|(_, tail)| tail.split_once("\n}\n/// Struct for block's aggregated changes")) .map(|(body, _)| body) .expect("World declaration must remain discoverable") };
-    let_row! { world_block = source .split_once("pub struct WorldBlock<'world> {") .and_then(|(_, tail)| tail.split_once("\n}\nimpl WorldBlock<'_>")) .map(|(body, _)| body) .expect("WorldBlock declaration must remain discoverable") };
+    let_row! { world = source .split_once("pub struct WorldData {") .and_then(|(_, tail)| tail.split_once("\n}\n/// One World execution owner")) .map(|(body, _)| body) .expect("World declaration must remain discoverable") };
+    let_row! { world_block = source .split_once("pub struct WorldBlockFields<'world> {") .and_then(|(_, tail)| tail.split_once("\n}\nimpl WorldBlock<'_>")) .map(|(body, _)| body) .expect("WorldBlock declaration must remain discoverable") };
     let world_annotations = snapshot_skip_annotations(world);
     let block_annotations = snapshot_skip_annotations(world_block);
     assert_eq!(
