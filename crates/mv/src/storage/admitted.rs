@@ -1,9 +1,9 @@
-//! Finite insertion into the original MV current/undo pair.
+//! Finite insertion and removal in the original MV current/undo pair.
 //!
 //! This admits original node, cursor, reader, tracking and copied payload owners.
 //! It does not admit publication/release control objects or iteration workspace.
-//! Insertion transactions additionally admit their ordered local touch owners.
-//! Capture/detachment, removal, mutable access and replacement blocks remain
+//! Transactions additionally admit their ordered local touch owners.
+//! Capture/detachment, mutable access and replacement blocks remain
 //! unavailable until their complete ownership paths are funded.
 
 use super::*;
@@ -13,7 +13,7 @@ use crate::{
 };
 use concread::bptree::{
     AllocationDemand, ClearAdmissionError, ClonePlanning, InsertAdmissionError, NodeFunding,
-    PairInsertError, PlanningError, Prepaid,
+    PairInsertError, PairRemoveError, PlanningError, Prepaid,
 };
 
 /// Constructs a payload policy from the original finite MV reservation.
@@ -70,7 +70,7 @@ pub enum AdmittedStorageError {
     },
 }
 
-/// Either opening/insertion admission failed or the caller aborted its block.
+/// Either opening or edit admission failed or the caller aborted its block.
 #[derive(Debug)]
 pub enum AdmittedBlockError<E> {
     /// Original writer or allocation admission refused.
@@ -196,8 +196,8 @@ where
     ///
     /// The original pool defers refund wakes across acquisition, callback and
     /// final writer destruction. Do not catch an edit panic and keep using the
-    /// block: both original cursors and this aggregate remain unusable. This is
-    /// insertion admission, not admitted World execution or detached publication.
+    /// block: both original cursors and this aggregate remain unusable. This admits
+    /// insertion and removal; World execution and detached publication remain unfunded.
     pub fn try_with_admitted_block<R, E>(
         &self,
         operation: impl for<'s> FnOnce(&mut Block<'s, K, V, Prepaid<P>>) -> Result<R, E>,
@@ -327,6 +327,36 @@ where
         result
     }
 
+    /// Remove through the original current/undo pair under one checked demand.
+    ///
+    /// An absent query still retains its explicit first None preimage, while only
+    /// a present removal marks the block dirty. Refusal returns the exact owned
+    /// query without changing either private map. The canonical pair consumes a
+    /// successful query before releasing its failure guard; a caught key-drop or
+    /// copy panic therefore forbids publication of this original block.
+    pub fn try_remove_admitted(&mut self, key: K) -> Result<Option<V>, (K, AdmittedStorageError)> {
+        self.assert_admitted_operable();
+        let budget = self.allocation.expect("admitted block original pool");
+        self.failed = true;
+        let result = self
+            .blocks
+            .try_remove_with_undo_admitted(&mut self.revert, key, |demand, _key| {
+                admit::<P>(budget, demand)
+            })
+            .map_err(|(key, error)| {
+                let error = match error {
+                    PairRemoveError::Planning(error) => AdmittedStorageError::Planning(error),
+                    PairRemoveError::Refused(error) => error,
+                };
+                (key, error)
+            });
+        if let Ok(previous) = &result {
+            self.dirty |= previous.is_some();
+        }
+        self.failed = false;
+        result
+    }
+
     /// Borrow a private current value without iteration allocation.
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
@@ -355,7 +385,7 @@ where
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-    /// Whether any admitted insertion changed this private current generation.
+    /// Whether an admitted insertion or present removal changed this generation.
     pub fn is_dirty(&self) -> bool {
         self.assert_admitted_operable();
         self.dirty

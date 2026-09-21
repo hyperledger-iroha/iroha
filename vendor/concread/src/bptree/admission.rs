@@ -15,6 +15,37 @@ pub use pair_admission::PairInsertError;
 mod clear_admission;
 pub use clear_admission::ClearAdmissionError;
 
+#[path = "delete_admission.rs"]
+mod delete_admission;
+pub use delete_admission::PairRemoveError;
+
+// This guard must precede, and therefore outlive, every nested checkpoint. A
+// caller may catch an unwind while keeping both physical writers: lock poison
+// alone cannot protect their partly applied or failed private generations.
+struct BorrowedPair<'c, 'u, K, V, P>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    current: &'c mut CursorWrite<K, V, Prepaid<P>>,
+    undo: &'u mut CursorWrite<K, Option<V>, Prepaid<P>>,
+    resolved: bool,
+}
+impl<K, V, P> Drop for BorrowedPair<'_, '_, K, V, P>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    fn drop(&mut self) {
+        if !self.resolved {
+            self.current.poison_joined_edit();
+            self.undo.poison_joined_edit();
+        }
+    }
+}
+
 /// Checked sum of actual requested allocation layouts, not encoded sizes or RSS.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AllocationDemand {

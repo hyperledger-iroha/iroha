@@ -44,6 +44,7 @@ from unittest.mock import MagicMock, patch
 # Fifty-one native connection controls preserve transport, Queue and retained execution owners.
 # Sixteen admitted Storage/clear/partition controls preserve original finite-pool custody.
 # Eleven actual Transaction/touch controls preserve joined admission and original parent ownership.
+# Twenty-three canonical and seventeen admitted removal controls preserve original tree and pair custody.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -52,8 +53,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 78 + 1 + 16 + 11 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 78 + 1 + 16 + 11 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 78 + 1 + 16 + 11 + 40 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 78 + 1 + 16 + 11 + 40 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -546,7 +547,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 self.assertEqual(len(library), 49)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 49), ("mv-ebr", 5), ("mv-map", 22), ("mv-admitted-map", 38), ("concread", 45)):
+                for harness, count in (("mv", 49), ("mv-ebr", 5), ("mv-map", 22), ("mv-admitted-map", 44), ("concread", 79)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -589,7 +590,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         for unknown in ("foreign", "../concread", "vendor/concread"):
             with self.assertRaisesRegex(gate.CheckError, "maintained source owner"):
                 gate.native_package_root(root, unknown)
-        names = lambda text: re.findall(r"#\[test\]\s*fn\s+(\w+)", text)
+        lexer = root / "scripts/formal/sumeragi_v2_rust_text.py"
+        namespace = {"__name__": "closed_source_test_census", "__file__": str(lexer)}
+        exec(compile(lexer.read_bytes(), str(lexer), "exec"), namespace)
+        names = lambda text: re.findall(r"#\[test\]\s*fn\s+(\w+)", namespace["mask_rust_comments"](text))
         admitted = names((root / "crates/mv/tests/admitted_map_custody.rs").read_text())
         storage = names((root / "crates/mv/tests/admitted_map_custody/storage.rs").read_text())
         mapped = names((root / "crates/mv/tests/map_owned_generations.rs").read_text())
@@ -599,6 +603,15 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         paired = names((root / "vendor/concread/src/bptree/pair_admission_tests.rs").read_text())
         borrowed = names((root / "vendor/concread/src/bptree/borrowed_pair_tests.rs").read_text())
         clear = names((root / "vendor/concread/src/bptree/clear_admission_tests.rs").read_text())
+        canonical_remove = [name for name in names((root / "vendor/concread/src/internals/bptree/cursor.rs").read_text())
+                            if name.startswith("test_bptree2_cursor_remove_")]
+        checked_remove = names((root / "vendor/concread/src/internals/bptree/remove_tests.rs").read_text())
+        deletion = names((root / "vendor/concread/src/bptree/delete_admission_tests.rs").read_text())
+        deletion_payload = names((root / "vendor/concread/src/bptree/delete_payload_tests.rs").read_text())
+        self.assertEqual((len(deletion), len(deletion_payload)), (6, 2))
+        self.assertEqual((len(canonical_remove), len(checked_remove)), (23, 3))
+        self.assertNotIn("test_bptree2_cursor_remove_stress_7", canonical_remove,
+                         "the disabled comment fixture must not qualify as executable coverage")
         expected = {
             "mv-admitted-map": [*admitted, *("storage_custody::" + name for name in storage)],
             "mv-map": mapped,
@@ -607,13 +620,29 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                          *("internals::bptree::cursor::checkpoint::tests::" + name for name in checkpoint),
                          *("bptree::admission::pair_admission::tests::" + name for name in paired),
                          *("bptree::admission::pair_admission::tests::borrowed::" + name for name in borrowed),
-                         *("bptree::admission::pair_admission::tests::clear::" + name for name in clear)],
+                         *("bptree::admission::pair_admission::tests::clear::" + name for name in clear),
+                         *("internals::bptree::cursor::tests::" + name for name in canonical_remove),
+                         *("internals::bptree::cursor::remove::tests::" + name for name in checked_remove),
+                         *("bptree::admission::pair_admission::tests::deletion::" + name for name in deletion),
+                         *("bptree::admission::pair_admission::tests::deletion::payload::" + name for name in deletion_payload)],
         }
-        self.assertEqual((len(admitted), len(storage), len(mapped), len(names(ordinary)), len(names(writer)), len(checkpoint), len(paired), len(borrowed), len(clear)), (25, 13, 22, 7, 6, 9, 9, 7, 7))
+        self.assertEqual((len(admitted), len(storage), len(mapped), len(names(ordinary)), len(names(writer)), len(checkpoint), len(paired), len(borrowed), len(clear)), (25, 19, 22, 7, 6, 9, 9, 7, 7))
         self.assertIn('#[path = "admitted_map_custody/storage.rs"]\nmod storage_custody;',
                       (root / "crates/mv/tests/admitted_map_custody.rs").read_text())
         self.assertIn('#[path = "clear_admission_tests.rs"]\nmod clear;',
                       (root / "vendor/concread/src/bptree/pair_admission_tests.rs").read_text())
+        self.assertIn('#[path = "remove.rs"]\nmod remove;',
+                      (root / "vendor/concread/src/internals/bptree/cursor.rs").read_text())
+        self.assertIn('#[path = "remove_tests.rs"]\nmod tests;',
+                      (root / "vendor/concread/src/internals/bptree/remove.rs").read_text())
+        self.assertIn('#[path = "delete_admission.rs"]\nmod delete_admission;',
+                      (root / "vendor/concread/src/bptree/admission.rs").read_text())
+        self.assertIn('#[path = "borrowed_delete.rs"]\nmod borrowed_delete;',
+                      (root / "vendor/concread/src/bptree/delete_admission.rs").read_text())
+        self.assertIn('#[path = "delete_admission_tests.rs"]\nmod deletion;',
+                      (root / "vendor/concread/src/bptree/pair_admission_tests.rs").read_text())
+        self.assertIn('#[path = "delete_payload_tests.rs"]\nmod payload;',
+                      (root / "vendor/concread/src/bptree/delete_admission_tests.rs").read_text())
         touch_names = names((root / "crates/mv/src/storage/touches_tests.rs").read_text())
         self.assertEqual(len(touch_names), 6)
         self.assertIn('#[path = "storage/touches.rs"]\nmod touches;',
@@ -2041,7 +2070,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             requested = tuple(harness + "=" + test for harness in gate.MV_OWNERSHIP_HARNESSES
                               for _, tests in selected[harness] for test in tests)
-            self.assertEqual(len(requested), 159)
+            self.assertEqual(len(requested), 199)
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
             with self.subTest(scope=scope), \
@@ -2065,7 +2094,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
-            self.assertIn("159 focused regressions", output.getvalue())
+            self.assertIn("199 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 

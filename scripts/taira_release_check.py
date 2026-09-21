@@ -2164,6 +2164,15 @@ MV_ADMITTED_MAP_STAGES = (
         'storage_custody::actual_transaction_touch_destructor_panic_cannot_apply_or_publish',
     )),
 
+    ('production Block and Transaction deletion custody', (
+        'storage_custody::actual_block_removal_preserves_first_preimages_and_absent_dirty_semantics',
+        'storage_custody::actual_transaction_removal_orders_explicit_absence_and_sibling_preimages',
+        'storage_custody::actual_block_removal_refusal_preserves_exact_query_for_complete_budget_retry',
+        'storage_custody::actual_transaction_removal_refusal_joins_touch_and_pair_before_exact_query_retry',
+        'storage_custody::actual_transaction_removal_exhausted_abort_restores_parent_and_outer_reader_custody',
+        'storage_custody::actual_removal_caught_copy_and_consumed_query_panics_cannot_publish',
+    )),
+
 )
 
 CONCREAD_STAGES = (
@@ -2223,6 +2232,48 @@ CONCREAD_STAGES = (
         'bptree::admission::pair_admission::tests::clear::clear_caught_callback_and_provider_panics_leave_original_parent_unusable',
         'bptree::admission::pair_admission::tests::clear::clear_apply_cleanup_panic_cannot_expose_a_usable_partial_writer',
         'bptree::admission::pair_admission::tests::clear::clear_empty_root_has_exact_finite_layouts_and_never_copies_payloads',
+    )),
+
+    ('canonical B+ tree deletion and rebalance', (
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_01_p0',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_01_p1',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_02',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_03',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_04p0',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_04p1',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_05',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_06',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_07',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_08',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_09',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_10',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_11',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_12',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_13',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_14',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_15',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_stress_1',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_stress_2',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_stress_3',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_stress_4',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_stress_5',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_stress_6',
+    )),
+    ('checked original removal tracking custody', (
+        'internals::bptree::cursor::remove::tests::remove_tracking_bound_is_checked_for_root_branch_and_overflow',
+        'internals::bptree::cursor::remove::tests::remove_fixed_slot_refusal_precedes_any_node_copy_and_preserves_original_root',
+        'internals::bptree::cursor::remove::tests::remove_exact_root_slots_preserve_absent_clone_and_original_reader_custody',
+    )),
+
+    ('admitted paired removal and nested sibling custody', (
+        'bptree::admission::pair_admission::tests::deletion::removal_retains_first_some_and_explicit_none_under_original_writers',
+        'bptree::admission::pair_admission::tests::deletion::removal_whole_demand_refusal_and_exact_retry_preserve_parent_custody',
+        'bptree::admission::pair_admission::tests::deletion::removal_orders_rebalance_and_abort_without_credit_or_reader_changes',
+        'bptree::admission::pair_admission::tests::deletion::removal_generation_refuses_before_callback_and_skips_existing_undo',
+        'bptree::admission::pair_admission::tests::deletion::removal_caught_callback_clone_and_provider_panics_invalidate_both_parents',
+        'bptree::admission::pair_admission::tests::deletion::removal_prefailed_parent_invalidates_other_owner_before_admission',
+        'bptree::admission::pair_admission::tests::deletion::payload::nonuniform_sibling_and_repair_payloads_fit_complete_demand_and_old_readers',
+        'bptree::admission::pair_admission::tests::deletion::payload::nonuniform_copy_and_query_drop_failures_poison_both_original_parents',
     )),
 
 )

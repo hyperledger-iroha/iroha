@@ -104,26 +104,29 @@ with one original finite pool. Construction and writer startup each reserve one
 checked sum for both maps and partition that reservation without reacquiring
 credits. `try_with_admitted_block` holds both original writers inside the pool's
 refund scope, clears the actual undo tree through admitted reset, and lends a
-private block to a synchronous callback. Its `try_insert_admitted` funds both
-current and missing first-preimage edits together. Success publishes the original
-pair; refusal or callback error leaves the published pair intact. A caught edit
+private block to a synchronous callback. Its `try_insert_admitted` and
+`try_remove_admitted` fund current and missing first-preimage edits together.
+Removal records an explicit None for an absent key and marks dirty only when
+a value was present. The owned query drops under the original pair failure guard.
+Success publishes the original pair; refusal or callback error leaves the published pair intact. A caught edit
 panic makes the aggregate unusable, including when the callback returns success.
 Read-only views and exclusive history retain original allocation owners.
 
-`Block::try_transaction_admitted` lends both original checkpoints to an insertion
-transaction. Its `try_insert_admitted` joins the canonical current/undo demand
-with the exact ordered touch-array growth and policy-owned key copy before one
+`Block::try_transaction_admitted` lends both original checkpoints to a private
+transaction. Both admitted insertion and removal join the canonical current/undo
+demand with the exact ordered touch-array growth and policy-owned key copy before one
 reservation. Repeated touches preserve the first owned key. `touched_entries`
-borrows a sorted slice without iterator allocation; no-op insertions remain
-explicit. Dropping the child restores both parent roots without allocation.
+borrows a sorted slice without iterator allocation; no-op insertions and absent
+removals remain explicit. Dropping the child restores both parent roots without
+allocation.
 Applying first destroys its touch keys under both rollback guards, then keeps
 both private successors. Cleanup panic also makes the original block unusable.
 
 World storage remains Untracked pending native lock/runtime and publication
-control storage, removal/mutable replacement, detached capture, concrete model
+control storage, mutable replacement, detached capture, concrete model
 payload policies and configured aggregate integration.
 These operations are unavailable on prepaid Storage until their ownership paths
-are admitted; its insertion API does not claim complete State admission.
+are admitted; these insertion/removal APIs do not claim complete State admission.
 
 TODO: compose these component publications with exact aggregate State predecessor
 ownership, membership, hash history, archive/resource reservations and finality.

@@ -1247,3 +1247,591 @@ fn actual_transaction_touch_destructor_panic_cannot_apply_or_publish() {
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
+
+fn removal_key(budget: &AllocationBudget, order: usize) -> Payload {
+    let (key, spare) = input(budget, order);
+    drop(spare);
+    key
+}
+fn block_remove(
+    block: &mut NativeBlock<'_>,
+    budget: &AllocationBudget,
+    order: usize,
+) -> Option<Payload> {
+    block
+        .try_remove_admitted(removal_key(budget, order))
+        .unwrap_or_else(|(_, error)| panic!("original Block removal refused: {error:?}"))
+}
+fn transaction_remove(
+    transaction: &mut NativeTransaction<'_>,
+    budget: &AllocationBudget,
+    order: usize,
+) -> Option<Payload> {
+    transaction
+        .try_remove_admitted(removal_key(budget, order))
+        .unwrap_or_else(|(_, error)| panic!("original Transaction removal refused: {error:?}"))
+}
+
+#[test]
+fn actual_block_removal_preserves_first_preimages_and_absent_dirty_semantics() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let mut storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    seed(&storage, &budget, 0x11);
+    let old = storage.view();
+    let original = old.get(&7).unwrap().pointer();
+    let old_id = old.get(&7).unwrap().id();
+    let query7 = removal_key(&budget, 7);
+    let query8 = removal_key(&budget, 8);
+    let query9 = removal_key(&budget, 9);
+    storage
+        .try_with_admitted_block(|block| {
+            for _ in 0..2 {
+                let previous = block.get(&7).unwrap().pointer();
+                let records = NEXT_RECORD.load(SeqCst);
+                assert!(block_remove(block, &budget, 9).is_none());
+                assert!(!block.is_dirty());
+                // Canonical absent deletion still clones its current leaf.
+                // Logical cleanliness does not erase that original paid owner.
+                let current = block.get(&7).unwrap();
+                marker(Some(current), 0x11);
+                assert_ne!(current.pointer(), previous);
+                assert!(current.id() >= records);
+                assert_eq!(
+                    RECORDS[current.id()].pointer.load(SeqCst),
+                    current.pointer()
+                );
+                assert!(!RECORDS[current.id()].freed.load(SeqCst));
+                assert!(!RECORDS[current.id()].refunded.load(SeqCst));
+                assert_eq!(old.get(&7).unwrap().pointer(), original);
+                assert!(!RECORDS[old_id].freed.load(SeqCst));
+            }
+            let removed = block_remove(block, &budget, 7).unwrap();
+            marker(Some(&removed), 0x11);
+            drop(removed);
+            assert!(block.is_dirty());
+            assert!(block.get(&7).is_none());
+            marker(block.get_before_block(&query7), 0x11);
+            let first = block.get_before_block(&query7).unwrap().pointer();
+            assert!(block_remove(block, &budget, 7).is_none());
+            assert_eq!(block.get_before_block(&query7).unwrap().pointer(), first);
+            assert!(put(block, &budget, 7, 0x12).is_none());
+            assert_eq!(block.get_before_block(&query7).unwrap().pointer(), first);
+            let removed = block_remove(block, &budget, 7).unwrap();
+            marker(Some(&removed), 0x12);
+            drop(removed);
+            assert_eq!(block.get_before_block(&query7).unwrap().pointer(), first);
+            assert!(put(block, &budget, 8, 0x18).is_none());
+            assert!(block.get_before_block(&query8).is_none());
+            drop(block_remove(block, &budget, 8));
+            assert!(block.get_before_block(&query8).is_none());
+            assert!(put(block, &budget, 7, 0x13).is_none());
+            assert!(put(block, &budget, 9, 0x19).is_none());
+            marker(block.get_before_block(&query7), 0x11);
+            assert!(block.get_before_block(&query9).is_none());
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    marker(storage.view().get(&7), 0x13);
+    marker(storage.view().get(&9), 0x19);
+    assert!(storage.view().get(&8).is_none());
+    assert_eq!(old.get(&7).unwrap().pointer(), original);
+    assert!(!RECORDS[old_id].freed.load(SeqCst));
+    drop(old);
+    {
+        let history = storage.history();
+        marker(history.get_before_block(&7), 0x11);
+        assert!(history.get_before_block(&8).is_none());
+        assert!(history.get_before_block(&9).is_none());
+    }
+    drop((query7, query8, query9));
+    without_allocations(|| drop(storage));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn actual_transaction_removal_orders_explicit_absence_and_sibling_preimages() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let mut storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    seed(&storage, &budget, 0x21);
+    let old = storage.view();
+    let original = old.get(&7).unwrap().pointer();
+    let query7 = removal_key(&budget, 7);
+    let query9 = removal_key(&budget, 9);
+    storage
+        .try_with_admitted_block(|block| {
+            let mut transaction = block.try_transaction_admitted().unwrap();
+            assert!(transaction_remove(&mut transaction, &budget, 9).is_none());
+            assert!(!transaction.is_dirty());
+            let absent_touch = transaction.touched_entries().next().unwrap().key.pointer();
+            assert!(transaction_remove(&mut transaction, &budget, 9).is_none());
+            assert!(!transaction.is_dirty());
+            assert_eq!(transaction.touched_entries().len(), 1);
+            assert_eq!(
+                transaction.touched_entries().next().unwrap().key.pointer(),
+                absent_touch
+            );
+            let removed = transaction_remove(&mut transaction, &budget, 7).unwrap();
+            marker(Some(&removed), 0x21);
+            drop(removed);
+            assert!(transaction.is_dirty());
+            assert!(transaction_put(&mut transaction, &budget, 7, 0x22).is_none());
+            drop(transaction_remove(&mut transaction, &budget, 7));
+            assert!(transaction_put(&mut transaction, &budget, 7, 0x23).is_none());
+            assert!(transaction_put(&mut transaction, &budget, 2, 0x22).is_none());
+            drop(transaction_remove(&mut transaction, &budget, 2));
+            without_allocations(|| {
+                let mut rows = transaction.touched_entries();
+                assert_eq!(rows.len(), 3);
+                let two = rows.next().unwrap();
+                assert_eq!(two.key.order, 2);
+                assert!(two.before.is_none() && two.after.is_none());
+                let nine = rows.next_back().unwrap();
+                assert_eq!(nine.key.order, 9);
+                assert_eq!(nine.key.pointer(), absent_touch);
+                assert!(nine.before.is_none() && nine.after.is_none());
+                let seven = rows.next().unwrap();
+                assert_eq!(seven.key.order, 7);
+                assert_eq!(seven.before.unwrap().pointer(), original);
+                marker(seven.before, 0x21);
+                marker(seven.after, 0x23);
+                assert!(rows.next().is_none());
+            });
+            marker(transaction.get_before_block(&query7), 0x21);
+            assert!(transaction.get_before_block(&query9).is_none());
+            without_allocations(|| transaction.apply());
+            let parent = (
+                block.get(&7).unwrap().pointer(),
+                block.get_before_block(&query7).unwrap().pointer(),
+            );
+            let held = budget.reserved_bytes();
+            {
+                let mut sibling = block.try_transaction_admitted().unwrap();
+                assert_eq!(sibling.touched_entries().len(), 0);
+                drop(transaction_remove(&mut sibling, &budget, 7));
+                assert!(transaction_put(&mut sibling, &budget, 8, 0x28).is_none());
+                drop(transaction_remove(&mut sibling, &budget, 8));
+                assert_eq!(sibling.touched_entries().len(), 2);
+                without_allocations(|| drop(sibling));
+            }
+            assert_eq!(budget.reserved_bytes(), held);
+            assert_eq!(
+                (
+                    block.get(&7).unwrap().pointer(),
+                    block.get_before_block(&query7).unwrap().pointer()
+                ),
+                parent
+            );
+            assert!(block.get(&8).is_none());
+            let mut sibling = block.try_transaction_admitted().unwrap();
+            assert_eq!(
+                sibling.get_before_transaction(&query7).unwrap().pointer(),
+                parent.0
+            );
+            drop(transaction_remove(&mut sibling, &budget, 7));
+            assert!(transaction_remove(&mut sibling, &budget, 9).is_none());
+            assert!(transaction_put(&mut sibling, &budget, 9, 0x29).is_none());
+            assert_eq!(
+                sibling.get_before_block(&query7).unwrap().pointer(),
+                parent.1
+            );
+            assert!(sibling.get_before_block(&query9).is_none());
+            without_allocations(|| sibling.apply());
+            assert!(block.get(&7).is_none());
+            marker(block.get(&9), 0x29);
+            assert_eq!(block.get_before_block(&query7).unwrap().pointer(), parent.1);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    assert!(storage.view().get(&7).is_none());
+    marker(storage.view().get(&9), 0x29);
+    assert_eq!(old.get(&7).unwrap().pointer(), original);
+    drop(old);
+    {
+        let history = storage.history();
+        marker(history.get_before_block(&7), 0x21);
+        assert!(history.get_before_block(&2).is_none());
+        assert!(history.get_before_block(&9).is_none());
+    }
+    drop((query7, query9));
+    without_allocations(|| drop(storage));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn actual_block_removal_refusal_preserves_exact_query_for_complete_budget_retry() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    seed(&storage, &budget, 0x31);
+    let old = storage.view();
+    let original = old.get(&7).unwrap().pointer();
+    for order in [7, 9] {
+        let baseline = budget.reserved_bytes();
+        let result = storage.try_with_admitted_block(|block| {
+            let key = removal_key(&budget, order);
+            let query = (key.pointer(), key.id());
+            let copies = (counters.admissions.load(SeqCst), counters.keys.load(SeqCst), counters.values.load(SeqCst));
+            let records = NEXT_RECORD.load(SeqCst);
+            let held = budget.reserved_bytes();
+            let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held).unwrap();
+            let (key, error) = without_allocations(|| block.try_remove_admitted(key).err().expect("whole original remove pair must refuse"));
+            let AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes, .. }) = error else { panic!("original remove capacity refusal"); };
+            assert!(requested_bytes > 0);
+            assert_eq!((key.pointer(), key.id()), query);
+            assert_eq!(block.get(&7).unwrap().pointer(), original);
+            assert!(!block.is_dirty());
+            assert_eq!(NEXT_RECORD.load(SeqCst), records);
+            assert_eq!((counters.admissions.load(SeqCst), counters.keys.load(SeqCst), counters.values.load(SeqCst)), copies);
+            drop(blocker);
+            let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held - requested_bytes + 1).unwrap();
+            let (key, error) = without_allocations(|| block.try_remove_admitted(key).err().expect("one byte below complete remove demand"));
+            assert!(matches!(error, AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes: n, .. }) if n == requested_bytes));
+            assert_eq!((key.pointer(), key.id()), query);
+            assert_eq!(NEXT_RECORD.load(SeqCst), records);
+            assert_eq!((counters.admissions.load(SeqCst), counters.keys.load(SeqCst), counters.values.load(SeqCst)), copies);
+            drop(blocker);
+            let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held - requested_bytes).unwrap();
+            let removed = block.try_remove_admitted(key).unwrap_or_else(|(_, error)| panic!("exact remove budget refused: {error:?}"));
+            assert_eq!(removed.is_some(), order == 7);
+            if let Some(value) = &removed { marker(Some(value), 0x31); }
+            assert_eq!(block.is_dirty(), order == 7);
+            assert!(block.get(&order).is_none());
+            assert!(RECORDS[query.1].freed.load(SeqCst));
+            assert!(RECORDS[query.1].refunded.load(SeqCst));
+            drop((removed, blocker));
+            Err::<(), _>("abort admitted removal")
+        });
+        assert!(matches!(
+            result,
+            Err(AdmittedBlockError::Callback("abort admitted removal"))
+        ));
+        assert_eq!(budget.reserved_bytes(), baseline);
+        assert_eq!(storage.view().get(&7).unwrap().pointer(), original);
+        assert_eq!(old.get(&7).unwrap().pointer(), original);
+    }
+    drop(old);
+    without_allocations(|| drop(storage));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn actual_transaction_removal_refusal_joins_touch_and_pair_before_exact_query_retry() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    seed(&storage, &budget, 0x41);
+    let old = storage.view();
+    let original = old.get(&7).unwrap().pointer();
+    storage.try_with_admitted_block(|block| {
+        for order in [7, 9] {
+            let parent_credits = budget.reserved_bytes();
+            let mut transaction = without_allocations(|| block.try_transaction_admitted()).unwrap();
+            let key = removal_key(&budget, order);
+            let query = (key.pointer(), key.id());
+            let copies = (counters.admissions.load(SeqCst), counters.keys.load(SeqCst), counters.values.load(SeqCst));
+            let records = NEXT_RECORD.load(SeqCst);
+            let held = budget.reserved_bytes();
+            let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held).unwrap();
+            let (key, error) = without_allocations(|| transaction.try_remove_admitted(key).err().expect("joined remove plus touch demand must refuse"));
+            let AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes, .. }) = error else { panic!("original remove plus touch capacity refusal"); };
+            assert!(requested_bytes > 0);
+            assert_eq!((key.pointer(), key.id()), query);
+            assert_eq!(transaction.touched_entries().len(), 0);
+            assert!(!transaction.is_dirty());
+            assert_eq!(transaction.get(&7).unwrap().pointer(), original);
+            assert_eq!(NEXT_RECORD.load(SeqCst), records);
+            assert_eq!((counters.admissions.load(SeqCst), counters.keys.load(SeqCst), counters.values.load(SeqCst)), copies);
+            drop(blocker);
+            let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held - requested_bytes + 1).unwrap();
+            let (key, error) = without_allocations(|| transaction.try_remove_admitted(key).err().expect("one byte below joined remove plus touch demand"));
+            assert!(matches!(error, AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes: n, .. }) if n == requested_bytes));
+            assert_eq!((key.pointer(), key.id()), query);
+            assert_eq!(transaction.touched_entries().len(), 0);
+            assert_eq!(NEXT_RECORD.load(SeqCst), records);
+            assert_eq!((counters.admissions.load(SeqCst), counters.keys.load(SeqCst), counters.values.load(SeqCst)), copies);
+            drop(blocker);
+            let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held - requested_bytes).unwrap();
+            let removed = transaction.try_remove_admitted(key).unwrap_or_else(|(_, error)| panic!("exact joined remove plus touch budget refused: {error:?}"));
+            assert_eq!(removed.is_some(), order == 7);
+            if let Some(value) = &removed { marker(Some(value), 0x41); }
+            assert_eq!(transaction.is_dirty(), order == 7);
+            without_allocations(|| {
+                let mut rows = transaction.touched_entries();
+                assert_eq!(rows.len(), 1);
+                let row = rows.next().unwrap();
+                assert_eq!(row.key.order, order);
+                assert_ne!(row.key.id(), query.1);
+                assert_eq!(row.before.map(Payload::pointer), if order == 7 { Some(original) } else { None });
+                assert!(row.after.is_none());
+                assert!(rows.next().is_none());
+            });
+            assert!(RECORDS[query.1].freed.load(SeqCst));
+            assert!(RECORDS[query.1].refunded.load(SeqCst));
+            drop((removed, blocker));
+            without_allocations(|| drop(transaction));
+            assert_eq!(budget.reserved_bytes(), parent_credits);
+            assert_eq!(block.get(&7).unwrap().pointer(), original);
+            assert!(!block.is_dirty());
+        }
+        Ok::<_, ()>(())
+    }).unwrap();
+    assert_eq!(old.get(&7).unwrap().pointer(), original);
+    drop(old);
+    without_allocations(|| drop(storage));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn actual_transaction_removal_exhausted_abort_restores_parent_and_outer_reader_custody() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(16 << 20);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    storage
+        .try_with_admitted_block(|block| {
+            for order in 0..40 {
+                assert!(put(block, &budget, order, 0x51).is_none());
+            }
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    let old = storage.view();
+    let original = (
+        old.get(&7).unwrap().pointer(),
+        old.get(&24).unwrap().pointer(),
+    );
+    let query7 = removal_key(&budget, 7);
+    let query45 = removal_key(&budget, 45);
+    let baseline = budget.reserved_bytes();
+    let result = storage.try_with_admitted_block(|block| {
+        drop(put(block, &budget, 7, 0x52));
+        assert!(put(block, &budget, 45, 0x55).is_none());
+        let parent = (
+            block.get(&7).unwrap().pointer(),
+            block.get(&45).unwrap().pointer(),
+            block.get_before_block(&query7).unwrap().pointer(),
+        );
+        let held = budget.reserved_bytes();
+        let records = NEXT_RECORD.load(SeqCst);
+        let mut transaction = without_allocations(|| block.try_transaction_admitted()).unwrap();
+        for order in (0..40).rev() {
+            assert!(transaction_remove(&mut transaction, &budget, order).is_some());
+        }
+        assert!(transaction_remove(&mut transaction, &budget, 45).is_some());
+        assert!(transaction_remove(&mut transaction, &budget, 99).is_none());
+        assert!(transaction.is_empty());
+        assert_eq!(transaction.touched_entries().len(), 42);
+        let blocker = budget
+            .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+            .unwrap();
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        without_allocations(|| drop(transaction));
+        assert_eq!(budget.reserved_bytes(), held + blocker.remaining_bytes());
+        reclaimed_since(records);
+        assert_eq!(
+            (
+                block.get(&7).unwrap().pointer(),
+                block.get(&45).unwrap().pointer(),
+                block.get_before_block(&query7).unwrap().pointer()
+            ),
+            parent
+        );
+        assert_eq!(block.len(), 41);
+        assert!(block.get_before_block(&query45).is_none());
+        drop(blocker);
+        let mut applied = block.try_transaction_admitted().unwrap();
+        assert!(transaction_remove(&mut applied, &budget, 7).is_some());
+        assert!(transaction_remove(&mut applied, &budget, 45).is_some());
+        assert_eq!(
+            applied.get_before_block(&query7).unwrap().pointer(),
+            parent.2
+        );
+        assert!(applied.get_before_block(&query45).is_none());
+        without_allocations(|| applied.apply());
+        assert!(block.get(&7).is_none() && block.get(&45).is_none());
+        assert_eq!(block.get_before_block(&query7).unwrap().pointer(), parent.2);
+        Err::<(), _>("abort original parent after admitted child removal")
+    });
+    assert!(matches!(
+        result,
+        Err(AdmittedBlockError::Callback(
+            "abort original parent after admitted child removal"
+        ))
+    ));
+    assert_eq!(budget.reserved_bytes(), baseline);
+    assert_eq!(storage.view().len(), 40);
+    assert_eq!(
+        (
+            storage.view().get(&7).unwrap().pointer(),
+            storage.view().get(&24).unwrap().pointer()
+        ),
+        original
+    );
+    assert_eq!(
+        (
+            old.get(&7).unwrap().pointer(),
+            old.get(&24).unwrap().pointer()
+        ),
+        original
+    );
+    drop((old, query7, query45));
+    without_allocations(|| drop(storage));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+fn caught_remove_failure(
+    key: Payload,
+    counters: &Counters,
+    fault: u8,
+    remove: impl FnOnce(Payload) -> Result<Option<Payload>, (Payload, AdmittedStorageError)>,
+) {
+    let query_id = key.id();
+    let records = NEXT_RECORD.load(SeqCst);
+    let copies = counters.keys.load(SeqCst);
+    if fault == 0 {
+        PANIC_CHARGE.store(query_id, SeqCst);
+    } else {
+        FACTORY_FAULT.with(|mode| mode.set(fault));
+    }
+    let removed = catch_unwind(AssertUnwindSafe(|| {
+        let _ = remove(key);
+    }));
+    assert!(
+        removed.is_err(),
+        "actual removal callback/copy/query-drop must fail"
+    );
+    if fault == 3 {
+        assert_eq!(NEXT_RECORD.load(SeqCst), records);
+        assert_eq!(counters.keys.load(SeqCst), copies);
+    } else if fault == 4 {
+        assert!(NEXT_RECORD.load(SeqCst) > records);
+        assert!(counters.keys.load(SeqCst) > copies);
+    } else {
+        assert_eq!(PANIC_CHARGE.load(SeqCst), usize::MAX);
+        assert!(RECORDS[query_id].freed.load(SeqCst));
+        assert!(RECORDS[query_id].refunded.load(SeqCst));
+    }
+}
+
+#[test]
+fn actual_removal_caught_copy_and_consumed_query_panics_cannot_publish() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    for (in_transaction, fault, order, repeated) in [
+        (false, 3, 7, false),
+        (false, 4, 7, false),
+        (false, 0, 7, false),
+        (false, 0, 9, false),
+        (true, 3, 7, false),
+        (true, 4, 7, false),
+        (true, 4, 7, true),
+        (true, 0, 7, false),
+        (true, 0, 9, false),
+    ] {
+        reset();
+        let budget = AllocationBudget::new(8 << 20);
+        let counters = Arc::new(Counters::default());
+        let _context = PolicyContext::new(&counters);
+        let mut storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+        seed(&storage, &budget, 0x61);
+        storage
+            .try_with_admitted_block(|block| {
+                drop(put(block, &budget, 7, 0x62));
+                assert!(put(block, &budget, 8, 0x68).is_none());
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        let before = {
+            let history = storage.history();
+            (
+                history.current().get(&7).unwrap().pointer(),
+                history.current().get(&8).unwrap().pointer(),
+                history.get_before_block(&7).unwrap().pointer(),
+            )
+        };
+        let old = storage.view();
+        let held = budget.reserved_bytes();
+        let records = NEXT_RECORD.load(SeqCst);
+        let callback_returned_ok = Cell::new(false);
+        let aggregate = catch_unwind(AssertUnwindSafe(|| {
+            storage.try_with_admitted_block(|block| {
+                if in_transaction {
+                    let mut transaction = block.try_transaction_admitted().unwrap();
+                    if repeated {
+                        drop(transaction_put(&mut transaction, &budget, 7, 0x63));
+                    }
+                    let key = removal_key(&budget, order);
+                    caught_remove_failure(key, &counters, fault, |key| {
+                        transaction.try_remove_admitted(key)
+                    });
+                    assert!(catch_unwind(AssertUnwindSafe(|| transaction.apply())).is_err());
+                } else {
+                    let key = removal_key(&budget, order);
+                    caught_remove_failure(key, &counters, fault, |key| {
+                        block.try_remove_admitted(key)
+                    });
+                }
+                callback_returned_ok.set(true);
+                Ok::<_, ()>(())
+            })
+        }));
+        assert!(callback_returned_ok.get());
+        assert!(
+            aggregate.is_err(),
+            "caught removal failure cannot publish either original map"
+        );
+        assert_eq!(budget.reserved_bytes(), held);
+        reclaimed_since(records);
+        assert_eq!(
+            (
+                old.get(&7).unwrap().pointer(),
+                old.get(&8).unwrap().pointer()
+            ),
+            (before.0, before.1)
+        );
+        drop(old);
+        {
+            let history = storage.history();
+            assert_eq!(
+                (
+                    history.current().get(&7).unwrap().pointer(),
+                    history.current().get(&8).unwrap().pointer(),
+                    history.get_before_block(&7).unwrap().pointer()
+                ),
+                before
+            );
+            assert!(history.get_before_block(&8).is_none());
+        }
+        assert!(matches!(
+            storage.try_with_admitted_block(|_| -> Result<(), ()> {
+                panic!("poisoned removal owner cannot invoke callback")
+            }),
+            Err(AdmittedBlockError::Admission(
+                AdmittedStorageError::Poisoned { .. }
+            ))
+        ));
+        without_allocations(|| drop(storage));
+        reclaimed_since(0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}

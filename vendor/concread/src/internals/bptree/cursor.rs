@@ -27,6 +27,10 @@ pub(crate) use checkpoint::{CheckpointBuffers, CursorCheckpoint};
 #[path = "clear.rs"]
 mod clear;
 
+#[path = "remove.rs"]
+mod remove;
+pub(crate) use remove::remove_tracking_slots;
+
 /// One shared bound for planning, cursor construction and private checkpoints.
 pub(crate) fn checked_next_generation(txid: u64) -> Option<u64> {
     txid.checked_add(1)
@@ -651,59 +655,11 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
 
     pub(crate) fn remove(&mut self, k: &K) -> Option<V> {
         self.begin_admitted_edit();
-        let r = match clone_and_remove(
-            self.root,
-            self.txid,
-            k,
-            self.last_seen.as_mut().expect("original retirement buffer"),
-            &mut self.first_seen,
-        ) {
-            CRRemoveState::NoClone(res) => res,
-            CRRemoveState::Clone(res, mut nnode) => {
-                mem::swap(&mut self.root, &mut nnode);
-                res
-            }
-            CRRemoveState::Shrink(res) => {
-                if self_meta!(self.root).is_leaf() {
-                    // No action - we have an empty tree.
-                    res
-                } else {
-                    // Root is being demoted, get the last branch and
-                    // promote it to the root.
-                    self.last_seen
-                        .as_mut()
-                        .expect("original retirement buffer")
-                        .push(self.root);
-                    let rmut = branch_ref!(self.root, K, V, Untracked);
-                    let mut pnode = rmut.extract_last_node();
-                    mem::swap(&mut self.root, &mut pnode);
-                    res
-                }
-            }
-            CRRemoveState::CloneShrink(res, mut nnode) => {
-                if self_meta!(nnode).is_leaf() {
-                    // The tree is empty, but we cloned the root to get here.
-                    mem::swap(&mut self.root, &mut nnode);
-                    res
-                } else {
-                    // Our root is getting demoted here, get the remaining branch
-                    self.last_seen
-                        .as_mut()
-                        .expect("original retirement buffer")
-                        .push(nnode);
-                    let rmut = branch_ref!(nnode, K, V, Untracked);
-                    let mut pnode = rmut.extract_last_node();
-                    // Promote it to the new root
-                    mem::swap(&mut self.root, &mut pnode);
-                    res
-                }
-            }
-        };
-        if r.is_some() {
-            self.length -= 1;
-        }
+        let previous = self
+            .try_remove(k)
+            .unwrap_or_else(|_| unreachable!("untracked tracking can grow"));
         self.edit_failed = false;
-        r
+        previous
     }
 
     #[cfg(test)]
@@ -1237,185 +1193,6 @@ fn path_clone<K: Clone + Ord + Debug, V: Clone>(
                 CRCloneState::NoClone
             }
         }
-    }
-}
-
-fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
-    node: *mut Node<K, V>,
-    txid: u64,
-    k: &K,
-    last_seen: &mut Vec<*mut Node<K, V>>,
-    first_seen: &mut Vec<*mut Node<K, V>>,
-) -> CRRemoveState<K, V> {
-    if self_meta_shared!(node).is_leaf() {
-        leaf_ref_shared!(node, K, V, Untracked)
-            .req_clone(txid, &mut Untracked)
-            .map(|cnode| {
-                first_seen.push(cnode);
-                // println!("ls push 10 {:?}", node);
-                last_seen.push(node);
-                let mref = leaf_ref!(cnode, K, V, Untracked);
-                match mref.remove(k) {
-                    LeafRemoveState::Ok(res) => CRRemoveState::Clone(res, cnode),
-                    LeafRemoveState::Shrink(res) => CRRemoveState::CloneShrink(res, cnode),
-                }
-            })
-            .unwrap_or_else(|| {
-                let mref = leaf_ref!(node, K, V, Untracked);
-                match mref.remove(k) {
-                    LeafRemoveState::Ok(res) => CRRemoveState::NoClone(res),
-                    LeafRemoveState::Shrink(res) => CRRemoveState::Shrink(res),
-                }
-            })
-    } else {
-        // Locate the node we need to work on and then react if it
-        // requests a shrink.
-        branch_ref_shared!(node, K, V, Untracked)
-            .req_clone(txid, &mut Untracked)
-            .map(|cnode| {
-                first_seen.push(cnode);
-                // println!("ls push 11 {:?}", node);
-                last_seen.push(node);
-                // Done mm
-                let nmref = branch_ref!(cnode, K, V, Untracked);
-                let anode_idx = nmref.locate_node(k);
-                let anode = nmref.get_idx_unchecked(anode_idx);
-                match clone_and_remove(anode, txid, k, last_seen, first_seen) {
-                    CRRemoveState::NoClone(_res) => {
-                        unreachable!("Should never occur");
-                    }
-                    CRRemoveState::Clone(res, lnode) => {
-                        nmref.replace_by_idx(anode_idx, lnode);
-                        CRRemoveState::Clone(res, cnode)
-                    }
-                    CRRemoveState::Shrink(_res) => {
-                        unreachable!("This represents a corrupt tree state");
-                    }
-                    CRRemoveState::CloneShrink(res, nnode) => {
-                        // Put our cloned child into the tree at the correct location, don't worry,
-                        // the shrink_decision will deal with it.
-                        nmref.replace_by_idx(anode_idx, nnode);
-
-                        // Now setup the sibling, to the left *or* right.
-                        let right_idx = nmref.clone_sibling_idx(
-                            txid,
-                            anode_idx,
-                            last_seen,
-                            first_seen,
-                            &mut Untracked,
-                        );
-                        // Okay, now work out what we need to do.
-                        match nmref.shrink_decision(right_idx, &mut Untracked) {
-                            BranchShrinkState::Balanced => {
-                                // K:V were distributed through left and right,
-                                // so no further action needed.
-                                CRRemoveState::Clone(res, cnode)
-                            }
-                            BranchShrinkState::Merge(dnode) => {
-                                // Right was merged to left, and we remain
-                                // valid
-                                debug_assert!(!last_seen.contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::Clone(res, cnode)
-                            }
-                            BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now fallen under the needed
-                                // amount of values.
-                                debug_assert!(!last_seen.contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::CloneShrink(res, cnode)
-                            }
-                        }
-                    }
-                }
-            })
-            .unwrap_or_else(|| {
-                // We are already part of this txn
-                let nmref = branch_ref!(node, K, V, Untracked);
-                let anode_idx = nmref.locate_node(k);
-                let anode = nmref.get_idx_unchecked(anode_idx);
-                match clone_and_remove(anode, txid, k, last_seen, first_seen) {
-                    CRRemoveState::NoClone(res) => CRRemoveState::NoClone(res),
-                    CRRemoveState::Clone(res, lnode) => {
-                        nmref.replace_by_idx(anode_idx, lnode);
-                        CRRemoveState::NoClone(res)
-                    }
-                    CRRemoveState::Shrink(res) => {
-                        let right_idx = nmref.clone_sibling_idx(
-                            txid,
-                            anode_idx,
-                            last_seen,
-                            first_seen,
-                            &mut Untracked,
-                        );
-                        match nmref.shrink_decision(right_idx, &mut Untracked) {
-                            BranchShrinkState::Balanced => {
-                                // K:V were distributed through left and right,
-                                // so no further action needed.
-                                CRRemoveState::NoClone(res)
-                            }
-                            BranchShrinkState::Merge(dnode) => {
-                                // Right was merged to left, and we remain
-                                // valid
-                                //
-                                // A quirk here is based on how clone_sibling_idx works. We may actually
-                                // start with anode_idx of 0, which triggers a right clone, so it's
-                                // *already* in the mm lists. But here right is "last seen" now if
-                                //
-                                // println!("ls push 22 {:?}", dnode);
-                                debug_assert!(!last_seen.contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::NoClone(res)
-                            }
-                            BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now fallen under the needed
-                                // amount of values, so we begin to shrink up.
-                                // println!("ls push 23 {:?}", dnode);
-                                debug_assert!(!last_seen.contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::Shrink(res)
-                            }
-                        }
-                    }
-                    CRRemoveState::CloneShrink(res, nnode) => {
-                        // We don't need to clone, just work on the nmref we have.
-                        //
-                        // Swap in the cloned node to the correct location.
-                        nmref.replace_by_idx(anode_idx, nnode);
-                        // Now setup the sibling, to the left *or* right.
-                        let right_idx = nmref.clone_sibling_idx(
-                            txid,
-                            anode_idx,
-                            last_seen,
-                            first_seen,
-                            &mut Untracked,
-                        );
-                        match nmref.shrink_decision(right_idx, &mut Untracked) {
-                            BranchShrinkState::Balanced => {
-                                // K:V were distributed through left and right,
-                                // so no further action needed.
-                                CRRemoveState::NoClone(res)
-                            }
-                            BranchShrinkState::Merge(dnode) => {
-                                // Right was merged to left, and we remain
-                                // valid
-                                // println!("ls push 24 {:?}", dnode);
-                                debug_assert!(!last_seen.contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::NoClone(res)
-                            }
-                            BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now fallen under the needed
-                                // amount of values.
-                                // println!("ls push 25 {:?}", dnode);
-                                debug_assert!(!last_seen.contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::Shrink(res)
-                            }
-                        }
-                    }
-                }
-            }) // end unwrap_or_else
     }
 }
 

@@ -679,3 +679,6 @@ mod borrowed;
 
 #[path = "clear_admission_tests.rs"]
 mod clear;
+
+#[path = "delete_admission_tests.rs"]
+mod deletion;

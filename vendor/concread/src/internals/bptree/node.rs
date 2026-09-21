@@ -1,4 +1,5 @@
 use super::states::*;
+use super::tracking::TrackingBuffer;
 use crate::utils::*;
 // use libc::{c_void, mprotect, PROT_READ, PROT_WRITE};
 use super::allocation::{NodeAllocation, NodeCloning, NodeFunding, OwnedNodeAllocation};
@@ -720,7 +721,9 @@ impl<K: Ord + Clone + Debug, V: Clone, C> Leaf<K, V, C> {
             Ok(idx) => {
                 // It exists at idx, replace
                 let prev = unsafe { self.values[idx].as_mut_ptr().replace(v) };
-                // Prev now contains the original value, return it!
+                // The replacement slot is initialized before arbitrary input
+                // cleanup. Keep the previous value local until that succeeds.
+                drop(k);
                 LeafInsertState::Ok(Some(prev))
             }
             Err(idx) => {
@@ -778,9 +781,13 @@ impl<K: Ord + Clone + Debug, V: Clone, C> Leaf<K, V, C> {
             None => LeafRemoveState::Ok(None),
             Some(idx) => {
                 // Get the kv out
-                let _pk = unsafe { slice_remove(&mut self.key, idx).assume_init() };
+                let removed_key = unsafe { slice_remove(&mut self.key, idx).assume_init() };
                 let pv = unsafe { slice_remove(&mut self.values, idx).assume_init() };
                 self.dec_count();
+                // Keep the removed value in local custody until key cleanup
+                // succeeds. A tail return would move it before an implicit key
+                // destructor can unwind, orphaning its allocation and charge.
+                drop(removed_key);
                 if self.count() == 0 {
                     LeafRemoveState::Shrink(Some(pv))
                 } else {
@@ -1677,8 +1684,8 @@ impl<K: Ord + Clone + Debug, V: Clone, C> Branch<K, V, C> {
         &mut self,
         txid: u64,
         idx: usize,
-        last_seen: &mut Vec<*mut Node<K, V, C>>,
-        first_seen: &mut Vec<*mut Node<K, V, C>>,
+        last_seen: &mut impl TrackingBuffer<*mut Node<K, V, C>, Charge = C>,
+        first_seen: &mut impl TrackingBuffer<*mut Node<K, V, C>, Charge = C>,
         funding: &mut impl NodeCloning<K, V, Charge = C>,
     ) -> usize {
         debug_assert_branch!(self);
