@@ -1890,10 +1890,13 @@ impl NativeTransactionBrokerCore {
         &self,
         payload: &iroha_data_model::transaction::TransactionPayload,
     ) -> Result<iroha_data_model::transaction::SignedTransaction, BrokerError> {
-        if payload.authority() != self.exact_binding.authority() {
+        if payload.authority() != self.exact_binding.authority()
+            || !iroha_torii::sorafs::native_transaction_signer::sorafs_native_transaction_payload_matches_role_v1(self.exact_binding.role(), payload)
+        {
             return Err(BrokerError::Rejected);
         }
-        ensure_transaction_session_network(payload, &self.session.network_id)?;
+        ensure_transaction_session_network(payload, &self.session.network_id)
+            .map_err(|_| BrokerError::Rejected)?;
         let payload = encode_native_transaction_payload(payload)?;
         let result = provider_call!(
             self,
@@ -2037,10 +2040,19 @@ macro_rules! define_native_transaction_broker_signer {
                 if payload.authority() != self.core.exact_binding.authority() {
                     return Err(iroha_torii::$error::InputAuthorityMismatch);
                 }
+                if !iroha_torii::sorafs::native_transaction_signer::sorafs_native_transaction_payload_matches_role_v1(
+                    iroha_torii::SorafsNativeTransactionSignerRoleV1::$role, &payload,
+                ) {
+                    return Err(iroha_torii::$error::Refused);
+                }
+                if ensure_transaction_session_network(&payload, &self.core.session.network_id).is_err() {
+                    return Err(iroha_torii::$error::Refused);
+                }
                 let raw = Arc::new($raw {
                     core: self.core.clone(),
                 });
                 let qualified = iroha_torii::$qualifier(
+                    self.core.session.network_id,
                     self.core.exact_binding.clone(),
                     raw,
                 )

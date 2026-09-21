@@ -22,6 +22,13 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 
 ## Overview
 - Hyperledger Iroha 3 is a blockchain platform in its first release.
+- The first release prohibits backward compatibility: remove retired layouts,
+  aliases, shims, fallback decoders, and parallel legacy implementations.
+- SoraFS and ordinary server/release signing support authenticated software
+  custody without an HSM prerequisite. Enforce signatures, permissions, finality,
+  revocation, and replay protection from verifiable protocol state. Do not relabel
+  hardware-dependent guarantees as software guarantees. The separate KAGEMUSHA
+  offline monetary-authority policy below is unchanged by SoraFS integration.
 - Sumeragi v2 DA/RBC availability is mandatory in Iroha 3 and is realized by
   the signed RS16 `PayloadManifest`/`PayloadChunk` layout. Legacy global-RBC
   and consensus fault-injection configuration is not a second production path.

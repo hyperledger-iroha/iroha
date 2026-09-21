@@ -1,38 +1,42 @@
-//! Canonical, independently authenticated hardware signer custody qualification.
+//! Canonical, independently authenticated signer authorization.
 //!
-//! This verifies an attestation authority's statement about a hardware-generated,
-//! non-exportable key. The authority must independently validate the actual device/vendor
-//! evidence; a signature from the role key is never custody evidence. Only public bindings and
-//! evidence digests cross this boundary. Vendor evidence, credentials and key material stay in
-//! the attestation service. Verification uses caller-supplied trust, time and authenticated
-//! finalized state, never values discovered from the candidate record or the process clock.
+//! This verifies an independently pinned authority's approval of a public key for an exact
+//! role, purpose and policy. Key storage and signer implementation are operator choices; this
+//! contract does not claim to observe key generation, exportability or server hardware. A
+//! signature from the role key cannot authorize that same key. Only public bindings and
+//! authorization evidence digests cross this boundary. Verification uses caller-supplied trust, time and
+//! authenticated finalized state, never values discovered from the candidate record or process
+//! clock.
 //!
 //! The daemon's opaque-operation coordinator and canonical release receipts consume this verifier.
 //! Enrollment admission must advance through authoritative CAS exactly once; ordinary use checks
 //! the already active record with fresh independent state. Provider I/O and release are fenced by
 //! that daemon boundary, not by possession of a public attestation alone.
 //!
-//! TODO: Finish the remaining SoraFS runtime/receipt consumers and production hardware/state
-//! adapters, then remove the software service path while preserving non-SoraFS consensus custody.
-//! This module alone neither proves a deployed HSM nor makes a software receipt hardware-qualified.
+//! TODO: Finish the remaining SoraFS runtime/receipt consumers and production state adapters.
+//! This module alone does not prove deployment, key rotation, or durable state; those are checked
+//! by the signer service and authoritative state observer before a receipt is admitted.
 
 use super::protocol::{
-    SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1, digest_parts, valid_identity,
+    SIGNER_MAX_ID_BYTES_V1, SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1,
+    digest_parts,
 };
 use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_primitives::production_identity::{
+    has_reserved_nonproduction_component_v1, is_production_identity_v1,
+};
 use norito::codec::{Decode, Encode};
 use std::fmt;
 
 /// Maximum complete canonical custody record, checked before decoding.
 pub const SIGNER_CUSTODY_MAX_BYTES_V1: usize = 16 * 1024;
 /// Domain of exact header-bearing canonical custody statement signing bytes.
-pub const SIGNER_CUSTODY_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:sorafs:hardware-signer-custody:v1\0";
+pub const SIGNER_CUSTODY_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:sorafs:signer-custody:v1\0";
 /// Exact format marker for the sole first-release custody statement.
 pub const SIGNER_CUSTODY_MAGIC_V1: [u8; 8] = *b"IRHSCU01";
 /// Exact first-release custody statement version.
 pub const SIGNER_CUSTODY_VERSION_V1: u16 = 1;
-pub(super) const CUSTODY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
-    b"iroha.sorafs.hardware-signer-custody.record.v1";
+pub(super) const CUSTODY_RECORD_DIGEST_DOMAIN_V1: &[u8] = b"iroha.sorafs.signer-custody.record.v1";
 const MAX_HANDLE_BYTES_V1: usize = 128;
 const MAX_VALIDITY_MS_V1: u64 = 24 * 60 * 60 * 1000;
 
@@ -47,7 +51,7 @@ pub struct SignerCustodyBindingV1 {
     pub network_id: [u8; 32],
     /// Public runtime-provider handle; never a vendor URI containing credentials.
     pub runtime_handle: String,
-    /// Public hardware key-generation handle resolved only by the deployment adapter.
+    /// Public key handle resolved only by the operator's configured signer adapter.
     pub key_handle: String,
     /// Public signer service identity.
     pub service_id: String,
@@ -59,7 +63,7 @@ pub struct SignerCustodyBindingV1 {
     pub purpose: SignerPurposeBindingV1,
     /// Exact permitted signature algorithm.
     pub algorithm: SignerKeyAlgorithmV1,
-    /// Exact public key whose hardware generation and non-exportability were attested.
+    /// Exact public key approved for this role and purpose by the independent authority.
     pub public_key: PublicKey,
     /// Nonzero governed key generation.
     pub key_revision: u64,
@@ -67,6 +71,19 @@ pub struct SignerCustodyBindingV1 {
     pub policy_revision: u64,
     /// Digest of the exact public signing policy.
     pub policy_digest: [u8; 32],
+}
+impl SignerCustodyBindingV1 {
+    /// Validate this binding's canonical public identity and role/algorithm shape before I/O.
+    ///
+    /// This checks public grammar only; it does not authenticate an enrollment, current
+    /// authority, provider evidence, time or permission to use the key.
+    ///
+    /// # Errors
+    /// Returns [`SignerCustodyErrorV1::InvalidRecord`] for malformed identities, handles,
+    /// network, purpose, key/algorithm, generations or policy digest.
+    pub fn validate(&self) -> Result<(), SignerCustodyErrorV1> {
+        validate_binding(self)
+    }
 }
 impl fmt::Debug for SignerCustodyBindingV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -78,7 +95,7 @@ impl fmt::Debug for SignerCustodyBindingV1 {
     }
 }
 
-/// Independently governed identity of the authority validating vendor/device evidence.
+/// Independently governed identity of the authority approving signer authorization.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::signer::custody::SignerCustodyAuthorityV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
@@ -91,7 +108,7 @@ pub struct SignerCustodyAuthorityV1 {
     pub key_revision: u64,
     /// Governed attestation-policy generation.
     pub policy_revision: u64,
-    /// Digest of the policy for verifying actual device evidence.
+    /// Digest of the policy for approving public keys and their role and purpose bindings.
     pub policy_digest: [u8; 32],
 }
 impl fmt::Debug for SignerCustodyAuthorityV1 {
@@ -125,9 +142,8 @@ pub struct SignerCustodyAnchorV1 {
 
 /// Statement signed by the independent attestation authority.
 ///
-/// There is exactly one admitted profile: generation inside hardware with no exportability or
-/// prior export. The booleans describe observations authenticated by the independent authority;
-/// they cannot replace device-evidence verification performed by that authority.
+/// The authority approves the exact public binding and validity interval. Software and optional
+/// hardware signers use this same contract; claims about private key storage are not wire fields.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::signer::custody::SignerCustodyStatementV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
@@ -150,16 +166,8 @@ pub struct SignerCustodyStatementV1 {
     pub issued_at_unix_ms: u64,
     /// Exclusive end of the signed validity interval, in Unix milliseconds.
     pub expires_at_unix_ms: u64,
-    /// Digest of the hardware module identity verified from device evidence.
-    pub hardware_identity_digest: [u8; 32],
-    /// Digest of the exact runtime-only vendor/device evidence.
+    /// Digest of the exact evidence used by the authority to approve this signer binding.
     pub evidence_digest: [u8; 32],
-    /// Must be true: importing an exported software key does not qualify.
-    pub generated_in_hardware: bool,
-    /// Must be false under the sole admitted non-exportable profile.
-    pub exportable: bool,
-    /// Must be false: no earlier cleartext/exportable copy may have existed.
-    pub ever_exported: bool,
     /// Must be false; the authoritative current context also checks revocation.
     pub revoked: bool,
 }
@@ -167,7 +175,7 @@ impl SignerCustodyStatementV1 {
     /// Return exact domain-separated bytes for the attestation authority to sign.
     ///
     /// # Errors
-    /// Rejects malformed, oversized, revoked or non-hardware/non-exportable statements.
+    /// Rejects malformed, oversized or revoked statements.
     pub fn signing_payload(&self) -> Result<Vec<u8>, SignerCustodyErrorV1> {
         validate_statement(self)?;
         let encoded =
@@ -274,7 +282,7 @@ pub struct SignerCustodyActiveHeadV1 {
     pub policy_digest: [u8; 32],
 }
 
-/// Explicit inputs for ordinary use of an already-enrolled active hardware key.
+/// Explicit inputs for ordinary use of an already-enrolled active key.
 ///
 /// The caller authenticates `active_head` and both revocation flags under
 /// `current_anchor.state_digest` independently of the candidate record. That digest covers this
@@ -397,8 +405,6 @@ impl fmt::Debug for VerifiedSignerCustodyV1 {
 pub enum SignerCustodyErrorV1 {
     /// Canonical framing, shape, resource bounds or public identities are invalid.
     InvalidRecord,
-    /// The only admitted hardware-generated, never-exported profile was not met.
-    HardwareCustodyRequired,
     /// The exact independently supplied signer binding does not match.
     BindingMismatch,
     /// The independent authority identity, policy, key or trust interval is invalid.
@@ -413,22 +419,21 @@ pub enum SignerCustodyErrorV1 {
     AnchorMismatch,
     /// The qualification sequence or predecessor disagrees with authoritative state.
     ReplayOrRollback,
-    /// Either the hardware key or its attestation authority is currently revoked.
+    /// Either the signer key or its attestation authority is currently revoked.
     Revoked,
 }
 impl fmt::Display for SignerCustodyErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidRecord => "invalid hardware custody record",
-            Self::HardwareCustodyRequired => "non-exportable hardware custody is required",
-            Self::BindingMismatch => "hardware custody signer binding mismatch",
-            Self::UntrustedAuthority => "hardware custody authority is untrusted",
-            Self::SelfAttestation => "hardware custody authority is not independent",
-            Self::InvalidAttestation => "hardware custody attestation is invalid",
-            Self::Freshness => "hardware custody freshness check failed",
-            Self::AnchorMismatch => "hardware custody finalized anchor mismatch",
-            Self::ReplayOrRollback => "hardware custody sequence or predecessor mismatch",
-            Self::Revoked => "hardware custody key or authority is revoked",
+            Self::InvalidRecord => "invalid signer custody record",
+            Self::BindingMismatch => "signer custody binding mismatch",
+            Self::UntrustedAuthority => "signer custody authority is untrusted",
+            Self::SelfAttestation => "signer custody authority is not independent",
+            Self::InvalidAttestation => "signer custody attestation is invalid",
+            Self::Freshness => "signer custody freshness check failed",
+            Self::AnchorMismatch => "signer custody finalized anchor mismatch",
+            Self::ReplayOrRollback => "signer custody sequence or predecessor mismatch",
+            Self::Revoked => "signer custody key or authority is revoked",
         })
     }
 }
@@ -437,7 +442,7 @@ impl std::error::Error for SignerCustodyErrorV1 {}
 /// Verify one canonical record against an independently supplied exact signer and authority.
 ///
 /// # Errors
-/// Rejects invalid framing/bounds, software or exported keys, self-attestation, binding/authority
+/// Rejects invalid framing/bounds, self-attestation, binding/authority
 /// substitution, invalid signatures, stale or future data, revocation and predecessor replay.
 pub fn verify_signer_custody_enrollment_v1(
     bytes: &[u8],
@@ -461,7 +466,7 @@ pub fn verify_signer_custody_enrollment_v1(
 /// immutable; the fresh current state independently determines which generation is active now.
 ///
 /// # Errors
-/// Rejects invalid/non-hardware attestations, wrong bindings, inactive or substituted record heads,
+/// Rejects invalid attestations, wrong bindings, inactive or substituted record heads,
 /// changed key/policy generations, false approval anchors, stale state and either key's revocation.
 pub fn verify_signer_custody_use_v1(
     bytes: &[u8],
@@ -513,18 +518,10 @@ fn verify_attestation(
         .map_err(|_| SignerCustodyErrorV1::InvalidAttestation)
 }
 
-fn valid_hardware_handle(value: &str) -> bool {
+fn valid_custody_handle(value: &str) -> bool {
     if value.len() > MAX_HANDLE_BYTES_V1
         || !value.is_ascii()
-        || value
-            .to_ascii_lowercase()
-            .split(|character: char| !character.is_ascii_alphanumeric())
-            .any(|component| {
-                matches!(
-                    component,
-                    "null" | "mock" | "test" | "dev" | "demo" | "fake" | "dummy" | "placeholder"
-                )
-            })
+        || has_reserved_nonproduction_component_v1(value)
     {
         return false;
     }
@@ -532,7 +529,7 @@ fn valid_hardware_handle(value: &str) -> bool {
         return false;
     };
     let opaque = opaque.strip_prefix("//").unwrap_or(opaque);
-    matches!(scheme, "hsm" | "kms" | "pkcs11")
+    matches!(scheme, "hsm" | "kms" | "pkcs11" | "software" | "signer")
         && opaque.split('/').all(|component| {
             component.bytes().any(|byte| byte.is_ascii_alphanumeric())
                 && component
@@ -546,10 +543,10 @@ pub(super) fn validate_binding(
 ) -> Result<(), SignerCustodyErrorV1> {
     if iroha_primitives::chain_id::validate_chain_id(&binding.chain_id).is_err()
         || binding.network_id == [0; 32]
-        || !valid_hardware_handle(&binding.runtime_handle)
-        || !valid_hardware_handle(&binding.key_handle)
-        || !valid_identity(&binding.service_id)
-        || !valid_identity(&binding.administrator_id)
+        || !valid_custody_handle(&binding.runtime_handle)
+        || !valid_custody_handle(&binding.key_handle)
+        || !is_production_identity_v1(&binding.service_id, SIGNER_MAX_ID_BYTES_V1)
+        || !is_production_identity_v1(&binding.administrator_id, SIGNER_MAX_ID_BYTES_V1)
         || binding.service_id == binding.administrator_id
         || !binding.purpose.validates_role(binding.role)
         || !binding.role.allows_algorithm(binding.algorithm)
@@ -564,8 +561,8 @@ pub(super) fn validate_binding(
 }
 
 fn valid_authority(authority: &SignerCustodyAuthorityV1) -> bool {
-    valid_identity(&authority.service_id)
-        && valid_identity(&authority.administrator_id)
+    is_production_identity_v1(&authority.service_id, SIGNER_MAX_ID_BYTES_V1)
+        && is_production_identity_v1(&authority.administrator_id, SIGNER_MAX_ID_BYTES_V1)
         && authority.service_id != authority.administrator_id
         && authority.key_revision != 0
         && authority.policy_revision != 0
@@ -582,7 +579,6 @@ fn validate_statement(statement: &SignerCustodyStatementV1) -> Result<(), Signer
         || statement.version != SIGNER_CUSTODY_VERSION_V1
         || !valid_authority(&statement.authority)
         || !valid_anchor(statement.anchor)
-        || statement.hardware_identity_digest == [0; 32]
         || statement.evidence_digest == [0; 32]
         || statement.sequence == 0
         || (statement.sequence == 1) != (statement.predecessor_digest == [0; 32])
@@ -591,9 +587,6 @@ fn validate_statement(statement: &SignerCustodyStatementV1) -> Result<(), Signer
         || statement.expires_at_unix_ms - statement.issued_at_unix_ms > MAX_VALIDITY_MS_V1
     {
         return Err(SignerCustodyErrorV1::InvalidRecord);
-    }
-    if !statement.generated_in_hardware || statement.exportable || statement.ever_exported {
-        return Err(SignerCustodyErrorV1::HardwareCustodyRequired);
     }
     if statement.revoked {
         return Err(SignerCustodyErrorV1::Revoked);
@@ -730,3 +723,7 @@ mod tests;
 
 #[cfg(test)]
 include!("custody/captured_owner_identity_tests.rs");
+
+#[cfg(test)]
+#[path = "custody/production_identity_tests.rs"]
+mod production_identity_tests;

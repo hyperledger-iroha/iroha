@@ -168,6 +168,8 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         h_end: 100,
         status: iroha_core::state::GovernanceReferendumStatus::Open,
         mode: iroha_core::state::GovernanceReferendumMode::Plain,
+        plain_context: iroha_core::query::standalone_plain_test_fixture::context(&raw_state.gov, 0),
+        plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
     };
     // Locks: one Aye with amount=10000, duration=conviction_step_blocks (factor=2 before clamp).
     let kp = checked_governance_read_ed25519_key_fixture();
@@ -185,7 +187,7 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         direction: 0, // approve
         duration_blocks,
         custody: iroha_core::state::GovernanceLockCustody {
-            escrowed: !raw_state.gov.min_bond_amount.is_zero(),
+            escrowed: true,
             asset_definition_id: raw_state.gov.voting_asset_id.clone(),
             bond_escrow_account: raw_state.gov.bond_escrow_account.clone(),
             slash_receiver_account: raw_state.gov.slash_receiver_account.clone(),

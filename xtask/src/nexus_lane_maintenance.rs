@@ -48,6 +48,9 @@ pub fn run(options: LaneMaintenanceOptions) -> Result<LaneMaintenanceReport> {
     Ok(report)
 }
 fn inspect_lanes(store_root: &Path, lanes: &LaneConfig) -> Result<LaneMaintenanceReport> {
+    // Validate the root before inspecting children so a linked store cannot
+    // make the otherwise non-following namespace walk traverse another tree.
+    directory_present(store_root)?;
     let (canonical_blocks, canonical_merge_log) = Kura::canonical_storage_paths(store_root);
     let blocks_root = store_root.join("blocks");
     let merge_root = store_root.join("merge_ledger");
@@ -75,10 +78,10 @@ fn inspect_lanes(store_root: &Path, lanes: &LaneConfig) -> Result<LaneMaintenanc
         unclassified_entries,
     })
 }
-fn inventory_entries(root: &Path, excluded: &[&str]) -> Result<Vec<PathReport>> {
+fn directory_present(root: &Path) -> Result<bool> {
     let metadata = match fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error).wrap_err_with(|| format!("inspect {}", root.display())),
     };
     if !metadata.is_dir() {
@@ -86,6 +89,12 @@ fn inventory_entries(root: &Path, excluded: &[&str]) -> Result<Vec<PathReport>> 
             "inventory namespace {} must be a directory, not a symbolic link or other file",
             root.display()
         ));
+    }
+    Ok(true)
+}
+fn inventory_entries(root: &Path, excluded: &[&str]) -> Result<Vec<PathReport>> {
+    if !directory_present(root)? {
+        return Ok(Vec::new());
     }
     let mut entries = Vec::new();
     for entry in fs::read_dir(root).wrap_err_with(|| format!("read {}", root.display()))? {
@@ -330,5 +339,38 @@ mod tests {
         assert!(error.to_string().contains("must be a directory"));
         assert!(cycle.is_symlink());
         assert!(broken.is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inventory_rejects_a_linked_store_root_and_does_not_follow_nested_links() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().expect("tmpdir");
+        let outside = tempdir().expect("outside directory");
+        fs::write(outside.path().join("retained.norito"), b"outside evidence")
+            .expect("outside evidence");
+        let linked_store = temp.path().join("linked-store");
+        symlink(outside.path(), &linked_store).expect("linked store");
+        let error =
+            inspect_lanes(&linked_store, &lane_cfg("Alpha")).expect_err("refuse linked store root");
+        assert!(error.to_string().contains("must be a directory"));
+
+        let store = temp.path().join("store");
+        let (blocks, _) = Kura::canonical_storage_paths(&store);
+        fs::create_dir_all(&blocks).expect("canonical blocks");
+        fs::write(blocks.join("blocks.data"), b"canonical").expect("block data");
+        let linked_payload = blocks.join("external");
+        symlink(outside.path(), &linked_payload).expect("linked payload");
+        let report = inspect_lanes(&store, &lane_cfg("Alpha")).expect("nested symlink inventory");
+        assert_eq!(
+            report.canonical_blocks.size_bytes,
+            9 + fs::symlink_metadata(&linked_payload).unwrap().len()
+        );
+        assert_eq!(
+            fs::read(outside.path().join("retained.norito")).unwrap(),
+            b"outside evidence"
+        );
+        assert!(linked_payload.is_symlink());
     }
 }

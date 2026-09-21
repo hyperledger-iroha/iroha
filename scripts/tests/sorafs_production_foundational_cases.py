@@ -11,7 +11,7 @@ def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["schema"] == MODULE.SUMMARY_SCHEMA
     assert payload["status"] == "ready"
-    assert payload["signer_qualification"] == "software-key-qualified"
+    assert "signer_qualification" not in payload
     assert payload["recognized_summary_count"] == len(MODULE.DEFAULT_REQUIRED_GATES)
     assert payload["deployment"] == {
         "deployment_id": DEPLOYMENT_ID,
@@ -24,7 +24,7 @@ def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
     assert payload["foundational_prerequisites"]["prerequisite_count"] == len(
         MODULE.FOUNDATIONAL_PREREQUISITE_IDS
     )
-    assert payload["foundational_prerequisites"]["signer_backend"] == "software"
+    assert "signer_backend" not in payload["foundational_prerequisites"]
     assert payload["foundational_prerequisites"]["signer_service_id"] == (
         FOUNDATIONAL_SIGNER_SERVICE_ID
     )
@@ -64,7 +64,7 @@ def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
 
 
 def test_aggregate_rejects_hsm_qualification_claim(tmp_path: Path) -> None:
-    """The revised policy never permits an HSM-qualified readiness claim."""
+    """The aggregate makes no claim about the operator's key storage."""
 
     write_all_gates(tmp_path)
     summary_path = tmp_path / "aggregate.json"
@@ -77,7 +77,7 @@ def test_aggregate_rejects_hsm_qualification_claim(tmp_path: Path) -> None:
         MODULE.DEFAULT_REQUIRED_GATES,
         errors,
     )
-    assert any("must be software-key-qualified or unqualified" in error for error in errors)
+    assert any("schema-closed output contract" in error for error in errors)
 
 
 def test_aggregate_replay_cross_binds_foundational_and_required_lane_digests(
@@ -264,7 +264,6 @@ def test_foundational_prerequisite_schema_inventories_are_closed() -> None:
     assert MODULE.FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS == {
         "administrator_id",
         "algorithm",
-        "backend",
         "key_revision",
         "policy_digest_sha256",
         "policy_revision",
@@ -682,7 +681,7 @@ def test_foundational_prerequisites_reject_schema_set_freshness_and_context_atta
             "hsm-backend",
             "backend",
             "hsm",
-            "signer backend must be `software`",
+            "signature fields must match the schema-closed contract",
         ),
         (
             "shared-administrator",

@@ -47,7 +47,9 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
         h.creation_time_ms = time_origin_ms + 1;
     });
     let state_block2 = state.block(block2.as_ref().header());
-    let mut events = state_block2.apply_fixture_block(&block2, None).expect("replay the complete actual typed Time outputs");
+    let mut events = state_block2
+        .apply_fixture_block(&block2, None)
+        .expect("replay the complete actual typed Time outputs");
     // Exactly one Time event and a single TriggerCompleted notification
     let time_count = events
         .iter()
@@ -232,7 +234,9 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
         header.creation_time_ms = time_origin_ms + 2;
     });
     let state_block2 = state.block(block2.as_ref().header());
-    let _ = state_block2.apply_fixture_block(&block2, None).expect("replay the complete actual typed Time outputs");
+    let _ = state_block2
+        .apply_fixture_block(&block2, None)
+        .expect("replay the complete actual typed Time outputs");
 
     {
         let view = state.view();
@@ -255,7 +259,9 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
         header.creation_time_ms = time_origin_ms + 3;
     });
     let state_block3 = state.block(block3.as_ref().header());
-    let _ = state_block3.apply_fixture_block(&block3, None).expect("replay the complete actual typed Time outputs");
+    let _ = state_block3
+        .apply_fixture_block(&block3, None)
+        .expect("replay the complete actual typed Time outputs");
 
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
@@ -283,10 +289,18 @@ fn result_bearing_time_trigger_block(
     let mut signed: SignedBlock = valid.into();
     if signed.header().is_genesis() {
         let snapshot = state.block(signed.header()).axt_policy_snapshot();
-        signed.set_execution_outputs(
-            Vec::new(), 0, BTreeMap::new(), Vec::new(), snapshot, Default::default(), Vec::new(),
-            &crate::execution_output_test_support::structural_output_limits(),
-        ).expect("empty World setup metadata is structurally complete");
+        signed
+            .set_execution_outputs(
+                Vec::new(),
+                0,
+                BTreeMap::new(),
+                Vec::new(),
+                snapshot,
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+            .expect("empty World setup metadata is structurally complete");
     } else {
         signed = signed.canonical_resultless_proposal();
         let mut trial = state.block(signed.header());
@@ -310,6 +324,30 @@ fn result_bearing_time_trigger_block(
         .unpack(|_| {})
         .expect("commit the result-bearing time-trigger fixture block")
 }
+#[test]
+fn apply_fixture_block_reports_predecessor_metadata_failure() {
+    let state = State::new(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    // Actual output replay can succeed while metadata correctly refuses a
+    // height-two carrier whose original State has no height-one predecessor.
+    let source = result_bearing_time_trigger_block(&state, |header| {
+        header.set_height(NonZeroU64::new(2).unwrap());
+    });
+    let block = state.block(source.as_ref().header());
+    let error = block
+        .apply_fixture_block(&source, None)
+        .expect_err("fixture metadata refusal must not become an empty successful event list");
+    assert!(
+        error.contains("execution publication does not extend this State's exact parent"),
+        "unexpected metadata refusal: {error}"
+    );
+    assert!(state.view().block_hashes().is_empty());
+    assert_eq!(state.committed_height(), 0);
+}
+
 #[test]
 fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() {
     use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
@@ -376,7 +414,9 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         );
     }
     let state_block2 = state.block(block2.as_ref().header());
-    let events2 = state_block2.apply_fixture_block(&block2, None).expect("replay the complete actual typed Time outputs");
+    let events2 = state_block2
+        .apply_fixture_block(&block2, None)
+        .expect("replay the complete actual typed Time outputs");
     let completions2: Vec<_> = events2
         .iter()
         .filter_map(|event| match event {
@@ -428,15 +468,20 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         stx.apply();
     }
     state_block3.commit_world_overlay_for_testing().unwrap();
-    let block3 = result_bearing_time_trigger_block(&state, |header| *header = block3.as_ref().header());
-    state.block(block3.as_ref().header()).apply_fixture_block(&block3, None)
+    let block3 =
+        result_bearing_time_trigger_block(&state, |header| *header = block3.as_ref().header());
+    state
+        .block(block3.as_ref().header())
+        .apply_fixture_block(&block3, None)
         .expect("publish the actual quiet retry interval");
     let block4 = result_bearing_time_trigger_block(&state, |header| {
         header.set_height(NonZeroU64::new(4).unwrap());
         header.creation_time_ms = time_origin_ms + 12;
     });
     let state_block4 = state.block(block4.as_ref().header());
-    let events4 = state_block4.apply_fixture_block(&block4, None).expect("replay the complete actual typed Time outputs");
+    let events4 = state_block4
+        .apply_fixture_block(&block4, None)
+        .expect("replay the complete actual typed Time outputs");
     let completions4: Vec<_> = events4
         .iter()
         .filter_map(|event| match event {
@@ -526,7 +571,9 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         );
     }
     let state_block2 = state.block(block2.as_ref().header());
-    let events2 = state_block2.apply_fixture_block(&block2, None).expect("replay the complete actual typed Time outputs");
+    let events2 = state_block2
+        .apply_fixture_block(&block2, None)
+        .expect("replay the complete actual typed Time outputs");
     let completions2: Vec<_> = events2
         .iter()
         .filter_map(|event| match event {
@@ -565,7 +612,9 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         header.creation_time_ms = time_origin_ms + 12;
     });
     let state_block3 = state.block(block3.as_ref().header());
-    let events3 = state_block3.apply_fixture_block(&block3, None).expect("replay the complete actual typed Time outputs");
+    let events3 = state_block3
+        .apply_fixture_block(&block3, None)
+        .expect("replay the complete actual typed Time outputs");
     let completions3: Vec<_> = events3
         .iter()
         .filter_map(|event| match event {
@@ -660,7 +709,9 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         );
     }
     let state_block2 = state.block(block2.as_ref().header());
-    let events2 = state_block2.apply_fixture_block(&block2, None).expect("replay the complete actual typed Time outputs");
+    let events2 = state_block2
+        .apply_fixture_block(&block2, None)
+        .expect("replay the complete actual typed Time outputs");
     let completions2: Vec<_> = events2
         .iter()
         .filter_map(|event| match event {
@@ -712,9 +763,12 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         stx.apply();
     }
     state_block3.commit_world_overlay_for_testing().unwrap();
-    let block3 = result_bearing_time_trigger_block(&state, |header| *header = block3.as_ref().header());
+    let block3 =
+        result_bearing_time_trigger_block(&state, |header| *header = block3.as_ref().header());
     let state_block3 = state.block(block3.as_ref().header());
-    let events3 = state_block3.apply_fixture_block(&block3, None).expect("replay the complete actual typed Time outputs");
+    let events3 = state_block3
+        .apply_fixture_block(&block3, None)
+        .expect("replay the complete actual typed Time outputs");
     let completions3: Vec<_> = events3
         .iter()
         .filter_map(|event| match event {
@@ -748,7 +802,9 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         header.creation_time_ms = time_origin_ms + 8;
     });
     let state_block4 = state.block(block4.as_ref().header());
-    let events4 = state_block4.apply_fixture_block(&block4, None).expect("replay the complete actual typed Time outputs");
+    let events4 = state_block4
+        .apply_fixture_block(&block4, None)
+        .expect("replay the complete actual typed Time outputs");
     let completions4: Vec<_> = events4
         .iter()
         .filter_map(|event| match event {
@@ -782,7 +838,9 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         header.creation_time_ms = time_origin_ms + 10;
     });
     let state_block5 = state.block(block5.as_ref().header());
-    let events5 = state_block5.apply_fixture_block(&block5, None).expect("replay the complete actual typed Time outputs");
+    let events5 = state_block5
+        .apply_fixture_block(&block5, None)
+        .expect("replay the complete actual typed Time outputs");
     let completions5: Vec<_> = events5
         .iter()
         .filter_map(|event| match event {
@@ -868,7 +926,8 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-    stx.apply_callback_for_testing().expect("capture successful component callbacks");
+    stx.apply_callback_for_testing()
+        .expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
@@ -938,9 +997,12 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
         h.creation_time_ms = 2;
     });
     let mut state_block2 = state.block(block2.as_ref().header());
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block2, Some(block2.as_ref()));
+    let outputs =
+        crate::state::run_empty_network_owner_fixture(&mut state_block2, Some(block2.as_ref()));
     assert_eq!(outputs.len(), 1);
-    assert!(matches!(&outputs[0], iroha_data_model::block::execution_output::ExecutionOutputV1::Time(row) if row.result.is_ok()));
+    assert!(
+        matches!(&outputs[0], iroha_data_model::block::execution_output::ExecutionOutputV1::Time(row) if row.result.is_ok())
+    );
     state_block2.commit_world_overlay_for_testing().unwrap();
     let after_first = state.trigger_ivm_cache.lock().stats();
     let block3 = new_dummy_block_with_payload(|h| {
@@ -948,9 +1010,12 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
         h.creation_time_ms = 3;
     });
     let mut state_block3 = state.block(block3.as_ref().header());
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block3, Some(block3.as_ref()));
+    let outputs =
+        crate::state::run_empty_network_owner_fixture(&mut state_block3, Some(block3.as_ref()));
     assert_eq!(outputs.len(), 1);
-    assert!(matches!(&outputs[0], iroha_data_model::block::execution_output::ExecutionOutputV1::Time(row) if row.result.is_ok()));
+    assert!(
+        matches!(&outputs[0], iroha_data_model::block::execution_output::ExecutionOutputV1::Time(row) if row.result.is_ok())
+    );
     state_block3.commit_world_overlay_for_testing().unwrap();
     let after_second = state.trigger_ivm_cache.lock().stats();
     assert!(
@@ -1133,7 +1198,8 @@ let _marker = marker;
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        stx.apply_callback_for_testing().expect("capture successful component callbacks");
+        stx.apply_callback_for_testing()
+            .expect("capture successful component callbacks");
     }
     state_block.commit_world_overlay_for_testing().unwrap();
     assert!(
@@ -1556,7 +1622,7 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
     );
     stx.world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event)));
     let steps = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect("disabled trigger should be skipped");
@@ -1649,7 +1715,7 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
     );
     stx.world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event)));
     let steps = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect("disabled data triggers should be skipped");
@@ -1744,7 +1810,7 @@ fn depleted_data_trigger_is_pruned_before_event_scan_without_mutating_state() {
     );
     stx.world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event)));
     let steps = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect("depleted trigger should be pruned without error");
@@ -1813,6 +1879,11 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
+    state
+        .lane_manifests
+        .read()
+        .ensure_lane_ready(LaneId::SINGLE)
+        .expect("the existing test State owns its active default Network route");
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -1870,22 +1941,46 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
         Register::trigger(data_trigger)
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        stx.apply_callback_for_testing().expect("capture successful component callbacks");
+        stx.apply_callback_for_testing()
+            .expect("capture successful component callbacks");
     }
     state_block.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
-    let mut state_block = state.block(header);
-    {
-        let mut stx = state_block.transaction_for_callback_testing();
-        Mint::asset_quantity(1_u32, asset_id.clone())
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-        let steps = stx
-            .execute_data_triggers_dfs(&ALICE_ID)
-            .expect("data trigger should run under its registered authority");
-        assert_eq!(steps.len(), 1, "expected one data trigger execution");
-        stx.apply_callback_for_testing().expect("capture successful component callbacks");
-    }
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
+    let signed = signed_callback_boundary_source(
+        &state,
+        header,
+        vec![Mint::asset_quantity(1_u32, asset_id.clone()).into()],
+    );
+    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+    builder.push_transaction(signed);
+    let source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    crate::sumeragi::witness::start_block();
+    let mut state_block = state.block(source.header());
+    state_block
+        .reserve_ordinary_execution_outputs(&source)
+        .expect("reserve actual signed Mint source output");
+    state_block
+        .execute_ordinary_output_plan(&source, None)
+        .expect("execute and fit actual Network callback before State apply");
+    let outputs = state_block.retained_execution_outputs_for_test().unwrap();
+    let [iroha_data_model::block::execution_output::ExecutionOutputV1::Network(output)] = outputs
+    else {
+        panic!("exactly one real Network source, with no internal actions");
+    };
+    let steps = output
+        .result
+        .as_ref()
+        .expect("data trigger should run under its registered authority");
+    assert_eq!(steps.len(), 1, "expected one data trigger execution");
+    assert_eq!(steps[0].id, trigger_id);
+    assert_eq!(output.completions.len(), 1);
+    assert_eq!(output.completions[0].trigger_id, trigger_id);
+    assert_eq!(output.completions[0].callback_index, 0);
+    assert_eq!(
+        output.completions[0].outcome,
+        iroha_data_model::events::trigger_completed::TriggerCompletedOutcome::Success
+    );
     state_block.commit_world_overlay_for_testing().unwrap();
     let flag_value = state
         .view()
@@ -1943,7 +2038,8 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        stx.apply_callback_for_testing().expect("capture successful component callbacks");
+        stx.apply_callback_for_testing()
+            .expect("capture successful component callbacks");
     }
     state_block.commit_world_overlay_for_testing().unwrap();
     assert!(
@@ -1951,18 +2047,29 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
         "contract entry should be removed for test setup"
     );
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
-    let mut state_block = state.block(header);
-    let mut stx = state_block.transaction_for_callback_testing();
     let alpha_domain: DomainId = DomainId::try_new("alpha", "universal").unwrap();
     let beta_domain: DomainId = DomainId::try_new("beta", "universal").unwrap();
+    let callback_source = signed_callback_boundary_source(
+        &state,
+        header,
+        vec![
+            Register::domain(Domain::new(alpha_domain.clone())).into(),
+            Register::domain(Domain::new(beta_domain.clone())).into(),
+        ],
+    );
+    let mut state_block = state.block(header);
+    let mut stx = state_block.transaction();
+    stx.current_entrypoint_index = Some(0);
+    stx.tx_call_hash = Some(Hash::from(callback_source.hash_as_entrypoint()));
+    stx.current_tx_hash = Some(callback_source.hash());
     let event_a = data_pre::DomainEvent::Created(Domain::new(alpha_domain).build(&ALICE_ID));
     let event_b = data_pre::DomainEvent::Created(Domain::new(beta_domain).build(&ALICE_ID));
     stx.world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event_a)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event_a)));
     stx.world
         .internal_event_buf
-        .push(Arc::new(DataEvent::Domain(event_b)));
+        .push(SharedDataEvent::from(DataEvent::Domain(event_b)));
     let err = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect_err("missing bytecode should reject data-trigger execution");

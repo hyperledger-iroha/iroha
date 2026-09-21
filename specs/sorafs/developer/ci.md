@@ -11,9 +11,9 @@ summary: Use the SoraFS CLI in CI and hand release artifacts to governed Ed25519
 SoraFS pipelines benefit from deterministic chunking, manifest construction,
 and proof verification. The `sorafs_cli` command surface keeps those steps
 portable across CI providers. Release authenticity is a separate aggregate
-manifest step backed by `signing_provider=authenticated_external_signer` with
-exact `signing_backend=software`; verified output is
-`signer_qualification=software-key-qualified`.
+manifest step backed by `signing_provider=authenticated_external_signer`, a
+governed Ed25519 public key and a pinned native verifier. Promotion additionally
+requires the signer's authorized purpose and completed-operation evidence.
 
 ## GitHub Actions
 

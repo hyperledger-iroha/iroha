@@ -480,7 +480,6 @@ def write_topology_qualification(
         "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
         **binding,
         "signer_authentication_kind": "external-ed25519",
-        "signer_backend": "software",
         "signer_service_id": TOPOLOGY_SIGNER_SERVICE_ID,
         "signer_administrator_id": TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
         "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,
@@ -910,29 +909,29 @@ def test_release_lane_rejects_stale_signed_topology_review(tmp_path: Path) -> No
         (
             "--topology-qualification-signer-service-id",
             "substituted-sf11-topology-service",
-            "signer_service_id must match the trusted external software signer",
+            "signer_service_id must match the trusted authenticated external signer",
         ),
         (
             "--topology-qualification-signer-administrator-id",
             "substituted-sf11-topology-admin",
-            "signer_administrator_id must match the trusted external software signer",
+            "signer_administrator_id must match the trusted authenticated external signer",
         ),
         (
             "--topology-qualification-signer-key-revision",
             # A distinctive valid revision preserves the redaction assertion
             # without colliding with arbitrary digits in temporary paths.
             "1700700123",
-            "signer_key_revision must match the trusted external software signer",
+            "signer_key_revision must match the trusted authenticated external signer",
         ),
         (
             "--topology-qualification-signer-policy-revision",
             str(TOPOLOGY_SIGNER_POLICY_REVISION + 1),
-            "signer_policy_revision must match the trusted external software signer",
+            "signer_policy_revision must match the trusted authenticated external signer",
         ),
         (
             "--topology-qualification-signer-policy-digest-hex",
             hashlib.sha256(b"substituted-sf11-topology-policy").hexdigest(),
-            "signer_policy_digest_sha256 must match the trusted external software signer",
+            "signer_policy_digest_sha256 must match the trusted authenticated external signer",
         ),
     ],
 )

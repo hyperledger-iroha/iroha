@@ -53,14 +53,26 @@ npm run build:native
 ```
 
 The native build writes strict V3 provenance with the execution policy
-`trusted-local-cargo-v1`. It binds the exact source seal observed before and
-after one local Cargo invocation to the exact compiled bytes. Its private
-source snapshot is owner-read-only and isolates ordinary concurrent checkout
-changes, but the attestation deliberately trusts the invoking user, local
-peer processes, toolchain, build scripts, procedural macros, dependencies, and
-build environment. It is not a reproducible-build or hostile-executor proof.
+`trusted-local-cargo-v1`. Cargo compiles the authenticated live repository root.
+The builder seals the tracked and untracked source inventory, selected Cargo
+lockfile and exact compiled bytes, and checks that source state again after
+compilation and during publication. Keep the checkout, index and HEAD unchanged
+through compilation, publication and native-backed tests. A dirty checkout is
+supported by the `debug` profile only; `release` and `deploy` require a clean
+source tree. The attestation trusts the invoking user, local peer processes,
+toolchain, build scripts, procedural macros, dependencies and build environment.
+It is not a reproducible-build or hostile-executor proof.
 Release processes that require that stronger property must compare matching
 artifacts from independent controlled rebuilders.
+
+`scripts/build-native.mjs` requires explicit canonical paths for Cargo, rustc
+and rustdoc from the same Rust 1.93.1 toolchain, the selected `Cargo.lock` and
+the Cargo target directory. It enforces one offline, locked Cargo build with
+`CARGO_BUILD_JOBS=1`, `CARGO_INCREMENTAL=0`, `CARGO_NET_OFFLINE=true` and
+`RUSTC_BOOTSTRAP=1`, and rejects `CARGO_PROFILE_*` overrides. The configured
+target must be the repository's `target` directory or wholly outside the source
+tree. Preserve `IROHA_JS_CARGO_LOCKFILE_PATH` through publication and loading so
+each provenance check observes the same selected dependency graph.
 
 Loading a debug artifact from a dirty source tree verifies its recorded source
 seal in a separate process before loading native code. This verifier has a
@@ -79,28 +91,6 @@ support. Concurrent publishers must all run the current owner-record protocol;
 mixing an older empty-directory lock implementation with this one is
 unsupported. Recovery retains a tiny owner-specific tombstone as an ABA guard
 so a delayed recovery process cannot displace a newer live publisher.
-
-Each operating-system temporary build run is likewise published only after an
-off-name initializer contains a complete, fsynced owner record binding the
-exact directory identity, hostname, PID, and effective UID where the platform
-exposes one. Before starting another build, the janitor reaps only exact
-current-host/current-user run names whose recorded PID is definitely absent.
-Live, foreign, malformed, partial, symlinked, and unknown prefix-matching
-artifacts are preserved. A dead run is first identity-revalidated and renamed
-into an exact trash namespace; payload deletion is resumable, and the owner
-record moves to a terminal sidecar before the empty trash directory is
-removed. This prevents a process killed during recursive cleanup from leaving
-a semantic run name or an unrecoverable ownerless deletion state.
-
-The temporary-run janitor relies on the same trusted-user boundary as the
-native build itself: same-UID local processes are trusted, and Windows
-installations must provide an equivalent private ACL. It never follows a
-symlink or replacement root, but Node.js has no portable descriptor-relative
-recursive deletion API. Its explicit guarantee is recovery from process
-interruption, including `SIGKILL`. Owner and rename transitions are fsynced,
-but durability across sudden host power loss still depends on the operating
-system and filesystem honoring file and directory sync semantics; temporary
-payload loss after such an event does not constitute published build evidence.
 
 Cargo may expose the validated profile-root `cdylib` as a hard link to its
 `deps` artifact. The builder accepts that exact Cargo-JSON-validated path only
@@ -4576,9 +4566,16 @@ if (!tallyResult.found) {
     `approve=${tallyResult.tally.approve} reject=${tallyResult.tally.reject}`,
   );
 }
-// Torii must return a JSON payload for governance reads (proposals, referenda, tallies, locks,
-// unlock stats); a 200 response without a body now throws so missing records continue to rely on
-// the 404 path instead of silently returning null data.
+// Referendum, tally and lock reads preserve u64/u128 integers as number when safe,
+// otherwise bigint. Tally results retain evaluated_block_height and evaluated_block_hash.
+// Referenda require frozen plain_context and plain_result; closed PLAIN decisions
+// are checked against that policy. Lock records require duration_blocks and custody.
+// Found raw lock responses retain the native { locks: { locks: ... } } nesting;
+// getGovernanceLocksTyped projects the inner map after validating the exact response.
+// A 200 response requires a JSON body. Referendum/lock misses use found:false with
+// the record omitted; HTTP 404 is also projected to the typed not-found result.
+// JSON.stringify cannot print bigint: use String(value) for individual fields.
+// These read checks do not qualify anonymous standalone ballots or private tally proofs.
 
 // Governance write helpers also accept AbortSignal options so transactions can be cancelled.
 const writeController = new AbortController();

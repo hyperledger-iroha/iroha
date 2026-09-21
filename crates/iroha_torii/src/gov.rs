@@ -278,24 +278,20 @@ fn validate_governance_selector_v1(field: &str, value: &str) -> Result<(), Strin
     Ok(())
 }
 
-fn is_stored_typed_proposal_fingerprint(state: &iroha_core::state::State, selector: &str) -> bool {
+fn is_stored_typed_proposal_fingerprint(world: &impl WorldReadOnly, selector: &str) -> bool {
     let Some(proposal_id) =
         iroha_data_model::governance::decode_governance_proposal_selector_alias_v1(selector)
     else {
         return false;
     };
-    state
-        .world_view()
-        .governance_proposals()
-        .get(&proposal_id)
-        .is_some()
+    world.governance_proposals().get(&proposal_id).is_some()
 }
 
 fn reject_typed_proposal_ballot_selector(
-    state: &iroha_core::state::State,
+    world: &impl WorldReadOnly,
     selector: &str,
 ) -> Result<(), String> {
-    if is_stored_typed_proposal_fingerprint(state, selector) {
+    if is_stored_typed_proposal_fingerprint(world, selector) {
         return Err(
             "typed proposal fingerprints use the authenticated Parliament lifecycle, not standalone referendum ballots"
                 .to_owned(),
@@ -410,7 +406,7 @@ pub async fn handle_gov_ballot_zk_v1(
     validate_exact_nonempty_token("backend", &body.backend).map_err(ballot_input_error)?;
     validate_governance_selector_v1("election_id", &body.election_id)
         .map_err(ballot_input_error)?;
-    reject_typed_proposal_ballot_selector(state.as_ref(), &body.election_id)
+    reject_typed_proposal_ballot_selector(&state.world_view(), &body.election_id)
         .map_err(ballot_input_error)?;
     let proof_envelope = base64::engine::general_purpose::STANDARD
         .decode(body.envelope_b64.as_bytes())
@@ -511,7 +507,7 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
     validate_exact_nonempty_token("backend", &body.ballot.backend).map_err(ballot_input_error)?;
     validate_governance_selector_v1("election_id", &body.election_id)
         .map_err(ballot_input_error)?;
-    reject_typed_proposal_ballot_selector(state.as_ref(), &body.election_id)
+    reject_typed_proposal_ballot_selector(&state.world_view(), &body.election_id)
         .map_err(ballot_input_error)?;
     if body.ballot.envelope_bytes.is_empty() {
         return Err(ballot_input_error(
@@ -1796,7 +1792,7 @@ pub struct LocksGetResponse {
     pub locks: Option<iroha_core::state::GovernanceLocksForReferendum>,
 }
 /// Response payload for GET /v1/gov/referenda/{id} Response payload for referendum lookup by id.
-#[derive(Copy, Clone, Debug, JsonSerialize)]
+#[derive(Clone, Debug, JsonSerialize)]
 pub struct ReferendumGetResponse {
     /// Whether the referendum exists.
     pub found: bool,
@@ -1847,9 +1843,9 @@ pub async fn handle_gov_get_locks(
 ) -> Result<JsonBody<LocksGetResponse>, crate::Error> {
     let ref_id = rid.0;
     require_exact_governance_path_token("referendum id", &ref_id)?;
-    reject_typed_proposal_ballot_selector(state.as_ref(), &ref_id)
-        .map_err(crate::routing::conversion_error)?;
     let world = state.world_view();
+    reject_typed_proposal_ballot_selector(&world, &ref_id)
+        .map_err(crate::routing::conversion_error)?;
     let found = world.governance_locks().get(&ref_id).cloned();
     Ok(JsonBody(LocksGetResponse {
         found: found.is_some(),
@@ -1868,10 +1864,10 @@ pub async fn handle_gov_get_referendum(
 ) -> Result<JsonBody<ReferendumGetResponse>, crate::Error> {
     let rid = id.0;
     require_exact_governance_path_token("referendum id", &rid)?;
-    reject_typed_proposal_ballot_selector(state.as_ref(), &rid)
-        .map_err(crate::routing::conversion_error)?;
     let world = state.world_view();
-    let found = world.governance_referenda().get(&rid).copied();
+    reject_typed_proposal_ballot_selector(&world, &rid)
+        .map_err(crate::routing::conversion_error)?;
+    let found = world.governance_referenda().get(&rid).cloned();
     Ok(JsonBody(ReferendumGetResponse {
         found: found.is_some(),
         referendum: found,
@@ -1890,20 +1886,31 @@ pub async fn handle_gov_get_tally(
 ) -> Result<JsonBody<TallyGetResponse>, crate::Error> {
     let rid = id.0;
     require_exact_governance_path_token("referendum id", &rid)?;
-    reject_typed_proposal_ballot_selector(state.as_ref(), &rid)
-        .map_err(crate::routing::conversion_error)?;
-    let world = state.world_view();
+    let view = state.query_view();
+    governance_tally_from_view(&view, rid).map(JsonBody)
+}
+
+// The projection accepts only one captured owner, so a later commit cannot mix
+// the corpus, selector authority, cutoff height or reported block identity.
+fn governance_tally_from_view(
+    view: &iroha_core::state::StateQueryView<'_>,
+    rid: String,
+) -> Result<TallyGetResponse, crate::Error> {
+    let world = view.world();
+    reject_typed_proposal_ballot_selector(world, &rid).map_err(crate::routing::conversion_error)?;
     let referendum = world
         .governance_referenda()
         .get(&rid)
-        .copied()
+        .cloned()
         .ok_or_else(|| {
             crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
             ))
         })?;
-    let evaluated_block_height = state.committed_height() as u64;
-    let evaluated_block_hash = match state.latest_block_hash_fast() {
+    let evaluated_block_height = u64::try_from(view.height()).map_err(|_| {
+        crate::routing::conversion_error("governance snapshot height exceeds u64".to_owned())
+    })?;
+    let evaluated_block_hash = match view.latest_block_hash() {
         Some(hash) => hex::encode(hash.as_ref()),
         None if evaluated_block_height == 0 => hex::encode([0_u8; 32]),
         None => {
@@ -1914,59 +1921,21 @@ pub async fn handle_gov_get_tally(
             ));
         }
     };
-    let gov_cfg = state.gov.clone();
+    referendum
+        .validate_context()
+        .map_err(|message| crate::routing::conversion_error(message.into()))?;
     // Project the current standalone referendum tally without mutating state.
-    let now_h = state.committed_height() as u64;
     let mut approve: u128 = 0;
     let mut reject: u128 = 0;
     let mut abstain: u128 = 0;
     match referendum.mode {
         iroha_core::state::GovernanceReferendumMode::Plain => {
-            let tally_height = if referendum.status
-                == iroha_core::state::GovernanceReferendumStatus::Closed
-                || now_h > referendum.h_end
-            {
-                referendum.h_end
-            } else {
-                now_h
-            };
-            if let Some(locks) = world.governance_locks().get(&rid) {
-                let step = gov_cfg.conviction_step_blocks.max(1);
-                let max_c = gov_cfg.max_conviction;
-                for (_owner, rec) in locks.locks.iter() {
-                    if rec.expiry_height < tally_height {
-                        continue;
-                    }
-                    if rec.amount.scale() != 0 {
-                        return Err(crate::routing::conversion_error(
-                            "plain ballot lock amount must have scale zero".into(),
-                        ));
-                    }
-                    let units = rec.amount.as_numeric().try_mantissa_u128().ok_or_else(|| {
-                        crate::routing::conversion_error(
-                            "plain ballot lock amount exceeds u128 voting range".into(),
-                        )
-                    })?;
-                    let w = checked_plain_tally_weight(units, rec.duration_blocks, step, max_c)?;
-                    match rec.direction {
-                        0 => {
-                            approve = approve.checked_add(w).ok_or_else(tally_overflow_error)?;
-                        }
-                        1 => {
-                            reject = reject.checked_add(w).ok_or_else(tally_overflow_error)?;
-                        }
-                        2 => {
-                            abstain = abstain.checked_add(w).ok_or_else(tally_overflow_error)?;
-                        }
-                        direction => {
-                            return Err(crate::routing::conversion_error(format!(
-                                "plain ballot lock has invalid direction {direction}; \
-                                 expected 0, 1, or 2"
-                            )));
-                        }
-                    }
-                }
-            }
+            [approve, reject, abstain] = iroha_core::state::plain_governance_tally(
+                &referendum,
+                world.governance_locks().get(&rid),
+                evaluated_block_height,
+            )
+            .map_err(|message| crate::routing::conversion_error(message.into()))?;
         }
         iroha_core::state::GovernanceReferendumMode::Zk => {
             if let Some(e) = world.elections().get(&rid) {
@@ -1978,41 +1947,16 @@ pub async fn handle_gov_get_tally(
             }
         }
     }
-    Ok(JsonBody(TallyGetResponse {
+    Ok(TallyGetResponse {
         referendum_id: rid,
         evaluated_block_height,
         evaluated_block_hash,
         approve,
         reject,
         abstain,
-    }))
+    })
 }
-fn checked_plain_tally_weight(
-    units: u128,
-    duration_blocks: u64,
-    conviction_step_blocks: u64,
-    max_conviction: u64,
-) -> Result<u128, crate::Error> {
-    let base = integer_sqrt_u128(units);
-    let step = conviction_step_blocks.max(1);
-    let factor = (u128::from(duration_blocks / step) + 1).min(u128::from(max_conviction));
-    base.checked_mul(factor).ok_or_else(tally_overflow_error)
-}
-fn tally_overflow_error() -> crate::Error {
-    crate::routing::conversion_error("governance tally arithmetic overflow".into())
-}
-fn integer_sqrt_u128(n: u128) -> u128 {
-    if n == 0 {
-        return 0;
-    }
-    let mut x0 = n;
-    let mut x1 = u128::midpoint(x0, n / x0);
-    while x1 < x0 {
-        x0 = x1;
-        x1 = u128::midpoint(x0, n / x0);
-    }
-    x0
-}
+
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::gov::ProtectedNamespacesDto")]
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -2653,7 +2597,7 @@ pub async fn handle_gov_ballot_plain_with_policy(
     ensure_authenticated_authority(authenticated_account, &authority_id)?;
     validate_governance_selector_v1("referendum_id", &body.referendum_id)
         .map_err(|message| crate::routing::conversion_error(message.into()))?;
-    reject_typed_proposal_ballot_selector(state.as_ref(), &body.referendum_id)
+    reject_typed_proposal_ballot_selector(&state.world_view(), &body.referendum_id)
         .map_err(|message| crate::routing::conversion_error(message.into()))?;
     // Basic shape validations
     if !(body.direction == "Aye" || body.direction == "Nay" || body.direction == "Abstain") {

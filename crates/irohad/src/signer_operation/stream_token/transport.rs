@@ -1,12 +1,11 @@
-//! Complete-receipt broker backend over the exact durable hardware producer.
+//! Complete-receipt broker backend over the exact durable signer producer.
 use super::{SignerOperationErrorV1, SignerStreamTokenErrorV1, SignerStreamTokenServiceV1};
 use iroha_torii::sorafs::{
-    StreamTokenHardwareCallErrorV1 as Error, StreamTokenHardwareClientV1,
-    StreamTokenHardwareReceiptV1,
+    StreamTokenSignerCallErrorV1 as Error, StreamTokenSignerClientV1, StreamTokenSignerReceiptV1,
 };
 use sorafs_manifest::{StreamTokenBodyV1, signer::stream_token::SignerStreamTokenExpectedV1};
 
-impl StreamTokenHardwareClientV1 for SignerStreamTokenServiceV1 {
+impl StreamTokenSignerClientV1 for SignerStreamTokenServiceV1 {
     fn handle(&self) -> &str {
         &self.coordinator.binding.runtime_handle
     }
@@ -15,14 +14,14 @@ impl StreamTokenHardwareClientV1 for SignerStreamTokenServiceV1 {
         &self,
         expected: &SignerStreamTokenExpectedV1,
         body: &StreamTokenBodyV1,
-    ) -> Result<StreamTokenHardwareReceiptV1, Error> {
+    ) -> Result<StreamTokenSignerReceiptV1, Error> {
         let payload = self.prepare_transport_payload(expected, body)?;
         // A later custody, journal or publication fence may fail after physical signing or CAS.
         // The transport has no proof of non-mutation then. Preserve the exact operation for
         // read-only recovery; never translate a post-invocation error into permission to re-sign.
         let receipt = SignerStreamTokenServiceV1::sign(self, &payload)
             .map_err(|_| Error::AmbiguousCompletion)?;
-        StreamTokenHardwareReceiptV1::new(receipt.bytes().to_vec())
+        StreamTokenSignerReceiptV1::new(receipt.bytes().to_vec())
             .map_err(|_| Error::AmbiguousCompletion)
     }
 
@@ -30,7 +29,7 @@ impl StreamTokenHardwareClientV1 for SignerStreamTokenServiceV1 {
         &self,
         expected: &SignerStreamTokenExpectedV1,
         body: &StreamTokenBodyV1,
-    ) -> Result<StreamTokenHardwareReceiptV1, Error> {
+    ) -> Result<StreamTokenSignerReceiptV1, Error> {
         let payload = self.prepare_transport_payload(expected, body)?;
         let receipt =
             SignerStreamTokenServiceV1::recover(self, &payload).map_err(|error| match error {
@@ -41,7 +40,7 @@ impl StreamTokenHardwareClientV1 for SignerStreamTokenServiceV1 {
                 SignerStreamTokenErrorV1::Receipt(_) => Error::InvalidResponse,
                 SignerStreamTokenErrorV1::Operation(_) => Error::Refused,
             })?;
-        StreamTokenHardwareReceiptV1::new(receipt.bytes().to_vec())
+        StreamTokenSignerReceiptV1::new(receipt.bytes().to_vec())
     }
 }
 

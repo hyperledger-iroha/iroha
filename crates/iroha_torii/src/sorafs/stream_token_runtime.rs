@@ -1,7 +1,7 @@
 //! Strict Torii ownership checks for the production stream-token runtime.
 use super::{
     StreamTokenAdmissionCaptureV1, StreamTokenApprovedCustodyAnchorV1,
-    StreamTokenGatewayAdmissionQualificationV1, StreamTokenHardwareClientV1, StreamTokenIssuer,
+    StreamTokenGatewayAdmissionQualificationV1, StreamTokenIssuer, StreamTokenSignerClientV1,
     StreamTokenStateObserverClientV1,
 };
 use iroha_config::parameters::actual::{SorafsTokenConfig, Torii as ToriiConfig};
@@ -62,7 +62,7 @@ pub(crate) fn preflight_admission_capture(
                 .to_owned()
         })
 }
-/// Enforce authenticated-operator issuance before constructing any hardware dependency.
+/// Enforce authenticated-operator issuance before constructing any signer dependency.
 pub(crate) fn validate_issuer_operator_signatures(
     config: &SorafsTokenConfig,
     operator_signatures_enabled: bool,
@@ -74,13 +74,13 @@ pub(crate) fn validate_issuer_operator_signatures(
     }
 }
 impl crate::ToriiRuntimeDeps {
-    /// Attach the configured opaque hardware client; responses remain untrusted.
+    /// Attach the configured opaque signer client; responses remain untrusted.
     #[must_use]
-    pub fn with_sorafs_stream_token_hardware_client(
+    pub fn with_sorafs_stream_token_signer_client(
         mut self,
-        client: Arc<dyn StreamTokenHardwareClientV1>,
+        client: Arc<dyn StreamTokenSignerClientV1>,
     ) -> Self {
-        self.sorafs_stream_token_hardware_client = Some(client);
+        self.sorafs_stream_token_signer_client = Some(client);
         self
     }
     /// Attach the separately configured read-only signed-observation transport.

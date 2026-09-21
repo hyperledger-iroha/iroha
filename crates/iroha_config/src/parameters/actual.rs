@@ -105,7 +105,10 @@ pub use sorafs_reputation::{
 };
 use thiserror::Error;
 use url::Url;
-pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy, SnapshotResourcePolicy};
+pub use user::{DevTelemetry, Logger, SnapshotBootstrapPolicy, SnapshotResourcePolicy};
+// Snapshot is the same validated representation at both configuration layers;
+// its explicit max_read_buffer_bytes reaches startup without another default.
+pub use user::Snapshot;
 type Result<T, E> = core::result::Result<T, Report<E>>;
 macro_rules! impl_default {
     ($(#[$attr:meta])* $type:ty => $body:block) => {
@@ -10895,10 +10898,10 @@ pub struct SorafsMeteringSmoothing {
     /// Alpha applied to the PoR-success exponential moving average.
     pub por_success_alpha: Option<f64>,
 }
-mod stream_token_hardware;
-pub use stream_token_hardware::{
+mod stream_token_signer;
+pub use stream_token_signer::{
     SorafsStreamTokenAttesterConfig, SorafsStreamTokenAuthorityConfig,
-    SorafsStreamTokenHardwareConfig, SorafsStreamTokenObserverConfig,
+    SorafsStreamTokenObserverConfig, SorafsStreamTokenSignerConfig,
 };
 
 /// Stream-token issuance configuration for chunk-range gateways.
@@ -10906,8 +10909,8 @@ pub use stream_token_hardware::{
 pub struct SorafsTokenConfig {
     /// Enable stream-token issuance.
     pub enabled: bool,
-    /// Complete hardware signer and independent attester/observer trust, absent when disabled.
-    pub hardware: Option<SorafsStreamTokenHardwareConfig>,
+    /// Complete signer and independent attester/observer trust, absent when disabled.
+    pub signer: Option<SorafsStreamTokenSignerConfig>,
     /// Deployment-owned quota, sealed-sequence, and callback-outbox provider handle.
     pub admission_provider_handle: Option<String>,
     /// Exact non-zero external admission-provider contract revision.
@@ -10934,7 +10937,7 @@ pub struct SorafsTokenConfig {
 impl_default!(SorafsTokenConfig => {
         Self {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
-            hardware: None,
+            signer: None,
             admission_provider_handle: None,
             admission_provider_revision: None,
             admission_provider_policy_digest: None,

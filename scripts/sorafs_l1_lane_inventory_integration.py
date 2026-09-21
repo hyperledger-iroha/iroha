@@ -23,7 +23,6 @@ VERIFICATION_FIELDS = frozenset(
     {
         "schema",
         "status",
-        "signer_qualification",
         "inventory_sha256",
         "summary_file_count",
         "recognized_summary_count",
@@ -38,7 +37,6 @@ PLAN_FIELDS = frozenset(
         "schema",
         "inventory",
         "inventory_sha256",
-        "signer_backend",
         "signer_service_id",
         "signer_administrator_id",
         "signer_key_revision",
@@ -233,7 +231,6 @@ def inventory_plan_from_args(
         **{
             f"signer_{field}": expected_signer[field]
             for field in (
-                "backend",
                 "service_id",
                 "administrator_id",
                 "key_revision",
@@ -282,8 +279,6 @@ def validate_verification_binding(
         errors.append(f"{path} schema must match the inventory contract")
     if value.get("status") != "ready":
         errors.append(f"{path} status must be ready")
-    if value.get("signer_qualification") != "software-key-qualified":
-        errors.append(f"{path} must be software-key-qualified")
     if _sha256(value.get("inventory_sha256")) is None:
         errors.append(f"{path} inventory_sha256 must be non-zero lowercase SHA-256")
     for field in ("summary_file_count", "recognized_summary_count"):
@@ -332,14 +327,13 @@ def validate_verification_binding(
             signer.get("role") != lane_inventory.SIGNER_ROLE
             or signer.get("service_kind") != lane_inventory.SIGNER_KIND
             or signer.get("algorithm") != "ed25519"
-            or signer.get("backend") != "software"
             or _canonical_text(signer.get("service_id")) is None
             or _canonical_text(signer.get("administrator_id")) is None
             or signer.get("service_id") == signer.get("administrator_id")
             or _sha256(signer.get("policy_digest_sha256")) is None
             or _sha256(signer.get("public_key_fingerprint_sha256")) is None
         ):
-            errors.append(f"{path} signer must be an external software Ed25519 signer")
+            errors.append(f"{path} signer must be an authenticated external Ed25519 signer")
         for field in ("key_revision", "policy_revision"):
             revision = signer.get(field)
             if (

@@ -5,6 +5,8 @@
 
 #[path = "common/governance_closed_registry.rs"]
 mod closed_registry;
+#[path = "common/governance_closed_state.rs"]
+mod closed_state;
 
 use iroha_core::{
     smartcontracts::Execute,
@@ -26,7 +28,7 @@ use std::collections::BTreeMap;
 
 #[test]
 fn unqualified_ballots_cannot_create_extend_or_shrink_retained_locks() {
-    let state = closed_registry::state();
+    let state = closed_state::state();
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     for circuit_id in [
         "halo2/pasta/ipa/vote-ballot",
@@ -39,7 +41,7 @@ fn unqualified_ballots_cannot_create_extend_or_shrink_retained_locks() {
             (Some((1200_u64, 400_u64)), 900, 250),
         ] {
             let mut transaction = block.transaction();
-            closed_registry::grant_permissions(&mut transaction, "ref-zk-lock");
+            closed_state::grant_permissions(&mut transaction, "ref-zk-lock");
             let (id, record) = closed_registry::unqualified_key(circuit_id);
             let mut election = closed_registry::retained_election(&id, &record);
             if previous.is_some() {
@@ -59,11 +61,15 @@ fn unqualified_ballots_cannot_create_extend_or_shrink_retained_locks() {
                 h_end: 100,
                 status: GovernanceReferendumStatus::Open,
                 mode: GovernanceReferendumMode::Zk,
+                plain_context:
+                    iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
             };
             transaction
                 .world
                 .governance_referenda_mut()
-                .insert("ref-zk-lock".into(), referendum);
+                .insert("ref-zk-lock".into(), referendum.clone());
             if let Some((previous_amount, previous_duration)) = previous {
                 let lock = GovernanceLockRecord {
                     owner: ALICE_ID.clone(),

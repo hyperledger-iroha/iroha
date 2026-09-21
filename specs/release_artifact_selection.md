@@ -139,13 +139,13 @@ certification.
 
 The builders accept no signing or private-key option. Aggregate production
 signing uses the `authenticated_external_signer` provider through
-`--external-signer` with the exact `software` backend, a raw 32-byte Ed25519
+`--external-signer`, a raw 32-byte Ed25519
 public key through `--signing-public-key`, and its independently approved
 lowercase SHA-256 fingerprint through
 `--trusted-signing-fingerprint`. Signing and publish-plan validation also
 require the packaged `iroha` candidate and its independently approved
-exact executable SHA-256. A verified V1 release is `software-key-qualified`.
+exact executable SHA-256. The receipt verifies signer authority and exact bytes;
+it makes no claim about private-key storage or origin.
 OIDC/cosign provenance, hosted scan results, publication receipts, and
-rollback/yank evidence remain external promotion inputs. Iroha exposes no
-hardware-specific signer mode; release qualification stays bound to the
-authenticated external software signer.
+rollback/yank evidence remain external promotion inputs. Software and optional
+hardware implementations use the same authenticated external signer contract.

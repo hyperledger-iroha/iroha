@@ -73,6 +73,16 @@ notification mutexes initialize before they can be needed by reclamation. See
 remaining node, nested payload and aggregate-policy requirements. Production
 maps still use explicit untracked allocation custody until those are complete.
 
+`CellSeeded::deserialize_charged` consumes an already prepaid current/undo pair
+before using the existing Norito parser. It moves both exact decoded values into
+their real EBR allocations, preserving nonempty undo without dummy generations
+or payload clones. Charged Cells and staged blocks use the same JSON encoding;
+there is no implicit charged decoder. Admission refusal stays with the original
+allocation budget, while parse failure releases the unused pair. The outer EBR
+charges survive published readers and deferred reclamation. Seed payloads,
+parser scratch, publication identities, notifications, collector bookkeeping
+and later nested growth remain separate funding obligations.
+
 Funded synchronous operations can use an original budget's
 `with_deferred_refund_notifications` scope to return freed credits immediately
 and wake retries after their physical guards are released. Other threads and
@@ -98,6 +108,12 @@ separator copies and tracking growth before mutation. Missing keys require no
 allocation or admission. Both map modes share this removal engine, including
 merges and root demotion; refusal and checkpoint abort preserve original nodes.
 `MapAdmissionError` covers acquisition and closed edit refusal.
+Retained insertion preparations keep the original cursor, checkpoint and input
+borrowed while their checked demands are combined and prepaid. Key and optional
+preimage copies occur only after that admission. Prepared, direct and joint
+insertions use the same planner and executor; joint edits retain their failure
+guard until both roots and all cleanup complete. Cancelling a preparation does
+not edit the tree or acquire new credit.
 Real MV budget regressions exercise this public boundary. Production Storage
 uses the same B+tree engine for current and block-undo data, retaining both
 original generations through snapshots and publication retries. Ordinary block

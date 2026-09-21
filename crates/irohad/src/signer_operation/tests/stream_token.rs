@@ -24,6 +24,33 @@ mod support;
 use support::*;
 
 #[test]
+fn ordinary_only_source_can_complete_signing_without_custody_control_capabilities() {
+    let harness = Harness::new();
+    // StreamSource implements only this trait; the service's constructor and full signing path
+    // therefore cannot depend on enrollment or audited terminal-transition methods.
+    let source: &dyn SignerOperationStateSourceV1 = harness.source.as_ref();
+    let observed = source
+        .observe_signing_state(&harness.source.base.binding)
+        .expect("ordinary signing observation");
+    let receipt = harness
+        .sign(&body(0x71))
+        .expect("complete ordinary signing");
+    let decoded: SignerStreamTokenReceiptV1 =
+        norito::decode_canonical(receipt.bytes()).expect("canonical receipt");
+    assert_eq!(decoded.intent.previous_audit, observed.audit_head);
+    assert_eq!(decoded.signatures.len(), 4);
+    assert_eq!(harness.calls(), 4);
+    let state = harness
+        .source
+        .base
+        .state
+        .lock()
+        .expect("fixture source lock");
+    assert_eq!(state.commits, 1);
+    assert_eq!(state.transition_commits, 0);
+}
+
+#[test]
 fn stream_receipt_persists_four_exact_signatures_and_restart_recovery_never_uses_key() {
     let mut harness = Harness::new();
     assert_eq!(

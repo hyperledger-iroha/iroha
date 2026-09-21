@@ -34,6 +34,36 @@ fn accept_deadline_test_stream(listener: &BrokerTestListener) -> BrokerTestStrea
 }
 
 #[test]
+fn deadline_fixture_clears_inherited_nonblocking_before_framed_reads() {
+    use std::io::{Read as _, Write as _};
+
+    let (_directory, path, _policy, listener) = bind_fake_broker();
+    let mut client = UnixStream::connect(&path).expect("queue fixture connection");
+    let mut server = accept_deadline_test_stream(&listener);
+    assert!(
+        rustix::fs::fcntl_getfl(&*listener)
+            .unwrap()
+            .contains(rustix::fs::OFlags::NONBLOCK),
+        "the accept loop remains nonblocking"
+    );
+    assert!(
+        !rustix::fs::fcntl_getfl(&*server)
+            .unwrap()
+            .contains(rustix::fs::OFlags::NONBLOCK),
+        "accepted framed reads must use their bounded blocking timeout"
+    );
+    assert_eq!(server.read_timeout().unwrap(), Some(Duration::from_secs(5)));
+    assert_eq!(
+        server.write_timeout().unwrap(),
+        Some(Duration::from_secs(5))
+    );
+    client.write_all(b"fixture request").unwrap();
+    let mut request = [0; 15];
+    server.read_exact(&mut request).unwrap();
+    assert_eq!(&request, b"fixture request");
+}
+
+#[test]
 fn expired_connect_deadline_does_not_open_the_hardened_socket() {
     let (_directory, _path, policy, listener) = bind_fake_broker();
     let deadline = BrokerDeadlineV1::new(Duration::from_nanos(1)).unwrap();

@@ -3627,6 +3627,7 @@ mod incremental_source_rns_native_publication_assembler_v2;
 // spool dependency; this does not change any proof/release admission gate.
 #[path = "incremental_source_phase23.rs"]
 mod incremental_source_phase23;
+pub(in crate::vega::zk_ams::mkhe) use incremental_source_phase23::MaterializedPlaneContextV1;
 #[cfg(test)]
 #[path = "incremental_source_tests.rs"]
 mod tests;

@@ -4,7 +4,7 @@
 Every gate selection requires an authenticated signed-manifest anchor. Supply
 the exact absolute source context and its independently reviewed SHA-256 with
 --signed-manifest-source-context and --signed-manifest-source-context-sha256.
-Raw Ed25519 verification does not establish hardware custody: qualification
+Raw Ed25519 verification does not establish signer authority: qualification
 requires the native ReleaseManifest receipt verifier and rejects missing support.
 """
 
@@ -425,7 +425,7 @@ def validate_release_archive(
 def validate_signed_manifest(
     payload: dict[str, Any], errors: list[str], options: ValidationOptions,
 ) -> None:
-    for field in ("manifest_signature_verified", "hardware_custody_verified", "completed_operation_verified", "state_observation_verified"):
+    for field in ("manifest_signature_verified", "signer_authority_verified", "completed_operation_verified", "state_observation_verified"):
         require_bool_true(payload, field, errors)
     require_string_in(
         payload,
@@ -433,7 +433,6 @@ def validate_signed_manifest(
         ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS,
         errors,
     )
-    require_string_in(payload, "signing_backend", ("hardware",), errors)
     require_string_in(payload, "role", ("release_manifest",), errors)
     for field in ("key_revision", "policy_revision", "finalized_height", "manifest_size"):
         require_positive_int(payload, field, errors)
@@ -457,7 +456,7 @@ def validate_signed_manifest(
         errors.append(f"signed-manifest source: {error}")
         return
     if not isinstance(verified, VerifiedSignedManifestSources):
-        errors.append("signed-manifest source authenticator returned without a verified hardware receipt")
+        errors.append("signed-manifest source authenticator returned without a verified operation receipt")
         return
     for field, expected in verified.canary_fields().items():
         if type(payload.get(field)) is not type(expected) or payload.get(field) != expected:

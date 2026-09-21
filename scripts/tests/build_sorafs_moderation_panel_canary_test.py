@@ -103,7 +103,6 @@ def write_signed_topology_qualification(tmp_path: Path) -> Path:
         "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
         **binding,
         "signer_authentication_kind": "external-ed25519",
-        "signer_backend": "software",
         "signer_service_id": TOPOLOGY_SIGNER_SERVICE_ID,
         "signer_administrator_id": TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
         "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,

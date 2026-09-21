@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-21. Iroha 3 is under active first-release implementation. Full release qualification remains open; the deployed basic Taira scope is recorded separately below. Signed source checkpoints do not establish runtime readiness. This page records current findings and bounded local evidence; it is not a substitute for the release gates in [the roadmap](roadmap.md).
+Last updated: 2026-09-21. Iroha 3 is under active first-release implementation. The [integrated completion goals](specs/first_release_completion_goals.md) require one V1 without backward compatibility and authenticated software signing without an HSM prerequisite. The [September 21 integration checkpoint](docs/history/2026-09-21/runtime-and-governance-integration.md) records current scoped runtime results and pending SDK/native checks. Full release qualification remains open; the deployed basic Taira scope is recorded separately below. Signed source checkpoints do not establish runtime readiness. This page records current findings and bounded local evidence; it is not a substitute for the release gates in [the roadmap](roadmap.md).
 
 The previous dirty working copies are preserved in the [dated historical archive](docs/history/2026-09-06/index.md). Its manifest binds every source occurrence and reconstructs the original bytes. Historical pass counts, plans, dates, and former policies do not attest the current candidate. [Repository ownership](docs/repository_map.md) and the [architecture record](specs/first_release_architecture_redesign.md) provide detail.
 
@@ -240,9 +240,9 @@ captured Core selection. Node focused/full validation remains in progress.
 The host reboot cleared previous `/tmp` SoraFS logs and interrupted native
 captures; those older observations cannot serve as retained current evidence.
 Matched daemon/harness four-validator
-execution, full workspace/SDK validation, source/bootstrap seals, genuine HSM
-custody and all deployment evidence remain open. See the
-[current closure checkpoint](specs/sorafs/v1_closure_ledger.md#2026-09-07-post-reboot-checkpoint).
+execution, full workspace/SDK validation, source/bootstrap seals, authenticated
+software custody and all deployment evidence remain open. See the
+[SoraFS closure ledger](specs/sorafs/v1_closure_ledger.md).
 
 The active acceptance policy uses enforced dependency ownership, the existing
 5,000-line production and 3,000-line test-file limits, substantive duplication

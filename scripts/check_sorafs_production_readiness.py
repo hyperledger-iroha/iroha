@@ -5904,11 +5904,6 @@ def validate_aggregate_summary_output(
         errors.append(
             "aggregate summary status must be ready, partial, failed, or blocked"
         )
-    signer_qualification = summary.get("signer_qualification")
-    if signer_qualification not in {"software-key-qualified", "unqualified"}:
-        errors.append(
-            "aggregate summary signer_qualification must be software-key-qualified or unqualified"
-        )
     required_gates_value = summary.get("required_gates")
     if not isinstance(required_gates_value, list):
         errors.append("aggregate summary required_gates must be a list")
@@ -6094,20 +6089,6 @@ def validate_aggregate_summary_output(
         foundational_prerequisites,
         errors,
     )
-    foundation_valid = (
-        isinstance(foundational_prerequisites, dict)
-        and foundational_prerequisites.get("valid") is True
-    )
-    inventory_valid = (
-        isinstance(inventory_row, dict) and inventory_row.get("valid") is True
-    )
-    expected_qualification = (
-        "software-key-qualified" if foundation_valid and inventory_valid else "unqualified"
-    )
-    if signer_qualification != expected_qualification:
-        errors.append(
-            "aggregate summary signer_qualification must match the validated software signer"
-        )
     validate_aggregate_foundational_lane_digest_bindings(
         foundational_prerequisites, required, errors
     )
@@ -6723,12 +6704,6 @@ def build_summary(
     summary = {
         "schema": SUMMARY_SCHEMA,
         "status": aggregate_summary_status(errors, required_gates),
-        "signer_qualification": (
-            "software-key-qualified"
-            if foundational_prerequisites.get("valid") is True
-            and inventory_row.get("valid") is True
-            else "unqualified"
-        ),
         "required_gates": list(required_gates),
         "thresholds": {
             "max_summary_artifact_age_secs": options.max_summary_artifact_age_secs,

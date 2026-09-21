@@ -1,0 +1,121 @@
+{
+  "provenance": "hand-authored-from-source-contract; native roundtrip pending",
+  "referendum_id": "ref-1",
+  "cases": [
+    {
+      "file": "referendum-open.json",
+      "kind": "referendum",
+      "valid": true
+    },
+    {
+      "file": "referendum-closed.json",
+      "kind": "referendum",
+      "valid": true
+    },
+    {
+      "file": "referendum-empty-closed.json",
+      "kind": "referendum",
+      "valid": true
+    },
+    {
+      "file": "referendum-max.json",
+      "kind": "referendum",
+      "valid": true
+    },
+    {
+      "file": "referendum-zk.json",
+      "kind": "referendum",
+      "valid": true
+    },
+    {
+      "file": "referendum-missing.json",
+      "kind": "referendum",
+      "valid": true
+    },
+    {
+      "file": "tally-max.json",
+      "kind": "tally",
+      "valid": true
+    },
+    {
+      "file": "tally-large.json",
+      "kind": "tally",
+      "valid": true
+    },
+    {
+      "file": "tally-empty.json",
+      "kind": "tally",
+      "valid": true
+    },
+    {
+      "file": "locks.json",
+      "kind": "locks",
+      "valid": true
+    },
+    {
+      "file": "locks-empty.json",
+      "kind": "locks",
+      "valid": true
+    },
+    {
+      "file": "locks-missing.json",
+      "kind": "locks",
+      "valid": true
+    },
+    {
+      "file": "tally-u128-overflow.json",
+      "kind": "tally",
+      "valid": false
+    },
+    {
+      "file": "tally-u64-overflow.json",
+      "kind": "tally",
+      "valid": false
+    },
+    {
+      "file": "tally-quoted-count.json",
+      "kind": "tally",
+      "valid": false
+    },
+    {
+      "file": "tally-negative-count.json",
+      "kind": "tally",
+      "valid": false
+    },
+    {
+      "file": "tally-bad-hash.json",
+      "kind": "tally",
+      "valid": false
+    },
+    {
+      "file": "tally-zero-height-with-hash.json",
+      "kind": "tally",
+      "valid": false
+    },
+    {
+      "file": "tally-positive-height-zero-hash.json",
+      "kind": "tally",
+      "valid": false
+    },
+    {
+      "file": "tally-wrong-selector.json",
+      "kind": "tally",
+      "valid": false
+    },
+    {
+      "file": "tally-aggregate-overflow.json",
+      "kind": "tally",
+      "valid": false
+    },
+    {
+      "file": "tally-missing-evaluated-block-height.json",
+      "kind": "tally",
+      "valid": false
+    },
+    {
+      "file": "tally-missing-evaluated-block-hash.json",
+      "kind": "tally",
+      "valid": false
+    }
+  ]
+}

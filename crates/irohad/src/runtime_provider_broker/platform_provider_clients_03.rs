@@ -3138,12 +3138,12 @@ fn resolve_with_decode_pool(
                 dependencies = dependencies.with_sorafs_fenced_transparency_head_reader(reader);
             }
             slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id() => {
-                let hardware = binding
-                    .stream_token_hardware_binding
+                let signer_backend = binding
+                    .stream_token_signer_binding
                     .as_ref()
                     .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
-                hardware.validate_network(&session.chain_id, session.network_id.as_bytes())?;
-                let client = Arc::new(StreamTokenHardwareBrokerClient {
+                signer_backend.validate_network(&session.chain_id, session.network_id.as_bytes())?;
+                let client = Arc::new(StreamTokenSignerBrokerClient {
                     session: Arc::clone(&session),
                     binding: binding.clone(),
                     metadata_digest: observation.metadata_digest,
@@ -3154,10 +3154,10 @@ fn resolve_with_decode_pool(
                     session: Arc::clone(&session),
                     binding: binding.clone(),
                     metadata_digest: observation.metadata_digest,
-                    observer_handle: hardware.observer_handle().to_owned(),
+                    observer_handle: signer_backend.observer_handle().to_owned(),
                 });
                 dependencies = dependencies
-                    .with_sorafs_stream_token_hardware_client(client)
+                    .with_sorafs_stream_token_signer_client(client)
                     .with_sorafs_stream_token_state_observer(observer);
             }
             slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id() => {

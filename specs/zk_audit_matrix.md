@@ -32,6 +32,13 @@ The [retired vote fixture](governance_vote_tally.md) supplies neither an
 approved semantic circuit nor a production key; changing its label cannot
 satisfy the closed registry.
 
+Public PLAIN arithmetic now uses an explicit pre-vote frozen smallest-unit
+context, funded escrow even at a zero minimum, immutable-choice monotonic
+updates, and a durable closed result independent of released locks. Core and
+Torii share the checked public tally. This is a public-account correctness repair;
+it supplies neither anonymous credentials nor a confidential position/ballot or
+sound private tally proof, and does not open any registry admission gate.
+
 Core's current `ballot_inputs_from_columns` reads only commitment and eligible
 root. `SubmitBallot` requires the supplied ciphertext to equal those commitment
 bytes, and `derive_ballot_nullifier` hashes that public commitment with domain,
@@ -39,7 +46,10 @@ network and election selector. `tally_from_columns` reads only one `u64` count
 per option. These shapes do not define ballot encryption, credential-based
 uniqueness or a tally relation over the actual accepted corpus.
 
-The retained standalone contract therefore needs a reviewed semantic design
+The [standalone protocol contract](standalone_election_protocol_contract.md)
+requires anonymous, aggregate-only, committee-free, non-reconstructing dropout
+completion. Its construction remains unresolved. The retained standalone
+contract therefore needs a reviewed semantic design
 that specifies and enforces the following bindings at the circuit and host
 boundaries before any production registry/key admission:
 
@@ -52,9 +62,10 @@ boundaries before any production registry/key admission:
   lock-extension rules must agree with the retained state transition;
   caller-provided hints alone do not prove them.
 - The exact admitted ciphertext/commitment and its well-formed relation to the
-  choice, plus election encryption key and release/decryption policy required
-  by the private-ballot design. The present model does not specify that key or
-  ciphertext relation; no encryption scheme or threshold parameters are
+  choice and confidential bond. Specify any public parameters and tally-opening
+  relation required by the construction without a decryption committee, master
+  decryption key, voter-secret reconstruction, omitted accepted ballots or
+  additional subset tallies. No encryption scheme or recovery construction is
   selected by this matrix.
 - The exact closed accepted ballot corpus, its order/root/count, election and
   eligibility/key/policy context, including replacement and duplicate handling.

@@ -135,7 +135,6 @@ AUTHENTICATION_FIELDS = frozenset(
     {
         "kind",
         "algorithm",
-        "backend",
         "service_id",
         "administrator_id",
         "key_revision",

@@ -1,5 +1,5 @@
 // Actual client/Unix transport within an entered Tokio blocking worker. Signed software
-// fixtures exercise transport composition only; they do not qualify hardware or an HTTP route.
+// fixtures exercise transport composition only; they do not qualify signer or an HTTP route.
 
 async fn worker_fixture_after_ambiguous_sign() -> (Fixture, Vec<u8>) {
     tokio::task::spawn_blocking(|| {
@@ -54,16 +54,16 @@ async fn exact_observer_opens_its_real_read_session_from_an_entered_blocking_wor
         observer_handle: fixture
             .signer
             .binding
-            .stream_token_hardware_binding
+            .stream_token_signer_binding
             .as_ref()
             .unwrap()
             .observer_handle()
             .to_owned(),
     };
     assert_ne!(observer.handle(), fixture.signer.handle());
-    let query = stream_token_hardware_test_support::query();
+    let query = stream_token_signer_test_support::query();
     let expected_query = query.encode_canonical().unwrap();
-    let observation = stream_token_hardware_test_support::state_claim(&query)
+    let observation = stream_token_signer_test_support::state_claim(&query)
         .encode_canonical()
         .unwrap();
     let custody = vec![0xa1; SIGNER_CUSTODY_MAX_BYTES_V1];

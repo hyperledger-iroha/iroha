@@ -235,7 +235,6 @@ RESILIENCE_QUALIFICATION_AUTHENTICATION_FIELDS = frozenset(
     {
         "kind",
         "algorithm",
-        "backend",
         "service_id",
         "administrator_id",
         "key_revision",
@@ -255,7 +254,6 @@ RESILIENCE_QUALIFICATION_BINDING_FIELDS = frozenset(
         "receipt_sha256",
         "canonical_receipt_sha256",
         "receipt_generated_at_unix",
-        "signer_backend",
         "signer_service_id",
         "signer_administrator_id",
         "signer_key_revision",
@@ -354,7 +352,6 @@ AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS = frozenset(
 FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS = frozenset(
     {
         "algorithm",
-        "backend",
         "service_id",
         "administrator_id",
         "key_revision",
@@ -392,7 +389,6 @@ AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
         "release_sequence",
         "previous_envelope_sha256",
         "l1_lane_evidence_inventory_sha256",
-        "signer_backend",
         "signer_service_id",
         "signer_administrator_id",
         "signer_key_revision",
@@ -1302,7 +1298,6 @@ AGGREGATE_SUMMARY_FIELDS = frozenset(
     {
         "schema",
         "status",
-        "signer_qualification",
         "required_gates",
         "thresholds",
         "summary_file_count",

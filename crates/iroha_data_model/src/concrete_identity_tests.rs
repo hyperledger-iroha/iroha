@@ -197,8 +197,23 @@ fn explicit_action() -> Action {
     .with_metadata(metadata())
 }
 
+fn confidential_features() -> crate::confidential::ConfidentialFeatureDigest {
+    // Codec captures use fixed input values, independent of current network-policy defaults.
+    crate::confidential::ConfidentialFeatureDigest::new(
+        None,
+        None,
+        None,
+        Some(1),
+        Some([
+            0x93, 0x76, 0x91, 0x34, 0xd0, 0xa3, 0x4d, 0x4c, 0x93, 0x7a, 0x95, 0xbb, 0xc3, 0x40,
+            0x05, 0x77, 0x1b, 0x9d, 0x82, 0xef, 0x0f, 0xcf, 0xdf, 0xf0, 0x69, 0x57, 0xf2, 0x07,
+            0xe2, 0x16, 0x89, 0x6f,
+        ]),
+    )
+}
+
 fn header() -> BlockHeader {
-    BlockHeader::new(
+    let mut header = BlockHeader::new(
         NonZeroU64::new(7).expect("nonzero header height"),
         Some(HashOf::from_untyped_unchecked(Hash::new(
             b"concrete fixture predecessor",
@@ -206,7 +221,51 @@ fn header() -> BlockHeader {
         None,
         1_700_000_000_007,
         3,
+    );
+    header.set_confidential_features(Some(confidential_features()));
+    header
+}
+
+fn captured_family_frame(label: &str) -> Vec<u8> {
+    let fixture = fixture_values(include_str!(
+        "../tests/fixtures/model_concrete_identity_frames.json"
+    ));
+    let captured = fixture["families"]
+        .as_array()
+        .expect("captured families")
+        .iter()
+        .find(|row| row["case"].as_str() == Some(label))
+        .expect("captured family");
+    hex::decode(
+        captured["root"]["encoding"]["frame_hex"]
+            .as_str()
+            .expect("captured family frame"),
     )
+    .expect("valid captured frame hex")
+}
+
+#[test]
+fn concrete_header_inputs_match_capture() {
+    let context: SmartContractContext =
+        norito::decode_from_bytes(&captured_family_frame("smart-contract-context"))
+            .expect("decode captured context");
+    let header = header();
+    assert_eq!(header, context.curr_block);
+    assert_fixed_confidential_features(header);
+}
+
+fn assert_fixed_confidential_features(header: BlockHeader) {
+    let digest = header
+        .confidential_features()
+        .expect("fixed capture digest");
+    assert_eq!(digest.vk_set_hash, None);
+    assert_eq!(digest.poseidon_params_id, None);
+    assert_eq!(digest.pedersen_params_id, None);
+    assert_eq!(digest.conf_rules_version, Some(1));
+    assert_eq!(
+        digest.zk_policy_hash.map(hex::encode).as_deref(),
+        Some("93769134d0a34d4c937a95bbc34005771b9d82ef0fcfdff06957f207e216896f"),
+    );
 }
 
 fn trigger_context() -> TriggerContext {
@@ -236,9 +295,14 @@ fn stream_block() -> crate::block::SignedBlock {
     let transaction = transaction
         .try_sign(keys.private_key())
         .expect("sign fixture transaction");
-    let proposal =
-        SignedBlock::try_genesis(vec![transaction.clone()], keys.private_key(), None, None)
-            .expect("build signed genesis proposal");
+    let proposal = SignedBlock::try_genesis(
+        vec![transaction.clone()],
+        keys.private_key(),
+        Some(confidential_features()),
+        None,
+    )
+    .expect("build signed genesis proposal");
+    assert_fixed_confidential_features(proposal.header());
     let mut builder = BlockBuilder::new(proposal.header());
     builder.set_da_proof_policies(proposal.da_proof_policies().cloned());
     builder.push_transaction(transaction);
@@ -263,6 +327,21 @@ fn stream_block() -> crate::block::SignedBlock {
         .verify_hash(keys.public_key(), block.hash())
         .expect("verify final stream-block signature");
     block
+}
+
+#[cfg(feature = "http")]
+#[test]
+fn concrete_stream_block_header_and_signature_match_capture() {
+    let captured: crate::block::stream::BlockMessage =
+        norito::decode_from_bytes(&captured_family_frame("block-message"))
+            .expect("decode captured block message");
+    let block = stream_block();
+    assert_eq!(block.header(), captured.0.header());
+    assert_fixed_confidential_features(block.header());
+    assert_eq!(
+        block.signatures().collect::<Vec<_>>(),
+        captured.0.signatures().collect::<Vec<_>>(),
+    );
 }
 
 fn concrete_identity_frames() -> Vec<Value> {

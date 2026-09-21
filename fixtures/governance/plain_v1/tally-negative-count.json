@@ -1,0 +1,8 @@
+{
+  "referendum_id": "ref-1",
+  "evaluated_block_height": 9007199254740993,
+  "evaluated_block_hash": "1212121212121212121212121212121212121212121212121212121212121212",
+  "approve": 18446744073709551617,
+  "reject": -1,
+  "abstain": 0
+}

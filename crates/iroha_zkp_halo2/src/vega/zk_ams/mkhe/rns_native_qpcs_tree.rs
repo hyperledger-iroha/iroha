@@ -1,26 +1,21 @@
 //! Canonical native qPCS tree construction with admission before source access.
 //!
-//! This local ledger counts dense-MDS hash field additions and multiplications
-//! and conservatively enforces the unchanged tracked limit before construction.
-//! One budget also retains reservations for every live tree node buffer and
-//! its construction scratch. These are named owned buffers, not allocator
-//! overhead, caller-owned inputs, source-generation scratch, or whole-process RSS.
-//! TODO: define and enforce complete resource units and lifetime across the real
-//! production source, prover and verifier stages; no production caller currently
-//! carries this ledger. These counts do not establish whole-proof qualification.
-
-use std::sync::{Arc, Mutex, MutexGuard};
+//! This test-only prototype charges dense-MDS field operations and live tree
+//! buffers to the canonical production resource owner before source access.
+//! It does not own or export a second budget. Its current initial-tree work
+//! exceeds the unchanged cap, and extraction does not enable a production tree
+//! or establish whole-proof qualification.
 
 use zeroize::Zeroizing;
 
 use super::{
-    rns_native_profile::{
-        ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1, ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1,
-    },
     rns_native_proof_hash::{RnsNativeProofDigestV1, RnsNativeProofHashWorkV1},
     rns_native_qpcs_leaf::{
         CANONICAL_LEAF_BYTES_V1, RnsNativeLeafErrorV1, RnsNativeLeafPayloadV1, RnsNativeOracleV1,
         oracle_node_hash_v1,
+    },
+    rns_native_resource_budget::{
+        RnsNativeProofResourceBudgetV1, RnsNativeResourceErrorV1, RnsNativeResourceReservationV1,
     },
 };
 
@@ -29,115 +24,13 @@ pub(super) enum RnsNativeTreeErrorV1 {
     InvalidOracle,
     InvalidSource,
     ArithmeticOverflow,
-    WorkLimit,
-    WorkspaceLimit,
+    Resource(RnsNativeResourceErrorV1),
     Allocation,
-    LedgerPoisoned,
 }
 
-/// Monotonic work and live named-buffer ledger, shared by all trees of one caller.
-/// Failed admission is atomic; work is never refunded. Tree drop releases only
-/// its retained bytes. Production proof/session lifetime remains unfinished.
-#[derive(Debug, Default)]
-pub(super) struct RnsNativeProofResourceBudgetV1 {
-    usage: Arc<Mutex<RnsNativeTreeResourceUsageV1>>,
-}
-
-#[derive(Debug, Default)]
-struct RnsNativeTreeResourceUsageV1 {
-    consumed_work: u64,
-    live_bytes: u64,
-    peak_bytes: u64,
-}
-
-fn release_reserved_bytes_v1(usage: &Mutex<RnsNativeTreeResourceUsageV1>, bytes: u64) {
-    // Recovery is restricted to releasing a reservation already owned before
-    // poison. Never clear poison or use a recovered guard for new admission.
-    let mut usage = usage
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    usage.live_bytes -= bytes;
-}
-
-impl RnsNativeProofResourceBudgetV1 {
-    fn usage(&self) -> Result<MutexGuard<'_, RnsNativeTreeResourceUsageV1>, RnsNativeTreeErrorV1> {
-        self.usage
-            .lock()
-            .map_err(|_| RnsNativeTreeErrorV1::LedgerPoisoned)
-    }
-
-    pub(super) fn consumed(&self) -> Result<u64, RnsNativeTreeErrorV1> {
-        Ok(self.usage()?.consumed_work)
-    }
-
-    pub(super) fn live_bytes(&self) -> Result<u64, RnsNativeTreeErrorV1> {
-        Ok(self.usage()?.live_bytes)
-    }
-
-    pub(super) fn peak_bytes(&self) -> Result<u64, RnsNativeTreeErrorV1> {
-        Ok(self.usage()?.peak_bytes)
-    }
-
-    /// Debit explicit primitive operations without a retained buffer.
-    pub(super) fn charge(&mut self, operations: u64) -> Result<(), RnsNativeTreeErrorV1> {
-        let _reservation = self.admit(operations, 0, 0)?;
-        Ok(())
-    }
-
-    fn admit(
-        &mut self,
-        operations: u64,
-        retained_bytes: u64,
-        scratch_bytes: u64,
-    ) -> Result<RnsNativeTreeReservationV1, RnsNativeTreeErrorV1> {
-        let bytes = retained_bytes
-            .checked_add(scratch_bytes)
-            .ok_or(RnsNativeTreeErrorV1::ArithmeticOverflow)?;
-        let mut usage = self.usage()?;
-        let next_work = usage
-            .consumed_work
-            .checked_add(operations)
-            .ok_or(RnsNativeTreeErrorV1::ArithmeticOverflow)?;
-        let next_bytes = usage
-            .live_bytes
-            .checked_add(bytes)
-            .ok_or(RnsNativeTreeErrorV1::ArithmeticOverflow)?;
-        if next_work > ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1 {
-            return Err(RnsNativeTreeErrorV1::WorkLimit);
-        }
-        if next_bytes > ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1 {
-            return Err(RnsNativeTreeErrorV1::WorkspaceLimit);
-        }
-        usage.consumed_work = next_work;
-        usage.live_bytes = next_bytes;
-        usage.peak_bytes = usage.peak_bytes.max(next_bytes);
-        Ok(RnsNativeTreeReservationV1 {
-            usage: Arc::clone(&self.usage),
-            retained_bytes,
-            scratch_bytes,
-        })
-    }
-}
-
-/// Private reservation cannot be cloned or detached from the tree it accounts.
-#[derive(Debug)]
-struct RnsNativeTreeReservationV1 {
-    usage: Arc<Mutex<RnsNativeTreeResourceUsageV1>>,
-    retained_bytes: u64,
-    scratch_bytes: u64,
-}
-
-impl RnsNativeTreeReservationV1 {
-    fn release_scratch(&mut self) {
-        let scratch = std::mem::take(&mut self.scratch_bytes);
-        // Called only after the exact construction scratch has been destroyed.
-        release_reserved_bytes_v1(&self.usage, scratch);
-    }
-}
-
-impl Drop for RnsNativeTreeReservationV1 {
-    fn drop(&mut self) {
-        release_reserved_bytes_v1(&self.usage, self.retained_bytes + self.scratch_bytes);
+impl From<RnsNativeResourceErrorV1> for RnsNativeTreeErrorV1 {
+    fn from(error: RnsNativeResourceErrorV1) -> Self {
+        Self::Resource(error)
     }
 }
 
@@ -228,7 +121,7 @@ pub(super) struct RnsNativeQpcsTreeV1 {
     leaves: usize,
     nodes: Vec<RnsNativeProofDigestV1>,
     // Declared after nodes so their allocation drops before its reservation.
-    _reservation: RnsNativeTreeReservationV1,
+    _reservation: RnsNativeResourceReservationV1,
 }
 
 impl RnsNativeQpcsTreeV1 {
@@ -338,6 +231,9 @@ impl RnsNativeQpcsTreeV1 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::rns_native_profile::{
+        ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1, ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1,
+    };
     use super::super::rns_native_proof_hash::RnsNativeProofHashContextV1;
     use super::*;
 
@@ -399,17 +295,22 @@ mod tests {
             let result = RnsNativeQpcsTreeV1::build(parameter(), oracle, &mut budget, |_, _| {
                 panic!("work rejection must precede source access")
             });
-            assert!(matches!(result, Err(RnsNativeTreeErrorV1::WorkLimit)));
+            assert!(matches!(
+                result,
+                Err(RnsNativeTreeErrorV1::Resource(
+                    RnsNativeResourceErrorV1::WorkLimit
+                ))
+            ));
             assert_eq!(budget.consumed().expect("healthy resource ledger"), 7);
         }
         // The cap is exact and fixed, with no caller-supplied limit or reset.
         budget
             .charge(ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1 - 7)
             .unwrap();
-        assert_eq!(budget.charge(1), Err(RnsNativeTreeErrorV1::WorkLimit));
+        assert_eq!(budget.charge(1), Err(RnsNativeResourceErrorV1::WorkLimit));
         assert_eq!(
             budget.charge(u64::MAX),
-            Err(RnsNativeTreeErrorV1::ArithmeticOverflow)
+            Err(RnsNativeResourceErrorV1::ArithmeticOverflow)
         );
         assert_eq!(
             budget.consumed().expect("healthy resource ledger"),
@@ -500,59 +401,6 @@ mod tests {
     }
 
     #[test]
-    fn work_and_live_bytes_are_admitted_atomically_and_only_bytes_are_released() {
-        let mut budget = RnsNativeProofResourceBudgetV1::default();
-        let reservation = budget
-            .admit(7, ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1 - 1, 1)
-            .unwrap();
-        assert_eq!(budget.consumed().expect("healthy resource ledger"), 7);
-        assert_eq!(
-            budget.live_bytes().expect("healthy resource ledger"),
-            ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1
-        );
-        assert_eq!(
-            budget.peak_bytes().expect("healthy resource ledger"),
-            budget.live_bytes().expect("healthy resource ledger")
-        );
-        assert!(matches!(
-            budget.admit(3, 1, 0),
-            Err(RnsNativeTreeErrorV1::WorkspaceLimit)
-        ));
-        assert!(matches!(
-            budget.admit(0, u64::MAX, 1),
-            Err(RnsNativeTreeErrorV1::ArithmeticOverflow)
-        ));
-        assert!(matches!(
-            budget.admit(u64::MAX, 0, 0),
-            Err(RnsNativeTreeErrorV1::ArithmeticOverflow)
-        ));
-        assert_eq!(budget.consumed().expect("healthy resource ledger"), 7);
-        assert_eq!(
-            budget.live_bytes().expect("healthy resource ledger"),
-            ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1
-        );
-        drop(reservation);
-        assert_eq!(budget.live_bytes().expect("healthy resource ledger"), 0);
-        assert_eq!(budget.consumed().expect("healthy resource ledger"), 7);
-        budget
-            .charge(ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1 - 7)
-            .unwrap();
-        assert!(matches!(
-            budget.admit(1, 1, 0),
-            Err(RnsNativeTreeErrorV1::WorkLimit)
-        ));
-        assert_eq!(budget.live_bytes().expect("healthy resource ledger"), 0);
-        assert_eq!(
-            budget.consumed().expect("healthy resource ledger"),
-            ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1
-        );
-        assert_eq!(
-            budget.peak_bytes().expect("healthy resource ledger"),
-            ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1
-        );
-    }
-
-    #[test]
     fn two_real_terminal_trees_keep_exact_live_storage_until_each_drop() {
         fn requires_send_sync<T: Send + Sync>() {}
         requires_send_sync::<RnsNativeProofResourceBudgetV1>();
@@ -616,7 +464,12 @@ mod tests {
         let result = RnsNativeQpcsTreeV1::build(parameter(), oracle, &mut budget, |_, _| {
             panic!("workspace rejection must precede source access")
         });
-        assert!(matches!(result, Err(RnsNativeTreeErrorV1::WorkspaceLimit)));
+        assert!(matches!(
+            result,
+            Err(RnsNativeTreeErrorV1::Resource(
+                RnsNativeResourceErrorV1::WorkspaceLimit
+            ))
+        ));
         assert_eq!(budget.consumed().expect("healthy resource ledger"), 11);
         assert_eq!(
             budget.live_bytes().expect("healthy resource ledger"),
@@ -657,8 +510,9 @@ mod tests {
             });
         }));
         assert!(unwind.is_err());
-        assert!(
-            !budget.usage.is_poisoned(),
+        assert_eq!(
+            budget.live_bytes(),
+            Ok(0),
             "source runs outside the ledger lock"
         );
         assert_eq!(budget.charge(0), Ok(()), "healthy ledger remains usable");
@@ -671,77 +525,5 @@ mod tests {
             budget.peak_bytes().expect("healthy resource ledger"),
             work.digest_storage_bytes + CANONICAL_LEAF_BYTES_V1 as u64
         );
-    }
-    #[test]
-    fn poisoned_ledger_rejects_new_admission_but_releases_existing_bytes() {
-        let mut budget = RnsNativeProofResourceBudgetV1::default();
-        let mut reservation = budget.admit(7, 20, 11).expect("healthy admission");
-        assert_eq!(budget.consumed(), Ok(7));
-        assert_eq!(budget.live_bytes(), Ok(31));
-        let shared = Arc::clone(&budget.usage);
-        let unwind = std::panic::catch_unwind(|| {
-            let _guard = shared.lock().expect("healthy lock");
-            panic!("deliberately poison the accounting lock");
-        });
-        assert!(unwind.is_err());
-        assert!(shared.is_poisoned());
-        for observed in [budget.consumed(), budget.live_bytes(), budget.peak_bytes()] {
-            assert_eq!(observed, Err(RnsNativeTreeErrorV1::LedgerPoisoned));
-        }
-        assert_eq!(budget.charge(1), Err(RnsNativeTreeErrorV1::LedgerPoisoned));
-        assert!(matches!(
-            budget.admit(1, 1, 1),
-            Err(RnsNativeTreeErrorV1::LedgerPoisoned)
-        ));
-        let attempted = RnsNativeQpcsTreeV1::build(
-            parameter(),
-            RnsNativeOracleV1::Fri { layer: 17 },
-            &mut budget,
-            |_, _| panic!("poison rejection must precede source access"),
-        );
-        assert!(matches!(
-            attempted,
-            Err(RnsNativeTreeErrorV1::LedgerPoisoned)
-        ));
-        // Test-only inspection of the poisoned state proves rejected admissions
-        // did not mutate any counter; production observations remain fallible.
-        {
-            let observed = shared.lock().unwrap_err().into_inner();
-            assert_eq!(
-                (
-                    observed.consumed_work,
-                    observed.live_bytes,
-                    observed.peak_bytes
-                ),
-                (7, 31, 31)
-            );
-        }
-        reservation.release_scratch();
-        reservation.release_scratch();
-        {
-            let observed = shared.lock().unwrap_err().into_inner();
-            assert_eq!(
-                (
-                    observed.consumed_work,
-                    observed.live_bytes,
-                    observed.peak_bytes
-                ),
-                (7, 20, 31)
-            );
-        }
-        drop(reservation);
-        {
-            let observed = shared.lock().unwrap_err().into_inner();
-            assert_eq!(
-                (
-                    observed.consumed_work,
-                    observed.live_bytes,
-                    observed.peak_bytes
-                ),
-                (7, 0, 31)
-            );
-        }
-        assert!(shared.is_poisoned());
-        assert_eq!(budget.charge(0), Err(RnsNativeTreeErrorV1::LedgerPoisoned));
     }
 }

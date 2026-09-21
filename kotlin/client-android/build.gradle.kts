@@ -1628,6 +1628,9 @@ android {
         // Native bridge bytes are generated under build/ and registered with
         // the variant API below. Never package stale, ignored source-tree .so files.
         getByName("main").jniLibs.directories.clear()
+        // Reuse the exact Java assertions against the Android consumer classpath.
+        getByName("test").java.srcDir(project(":core-jvm").file("src/sccpJavaTest/java"))
+        getByName("test").java.srcDir(project(":core-jvm").file("src/sorafsJavaTest/java"))
     }
 
     packaging {
@@ -1659,6 +1662,7 @@ dependencies {
     implementation(libs.play.services.nearby)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(kotlin("test"))
+    testImplementation(libs.bcprov)
     testImplementation(libs.junit.params)
     testRuntimeOnly(libs.junit.jupiter.engine)
     testRuntimeOnly(libs.junit.platform.launcher)
@@ -1667,6 +1671,7 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
+    enableAssertions = true
     val hostNativeTask = name == "testDebugHostNative"
     useJUnitPlatform {
         if (!hostNativeTask) excludeTags("host-native")
@@ -1687,7 +1692,7 @@ tasks.withType<Test>().configureEach {
 // managed unit tests and from physical-device/Android-native execution.
 afterEvaluate {
     tasks.register<Test>("testDebugHostNative") {
-        description = "Run Android Java consumers against an explicitly supplied host JNI bridge."
+        description = "Run Android Kotlin and Java consumers against an explicitly supplied host JNI bridge."
         group = "verification"
         val managed = tasks.named<Test>("testDebugUnitTest").get()
         testClassesDirs = managed.testClassesDirs
@@ -1695,7 +1700,7 @@ afterEvaluate {
         dependsOn(provider { managed.taskDependencies.getDependencies(managed) })
         useJUnitPlatform { includeTags("host-native") }
         filter {
-            includeTestsMatching("org.hyperledger.iroha.sdk.IrohaKeyManagerNativeJavaConsumerTest")
+            includeTestsMatching("org.hyperledger.iroha.sdk.*")
             isFailOnNoMatchingTests = true
         }
         outputs.upToDateWhen { false }

@@ -104,7 +104,6 @@ def resilience_summary(
     authentication = {
         "kind": "external-ed25519",
         "algorithm": "ed25519",
-        "backend": "software",
         "service_id": SIGNER_SERVICE_ID,
         "administrator_id": SIGNER_ADMINISTRATOR_ID,
         "key_revision": SIGNER_KEY_REVISION,
@@ -190,7 +189,6 @@ def resilience_binding(
         "receipt_sha256": payload["receipt_sha256"],
         "canonical_receipt_sha256": payload["canonical_receipt_sha256"],
         "receipt_generated_at_unix": payload["receipt_generated_at_unix"],
-        "signer_backend": authentication["backend"],
         "signer_service_id": authentication["service_id"],
         "signer_administrator_id": authentication["administrator_id"],
         "signer_key_revision": authentication["key_revision"],

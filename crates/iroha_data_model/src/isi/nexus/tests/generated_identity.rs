@@ -188,6 +188,46 @@ fn sponsor_instruction_records() -> [Value; 10] {
     ]
 }
 
+#[test]
+fn nexus_identity_header_matches_every_captured_confidential_field() {
+    let captured: Value = json::from_str(include_str!(
+        "../../../../tests/fixtures/nexus_instruction_generated_identity_frames.json"
+    ))
+    .expect("immutable Nexus instruction capture");
+    let relay = captured
+        .as_array()
+        .expect("captured instruction records")
+        .iter()
+        .find(|row| {
+            row["nominal"].as_str()
+                == Some("iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay")
+        })
+        .expect("captured relay instruction");
+    let bytes = hex::decode(relay["cases"][0]["frame"].as_str().expect("captured frame"))
+        .expect("captured frame hex");
+    let captured: RegisterVerifiedLaneRelay =
+        norito::decode_from_bytes(&bytes).expect("decode captured relay instruction");
+    let expected = captured
+        .envelope
+        .block_header
+        .confidential_features()
+        .expect("captured confidential digest");
+    assert_eq!(expected.vk_set_hash, None);
+    assert_eq!(expected.poseidon_params_id, None);
+    assert_eq!(expected.pedersen_params_id, None);
+    assert_eq!(expected.conf_rules_version, Some(1));
+    assert_eq!(
+        hex::encode(expected.zk_policy_hash.expect("captured policy hash")),
+        "93769134d0a34d4c937a95bbc34005771b9d82ef0fcfdff06957f207e216896f"
+    );
+    for height in [5, 9] {
+        assert_eq!(
+            sample_header(height).confidential_features(),
+            Some(expected)
+        );
+    }
+}
+
 fn current_instruction_records() -> Value {
     let mut rows = sponsor_instruction_records().to_vec();
     rows.extend(verified_instruction_records());

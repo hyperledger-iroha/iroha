@@ -39,21 +39,20 @@ pub(crate) const MAX_CLIENT_ID_BYTES: usize = 128;
 pub(crate) const MAX_NONCE_BYTES: usize = 128;
 /// Maximum tolerated positive clock skew for an otherwise valid token.
 pub(crate) const MAX_TOKEN_FUTURE_SKEW_SECS: u64 = 60;
-mod hardware_finality;
-mod hardware_lifecycle;
-mod hardware_pins;
-mod hardware_transport;
-use hardware_finality::CoreFinalityV1;
-use hardware_lifecycle::{HardwareDriverV1, SystemHardwareClockV1};
-pub use hardware_pins::StreamTokenHardwarePinsV1;
-pub use hardware_transport::{
-    StreamTokenApprovedCustodyAnchorV1, StreamTokenHardwareCallErrorV1,
-    StreamTokenHardwareClientV1, StreamTokenHardwareReceiptV1, StreamTokenObserverReplyV1,
-    StreamTokenStateObserverClientV1,
+mod signer_finality;
+mod signer_lifecycle;
+mod signer_pins;
+mod signer_transport;
+use signer_finality::CoreFinalityV1;
+use signer_lifecycle::{SignerDriverV1, SystemSignerClockV1};
+pub use signer_pins::StreamTokenSignerPinsV1;
+pub use signer_transport::{
+    StreamTokenApprovedCustodyAnchorV1, StreamTokenObserverReplyV1, StreamTokenSignerCallErrorV1,
+    StreamTokenSignerClientV1, StreamTokenSignerReceiptV1, StreamTokenStateObserverClientV1,
 };
 /// Issuer used to sign stream tokens with configured defaults.
 pub struct StreamTokenIssuer {
-    hardware: HardwareDriverV1,
+    signer: SignerDriverV1,
     verifying_key: VerifyingKey,
     defaults: TokenDefaults,
     issuance_budgets: Mutex<BTreeMap<StreamTokenQuotaSubject, IssuanceBudget>>,
@@ -129,72 +128,72 @@ impl StreamTokenIssuer {
         storage: &actual::SorafsStorage,
         chain_id: &str,
         network_id: [u8; 32],
-        client: Option<Arc<dyn StreamTokenHardwareClientV1>>,
+        client: Option<Arc<dyn StreamTokenSignerClientV1>>,
         observer: Option<Arc<dyn StreamTokenStateObserverClientV1>>,
         approved: Option<StreamTokenApprovedCustodyAnchorV1>,
         state: Arc<CoreState>,
     ) -> Result<Option<Self>, StreamTokenIssuerError> {
-        let pins = StreamTokenHardwarePinsV1::from_config(storage, chain_id, network_id)?;
+        let pins = StreamTokenSignerPinsV1::from_config(storage, chain_id, network_id)?;
         let Some(pins) = pins else {
             return if client.is_none() && observer.is_none() && approved.is_none() {
                 Ok(None)
             } else {
-                Err(StreamTokenIssuerError::UnexpectedHardwareDependency)
+                Err(StreamTokenIssuerError::UnexpectedSignerDependency)
             };
         };
-        let client = client.ok_or(StreamTokenIssuerError::MissingHardwareClient)?;
+        let client = client.ok_or(StreamTokenIssuerError::MissingSignerClient)?;
         let observer = observer.ok_or(StreamTokenIssuerError::MissingStateObserver)?;
         let approved = approved.ok_or(StreamTokenIssuerError::MissingApprovedAnchor)?;
         {
             let view = state.view();
             if view.chain_id().as_ref() != chain_id || view.network_id().as_bytes() != &network_id {
-                return Err(StreamTokenIssuerError::HardwareBindingMismatch);
+                return Err(StreamTokenIssuerError::SignerBindingMismatch);
             }
         }
         // Validate local defaults before any observer I/O or private operation.
         Self::configured_defaults(&storage.stream_tokens, &pins)?.validate()?;
         let finality = Arc::new(CoreFinalityV1::new(state, pins.clone()));
-        let driver = HardwareDriverV1::new(
+        let driver = SignerDriverV1::new(
             pins,
             client,
             observer,
             approved,
             finality,
-            Arc::new(SystemHardwareClockV1),
+            Arc::new(SystemSignerClockV1),
         )?;
-        Self::from_hardware(&storage.stream_tokens, driver).map(Some)
+        Self::from_signer(&storage.stream_tokens, driver).map(Some)
     }
     fn configured_defaults(
         config: &actual::SorafsTokenConfig,
-        pins: &StreamTokenHardwarePinsV1,
+        pins: &StreamTokenSignerPinsV1,
     ) -> Result<TokenDefaults, StreamTokenIssuerError> {
         Ok(TokenDefaults {
             key_version: u32::try_from(pins.binding().key_revision)
-                .map_err(|_| StreamTokenIssuerError::InvalidHardwareConfig)?,
+                .map_err(|_| StreamTokenIssuerError::InvalidSignerConfig)?,
             ttl_secs: config.default_ttl_secs,
             max_streams: config.default_max_streams,
             rate_limit_bytes: config.default_rate_limit_bytes,
             requests_per_minute: config.default_requests_per_minute,
         })
     }
-    fn from_hardware(
+    fn from_signer(
         config: &actual::SorafsTokenConfig,
-        hardware: HardwareDriverV1,
+        signer: SignerDriverV1,
     ) -> Result<Self, StreamTokenIssuerError> {
-        let defaults = Self::configured_defaults(config, hardware.pins())?;
+        let defaults = Self::configured_defaults(config, signer.pins())?;
         defaults.validate()?;
-        let bytes: [u8; 32] = hardware
+        let bytes: [u8; 32] = signer
             .pins()
             .binding()
             .public_key
             .to_bytes()
             .1
             .try_into()
-            .map_err(|_| StreamTokenIssuerError::InvalidHardwareConfig)?;
+            .map_err(|_| StreamTokenIssuerError::InvalidSignerConfig)?;
         let verifying_key = VerifyingKey::from_bytes(&bytes)
-            .map_err(|_| StreamTokenIssuerError::InvalidHardwareConfig)?;
+            .map_err(|_| StreamTokenIssuerError::InvalidSignerConfig)?;
         Ok(Self {
-            hardware,
+            signer,
             verifying_key,
             defaults,
             issuance_budgets: Mutex::new(BTreeMap::new()),
@@ -232,7 +231,7 @@ impl StreamTokenIssuer {
             overrides.requests_per_minute,
             self.defaults.requests_per_minute,
         )?;
-        let now = self.hardware.now_unix_ms()? / 1_000;
+        let now = self.signer.now_unix_ms()? / 1_000;
         self.observe_epoch(now)?;
         let ttl_epoch = now
             .checked_add(ttl_secs)
@@ -251,7 +250,7 @@ impl StreamTokenIssuer {
         };
         validate_token_body(&body)?;
         let remaining_quota = self.reserve_issuance_budget(quota_subject, Instant::now())?;
-        let token = self.hardware.sign(body)?;
+        let token = self.signer.sign(body)?;
         Ok(TokenIssue {
             token,
             remaining_quota,
@@ -263,7 +262,7 @@ impl StreamTokenIssuer {
         &self,
         body: &StreamTokenBodyV1,
     ) -> Result<u64, StreamTokenIssuerError> {
-        self.hardware.before_admission(body)
+        self.signer.before_admission(body)
     }
     /// Return the Ed25519 verifying key bytes.
     pub fn verifying_key_bytes(&self) -> [u8; 32] {
@@ -409,11 +408,11 @@ fn new_token_id_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<String, StreamT
 #[derive(Debug, Error)]
 pub enum StreamTokenIssuerError {
     /// Disabled issuance received an unrequested client, observer or approved state pin.
-    #[error("stream-token hardware dependency injected while issuance is disabled")]
-    UnexpectedHardwareDependency,
-    /// Enabled issuance requires the exact opaque hardware client.
-    #[error("stream-token hardware client is missing")]
-    MissingHardwareClient,
+    #[error("stream-token signer dependency injected while issuance is disabled")]
+    UnexpectedSignerDependency,
+    /// Enabled issuance requires the exact configured signer client.
+    #[error("stream-token signer client is missing")]
+    MissingSignerClient,
     /// Enabled issuance requires the independently authenticated observer transport.
     #[error("stream-token state observer is missing")]
     MissingStateObserver,
@@ -421,31 +420,31 @@ pub enum StreamTokenIssuerError {
     #[error("stream-token approved custody anchor is missing")]
     MissingApprovedAnchor,
     /// Public configuration was incomplete, noncanonical or lacked independent trust.
-    #[error("invalid stream-token hardware configuration")]
-    InvalidHardwareConfig,
+    #[error("invalid stream-token signer configuration")]
+    InvalidSignerConfig,
     /// Client routing, immutable pins or authenticated chain context was substituted.
-    #[error("stream-token hardware binding mismatch")]
-    HardwareBindingMismatch,
+    #[error("stream-token signer binding mismatch")]
+    SignerBindingMismatch,
     /// Signed custody, current-state or immutable completion evidence failed verification.
-    #[error("stream-token hardware evidence is invalid")]
-    HardwareEvidenceInvalid,
+    #[error("stream-token signer evidence is invalid")]
+    SignerEvidenceInvalid,
     /// Current custody, finality or concurrent publication state drifted.
-    #[error("stream-token hardware state changed")]
-    HardwareStateChanged,
+    #[error("stream-token signer state changed")]
+    SignerStateChanged,
     /// Exact local committed history and its authenticated finality were unavailable.
-    #[error("stream-token hardware finality is unavailable")]
-    HardwareFinalityUnavailable,
+    #[error("stream-token signer finality is unavailable")]
+    SignerFinalityUnavailable,
     /// The independently observed millisecond clock moved backwards.
-    #[error("stream-token hardware clock moved backwards")]
-    HardwareClockRollback,
+    #[error("stream-token signer clock moved backwards")]
+    SignerClockRollback,
     /// The bounded operation or its read-only recovery was unavailable.
-    #[error("stream-token hardware runtime unavailable")]
+    #[error("stream-token signer runtime unavailable")]
     RuntimeSignerUnavailable,
     /// The service refused the prepared operation.
-    #[error("stream-token hardware runtime refused request")]
+    #[error("stream-token signer runtime refused request")]
     RuntimeSignerRefused,
     /// The bounded returned signature or transport shape was invalid.
-    #[error("stream-token hardware runtime produced invalid output")]
+    #[error("stream-token signer runtime produced invalid output")]
     RuntimeSignerOutputInvalid,
     /// A configured or requested token policy was zero, unsafe, or above its ceiling.
     #[error("invalid stream-token policy {field}: {reason}")]
@@ -586,24 +585,24 @@ fn decode_token_wire(bytes: &[u8]) -> Result<StreamTokenV1, StreamTokenHeaderErr
     .map_err(StreamTokenHeaderError::InvalidPayload)
 }
 #[cfg(test)]
-#[path = "token/hardware_finality_native_custody_tests.rs"]
-mod hardware_finality_native_custody_tests;
+#[path = "token/signer_finality_native_custody_tests.rs"]
+mod signer_finality_native_custody_tests;
 #[cfg(test)]
-#[path = "token/hardware_finality_tests.rs"]
-mod hardware_finality_tests;
+#[path = "token/signer_finality_tests.rs"]
+mod signer_finality_tests;
 #[cfg(test)]
-#[path = "token/hardware_pins_tests.rs"]
-mod hardware_pins_tests;
+#[path = "token/signer_pins_tests.rs"]
+mod signer_pins_tests;
 #[cfg(test)]
-#[path = "token/hardware_test_support.rs"]
-pub(crate) mod hardware_test_support;
+#[path = "token/signer_test_support.rs"]
+pub(crate) mod signer_test_support;
 #[cfg(test)]
-#[path = "token/hardware_wire_tests.rs"]
-mod hardware_wire_tests;
+#[path = "token/signer_wire_tests.rs"]
+mod signer_wire_tests;
 #[cfg(test)]
-#[path = "token/hardware_tests.rs"]
+#[path = "token/signer_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "token/hardware_admission_tests.rs"]
-mod hardware_admission_tests;
+#[path = "token/signer_admission_tests.rs"]
+mod signer_admission_tests;

@@ -19,9 +19,6 @@ const SOURCE_OPENINGS_TEST_SOURCE_V1: &str = include_str!(
 const SOURCE_OPENINGS_MAPPING_TEST_SOURCE_V1: &str = include_str!(
     "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1_mapping_tests.rs"
 );
-const SOURCE_OPENINGS_REOPEN_SOURCE_V1: &str = include_str!(
-    "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1/canonical_reopen_v1.rs"
-);
 #[test]
 fn exact_formula_mapping_and_memory_budgets_are_frozen() {
     assert_eq!(SOURCE_ALGEBRA_RECORDS_V2, 43);
@@ -492,8 +489,6 @@ fn source_and_test_budgets_remain_bounded() {
         SOURCE_OPENINGS_TEST_SOURCE_V1
             .contains("#[path = \"source_openings_v1_mapping_tests.rs\"]\nmod mapping;")
     );
-    assert!(SOURCE_OPENINGS_REOPEN_SOURCE_V1.lines().count() <= 300);
-    assert!(SOURCE_OPENINGS_REOPEN_SOURCE_V1.len() <= 12_000);
 }
 
 #[test]

@@ -107,6 +107,8 @@ impl Drop for AddressRuntimeGuard {
 #[error("failed to load config from fixtures")]
 struct FixtureConfigLoadError;
 include!("fixtures/soranet_transport_identity_tests.rs");
+#[path = "fixtures/snapshot_read_buffer_tests.rs"]
+mod snapshot_read_buffer_tests;
 fn load_config_from_fixtures(path: impl AsRef<Path>) -> Result<Config, FixtureConfigLoadError> {
     let config = ConfigReader::new()
         .without_env()

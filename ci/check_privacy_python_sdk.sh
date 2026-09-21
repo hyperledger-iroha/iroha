@@ -1167,6 +1167,8 @@ export PYTHONPATH="${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"
   tests/privacy_zk_x509_transport_test.py \
   tests/proof_attachment_contract_test.py \
   tests/crypto_algorithms_test.py \
+  tests/governance_tally_test.py \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/governance_tally_response_test.py" \
   "${ROOT_DIR}/scripts/tests/check_privacy_jvm_native_gate_test.py" \
   "${ROOT_DIR}/scripts/tests/check_privacy_python_witness_boundary_test.py"
 assert_privacy_sdk_inputs_unchanged

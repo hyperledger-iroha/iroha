@@ -831,3 +831,60 @@ fn partition_retains_exact_original_pool_and_conserves_real_credits() {
     without_allocations(|| drop(charge));
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[test]
+fn partition_prepaid_reservation_preserves_same_pool_without_allocation_or_acquisition() {
+    let budget = AllocationBudget::new(64);
+    let mut parent = budget.try_reserve_bytes(64).unwrap();
+    let mut child = without_allocations(|| parent.try_partition_bytes(24).unwrap());
+    assert_eq!(parent.remaining_bytes(), 40);
+    assert_eq!(child.remaining_bytes(), 24);
+    assert_eq!(budget.reserved_bytes(), 64);
+    assert!(matches!(
+        budget.try_reserve_bytes(1),
+        Err(AllocationRefusal::Capacity { .. })
+    ));
+    let charge = without_allocations(|| child.try_split(layout(24)).unwrap());
+    assert_eq!(charge.layout(), layout(24));
+    assert_eq!(child.remaining_bytes(), 0);
+    without_allocations(|| drop(child));
+    assert_eq!(budget.reserved_bytes(), 64);
+    without_allocations(|| drop(parent));
+    assert_eq!(budget.reserved_bytes(), 24);
+    let replacement = budget.try_reserve_bytes(40).unwrap();
+    assert!(matches!(
+        budget.try_reserve_bytes(1),
+        Err(AllocationRefusal::Capacity { .. })
+    ));
+    without_allocations(|| drop(charge));
+    assert_eq!(budget.reserved_bytes(), 40);
+    without_allocations(|| drop(replacement));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn partition_refusal_and_zero_partition_preserve_original_remaining_and_refund() {
+    let budget = AllocationBudget::new(17);
+    let mut parent = budget.try_reserve_bytes(17).unwrap();
+    let error = without_allocations(|| parent.try_partition_bytes(18)).unwrap_err();
+    assert_eq!(
+        error,
+        InsufficientReservation {
+            requested_bytes: 18,
+            remaining_bytes: 17
+        }
+    );
+    assert_eq!(parent.remaining_bytes(), 17);
+    assert_eq!(budget.reserved_bytes(), 17);
+    let empty = without_allocations(|| parent.try_partition_bytes(0).unwrap());
+    assert_eq!(empty.remaining_bytes(), 0);
+    assert_eq!(parent.remaining_bytes(), 17);
+    without_allocations(|| drop(empty));
+    assert_eq!(budget.reserved_bytes(), 17);
+    let child = without_allocations(|| parent.try_partition_bytes(17).unwrap());
+    assert_eq!(parent.remaining_bytes(), 0);
+    without_allocations(|| drop(parent));
+    assert_eq!(budget.reserved_bytes(), 17);
+    without_allocations(|| drop(child));
+    assert_eq!(budget.reserved_bytes(), 0);
+}

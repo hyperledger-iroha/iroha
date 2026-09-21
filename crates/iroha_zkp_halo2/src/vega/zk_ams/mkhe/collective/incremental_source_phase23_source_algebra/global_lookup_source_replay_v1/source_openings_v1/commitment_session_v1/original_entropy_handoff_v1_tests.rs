@@ -58,9 +58,11 @@ fn isolated_session<R: MaskedRelaxedRandomSourceV1>(
 ) -> GlobalLookupCommitmentSessionV1<R, SourceOpeningEntropyStageV1> {
     GlobalLookupCommitmentSessionV1 {
         live: Some(GlobalLookupCommitmentSessionLiveV1 {
+            proof_resources: Default::default(),
             entropy: GlobalLookupProofSessionEntropySourceV1::Production {
                 original_random: random,
                 commitment_entropy_bytes: 0,
+                q_mask_entropy_bytes: 0,
             },
             inventory: GlobalLookupCommitmentInventorySkeletonV1::new_v1().unwrap(),
             proof_session_context_digest: [0x91; 32],
@@ -169,6 +171,7 @@ fn exact_derived_request_bound_and_bad_metadata_never_call_original_rng() {
     let mut entropy = GlobalLookupProofSessionEntropySourceV1::Production {
         original_random: source,
         commitment_entropy_bytes: MAX_COMMITMENT_ENTROPY_BYTES_V1 - 32,
+        q_mask_entropy_bytes: 0,
     };
     let mut destination = [0; 32];
     fill_entropy_v1(&mut entropy, 72_385, 127, &mut destination).unwrap();

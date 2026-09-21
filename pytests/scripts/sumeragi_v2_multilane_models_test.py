@@ -134,6 +134,12 @@ def test_reviewed_rust_include_manifest_is_pinned_and_current() -> None:
 # Current split owners retain their production or regression role in the exact
 # recursive source closure; nested catalog tests have explicit owners as well.
 CURRENT_REVIEWED_INCLUDE_COMPONENTS = (
+    ("crates/iroha_core/src/smartcontracts/ivm/host.rs", (
+        ("host/contract_state_namespace.rs", "contract_state_key_matches_namespace"),
+        ("host/contract_state_namespace.rs", "contract_state_namespace_access"),
+        ("host/contract_state_namespace.rs", "ensure_contract_state_read_allowed"),
+        ("host/contract_state_namespace.rs", "ensure_contract_state_write_allowed"),
+    )),
     ("crates/iroha_core/src/state.rs", (
         ("state/runtime_catalog.rs", "stage_consensus_catalog_transition"),
         ("state/runtime_catalog_startup.rs", "lane_manifests_with_committed_catalog"),

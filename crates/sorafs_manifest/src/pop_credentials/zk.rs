@@ -1374,10 +1374,13 @@ pub(super) fn prove_v1(
     commitment_root: [u8; 32],
     revocation_root: [u8; 32],
     current_list_version: u64,
-    challenge: [u8; 32],
-    context: &str,
-    presentation_binding: [u8; 32],
+    presentation: super::PopMembershipPresentationV1<'_>,
 ) -> Result<PopMembershipProofV1, PopCredentialValidationError> {
+    let super::PopMembershipPresentationV1 {
+        challenge_digest: challenge,
+        verifier_context: context,
+        presentation_binding_digest: presentation_binding,
+    } = presentation;
     let secret = canonical_scalar(witness.holder_secret)?;
     let challenge_field = challenge_scalar(challenge);
     let context_field = context_scalar(context);

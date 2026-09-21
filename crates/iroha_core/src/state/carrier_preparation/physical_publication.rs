@@ -857,3 +857,9 @@ pub(crate) use publication::PublishedNativeApply;
 #[cfg(test)]
 #[path = "physical_publication_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "governance_fixture.rs"]
+mod governance_fixture;
+#[cfg(test)]
+pub(crate) use governance_fixture::publish_governance_fixture;

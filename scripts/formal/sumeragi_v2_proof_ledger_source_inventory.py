@@ -329,6 +329,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'plan_journal_replay_tests.rs',
     ),
     'crates/iroha_core/src/smartcontracts/ivm/host.rs': (
+        'host/contract_state_namespace.rs',
         'host/axt_persistent_budget_tests.rs',
         'host/axt_unanchored_admission_tests.rs',
         'host/core_codec_and_contract_tests.rs',

@@ -168,7 +168,7 @@ REQUIRED_PHASES = (
     "python-sdk",
     "swift-sdk",
     "kotlin-sdk",
-    "java-android",
+    "java-source-kotlin",
     "dotnet-sdk",
     "contract-smoke",
     "tvm-contract-smoke",

@@ -1040,3 +1040,162 @@ fn release_approvals_require_independent_signers_with_valid_signatures() {
         assert_eq!(candidate.validate(), expected);
     }
 }
+#[test]
+fn release_sdk_consumers_preserve_ten_exact_json_and_binary_identities() {
+    use norito::codec::DecodeAll as _;
+    let expected = [
+        (PrivacyReleaseSdkConsumerV1::KotlinJvm, "kotlin_jvm", 0_u32),
+        (
+            PrivacyReleaseSdkConsumerV1::KotlinAndroid,
+            "kotlin_android",
+            1,
+        ),
+        (
+            PrivacyReleaseSdkConsumerV1::JavaSourceKotlin,
+            "java_source_kotlin",
+            10,
+        ),
+        (
+            PrivacyReleaseSdkConsumerV1::SwiftCBridge,
+            "swift_c_bridge",
+            3,
+        ),
+        (
+            PrivacyReleaseSdkConsumerV1::JavascriptNapi,
+            "javascript_napi",
+            4,
+        ),
+        (PrivacyReleaseSdkConsumerV1::PythonPyo3, "python_pyo3", 5),
+        (PrivacyReleaseSdkConsumerV1::CSharp, "csharp", 6),
+        (PrivacyReleaseSdkConsumerV1::Cli, "cli", 7),
+        (PrivacyReleaseSdkConsumerV1::OpenApi, "openapi", 8),
+        (
+            PrivacyReleaseSdkConsumerV1::GenesisTooling,
+            "genesis_tooling",
+            9,
+        ),
+    ];
+    assert_eq!(PrivacyReleaseSdkConsumerV1::ALL.len(), 10);
+    let schema = <PrivacyReleaseSdkConsumerV1 as iroha_schema::IntoSchema>::schema();
+    let iroha_schema::Metadata::Enum(metadata) = schema
+        .get::<PrivacyReleaseSdkConsumerV1>()
+        .expect("consumer schema")
+    else {
+        panic!("SDK consumers must retain their closed enum schema");
+    };
+    assert_eq!(metadata.variants.len(), expected.len());
+    for (index, (consumer, tag, discriminant)) in expected.into_iter().enumerate() {
+        assert_eq!(PrivacyReleaseSdkConsumerV1::ALL[index], consumer);
+        let bytes = consumer.encode();
+        assert_eq!(bytes, discriminant.to_le_bytes(), "{tag}");
+        assert_eq!(
+            PrivacyReleaseSdkConsumerV1::decode_all(&mut bytes.as_slice())
+                .expect("decode exact consumer index"),
+            consumer,
+        );
+        let framed = norito::encode_canonical(&consumer).expect("frame consumer");
+        assert_eq!(
+            norito::decode_canonical::<PrivacyReleaseSdkConsumerV1>(&framed)
+                .expect("decode framed consumer"),
+            consumer,
+        );
+        let json = norito::json::to_json(&consumer).expect("encode consumer JSON");
+        let value: norito::json::Value = norito::json::from_json(&json).unwrap();
+        assert_eq!(value, norito::json!({"consumer": tag, "value": null}));
+        assert_eq!(
+            norito::json::from_json::<PrivacyReleaseSdkConsumerV1>(&json)
+                .expect("decode exact consumer JSON"),
+            consumer,
+        );
+        assert_eq!(metadata.variants[index].tag, tag);
+        assert_eq!(metadata.variants[index].discriminant, discriminant);
+        assert_eq!(metadata.variants[index].ty, None);
+    }
+}
+
+#[test]
+fn release_sdk_consumer_rejects_retired_java_json_and_binary_index() {
+    use norito::codec::DecodeAll as _;
+    // A test-only producer preserves the exact old payload and unchanged root identity.
+    // No production decoder or compatibility alias is supplied for this retired tag.
+    #[derive(norito::Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseSdkConsumerV1"
+    )]
+    enum RetiredSdkConsumerWireFixture {
+        #[codec(index = 2)]
+        Retired,
+    }
+    for tag in ["java_android", "JavaAndroid", "JavaSourceKotlin"] {
+        let json = format!(r#"{{"consumer":"{tag}","value":null}}"#);
+        assert!(norito::json::from_json::<PrivacyReleaseSdkConsumerV1>(&json).is_err());
+    }
+    let old = RetiredSdkConsumerWireFixture::Retired;
+    assert_eq!(old.encode(), 2_u32.to_le_bytes());
+    let error = PrivacyReleaseSdkConsumerV1::decode_all(&mut old.encode().as_slice())
+        .expect_err("retired binary consumer must not acquire new qualification meaning");
+    assert!(matches!(
+        error,
+        norito::Error::Message(message) if message == "invalid enum discriminant"
+    ));
+    let framed = norito::encode_canonical(&old).expect("frame the exact retired consumer");
+    let error = norito::decode_canonical::<PrivacyReleaseSdkConsumerV1>(&framed)
+        .expect_err("matching frame identity must not admit a retired payload tag");
+    assert!(matches!(
+        error,
+        norito::Error::Message(message) if message == "invalid enum discriminant"
+    ));
+}
+
+#[test]
+fn release_sdk_inventory_requires_separate_java_source_kotlin_evidence() {
+    let release = synthetic_valid_release_manifest();
+    assert_eq!(release.validate(), Ok(()));
+    assert_eq!(release.sdk_packages.len(), 10);
+    assert_eq!(
+        release.sdk_packages[2].consumer,
+        PrivacyReleaseSdkConsumerV1::JavaSourceKotlin
+    );
+    let mut missing = release.clone();
+    missing.sdk_packages.remove(2);
+    assert_eq!(
+        missing.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::SdkPackageCount)
+    );
+    let mut extra = release.clone();
+    extra.sdk_packages.push(release.sdk_packages[2].clone());
+    assert_eq!(
+        extra.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::SdkPackageCount)
+    );
+    for substitute in [
+        PrivacyReleaseSdkConsumerV1::KotlinJvm,
+        PrivacyReleaseSdkConsumerV1::KotlinAndroid,
+    ] {
+        let mut substituted = release.clone();
+        substituted.sdk_packages[2].consumer = substitute;
+        assert_eq!(
+            substituted.validate(),
+            Err(PrivacyExact12ReleaseManifestValidationErrorV1::SdkPackage)
+        );
+    }
+    let mut reordered = release.clone();
+    reordered.sdk_packages.swap(1, 2);
+    assert_eq!(
+        reordered.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::SdkPackage)
+    );
+    let mut reused_package = release.clone();
+    reused_package.sdk_packages[2].package_digest = release.sdk_packages[1].package_digest;
+    assert_eq!(
+        reused_package.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::SdkPackage)
+    );
+    let mut different_corpus = release.clone();
+    different_corpus.sdk_packages[2].fixture_corpus_digest =
+        PrivacyReleaseArtifactDigestV1::new(raw(158));
+    assert_eq!(
+        different_corpus.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::SdkPackage)
+    );
+}

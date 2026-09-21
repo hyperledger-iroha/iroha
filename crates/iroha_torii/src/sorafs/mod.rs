@@ -118,14 +118,14 @@ pub use stream_token_admission::{
     StreamTokenGatewayAdmissionResultV1, StreamTokenGatewayQuotaRequestV1,
 };
 #[cfg(test)]
-pub(crate) use token::hardware_test_support;
+pub(crate) use token::signer_test_support;
 pub(crate) use token::{
     MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES,
     MAX_TOKEN_FUTURE_SKEW_SECS, StreamTokenQuotaSubject,
 };
 pub use token::{
-    StreamTokenApprovedCustodyAnchorV1, StreamTokenHardwareCallErrorV1,
-    StreamTokenHardwareClientV1, StreamTokenHardwarePinsV1, StreamTokenHardwareReceiptV1,
-    StreamTokenHeaderError, StreamTokenIssuer, StreamTokenIssuerError, StreamTokenObserverReplyV1,
+    StreamTokenApprovedCustodyAnchorV1, StreamTokenHeaderError, StreamTokenIssuer,
+    StreamTokenIssuerError, StreamTokenObserverReplyV1, StreamTokenSignerCallErrorV1,
+    StreamTokenSignerClientV1, StreamTokenSignerPinsV1, StreamTokenSignerReceiptV1,
     StreamTokenStateObserverClientV1, TokenOverrides, decode_token_base64, encode_token_base64,
 };

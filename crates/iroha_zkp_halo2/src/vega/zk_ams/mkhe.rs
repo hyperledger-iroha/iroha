@@ -209,6 +209,8 @@ mod rns_native_qpcs_initial;
 mod rns_native_qpcs_leaf;
 #[path = "mkhe/rns_native_qpcs_prefix.rs"]
 mod rns_native_qpcs_prefix;
+#[path = "mkhe/rns_native_resource_budget.rs"]
+mod rns_native_resource_budget;
 // Prototype tree construction is exercised by internal fixtures; production uses the verifier.
 #[path = "mkhe/rns_native_qpcs_tree.rs"]
 #[cfg(test)]
@@ -247,6 +249,8 @@ mod rns_native_terminal_cross_basis;
 )]
 #[path = "mkhe/rns_native_transcript.rs"]
 mod rns_native_transcript;
+#[path = "mkhe/rns_native_u15_msm.rs"]
+mod rns_native_u15_msm;
 #[path = "mkhe/rns_native_wire.rs"]
 mod rns_native_wire;
 #[path = "mkhe/security.rs"]

@@ -1,4 +1,4 @@
-//! Exact receipt verification simulations; these fixtures do not qualify any actual hardware.
+//! Exact receipt verification with independently signed authorization fixtures.
 
 use super::*;
 use crate::signer::custody::*;
@@ -34,8 +34,8 @@ pub(crate) fn fixture() -> Fixture {
     let binding = SignerCustodyBindingV1 {
         chain_id: "release-chain".into(),
         network_id: [0x11; 32],
-        runtime_handle: "hsm://sorafs/release/primary".into(),
-        key_handle: "pkcs11:production/release/key-7".into(),
+        runtime_handle: "software://sorafs/release/primary".into(),
+        key_handle: "software://production/release/key-7".into(),
         service_id: "release-primary".into(),
         administrator_id: "release-security-primary".into(),
         role: SignerRoleV1::ReleaseManifest,
@@ -70,11 +70,7 @@ pub(crate) fn fixture() -> Fixture {
         predecessor_digest: [0; 32],
         issued_at_unix_ms: 100_000,
         expires_at_unix_ms: 200_000,
-        hardware_identity_digest: [0x45; 32],
         evidence_digest: [0x46; 32],
-        generated_in_hardware: true,
-        exportable: false,
-        ever_exported: false,
         revoked: false,
     };
     let attestation = Signature::new(
@@ -364,15 +360,12 @@ fn signatures_order_bytes_messages_provenance_and_response_are_bound() {
 }
 
 #[test]
-fn other_purpose_and_exportable_attestations_never_upgrade_to_release_receipts() {
-    for mutate in [
-        |s: &mut SignerCustodyStatementV1| {
+fn other_purpose_authorizations_never_upgrade_to_release_receipts() {
+    {
+        let mutate = |s: &mut SignerCustodyStatementV1| {
             s.binding.role = SignerRoleV1::Promotion;
             s.binding.purpose = SignerPurposeBindingV1::NativeOrPromotion;
-        },
-        |s: &mut SignerCustodyStatementV1| s.exportable = true,
-        |s: &mut SignerCustodyStatementV1| s.generated_in_hardware = false,
-    ] {
+        };
         let mut f = fixture();
         let mut record: SignerCustodyRecordV1 =
             norito::decode_canonical(&f.receipt.custody_record).unwrap();
@@ -412,11 +405,6 @@ fn other_purpose_and_exportable_attestations_never_upgrade_to_release_receipts()
             )
             .expect("independently active valid Promotion custody");
             assert_eq!(verify(&f).unwrap_err(), SignerReceiptErrorV1::WrongPurpose);
-        } else {
-            assert_eq!(
-                verify(&f).unwrap_err(),
-                SignerReceiptErrorV1::Custody(SignerCustodyErrorV1::HardwareCustodyRequired)
-            );
         }
     }
 }

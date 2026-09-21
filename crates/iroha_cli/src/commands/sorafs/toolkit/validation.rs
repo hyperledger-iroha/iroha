@@ -3,6 +3,7 @@
 //! Command arguments belong to the canonical CLI; artifact validators, wire types and
 //! cryptographic verification remain in their reusable library owners.
 mod args;
+pub mod final_promotion_receipt;
 pub mod release_manifest_receipt;
 pub use args::*;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};

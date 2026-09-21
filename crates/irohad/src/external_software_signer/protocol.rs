@@ -1,5 +1,6 @@
 //! Canonical public identities and wire containers for the signer service.
 use iroha_crypto::PublicKey;
+use iroha_primitives::production_identity::is_production_identity_v1;
 use norito::codec::{Decode, Encode};
 use std::fmt;
 pub(super) const SIGNER_PROTOCOL_MAGIC_V1: [u8; 8] = *b"IRSGNR01";
@@ -116,8 +117,8 @@ impl SoftwareSignerPublicBindingV1 {
         if self.magic != SIGNER_PUBLIC_BINDING_MAGIC_V1
             || self.version != SIGNER_PROTOCOL_VERSION_V1
             || self.backend != ExternalSignerBackendV1::Software
-            || !valid_identity(&self.service_id)
-            || !valid_identity(&self.administrator_id)
+            || !is_production_identity_v1(&self.service_id, SIGNER_MAX_ID_BYTES_V1)
+            || !is_production_identity_v1(&self.administrator_id, SIGNER_MAX_ID_BYTES_V1)
             || self.service_id == self.administrator_id
             || self.service_uid == self.client_uid
             || self.service_uid == self.administrator_uid
@@ -318,15 +319,6 @@ pub(super) struct AdminResponseV1 {
     pub response_digest: [u8; 32],
     pub response_attestation: Vec<u8>,
 }
-pub(super) fn valid_identity(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= SIGNER_MAX_ID_BYTES_V1
-        && !value.as_bytes().contains(&0)
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
-        && !value.to_ascii_lowercase().contains("test")
-}
 pub(super) fn valid_software_signer_handle(role: SignerRoleV1, value: &str) -> bool {
     let (role_segment, instance_prefix) = match role {
         SignerRoleV1::ProofOutcome => ("proof-outcome", None),
@@ -340,12 +332,20 @@ pub(super) fn valid_software_signer_handle(role: SignerRoleV1, value: &str) -> b
         SignerRoleV1::BillingStatement => ("billing", None),
         SignerRoleV1::EvidenceViewer => ("evidence-viewer", None),
         SignerRoleV1::PopCredentials => ("pop-credentials", None),
-        SignerRoleV1::ReleaseManifest | SignerRoleV1::StreamToken => return false,
+        // TODO: implement these roles' purpose-aware payload validation and their
+        // dedicated receipt/state protocols before advertising them through this
+        // generic service. This is a service capability boundary; their provider
+        // interfaces permit operator-selected software or hardware custody.
+        SignerRoleV1::ReleaseManifest
+        | SignerRoleV1::StreamToken
+        | SignerRoleV1::FinalPromotionProvenance
+        | SignerRoleV1::FinalPromotionAccountTransaction
+        | SignerRoleV1::TopologyApproval => return false,
     };
     let prefix = format!("software://sorafs/{role_segment}/");
     iroha_config::parameters::validate_production_runtime_handle(value).is_ok()
         && value.strip_prefix(&prefix).is_some_and(|instance| {
-            valid_identity(instance)
+            is_production_identity_v1(instance, SIGNER_MAX_ID_BYTES_V1)
                 && !instance.contains('/')
                 && instance_prefix.is_none_or(|prefix| instance.starts_with(prefix))
         })

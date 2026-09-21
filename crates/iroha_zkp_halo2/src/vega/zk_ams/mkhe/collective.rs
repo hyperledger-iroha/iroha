@@ -64,7 +64,8 @@ mod persistent_direct_opening_v1;
 #[path = "collective/prepared_public_a.rs"]
 mod prepared_public_a;
 pub(in crate::vega::zk_ams::mkhe) use incremental_source::{
-    RnsNativeClaimedDirectNumericOriginV2, RnsNativeQpcsCompositeAuthorityV2,
+    MaterializedPlaneContextV1, RnsNativeClaimedDirectNumericOriginV2,
+    RnsNativeQpcsCompositeAuthorityV2,
 };
 #[expect(
     unused_imports,

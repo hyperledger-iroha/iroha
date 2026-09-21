@@ -23,7 +23,7 @@ PHASES = (
     "python-sdk",
     "swift-sdk",
     "kotlin-sdk",
-    "java-android",
+    "java-source-kotlin",
     "dotnet-sdk",
     "contract-smoke",
     "tvm-contract-smoke",
@@ -80,6 +80,19 @@ def test_runner_is_valid_bash_and_lists_exact_phase_set() -> None:
         stderr=subprocess.PIPE,
     )
     assert tuple(line.strip() for line in result.stdout.splitlines()[1:]) == PHASES
+
+
+def test_native_evidence_validator_requires_the_same_exact_corridor_phases() -> None:
+    """The independently compiled Rust consumer must agree with the Python runner."""
+    source = (ROOT / "crates/iroha_sccp/src/bin/sccp_release_evidence.rs").read_text(
+        encoding="utf-8"
+    )
+    declaration = re.search(
+        r"const REQUIRED_PHASES: \[&str; 12\] = \[(.*?)\];", source, re.DOTALL
+    )
+    assert declaration is not None
+    phases = tuple(re.findall(r'"([^"\n]+)"', declaration.group(1)))
+    assert phases == PHASES
 
 
 def test_sccp_bls_verification_is_mandatory_in_every_crate_build() -> None:
@@ -224,7 +237,7 @@ def test_runtime_api_phase_covers_durable_finality_router_cli_and_generated_spec
 
 
 def test_sdk_phases_use_only_exact_first_release_v1_suites() -> None:
-    trace = dry_run("js-sdk,swift-sdk,kotlin-sdk,java-android").stdout
+    trace = dry_run("js-sdk,swift-sdk,kotlin-sdk,java-source-kotlin").stdout
     for expected in (
         "sccpExact.test.js",
         "scripts/build_norito_xcframework.sh",
@@ -232,8 +245,8 @@ def test_sdk_phases_use_only_exact_first_release_v1_suites() -> None:
         "SccpV1Tests",
         "org.hyperledger.iroha.sdk.sccp.",
         "SccpClientExactTest",
-        "org.hyperledger.iroha.android.sccp.SccpV1Tests",
-        "org.hyperledger.iroha.android.client.SccpClientExactTests",
+        "org.hyperledger.iroha.sdk.sccp.SccpV1JavaConsumerTest",
+        "org.hyperledger.iroha.sdk.client.SccpClientExactJavaConsumerTest",
     ):
         assert expected in trace
     for retired in ("SolanaSccp", "TonSccp", "sccpSolana", "sccpEthereumMainnet"):
@@ -551,3 +564,30 @@ def test_workflow_path_filters_cover_release_trust_and_fixture_inputs() -> None:
         '"pytests/scripts/sccp_*"',
     ):
         assert path in workflow
+
+
+def test_retired_java_android_phase_has_no_alias() -> None:
+    completed = subprocess.run(
+        ["bash", str(RUNNER), "--dry-run", "--phase", "java-android"],
+        cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    assert completed.returncode != 0
+    assert "unknown" in completed.stderr.lower()
+    assert "cargo build" not in completed.stdout
+
+
+def test_java_source_kotlin_executes_both_platforms_and_authenticates_the_bridge() -> None:
+    trace = dry_run("java-source-kotlin").stdout
+    for suite in ("SccpV1JavaConsumerTest", "SccpClientExactJavaConsumerTest"):
+        assert trace.count(suite) == 2
+    for required in (
+        ":core-jvm:test", ":client-android:testDebugHostNative",
+        "--rerun-tasks", "--no-build-cache", "IROHA_NATIVE_LIBRARY_PATH=",
+        "check_native_sdk_abi23_artifact.py record", "check_native_sdk_abi23_artifact.py verify",
+        "check_sccp_java_consumer_contract.py", "--jdk-home",
+        "build/test-results/testDebugHostNative",
+    ):
+        assert required in trace
+    assert trace.count("check_sccp_java_consumer_contract.py") == 2
+    for retired in ("java/iroha_android", "ANDROID_HARNESS_MAINS", "GradleHarnessTests", "|| true"):
+        assert retired not in trace

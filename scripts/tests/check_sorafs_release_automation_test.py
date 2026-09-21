@@ -26,6 +26,9 @@ def _copy_workflows(target: Path) -> None:
         *automation.RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS,
         *automation.RELEASE_VERSION_MAP_CONTRACT_MARKERS,
         automation.SORAFS_CLI_RELEASE_GATE_SCRIPT,
+        automation.SORAFS_NATIVE_AUTHORITY_RUNTIME_SCRIPT,
+        automation.SORAFS_COSIGN_QUALIFICATION_HELPER,
+        automation.SORAFS_COSIGN_VERIFIER_POLICY,
         automation.PACKAGE_RELEASE_SMOKE_SCRIPT,
     ):
         source = REPO_ROOT / relative
@@ -44,6 +47,128 @@ def test_validate_release_automation_accepts_repository_contract() -> None:
         "workflow_count": 3,
         "workflows": sorted(automation.WORKFLOWS),
     }
+
+
+@pytest.mark.parametrize("mutation", ("remove", "duplicate", "conditional", "ignore_failure"))
+def test_release_gate_requires_mandatory_cosign_qualification(tmp_path, mutation):
+    _copy_workflows(tmp_path)
+    gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
+    source = gate.read_text()
+    command = f"python3 {automation.SORAFS_COSIGN_QUALIFICATION_HELPER}\n"
+    replacement = {
+        "remove": "", "duplicate": command * 2,
+        "conditional": "if false; then\n" + command + "fi\n",
+        "ignore_failure": command.rstrip() + " || true\n",
+    }[mutation]
+    gate.write_text(source.replace(command, replacement, 1))
+    with pytest.raises(ValueError, match="mandatory cosign qualification"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("mutation", ("remove", "comment", "duplicate", "conditional", "ignore_failure"))
+def test_release_gate_requires_mandatory_native_authority_runtime(tmp_path, mutation):
+    _copy_workflows(tmp_path)
+    gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
+    command = f"bash {automation.SORAFS_NATIVE_AUTHORITY_RUNTIME_SCRIPT}\n"
+    source = gate.read_text()
+    assert source.count(command) == 1
+    replacement = {
+        "remove": "", "comment": "# " + command, "duplicate": command * 2,
+        "conditional": "if false; then\n" + command + "fi\n",
+        "ignore_failure": command.rstrip() + " || true\n",
+    }[mutation]
+    gate.write_text(source.replace(command, replacement, 1))
+    with pytest.raises(ValueError, match="mandatory native authority runtime"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("mutation", (
+    "remove", "comment", "duplicate", "conditional", "ignore_failure", "filter",
+    *("omit_" + package for package in automation.SORAFS_SIGNER_CONTRACT_LIBRARIES),
+))
+def test_release_gate_requires_full_signer_contract_libraries(tmp_path, mutation):
+    _copy_workflows(tmp_path)
+    gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
+    command = automation.SORAFS_SIGNER_CONTRACT_COMMAND + "\n"
+    source = gate.read_text()
+    assert source.count(command) == 1
+    if mutation.startswith("omit_"):
+        replacement = command.replace("-p " + mutation.removeprefix("omit_") + " ", "", 1)
+    else:
+        replacement = {
+            "remove": "", "comment": "# " + command, "duplicate": command * 2,
+            "conditional": "if false; then\n" + command + "fi\n",
+            "ignore_failure": command.rstrip() + " || true\n",
+            "filter": command.rstrip() + " -- one_nonexistent_case\n",
+        }[mutation]
+    gate.write_text(source.replace(command, replacement, 1))
+    with pytest.raises(ValueError, match="mandatory signer contract libraries"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("sentinel", automation.SORAFS_NATIVE_AUTHORITY_SENTINELS)
+@pytest.mark.parametrize("mutation", ("remove", "comment", "duplicate"))
+def test_native_authority_runtime_requires_each_critical_test_exactly_once(tmp_path, sentinel, mutation):
+    _copy_workflows(tmp_path)
+    helper = tmp_path / automation.SORAFS_NATIVE_AUTHORITY_RUNTIME_SCRIPT
+    source = helper.read_text()
+    line = f'  "{sentinel}"\n'
+    assert source.count(line) == 1
+    replacement = {"remove": "", "comment": "# " + line, "duplicate": line * 2}[mutation]
+    helper.write_text(source.replace(line, replacement, 1))
+    with pytest.raises(ValueError, match="mandatory native authority runtime"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("marker", (
+    *(f"  -p {package}\n" for package in automation.SORAFS_NATIVE_AUTHORITY_PACKAGES),
+    *(f'  "{value}"\n' for value in automation.SORAFS_NATIVE_AUTHORITY_FILTERS),
+    'set -euo pipefail', '--locked', '--lib', '--list',
+    'for native_test in "${native_test_sentinels[@]}"; do',
+    'grep -Fxc -- "${native_test}: test"', '!= 1', 'exit 1',
+    '--include-ignored', '--nocapture',
+))
+def test_native_authority_runtime_rejects_deleted_or_weakened_commands(tmp_path, marker):
+    _copy_workflows(tmp_path)
+    helper = tmp_path / automation.SORAFS_NATIVE_AUTHORITY_RUNTIME_SCRIPT
+    source = helper.read_text()
+    assert marker in source
+    helper.write_text(source.replace(marker, "removed", 1))
+    with pytest.raises(ValueError, match="mandatory native authority runtime"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("addition", ("exit 0\n", "set +e\n", "if false; then\n"))
+def test_native_authority_runtime_rejects_early_exit_or_conditional_execution(tmp_path, addition):
+    _copy_workflows(tmp_path)
+    helper = tmp_path / automation.SORAFS_NATIVE_AUTHORITY_RUNTIME_SCRIPT
+    helper.write_text(addition + helper.read_text())
+    with pytest.raises(ValueError, match="mandatory native authority runtime"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("marker", (
+    "results.passed != REQUIRED_CASES", "results.skipped",
+    "set(results.collected) != REQUIRED_CASES",
+    "len(results.collected) != len(REQUIRED_CASES)",
+    "--sorafs-cosign-verifier-sha256", "load_evidence_json(path, 16 * 1024)",
+))
+def test_release_gate_rejects_weakened_cosign_helper(tmp_path, marker):
+    _copy_workflows(tmp_path)
+    helper = tmp_path / automation.SORAFS_COSIGN_QUALIFICATION_HELPER
+    helper.write_text(helper.read_text().replace(marker, "removed", 1))
+    with pytest.raises(ValueError, match="mandatory cosign qualification"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("replacement", ("", '          cosign-release: "latest"\n'))
+def test_cosign_installer_release_version_must_remain_pinned(tmp_path, replacement):
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text()
+    workflow.write_text(source.replace('          cosign-release: "v3.1.3"\n', replacement, 1))
+    with pytest.raises(ValueError, match="both cosign installer steps"):
+        automation.validate_release_automation(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -473,9 +598,9 @@ def test_repair_client_contract_triggers_are_mandatory(
 
 @pytest.mark.parametrize(
     "relative",
-    sorted(automation.SORAFS_CLI_REDIRECT_TRIGGER_PATHS),
+    sorted(automation.SORAFS_CLI_RUST_OWNER_TRIGGER_PATHS),
 )
-def test_redirect_no_follow_contract_triggers_are_mandatory(
+def test_rust_module_owner_contract_triggers_are_mandatory(
     tmp_path: Path, relative: str
 ) -> None:
     _copy_workflows(tmp_path)
@@ -487,7 +612,25 @@ def test_redirect_no_follow_contract_triggers_are_mandatory(
 
     with pytest.raises(
         ValueError,
-        match=r"pull_request\.paths omits redirect no-follow contract trigger",
+        match=r"pull_request\.paths omits Rust module-owner contract trigger",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("mutation", ("remove", "duplicate"))
+def test_rust_module_owner_regression_suite_executes_exactly_once(
+    tmp_path: Path, mutation: str
+) -> None:
+    _copy_workflows(tmp_path)
+    release_gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
+    source = release_gate.read_text(encoding="utf-8")
+    suite = automation.SORAFS_CLI_RUST_OWNER_CONTRACT_TEST
+    assert source.count(suite) == 1
+    replacement = "" if mutation == "remove" else suite + " " + suite
+    release_gate.write_text(source.replace(suite, replacement, 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError, match="Rust module-owner regression suite exactly once"
     ):
         automation.validate_release_automation(tmp_path)
 
@@ -2634,7 +2777,7 @@ def test_cli_release_gate_runs_supply_chain_and_topology_adversarial_suites() ->
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_pdp_provider_protocol_and_chain_repair_boundary_are_documented",
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs",
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reserve_rent_chain_authoritative_contract_stays_open_until_evidence",
-        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_release_http_clients_do_not_follow_redirects",
+        "scripts/tests/check_sorafs_rust_owner_contract_test.py",
         "scripts/tests/sorafs_evidence_json_test.py",
         "scripts/tests/sorafs_response_args_test.py",
         "scripts/tests/sorafs_topology_qualification_test.py",
@@ -2649,11 +2792,15 @@ def test_release_workflow_script_dependencies_are_exactly_pinned() -> None:
     assert requirements == sorted(requirements)
     assert requirements == [
         "blake3==1.0.9",
+        'cffi==2.1.1; platform_python_implementation != "PyPy"',
+        "cryptography==50.0.1",
         "jsonschema==4.26.0",
+        'pycparser==3.0; platform_python_implementation != "PyPy"',
         "pytest==9.0.3",
         "requests==2.33.0",
         'tomli==2.4.1; python_version < "3.11"',
         "tomli_w==1.2.0",
+        'typing_extensions==4.16.0; python_version < "3.11"',
     ]
     dependabot = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
     assert 'package-ecosystem: "pip"' in dependabot

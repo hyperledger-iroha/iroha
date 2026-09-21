@@ -1,6 +1,9 @@
-//! Simulated opaque-provider races and durable-CAS failures; these are not hardware evidence.
+//! Simulated opaque-provider races and durable-CAS failures; these are not deployment evidence.
 
+mod completion_finality;
 mod control;
+#[cfg(unix)]
+mod final_promotion;
 mod recovery;
 #[cfg(unix)]
 mod release_manifest;
@@ -34,7 +37,9 @@ enum Mutation {
     TimeBackwards,
     SameHeightFork,
     Expired,
+    ObservationTime { now: u64, observed: u64 },
     LostReservation,
+    LostCompletion,
 }
 #[derive(Clone)]
 struct SourceState {
@@ -59,12 +64,16 @@ struct SourceState {
     mutate_after_reserve: Option<Mutation>,
     mutate_at_reserved: Option<(usize, Mutation)>,
     mutate_after_commit: Option<Mutation>,
+    mutate_at_completed: Option<(SignerCommittedObservationPhaseV1, Mutation)>,
     mutate_at_release: Option<Mutation>,
     fail_observe: bool,
+    signing_reads: usize,
+    advance_audit_after_signing_snapshot: bool,
     fail_commit: bool,
     expected_journal: Option<std::path::PathBuf>,
     journal_checked: usize,
     mutate_journal_after_commit: bool,
+    mutate_journal_at_release: bool,
     reserved_reads: usize,
     commits: usize,
     reserved_phases: Vec<SignerReservedObservationPhaseV1>,
@@ -99,7 +108,12 @@ impl SourceState {
                 self.context.now_unix_ms = 1_800;
                 self.context.anchor_observed_at_unix_ms = 1_800;
             }
+            Mutation::ObservationTime { now, observed } => {
+                self.context.now_unix_ms = now;
+                self.context.anchor_observed_at_unix_ms = observed;
+            }
             Mutation::LostReservation => self.reservation = None,
+            Mutation::LostCompletion => self.completed = None,
         }
     }
     fn owns(&self, check: &SignerOperationReservationCheckV1<'_>) -> bool {
@@ -117,14 +131,20 @@ impl SignerOperationStateSourceV1 for Source {
         &self,
         binding: &SignerCustodyBindingV1,
     ) -> Result<SignerOperationSigningStateV1, SignerOperationErrorV1> {
-        let state = self.state.lock().expect("test source lock");
+        let mut state = self.state.lock().expect("test source lock");
+        state.signing_reads += 1;
         if state.fail_observe || binding != &state.active_binding || !state.initially_enrolled {
             return Err(SignerOperationErrorV1::StateUnavailable);
         }
-        Ok(SignerOperationSigningStateV1 {
+        let snapshot = SignerOperationSigningStateV1 {
             custody: state.context,
             audit_head: state.audit,
-        })
+        };
+        if state.advance_audit_after_signing_snapshot {
+            state.audit.sequence += 1;
+            state.audit.digest[0] ^= 1;
+        }
+        Ok(snapshot)
     }
     fn observe(
         &self,
@@ -227,18 +247,41 @@ impl SignerOperationStateSourceV1 for Source {
             ));
             let bytes = std::fs::read(path)
                 .expect("receipt must be durably staged before authoritative commit");
-            let receipt: sorafs_manifest::signer::receipt::SignerReleaseManifestReceiptV1 =
-                norito::decode_canonical(&bytes).expect("canonical staged receipt");
+            let (intent, original_custody, reservation, commitment, signatures) = if self
+                .binding
+                .role
+                == SignerRoleV1::FinalPromotionProvenance
+            {
+                let receipt: sorafs_manifest::signer::final_promotion::SignerFinalPromotionReceiptV1 =
+                        norito::decode_canonical(&bytes).expect("canonical staged final promotion receipt");
+                (
+                    receipt.intent,
+                    receipt.request.original_custody,
+                    receipt.reservation,
+                    receipt.commitment,
+                    receipt.signatures,
+                )
+            } else {
+                let receipt: sorafs_manifest::signer::receipt::SignerReleaseManifestReceiptV1 =
+                    norito::decode_canonical(&bytes).expect("canonical staged release receipt");
+                (
+                    receipt.intent,
+                    receipt.request.original_custody,
+                    receipt.reservation,
+                    receipt.commitment,
+                    receipt.signatures,
+                )
+            };
             assert_eq!(
-                receipt.intent.digest().unwrap(),
+                intent.digest().unwrap(),
                 request.check().request().intent_digest()
             );
-            assert_eq!(receipt.request.original_custody, request.original_custody());
-            assert_eq!(receipt.reservation, request.check().reservation());
-            assert_eq!(receipt.commitment, request.commitment());
+            assert_eq!(original_custody, request.original_custody());
+            assert_eq!(reservation, request.check().reservation());
+            assert_eq!(commitment, request.commitment());
             assert_eq!(
                 sorafs_manifest::signer::protocol::signer_operation_signatures_digest_v1(
-                    &receipt.signatures
+                    &signatures
                 )
                 .unwrap(),
                 request.signatures_digest()
@@ -280,7 +323,24 @@ impl SignerOperationStateSourceV1 for Source {
         if state.fail_completed_phase == Some(phase) {
             return Err(SignerOperationErrorV1::StateUnavailable);
         }
+        if let Some((expected, mutation)) = state.mutate_at_completed {
+            if phase == expected {
+                state.mutate(mutation);
+                state.mutate_at_completed = None;
+            }
+        }
         if phase == SignerCommittedObservationPhaseV1::BeforeRelease {
+            #[cfg(unix)]
+            if state.mutate_journal_at_release {
+                use std::os::unix::fs::PermissionsExt as _;
+                let path = state.expected_journal.as_ref().unwrap().join(format!(
+                    "{}.receipt.norito",
+                    hex::encode(request.check().request().intent().operation_id)
+                ));
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+                std::fs::write(path, b"journal changed during final completion observation")
+                    .unwrap();
+            }
             if let Some(mutation) = state.mutate_at_release.take() {
                 state.mutate(mutation);
             }
@@ -301,6 +361,8 @@ impl SignerOperationStateSourceV1 for Source {
         }
         Ok(state.context)
     }
+}
+impl super::control::SignerCustodyEnrollmentStateSourceV1 for Source {
     fn observe_enrollment(
         &self,
         binding: &SignerCustodyBindingV1,
@@ -327,6 +389,8 @@ impl SignerOperationStateSourceV1 for Source {
         state.transition_commits += 1;
         Ok(state.context)
     }
+}
+impl super::control::SignerCustodyControlStateSourceV1 for Source {
     fn commit_custody_transition(
         &self,
         request: &super::control::SignerCustodyTransitionRequestV1<'_>,
@@ -450,8 +514,8 @@ fn fixture_for(role: SignerRoleV1, purpose: SignerPurposeBindingV1) -> Fixture {
     let binding = SignerCustodyBindingV1 {
         chain_id: "sorafs-reference".parse().expect("chain"),
         network_id: [0x11; 32],
-        runtime_handle: "hsm://sorafs/promotion/primary".into(),
-        key_handle: "pkcs11:production/promotion/key-7".into(),
+        runtime_handle: "software://sorafs/final-promotion-provenance/primary".into(),
+        key_handle: "software://sorafs/final-promotion-provenance/key-7".into(),
         service_id: "promotion-primary".into(),
         administrator_id: "promotion-security-primary".into(),
         role,
@@ -484,11 +548,7 @@ fn fixture_for(role: SignerRoleV1, purpose: SignerPurposeBindingV1) -> Fixture {
         predecessor_digest: [0; 32],
         issued_at_unix_ms: 1_000,
         expires_at_unix_ms: 2_000,
-        hardware_identity_digest: [0x53; 32],
         evidence_digest: [0x55; 32],
-        generated_in_hardware: true,
-        exportable: false,
-        ever_exported: false,
         revoked: false,
     };
     let trust = SignerCustodyTrustV1 {
@@ -561,12 +621,16 @@ fn fixture_for(role: SignerRoleV1, purpose: SignerPurposeBindingV1) -> Fixture {
             mutate_after_reserve: None,
             mutate_at_reserved: None,
             mutate_after_commit: None,
+            mutate_at_completed: None,
             mutate_at_release: None,
             fail_observe: false,
+            signing_reads: 0,
+            advance_audit_after_signing_snapshot: false,
             fail_commit: false,
             expected_journal: None,
             journal_checked: 0,
             mutate_journal_after_commit: false,
+            mutate_journal_at_release: false,
             reserved_reads: 0,
             commits: 0,
             reserved_phases: Vec::new(),
@@ -611,7 +675,7 @@ fn commitment() -> SignerOperationCommitmentV1 {
     }
 }
 fn stage(operation: &mut SignerOperationV1<'_>) {
-    for purpose in operation.required_purposes() {
+    for purpose in required_purposes(operation.intent.action) {
         let message = match purpose {
             SignerKeyOperationPurposeV1::AuditRecord => {
                 commitment().audit.signing_message().to_vec()
@@ -997,7 +1061,12 @@ fn commit_failure_and_post_commit_or_release_revocation_cannot_release_signature
                 0 => state.fail_commit = true,
                 1 => state.mutate_after_commit = Some(Mutation::SignerRevoked),
                 2 => state.mutate_at_release = Some(Mutation::Control),
-                _ => state.mutate_at_release = Some(Mutation::Expired),
+                _ => {
+                    state.mutate_at_release = Some(Mutation::ObservationTime {
+                        now: 2_000,
+                        observed: 2_000,
+                    });
+                }
             }
         }
         assert!(operation.finish(commitment()).is_err());

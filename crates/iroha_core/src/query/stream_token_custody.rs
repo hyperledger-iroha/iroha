@@ -16,8 +16,8 @@ use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use sorafs_manifest::signer::{
     custody::{SignerCustodyAnchorV1, SignerCustodyBindingV1},
-    protocol::SignerPurposeBindingV1,
-    stream_token_custody_control::StreamTokenCustodyControlStateV1,
+    custody_control::SignerCustodyControlStateV1,
+    protocol::{SignerPurposeBindingV1, SignerRoleV1},
 };
 use std::str::FromStr;
 
@@ -53,7 +53,7 @@ use StreamTokenCustodyControlErrorV1 as Error;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamTokenCustodyControlSnapshotV1 {
     /// Exact governed control at the requested committed height.
-    pub state: StreamTokenCustodyControlStateV1,
+    pub state: SignerCustodyControlStateV1,
     /// Requested block coordinates paired with the selected native control digest.
     pub anchor: SignerCustodyAnchorV1,
 }
@@ -77,7 +77,7 @@ pub(crate) struct ControlIndexV1 {
 }
 pub(crate) struct NativeControl {
     pub(crate) record: StreamTokenCustodyControlRecordV1,
-    pub(crate) state: StreamTokenCustodyControlStateV1,
+    pub(crate) state: SignerCustodyControlStateV1,
     pub(crate) index: ControlIndexV1,
 }
 
@@ -155,7 +155,7 @@ fn validate_key_indexes(
     world: &impl WorldReadOnly,
     provider: ProviderId,
     record: &StreamTokenCustodyControlRecordV1,
-    state: &StreamTokenCustodyControlStateV1,
+    state: &SignerCustodyControlStateV1,
 ) -> Result<(), Error> {
     for (signer, key, generation) in [
         (
@@ -183,7 +183,7 @@ fn validate_key_indexes(
             .ok_or(Error::CorruptHistory)?;
         let original: StreamTokenCustodyControlRecordV1 =
             decode(original_bytes).map_err(|_| Error::CorruptHistory)?;
-        let original_state: StreamTokenCustodyControlStateV1 =
+        let original_state: SignerCustodyControlStateV1 =
             decode(&original.control_state).map_err(|_| Error::CorruptHistory)?;
         original_state
             .validate()
@@ -213,8 +213,9 @@ fn validate_key_indexes(
     }
     Ok(())
 }
-fn valid_scope(state: &StreamTokenCustodyControlStateV1, provider: ProviderId) -> bool {
-    matches!(state.policy.binding.purpose, SignerPurposeBindingV1::StreamToken { provider_id } if provider_id == *provider.as_bytes())
+fn valid_scope(state: &SignerCustodyControlStateV1, provider: ProviderId) -> bool {
+    state.policy.binding.role == SignerRoleV1::StreamToken
+        && matches!(state.policy.binding.purpose, SignerPurposeBindingV1::StreamToken { provider_id } if provider_id == *provider.as_bytes())
 }
 pub(crate) fn read_record(
     world: &impl WorldReadOnly,
@@ -227,7 +228,7 @@ pub(crate) fn read_record(
         .ok_or(Error::CorruptHistory)?;
     let record: StreamTokenCustodyControlRecordV1 =
         decode(bytes).map_err(|_| Error::CorruptHistory)?;
-    let state: StreamTokenCustodyControlStateV1 =
+    let state: SignerCustodyControlStateV1 =
         decode(&record.control_state).map_err(|_| Error::CorruptHistory)?;
     state.validate().map_err(|_| Error::CorruptHistory)?;
     if record.provider_id != provider
@@ -328,6 +329,8 @@ pub(crate) fn read_active(
     let Some(bytes) = world.smart_contract_state().get(&head_key(provider)) else {
         if prefix_has_any(world, &format!("{}_revision_", scope(provider)))
             || prefix_has_any(world, &format!("{}_height_", scope(provider)))
+            || prefix_has_any(world, &format!("{}_signer_key_", scope(provider)))
+            || prefix_has_any(world, &format!("{}_attester_key_", scope(provider)))
         {
             return Err(Error::CorruptHistory);
         }
@@ -420,7 +423,8 @@ pub(crate) fn validate_state_binding(
     let SignerPurposeBindingV1::StreamToken { provider_id } = binding.purpose else {
         return Err(Error::BindingMismatch);
     };
-    if binding.chain_id != state.chain_id().to_string()
+    if binding.role != SignerRoleV1::StreamToken
+        || binding.chain_id != state.chain_id().to_string()
         || binding.network_id != *state.network_id().as_bytes()
         || provider_id == [0; 32]
     {

@@ -327,3 +327,21 @@ also rejects retired witness owners and test-fixture leakage into main outputs.
 Engine-specific Rust witnesses remain local to their governed builders. A
 generic witness serializer is not a replacement for an SDK proving route;
 complete SDK proof-construction qualification remains open.
+
+## SCCP Java assertion ownership (2026-09-21)
+
+The SCCP release corridor's Java-source phase is `java-source-kotlin`; the retired
+`java-android` evidence name is rejected. The 13 codec groups and 18 client groups
+move from the duplicate Java harness to one shared Java-source test directory
+under Kotlin. JVM and Android host-native tasks compile and execute the same
+assertions against Kotlin-owned types. Both original public-method absence
+checks are retained as compiled-declaration controls across each API owner and
+its ancestors, with JDK 8 terminals authenticated from the compiler's `ct.sym`.
+The checker rejects missing parents, restored public writes, and absent or skipped
+runtime groups. No reflection or production visibility change is introduced.
+
+The focused sponsor wrapper and duplicate SCCP harness registrations are removed
+with those superseded Java suites. Remaining duplicate Java implementation
+retirement still requires its other consumers to migrate. This ownership change
+does not complete candidate-specific JVM/Android execution, device qualification,
+SDK package provenance, or the full SCCP production release gate.

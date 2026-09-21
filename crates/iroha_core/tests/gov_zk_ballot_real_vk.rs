@@ -5,6 +5,8 @@
 
 #[path = "common/governance_closed_registry.rs"]
 mod closed_registry;
+#[path = "common/governance_closed_state.rs"]
+mod closed_state;
 
 use iroha_core::{smartcontracts::Execute, state::WorldReadOnly};
 use iroha_data_model::{
@@ -21,7 +23,7 @@ use nonzero_ext::nonzero;
 
 #[test]
 fn zk_ballot_unqualified_keys_cannot_register_or_create_an_election() {
-    let state = closed_registry::state();
+    let state = closed_state::state();
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     for circuit_id in [
         "halo2/pasta/ipa/vote-ballot",
@@ -29,7 +31,7 @@ fn zk_ballot_unqualified_keys_cannot_register_or_create_an_election() {
         "halo2/pasta/ipa/vote-bool-commit-merkle8",
     ] {
         let mut transaction = block.transaction();
-        closed_registry::grant_permissions(&mut transaction, "ref-vk");
+        closed_state::grant_permissions(&mut transaction, "ref-vk");
         let (id, record) = closed_registry::unqualified_key(circuit_id);
         let error = RegisterVerifyingKey {
             id: id.clone(),

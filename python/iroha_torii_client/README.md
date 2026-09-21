@@ -8,6 +8,13 @@ eleven key algorithms, complete weighted multisig policies, exact I105 literals,
 and canonical SCCP AccountId bytes. Missing native support is an explicit error;
 there is no structural identity fallback or dependency on the full Python SDK.
 
+`get_governance_tally(referendum_id, canonical_auth=...)` returns the shared
+`GovernanceTally` model, or `None` for a missing referendum. The six-field
+response preserves exact `u128` approve/reject/abstain totals and the evaluated
+block's `u64` height and lowercase hash. The client rejects missing fields,
+numeric coercion, aggregate overflow and inconsistent block coordinates, and
+consumes each response under a 4 KiB actual-byte limit.
+
 Use the public Taira profile instead of copying its origin, address
 discriminant, Digital Shekel, and XOR metadata. The deployment's exact
 genesis-derived `NetworkId` remains caller-supplied because public resets can

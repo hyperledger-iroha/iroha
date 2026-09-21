@@ -61,9 +61,9 @@ scripts/release_sorafs_cli.sh \
 
 - Release authenticity applies to the canonical aggregate release manifest, not
   an individual content `.to` manifest.
-- The signer adapter uses `signing_provider=authenticated_external_signer` with
-  exact `signing_backend=software`; private signing material remains
-  runtime-only. Verified output is `signer_qualification=software-key-qualified`.
+- The signer adapter uses `signing_provider=authenticated_external_signer`;
+  private signing material remains runtime-only. Promotion additionally verifies
+  signer authorization and the completed operation for the exact manifest.
 - Iroha exposes no hardware-specific signer mode; the authenticated signer
   process boundary remains provider-neutral.
 - The raw 32-byte public key, reviewed fingerprint, native verifier path, and

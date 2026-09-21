@@ -1405,6 +1405,9 @@ impl Root {
         if let Err(message) = snapshot.resources.validate(snapshot.max_payload_bytes) {
             emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
         }
+        if let Err(message) = snapshot.validate_read_buffer_budget() {
+            emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
+        }
         zk.max_proof_size_bytes = confidential.max_proof_size_bytes;
         zk.max_nullifiers_per_tx = confidential.max_nullifiers_per_tx;
         zk.max_commitments_per_tx = confidential.max_commitments_per_tx;
@@ -13306,6 +13309,12 @@ pub struct Snapshot {
     /// use additional transient memory beyond this on-disk bound.
     #[config(default = "defaults::snapshot::MAX_PAYLOAD_BYTES")]
     pub max_payload_bytes: NonZeroUsize,
+    /// Aggregate requested bytes in authenticated snapshot payload read buffers.
+    /// The shared pool covers their original allocations through physical free,
+    /// including generation validation during publication and garbage collection.
+    /// Typed State, parser scratch, sidecars and writer output are separate.
+    #[config(default = "defaults::snapshot::MAX_READ_BUFFER_BYTES")]
+    pub max_read_buffer_bytes: NonZeroUsize,
     /// Typed decode and transient-allocation budgets for snapshot restoration.
     #[config(nested)]
     pub resources: SnapshotResourcePolicy,
@@ -13316,6 +13325,22 @@ pub struct Snapshot {
     /// Explicit authorization for a one-time audited hash-only snapshot boundary.
     #[config(nested)]
     pub bootstrap: SnapshotBootstrapPolicy,
+}
+impl Snapshot {
+    fn validate_read_buffer_budget(&self) -> core::result::Result<(), String> {
+        if self.max_read_buffer_bytes < self.max_payload_bytes {
+            return Err(
+                "snapshot.max_read_buffer_bytes must admit snapshot.max_payload_bytes".to_owned(),
+            );
+        }
+        if self.max_read_buffer_bytes > self.resources.max_transient_bytes {
+            return Err(
+                "snapshot.max_read_buffer_bytes must not exceed snapshot.resources.max_transient_bytes"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
 }
 /// Strict typed-decoder and transient-allocation budgets for snapshot restoration.
 #[derive(Debug, Clone, Copy, ReadConfig)]
@@ -31947,11 +31972,10 @@ fn sorafs_por_rejects_obsolete_competing_state_paths() {
 }
 #[path = "user/stream_token_admission.rs"]
 mod stream_token_admission;
-#[path = "user/stream_token_hardware.rs"]
-mod stream_token_hardware;
-pub use stream_token_hardware::{
-    SorafsStreamTokenAttesterConfig, SorafsStreamTokenHardwareConfig,
-    SorafsStreamTokenObserverConfig,
+#[path = "user/stream_token_signer.rs"]
+mod stream_token_signer;
+pub use stream_token_signer::{
+    SorafsStreamTokenAttesterConfig, SorafsStreamTokenObserverConfig, SorafsStreamTokenSignerConfig,
 };
 /// User-level configuration for stream-token issuance.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
@@ -31959,9 +31983,9 @@ pub struct SorafsStreamTokenConfig {
     /// Enable stream-token issuance.
     #[config(default = "defaults::sorafs::storage::tokens::ENABLED")]
     pub enabled: bool,
-    /// Complete hardware signer and independent attester/observer trust.
+    /// Complete signer and independent attester/observer trust.
     #[config(nested)]
-    pub hardware: SorafsStreamTokenHardwareConfig,
+    pub signer: SorafsStreamTokenSignerConfig,
     /// Credential-free deployment-owned quota/sequence/outbox provider handle.
     pub admission_provider_handle: Option<String>,
     /// Exact non-zero external admission-provider contract revision.
@@ -31997,7 +32021,7 @@ impl Default for SorafsStreamTokenConfig {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
-            hardware: SorafsStreamTokenHardwareConfig::default(),
+            signer: SorafsStreamTokenSignerConfig::default(),
             admission_provider_handle: None,
             admission_provider_revision: None,
             admission_provider_policy_digest_hex: None,
@@ -32040,7 +32064,7 @@ impl SorafsStreamTokenConfig {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
                 "sorafs.storage.stream_tokens runtime bindings are forbidden while issuance is disabled"));
         }
-        let hardware = self.hardware.parse(self.enabled, emitter);
+        let signer = self.signer.parse(self.enabled, emitter);
         let admission_provider_policy_digest = stream_token_admission::decode_policy_digest(
             self.admission_provider_policy_digest_hex.as_deref(),
             "admission_provider_policy_digest_hex",
@@ -32049,7 +32073,7 @@ impl SorafsStreamTokenConfig {
         stream_token_admission::validate_binding_and_bounds(&self, emitter);
         actual::SorafsTokenConfig {
             enabled: self.enabled,
-            hardware,
+            signer,
             admission_provider_handle: self.admission_provider_handle,
             admission_provider_revision: self.admission_provider_revision,
             admission_provider_policy_digest,

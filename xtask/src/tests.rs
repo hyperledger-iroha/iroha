@@ -143,9 +143,9 @@ fn norito_rpc_fixture_help_discloses_every_publication_surface() {
     }
 }
 #[test]
-fn vote_tally_default_path_points_into_fixtures() {
-    let default = default_vote_tally_path();
-    assert!(default.ends_with("fixtures/zk/vote_tally"));
+fn dev_vote_fixture_default_path_points_into_fixtures() {
+    let default = default_dev_vote_fixture_path();
+    assert!(default.ends_with("fixtures/zk/dev_vote_membership"));
 }
 #[test]
 fn soranet_fixture_default_path_points_into_tests() {
@@ -288,17 +288,19 @@ fn sm_operator_snippet_supports_stdout_targets() {
 fn iso_bridge_lint_uses_default_reference_data() {
     lint_iso_bridge(IsoLintOptions::default()).expect("default iso lint should succeed");
 }
-#[cfg(feature = "vote-tally")]
+#[cfg(feature = "dev-vote-fixture")]
 #[test]
-fn vote_tally_bundle_matches_expected_hashes() {
+fn development_vote_fixture_math_identity_and_reproducibility() {
     let temp = TempDir::new().expect("temp dir");
     let summary = write_bundle(temp.path()).expect("write bundle");
     let attestation =
         vote_tally::attestation_manifest(&summary, temp.path()).expect("attestation manifest");
-    assert_eq!(
-        attestation["generated_unix_ms"],
-        norito::json!(3513801751697071715u64)
-    );
+    let second = TempDir::new().expect("second deterministic fixture");
+    let second_summary = write_bundle(second.path()).expect("second bundle");
+    compare_bundle_dirs(second.path(), temp.path()).expect("exact deterministic artifacts");
+    assert_eq!(attestation, vote_tally::attestation_manifest(&second_summary, second.path()).unwrap());
+    assert_eq!(attestation["bundle"]["production_admissible"], norito::json!(false));
+    assert_eq!(attestation["bundle"]["purpose"], norito::json!("development-only fixed-witness membership"));
     assert_eq!(
         attestation["hash_algorithm"],
         norito::json!("blake2b-256"),
@@ -320,24 +322,24 @@ fn vote_tally_bundle_matches_expected_hashes() {
     }
     let artifact_map = artifacts_to_map(artifacts).expect("artifact map");
     let meta_entry = artifact_map
-        .get("vote_tally_meta.json")
+        .get("dev_vote_membership_meta.json")
         .expect("meta entry present");
     assert!(meta_entry.0 > 0);
     let proof_entry = artifact_map
-        .get("vote_tally_proof.zk1")
+        .get("dev_vote_membership_proof.zk1")
         .expect("proof entry present");
     assert_eq!(proof_entry.0, summary.proof_len as u64);
     let vk_entry = artifact_map
-        .get("vote_tally_vk.zk1")
+        .get("dev_vote_membership_vk.zk1")
         .expect("vk entry present");
     assert_eq!(vk_entry.0, summary.vk_len as u64);
     assert_eq!(
         summary.backend,
-        "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1"
+        "halo2/ipa"
     );
     assert_eq!(
         summary.circuit_id,
-        "halo2/pasta/vote-bool-commit-merkle8-v1"
+        "halo2/pasta/ipa/vote-bool-commit-merkle8"
     );
     assert_eq!(
         summary.commit_hex,
@@ -348,17 +350,19 @@ fn vote_tally_bundle_matches_expected_hashes() {
         "b63752ff429362c3a9b3cd5966c23567fdb757ce3b38af724b9303a5ea2f5817"
     );
     assert_eq!(
-        summary.schema_hash_hex,
+        summary.public_inputs_hash_hex,
         "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3"
     );
-    assert_eq!(
-        summary.vk_commit_hex,
-        "6f4749f5f75fee2a40880d4798123033b2b8036284225bad106b04daca5fb10e"
-    );
+    let key = iroha_data_model::proof::VerifyingKeyBox::new(summary.backend.clone(),
+        std::fs::read(temp.path().join("dev_vote_membership_vk.zk1")).unwrap());
+    assert_eq!(summary.vk_commit_hex, hex::encode(iroha_core::zk::hash_vk(&key)));
+    let mut changed_key = key.clone();
+    changed_key.bytes[0] ^= 1;
+    assert_ne!(summary.vk_commit_hex, hex::encode(iroha_core::zk::hash_vk(&changed_key)));
     assert!(summary.vk_len > 0);
     assert!(summary.proof_len > 0);
 }
-#[cfg(feature = "vote-tally")]
+#[cfg(feature = "dev-vote-fixture")]
 #[test]
 fn attestation_verification_rejects_proof_digest_drift() {
     let baseline = TempDir::new().expect("baseline dir");
@@ -376,7 +380,7 @@ fn attestation_verification_rejects_proof_digest_drift() {
     {
         for entry in artifacts {
             if let Some(map) = entry.as_object_mut()
-                && map.get("file") == Some(&norito::json!("vote_tally_proof.zk1"))
+                && map.get("file") == Some(&norito::json!("dev_vote_membership_proof.zk1"))
             {
                 map.insert(
                     "blake2b_256".into(),
@@ -398,11 +402,11 @@ fn attestation_verification_rejects_proof_digest_drift() {
     )
     .expect_err("proof digest drift must be rejected");
     assert!(
-        err.to_string().contains("vote_tally_proof.zk1"),
+        err.to_string().contains("dev_vote_membership_proof.zk1"),
         "error must cite proof artefact"
     );
 }
-#[cfg(feature = "vote-tally")]
+#[cfg(feature = "dev-vote-fixture")]
 #[test]
 fn attestation_verification_rejects_metadata_drift() {
     let baseline = TempDir::new().expect("baseline dir");
@@ -421,7 +425,7 @@ fn attestation_verification_rejects_metadata_drift() {
     {
         for entry in artifacts {
             if let Some(map) = entry.as_object_mut()
-                && map.get("file") == Some(&norito::json!("vote_tally_meta.json"))
+                && map.get("file") == Some(&norito::json!("dev_vote_membership_meta.json"))
             {
                 map.insert(
                     "blake2b_256".into(),
@@ -443,18 +447,39 @@ fn attestation_verification_rejects_metadata_drift() {
     )
     .expect_err("metadata drift must be rejected");
     assert!(
-        err.to_string().contains("vote_tally_meta.json"),
+        err.to_string().contains("dev_vote_membership_meta.json"),
         "error should reference the divergent artefact"
     );
 }
 #[test]
 fn verify_requires_seeded_baseline() {
     let baseline = TempDir::new().expect("baseline dir");
-    let err = generate_vote_tally_bundle(baseline.path().to_path_buf(), true, false, None, None)
+    let err = generate_dev_vote_fixture(baseline.path().to_path_buf(), true, false, None, None)
         .expect_err("verify without seeded fixtures must fail");
     let message = err.to_string();
     assert!(
-        message.contains("run `cargo xtask zk-vote-tally-bundle"),
+        message.contains("run `cargo xtask zk-dev-vote-fixture"),
         "error message should suggest seeding baseline, got: {message}"
     );
+}
+
+#[cfg(feature = "dev-vote-fixture")]
+#[test]
+fn development_fixture_metadata_cannot_claim_production_admission() {
+    let directory = TempDir::new().unwrap();
+    write_bundle(directory.path()).unwrap();
+    let path = directory.path().join("dev_vote_membership_meta.json");
+    let mut value: Value = norito::json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    value.as_object_mut().unwrap().insert("production_admissible".into(), Value::from(true));
+    std::fs::write(path, norito::json::to_string_pretty(&value).unwrap()).unwrap();
+    assert!(read_summary(directory.path()).unwrap_err().to_string().contains("inadmissible development fixture"));
+}
+
+#[test]
+fn dev_vote_fixture_command_has_no_retired_production_alias() {
+    assert!(matches!(
+        parse_command(["xtask", "zk-dev-vote-fixture"].into_iter().map(String::from)).unwrap(),
+        CommandKind::ZkDevVoteFixture { .. }
+    ));
+    assert!(parse_command(["xtask", "zk-vote-tally-bundle"].into_iter().map(String::from)).is_err());
 }

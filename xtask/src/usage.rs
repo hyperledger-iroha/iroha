@@ -52,10 +52,10 @@ fn print_usage() {
         "    Emit or verify the ADDR-2 I105/multisig fixture. Defaults to fixtures/account/address_vectors.json"
     );
     eprintln!(
-        "  cargo xtask zk-vote-tally-bundle [--out <path>] [--verify] [--print-hashes] [--summary-json <path|->] [--attestation <path|->]"
+        "  cargo xtask zk-dev-vote-fixture [--out <path>] [--verify] [--print-hashes] [--summary-json <path|->] [--attestation <path|->]"
     );
     eprintln!(
-        "    Rebuild or verify the Halo2 vote tally fixtures. Defaults to fixtures/zk/vote_tally"
+        "    Rebuild or verify development-only membership fixtures (requires --features dev-vote-fixture). Defaults to fixtures/zk/dev_vote_membership"
     );
     eprintln!("    Run once without --verify to seed fixtures before using --verify.");
     eprintln!("    Use --summary-json - to emit JSON on stdout or provide a path to write a file.");

@@ -1,4 +1,4 @@
-"""Authenticate exact SF-11 manifest inputs before hardware release qualification.
+"""Authenticate exact SF-11 manifest inputs and signer authority.
 
 The caller independently supplies a SHA-256-pinned source-context file. That
 closed context names exact manifest, raw signature/key, policy, custody trust,
@@ -55,7 +55,7 @@ NATIVE_SOURCE_FIELDS = {
 NATIVE_TO_CANARY = {
     **{field: field for field in NATIVE_SOURCE_FIELDS},
     "manifest_sha256": "manifest_digest_hex", "public_key_fingerprint_sha256": "public_key_fingerprint_hex",
-    "policy_digest": "policy_digest_hex", "backend": "signing_backend",
+    "policy_digest": "policy_digest_hex",
     **{field: field for field in (
         "manifest_size", "operation_id", "custody_record_digest", "key_revision", "policy_revision",
         "service_id", "administrator_id", "role", "deployment_id", "chain_id", "network_id",
@@ -65,7 +65,7 @@ NATIVE_TO_CANARY = {
 NATIVE_RECEIPT_FIELDS = frozenset(NATIVE_TO_CANARY) | {"schema", "status", "verified_at_unix_ms"}
 DERIVED_CANARY_FIELDS = {
     "signature_algorithm": "ed25519", "manifest_signature_verified": True,
-    "hardware_custody_verified": True, "completed_operation_verified": True,
+    "signer_authority_verified": True, "completed_operation_verified": True,
     "state_observation_verified": True, "raw_manifest_included": False,
     "receipt_verification_schema": NATIVE_RECEIPT_SCHEMA,
 }
@@ -339,8 +339,8 @@ def authenticate_signed_manifest_sources(
             result = json.loads(output.decode("utf-8"), object_pairs_hook=_closed_pairs, parse_constant=_reject_constant)
             if not isinstance(result, dict) or set(result) != NATIVE_RECEIPT_FIELDS:
                 raise SignedManifestSourceError("native release receipt result must use the exact closed schema")
-            if result["schema"] != NATIVE_RECEIPT_SCHEMA or result["status"] != "verified" or result["role"] != "release_manifest" or result["backend"] != "hardware":
-                raise SignedManifestSourceError("native result does not authenticate the ReleaseManifest hardware purpose")
+            if result["schema"] != NATIVE_RECEIPT_SCHEMA or result["status"] != "verified" or result["role"] != "release_manifest":
+                raise SignedManifestSourceError("native result does not authenticate the ReleaseManifest purpose")
             for field, source in NATIVE_SOURCE_FIELDS.items():
                 if _require_digest(result[field], field) != digests[source]:
                     raise SignedManifestSourceError("native receipt result differs from the exact pinned sources")

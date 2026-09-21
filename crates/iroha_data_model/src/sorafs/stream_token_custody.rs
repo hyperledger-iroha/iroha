@@ -69,7 +69,7 @@ pub struct SorafsStreamTokenCustodyRevocationV1 {
 )]
 #[norito(tag = "action", content = "value", rename_all = "snake_case")]
 pub enum SorafsStreamTokenCustodyActionV1 {
-    /// Exact canonical Manifest `StreamTokenCustodyPolicyV1` frame.
+    /// Exact canonical Manifest `SignerCustodyPolicyV1` frame.
     #[codec(index = 0)]
     Configure(Vec<u8>),
     /// Exact signed Manifest `SignerCustodyRecordV1` frame, fully verified before admission.
@@ -117,7 +117,7 @@ pub struct StreamTokenCustodyControlRecordV1 {
     pub recorded_at_unix_ms: u64,
     /// Canonical registered transaction authority holding the exact provider permission.
     pub authority: AccountId,
-    /// Canonical Manifest `StreamTokenCustodyControlStateV1`, not a competing signed schema.
+    /// Canonical Manifest `SignerCustodyControlStateV1`, not a competing signed schema.
     #[norito(json = "crate::json_helpers::base64_vec")]
     pub control_state: Vec<u8>,
 }

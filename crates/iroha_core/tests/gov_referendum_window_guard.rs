@@ -37,6 +37,12 @@ fn plain_ballot_rejected_outside_window() {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut sblock = state.block(header);
         let mut stx = sblock.transaction();
+        iroha_core::query::standalone_plain_test_fixture::fund_voter(
+            &mut stx,
+            &iroha_test_samples::ALICE_ID,
+            1_000_000_u64.into(),
+            0,
+        );
         stx.world.governance_referenda_mut().insert(
             "ref-window".to_string(),
             iroha_core::state::GovernanceReferendumRecord {
@@ -44,6 +50,11 @@ fn plain_ballot_rejected_outside_window() {
                 h_end: 6,
                 status: iroha_core::state::GovernanceReferendumStatus::Proposed,
                 mode: iroha_core::state::GovernanceReferendumMode::Plain,
+                plain_context: iroha_core::query::standalone_plain_test_fixture::context(
+                    &stx.gov, 0,
+                ),
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
             },
         );
         let ballot_perm: Permission = CanSubmitGovernanceBallot {
@@ -75,6 +86,12 @@ fn plain_ballot_rejected_outside_window() {
         let mut sblock_late = state.block(header_late);
         let mut stx_late = sblock_late.transaction();
         // Reinsert referendum (state.block() took a snapshot)
+        iroha_core::query::standalone_plain_test_fixture::fund_voter(
+            &mut stx_late,
+            &ALICE_ID,
+            1_000_000_u64.into(),
+            0,
+        );
         stx_late.world.governance_referenda_mut().insert(
             "ref-window".to_string(),
             iroha_core::state::GovernanceReferendumRecord {
@@ -82,6 +99,19 @@ fn plain_ballot_rejected_outside_window() {
                 h_end: 6,
                 status: iroha_core::state::GovernanceReferendumStatus::Closed,
                 mode: iroha_core::state::GovernanceReferendumMode::Plain,
+                plain_context: iroha_core::query::standalone_plain_test_fixture::context(
+                    &stx_late.gov,
+                    0,
+                ),
+                plain_result:
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::Decided(
+                        iroha_data_model::governance::conviction::PlainVotingDecisionV1 {
+                            approve: 0,
+                            reject: 0,
+                            abstain: 0,
+                            approved: false,
+                        },
+                    ),
             },
         );
         let late_perm: Permission = CanSubmitGovernanceBallot {

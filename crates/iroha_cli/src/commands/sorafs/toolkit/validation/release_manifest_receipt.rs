@@ -181,7 +181,6 @@ pub(crate) fn run(args: Args) -> Result<ExitCode, CliError> {
             json::Value::from(binding.administrator_id.clone()),
         ),
         ("role", json::Value::from(binding.role.as_str())),
-        ("backend", json::Value::from("hardware")),
         ("deployment_id", json::Value::from(deployment_id.clone())),
         ("chain_id", json::Value::from(binding.chain_id.clone())),
         (

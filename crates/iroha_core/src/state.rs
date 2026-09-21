@@ -613,7 +613,7 @@ const TRIGGER_FILTER_CHECK_GAS: u64 = 1;
 const TRIGGER_FIRING_GAS: u64 = 1;
 
 struct PendingDataEventScan {
-    events: Vec<Arc<data_pre::DataEvent>>,
+    events: Vec<SharedDataEvent>,
     event_index: usize,
     candidates: Vec<TriggerId>,
     candidate_index: usize,
@@ -8447,7 +8447,7 @@ pub struct WorldTransaction<'block, 'world> {
     telemetry: Option<&'world StateTelemetry>,
     /// Data events buffered during a single execution step
     /// -- either the initial step (transaction or time trigger) or a subsequent step (data trigger).
-    pub(crate) internal_event_buf: Vec<Arc<DataEvent>>,
+    pub(crate) internal_event_buf: Vec<SharedDataEvent>,
 }
 fn validate_alias_lease_window(
     lease_expiry_ms: Option<u64>,
@@ -11478,16 +11478,9 @@ fn update_oracle_change_pipeline(
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceReferendumRecord")]
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    NoritoSerialize,
-    NoritoDeserialize,
+    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct GovernanceReferendumRecord {
     /// Enactment window start height (inclusive)
     pub h_start: u64,
@@ -11496,8 +11489,98 @@ pub struct GovernanceReferendumRecord {
     /// Current referendum status
     pub status: GovernanceReferendumStatus,
     /// Voting mode for this referendum
-    #[norito(default)]
     pub mode: GovernanceReferendumMode,
+    /// Required immutable public-ballot context, frozen by creation/bootstrap before voting.
+    pub plain_context: iroha_data_model::governance::conviction::PlainVotingContextV1,
+    /// Required lifecycle/result binding, retained independently of released voting locks.
+    pub plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1,
+}
+impl GovernanceReferendumRecord {
+    /// Validate the mode/context pairing without deriving any policy from current configuration.
+    ///
+    /// # Errors
+    /// Rejects missing, mismatched or arithmetically invalid frozen public-ballot context.
+    pub fn validate_context(&self) -> Result<(), String> {
+        use iroha_data_model::governance::conviction::{PlainVotingContextV1, PlainVotingResultV1};
+        match (
+            &self.mode,
+            &self.plain_context,
+            &self.plain_result,
+            self.status,
+        ) {
+            (
+                GovernanceReferendumMode::Plain,
+                PlainVotingContextV1::Conviction(policy),
+                PlainVotingResultV1::Pending,
+                GovernanceReferendumStatus::Proposed | GovernanceReferendumStatus::Open,
+            ) => policy.validate().map_err(|error| error.to_string()),
+            (
+                GovernanceReferendumMode::Plain,
+                PlainVotingContextV1::Conviction(policy),
+                PlainVotingResultV1::Decided(result),
+                GovernanceReferendumStatus::Closed,
+            ) => {
+                let expected = policy
+                    .decide([result.approve, result.reject, result.abstain])
+                    .map_err(|error| error.to_string())?;
+                if result != &expected {
+                    return Err("closed PLAIN decision does not match its frozen policy".into());
+                }
+                Ok(())
+            }
+            (
+                GovernanceReferendumMode::Zk,
+                PlainVotingContextV1::NotApplicable,
+                PlainVotingResultV1::NotApplicable,
+                _,
+            ) => Ok(()),
+            _ => Err(
+                "referendum mode/status does not match its required frozen PLAIN context/result"
+                    .into(),
+            ),
+        }
+    }
+
+    /// Borrow the exact public-ballot policy retained by this referendum.
+    ///
+    /// # Errors
+    /// Rejects a ZK referendum or an invalid/mismatched frozen context.
+    pub fn plain_policy(
+        &self,
+    ) -> Result<&iroha_data_model::governance::conviction::PlainConvictionPolicyV1, String> {
+        self.validate_context()?;
+        match &self.plain_context {
+            iroha_data_model::governance::conviction::PlainVotingContextV1::Conviction(policy) => {
+                Ok(policy)
+            }
+            _ => Err("referendum has no public conviction policy".into()),
+        }
+    }
+}
+/// Project an open public corpus or read its immutable closed result.
+///
+/// # Errors
+/// Rejects invalid context/result, malformed custody/owner bindings, corpus or arithmetic bounds.
+pub fn plain_governance_tally(
+    referendum: &GovernanceReferendumRecord,
+    locks: Option<&GovernanceLocksForReferendum>,
+    evaluated_height: u64,
+) -> Result<[u128; 3], String> {
+    let policy = referendum.plain_policy()?;
+    if let iroha_data_model::governance::conviction::PlainVotingResultV1::Decided(result) =
+        &referendum.plain_result
+    {
+        return Ok([result.approve, result.reject, result.abstain]);
+    }
+    locks.map_or(Ok([0; 3]), |locks| {
+        crate::smartcontracts::isi::world::isi::plain_governance_tally_v1(
+            locks,
+            None,
+            Some(evaluated_height.min(referendum.h_end)),
+            policy,
+        )
+        .map_err(|error| error.to_string())
+    })
 }
 /// Lifecycle status of a referendum
 #[derive(norito::NoritoSchema)]
@@ -11572,6 +11655,7 @@ impl json::JsonDeserialize for GovernanceReferendumMode {
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct GovernanceLockCustody {
     /// Whether the lock amount was actually transferred into escrow.
     pub escrowed: bool,
@@ -11586,23 +11670,63 @@ pub struct GovernanceLockCustody {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::GovernanceLockRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct GovernanceLockRecord {
     /// Account that owns the lock.
     pub owner: iroha_data_model::account::AccountId,
     /// Exact non-negative amount locked.
     pub amount: Quantity,
     /// Exact amount slashed from this lock (accumulated).
-    #[norito(default)]
     pub slashed: Quantity,
     /// Height at which the lock expires and can be released.
     pub expiry_height: u64,
     /// 0=Aye, 1=Nay, 2=Abstain
     pub direction: u8,
     /// Duration in blocks that this lock was requested for (used for conviction).
-    #[norito(default)]
     pub duration_blocks: u64,
     /// Immutable custody identities used for lock, slash, restitution, and release.
     pub custody: GovernanceLockCustody,
+}
+impl GovernanceLockRecord {
+    /// Check this public position against the referendum's immutable asset and custody policy.
+    ///
+    /// # Errors
+    /// Rejects unbacked custody, a different asset/account, shortened duration, invalid amount or
+    /// an original bond below the frozen minimum, including its retained slashed balance.
+    pub fn validate_plain_context(
+        &self,
+        policy: &iroha_data_model::governance::conviction::PlainConvictionPolicyV1,
+    ) -> Result<(), String> {
+        policy.validate().map_err(|error| error.to_string())?;
+        policy
+            .units(&self.amount)
+            .map_err(|error| error.to_string())?;
+        policy
+            .units(&self.slashed)
+            .map_err(|error| error.to_string())?;
+        let original = self
+            .amount
+            .try_add(&self.slashed)
+            .map_err(|error| error.to_string())?;
+        policy.units(&original).map_err(|error| error.to_string())?;
+        // Slashing moves units between these two amounts; admission constrains their sum.
+        if original < policy.minimum_bond {
+            return Err("original public conviction bond is below its frozen minimum".into());
+        }
+        if !self.custody.escrowed
+            || self.custody.asset_definition_id != policy.asset_definition_id
+            || self.custody.bond_escrow_account != policy.bond_escrow_account
+            || self.custody.slash_receiver_account != policy.slash_receiver_account
+            || self.duration_blocks < policy.conviction_step_blocks
+            || self.expiry_height < self.duration_blocks
+            || (!self.amount.is_zero()
+                && (self.owner == policy.bond_escrow_account
+                    || self.owner == policy.slash_receiver_account))
+        {
+            return Err("public conviction position does not match its frozen context".into());
+        }
+        Ok(())
+    }
 }
 /// Locks for a single referendum keyed by voter account id
 #[derive(norito::NoritoSchema)]
@@ -19364,14 +19488,14 @@ where
 
 fn governance_lock_expiry_index_v1<'a>(
     locks: impl IntoIterator<Item = (&'a String, &'a GovernanceLocksForReferendum)>,
-    mut referendum_mode: impl FnMut(&String) -> Option<GovernanceReferendumMode>,
+    mut referendum: impl FnMut(&String) -> Option<GovernanceReferendumRecord>,
 ) -> Result<BTreeMap<u64, BTreeSet<(String, AccountId)>>, String> {
     let mut lock_expiries = BTreeMap::<u64, BTreeSet<(String, AccountId)>>::new();
     for (referendum_id, locks) in locks {
-        let enforce_plain_tally_domain = !matches!(
-            referendum_mode(referendum_id),
-            Some(GovernanceReferendumMode::Zk)
-        );
+        let record = referendum(referendum_id)
+            .ok_or_else(|| format!("governance locks have no owning referendum {referendum_id}"))?;
+        record.validate_context()?;
+        let enforce_plain_tally_domain = record.mode == GovernanceReferendumMode::Plain;
         if enforce_plain_tally_domain
             && locks.locks.len()
                 > crate::smartcontracts::isi::world::isi::MAX_STANDALONE_PLAIN_BALLOTS_V1
@@ -19393,13 +19517,8 @@ fn governance_lock_expiry_index_v1<'a>(
                     lock.direction
                 ));
             }
-            if enforce_plain_tally_domain
-                && (lock.amount.scale() != 0
-                    || lock.amount.as_numeric().try_mantissa_u128().is_none())
-            {
-                return Err(format!(
-                    "governance lock for referendum {referendum_id} has an amount outside the exact integer u128 tally domain"
-                ));
+            if enforce_plain_tally_domain {
+                lock.validate_plain_context(record.plain_policy()?)?;
             }
             lock_expiries
                 .entry(lock.expiry_height)
@@ -20735,10 +20854,11 @@ impl World {
         let lock_expiries = {
             let locks = self.governance_locks.view();
             let referenda = self.governance_referenda.view();
+            for (_, referendum) in referenda.iter() {
+                referendum.validate_context()?;
+            }
             governance_lock_expiry_index_v1(locks.iter(), |referendum_id| {
-                referenda
-                    .get(referendum_id)
-                    .map(|referendum| referendum.mode)
+                referenda.get(referendum_id).cloned()
             })?
         };
         let validation_fee_proposal_index = {
@@ -20786,11 +20906,12 @@ impl World {
                     "previous Parliament citizen registry exceeds the first-release limit of {MAX_PARLIAMENT_CITIZENS_V1}"
                 ));
             }
+            for (_, referendum) in reverted_referenda.iter() {
+                referendum.validate_context()?;
+            }
             let previous_lock_expiries =
                 governance_lock_expiry_index_v1(reverted_locks.iter(), |referendum_id| {
-                    reverted_referenda
-                        .get(referendum_id)
-                        .map(|referendum| referendum.mode)
+                    reverted_referenda.get(referendum_id).cloned()
                 })?;
             let previous_validation_fee_proposal_index =
                 validation_fee_proposal_index_v1(reverted_proposals.iter());
@@ -20896,32 +21017,21 @@ impl World {
     pub(crate) fn rebuild_governance_read_indexes_for_testing(&mut self) -> Result<(), String> {
         self.rebuild_governance_read_indexes()
     }
-    fn validate_plain_governance_tally_capacity(
-        &self,
-        governance: &iroha_config::parameters::actual::Governance,
-    ) -> Result<(), String> {
+    fn validate_plain_governance_tally_capacity(&self) -> Result<(), String> {
+        let referenda = self.governance_referenda.view();
+        for (_, record) in referenda.iter() {
+            record.validate_context()?;
+        }
         for (referendum_id, locks) in self.governance_locks.view().iter() {
-            if matches!(
-                self.governance_referenda
-                    .view()
-                    .get(referendum_id)
-                    .map(|referendum| referendum.mode),
-                Some(GovernanceReferendumMode::Zk)
-            ) {
+            let record = referenda.get(referendum_id).ok_or_else(|| {
+                format!("governance locks have no owning referendum {referendum_id}")
+            })?;
+            if record.mode == GovernanceReferendumMode::Zk {
                 continue;
             }
             crate::smartcontracts::isi::world::isi::plain_governance_tally_v1(
-                locks,
-                None,
-                None,
-                governance.conviction_step_blocks,
-                governance.max_conviction,
-            )
-            .map_err(|error| {
-                format!(
-                    "governance locks for referendum {referendum_id} exceed the exact configured tally domain: {error}"
-                )
-            })?;
+                locks, None, None, record.plain_policy()?,
+            ).map_err(|error| format!("governance locks for referendum {referendum_id} exceed the exact frozen tally domain: {error}"))?;
         }
         Ok(())
     }
@@ -27375,10 +27485,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Events should be produced in the order of expanding scope: from specific to general.
     /// Example: account events before domain events.
     pub fn emit_events<I: IntoIterator<Item = T>, T: Into<DataEvent>>(&mut self, world_events: I) {
-        let shared_events: Vec<Arc<DataEvent>> = world_events
+        let shared_events: Vec<SharedDataEvent> = world_events
             .into_iter()
-            .map(Into::into)
-            .map(Arc::new)
+            .map(|event| {
+                let event: DataEvent = event.into();
+                SharedDataEvent::from(event)
+            })
             .collect();
         let mut axt_policy_dirty = false;
         for event in &shared_events {
@@ -27426,13 +27538,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 telemetry.ingest_data_event(event);
             }
         }
-        self.external_event_buf.extend(
-            shared_events
-                .iter()
-                .cloned()
-                .map(SharedDataEvent::from)
-                .map(EventBox::Data),
-        );
+        self.external_event_buf
+            .extend(shared_events.iter().cloned().map(EventBox::Data));
         self.internal_event_buf.extend(shared_events);
     }
     /// Publish data events to native trigger processing without exposing them
@@ -31348,13 +31455,8 @@ impl State {
             let mut rec = wtx
                 .governance_referenda
                 .get(&rid)
-                .copied()
-                .unwrap_or_else(|| super::state::GovernanceReferendumRecord {
-                    h_start,
-                    h_end,
-                    status: super::state::GovernanceReferendumStatus::Proposed,
-                    mode: super::state::GovernanceReferendumMode::default(),
-                });
+                .cloned()
+                .expect("collected referendum retains its frozen context");
             rec.status = super::state::GovernanceReferendumStatus::Open;
             wtx.governance_referenda.insert(rid.clone(), rec);
             wtx.emit_events(Some(
@@ -31372,22 +31474,26 @@ impl State {
         let to_close: Vec<(String, u64)> = wtx
             .governance_referenda
             .iter()
-            .filter_map(|(rid, rec)| match rec.status {
-                super::state::GovernanceReferendumStatus::Open
-                    if rec.h_end.checked_add(1) == Some(now_h) =>
-                {
-                    Some((rid.clone(), rec.h_end))
-                }
-                _ => None,
+            .filter_map(|(rid, rec)| {
+                let due_plain = rec.mode == GovernanceReferendumMode::Plain
+                    && rec.status != GovernanceReferendumStatus::Closed
+                    && rec.h_end < now_h;
+                let due_zk = rec.mode == GovernanceReferendumMode::Zk
+                    && rec.status == GovernanceReferendumStatus::Open
+                    && rec.h_end.checked_add(1) == Some(now_h);
+                (due_plain || due_zk).then(|| (rid.clone(), rec.h_end))
             })
             .collect();
         for (rid, at_h) in to_close {
-            let mut mode = super::state::GovernanceReferendumMode::default();
-            if let Some(mut rec) = wtx.governance_referenda.get(&rid).copied() {
-                mode = rec.mode;
-                rec.status = super::state::GovernanceReferendumStatus::Closed;
-                wtx.governance_referenda.insert(rid.clone(), rec);
-            }
+            let mut record = wtx
+                .governance_referenda
+                .get(&rid)
+                .cloned()
+                .expect("collected closing referendum remains retained");
+            record
+                .validate_context()
+                .expect("closing referendum context remains valid");
+            let mode = record.mode;
             wtx.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::ReferendumClosed(
                     iroha_data_model::events::data::governance::GovernanceReferendumClosed {
@@ -31409,8 +31515,7 @@ impl State {
                                 locks,
                                 None,
                                 Some(at_h),
-                                sb.gov.conviction_step_blocks,
-                                sb.gov.max_conviction,
+                                record.plain_policy().expect("closing PLAIN context is valid"),
                             )
                             .expect(
                                 "persisted plain-governance locks must retain an exact bounded tally",
@@ -31431,10 +31536,29 @@ impl State {
                     }
                 }
             }
-            if decision_ready {
+            if mode == GovernanceReferendumMode::Plain {
+                let decision = record
+                    .plain_policy()
+                    .expect("closing PLAIN context is valid")
+                    .decide([approve, reject, abstain])
+                    .expect("persisted public tally and frozen policy remain exact");
+                record.plain_result =
+                    iroha_data_model::governance::conviction::PlainVotingResultV1::Decided(
+                        decision,
+                    );
+                wtx.emit_events(Some(governance_events::GovernanceEvent::ReferendumDecided(
+                    governance_events::GovernanceReferendumDecided {
+                        referendum_id: rid.clone(),
+                        approve,
+                        reject,
+                        abstain,
+                        approved: decision.approved,
+                    },
+                )));
+            } else if decision_ready {
                 let decision =
                     crate::smartcontracts::isi::world::isi::standalone_referendum_decision_v1(
-                        rid,
+                        rid.clone(),
                         approve,
                         reject,
                         abstain,
@@ -31447,6 +31571,11 @@ impl State {
                     decision,
                 )));
             }
+            record.status = GovernanceReferendumStatus::Closed;
+            record
+                .validate_context()
+                .expect("closed public decision matches its frozen policy");
+            wtx.governance_referenda.insert(rid, record);
         }
         wtx.apply();
     }
@@ -32621,7 +32750,7 @@ impl State {
         self.transactions.view().get(&hash).is_some()
     }
     /// Seed canonical entrypoint membership for focused fixtures.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn record_committed_entrypoints_for_tests(
         &self,
         entrypoints: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
@@ -48685,14 +48814,14 @@ impl State {
         self.gov = gov;
     }
 
-    /// Validate restored governance state against runtime governance policy without mutating it.
+    /// Validate runtime parameters and restored frozen governance contexts without mutation.
     ///
     /// Emergency Fast startup uses this check while deliberately leaving runtime services and
     /// configuration inert. It rejects invalid conviction/threshold parameters and any restored
-    /// standalone PLAIN ballot corpus that cannot be tallied exactly under the supplied policy.
+    /// standalone PLAIN ballot corpus that cannot be tallied exactly under its retained policy.
     ///
     /// # Errors
-    /// Returns an error when the policy is invalid or incompatible with restored PLAIN locks.
+    /// Returns an error when runtime parameters, frozen contexts/results or PLAIN locks are invalid.
     pub fn validate_restored_governance(
         &self,
         gov: &iroha_config::parameters::actual::Governance,
@@ -48705,7 +48834,7 @@ impl State {
         {
             return Err("invalid approval threshold".to_owned());
         }
-        self.world.validate_plain_governance_tally_capacity(gov)
+        self.world.validate_plain_governance_tally_capacity()
     }
 }
 include!("state/lane_lifecycle_support.rs");
@@ -66028,11 +66157,11 @@ impl StateTransaction<'_, '_> {
             }
             let trg_id = scan.candidates[scan.candidate_index].clone();
             scan.candidate_index = scan.candidate_index.saturating_add(1);
-            let event = Arc::clone(
-                scan.events
-                    .get(scan.event_index.saturating_sub(1))
-                    .expect("a candidate list always belongs to its preceding event"),
-            );
+            let event = scan
+                .events
+                .get(scan.event_index.saturating_sub(1))
+                .expect("a candidate list always belongs to its preceding event")
+                .clone();
             self.charge_trigger_work_gas(TRIGGER_FILTER_CHECK_GAS, "data trigger filter checks")?;
             let Some(generation) = self.world.triggers.data_trigger_matching_generation(
                 scan.snapshot,
@@ -66041,9 +66170,8 @@ impl StateTransaction<'_, '_> {
             ) else {
                 continue;
             };
-            let shared = SharedDataEvent::from_arc(event);
             return Ok(Some((
-                EventBox::Data(shared),
+                EventBox::Data(event),
                 trg_id,
                 generation,
                 scan.depth,
@@ -67544,3 +67672,6 @@ pub(crate) fn run_empty_network_owner_fixture(
         .unwrap()
         .to_vec()
 }
+
+#[cfg(test)]
+pub(crate) use carrier_preparation::publish_governance_fixture;

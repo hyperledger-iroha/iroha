@@ -62,7 +62,7 @@ privacy_sdk_materialize_canonical_cargo_lock "$2" "$3" "$state" "$4"
     def test_stale_graph_owner_rejects_current_authenticated_source(self):
         # A preceding reviewed digest is a rejected fixture, never an alternate
         # selector. Even a correct current physical seal cannot authorize it.
-        stale_digest = "fe9a6f9e30fe537059868ebddd826a70c1312d09b7d308cbe5d55e6ec7bfd32b"
+        stale_digest = "6db7b8e403d3f0ceda056552ede710d5f57b2c423290640f368b51e7f4c91ddd"
         self.assertNotEqual(stale_digest, OWNER[0])
         state = self.run_python_owner("privacy_sdk_file_seal", [self.lock])
         self.assertEqual(state.returncode, 0, state.stderr)
@@ -306,6 +306,135 @@ class CanonicalGraphWorkflowOrderTests(unittest.TestCase):
                 self.assertTrue(any("must source the sole graph owner before every pin use" in error for error in errors), errors)
             checks += 1
         self.assertEqual(checks, 4)
+
+
+class CanonicalSourceLockAssertionTests(unittest.TestCase):
+    """Execute the actual self-test footer, including on macOS's Bash 3.2."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="privacy-source-lock-")
+        self.addCleanup(self.temporary.cleanup)
+        self.source = Path(self.temporary.name).resolve()
+        (self.source / "Cargo.lock").write_bytes((ROOT / "Cargo.lock").read_bytes())
+        (self.source / ".gitignore").write_text("**/Cargo.lock\n!/Cargo.lock\n")
+        self.workflow = self.source / "workflow.yml"
+        self.workflow.write_text("# No root-lock copy operation.\n")
+        script = (ROOT / "ci/privacy_sdk_cargo_lockfile_test.sh").read_text()
+        begin = "# BEGIN canonical source lock assertion."
+        end = "# END canonical source lock assertion."
+        self.assertEqual(script.count(begin), 1)
+        self.assertEqual(script.count(end), 1)
+        self.assertion = script.split(begin, 1)[1].split(end, 1)[0]
+
+    def invoke(self, **changes):
+        oid = "1" * 40
+        environment = dict(os.environ)
+        environment.update(
+            SOURCE_ROOT=str(self.source),
+            WORKFLOW_PATH=str(self.workflow),
+            PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=OWNER[0],
+            FIXTURE_INDEX_ENTRY=f"100644 {oid} 0\tCargo.lock",
+            FIXTURE_HEAD_ENTRY=f"100644 blob {oid}\tCargo.lock",
+            FIXTURE_WORK_OID=oid,
+            FIXTURE_GIT_FAIL="",
+        )
+        environment.update(changes)
+        # Only Git's three read results are fixtures. The real footer reads the
+        # actual lock bytes, pin and tracking policy; no candidate is fabricated.
+        command = '''set -euo pipefail
+git() {
+  if [[ "$3" == "$FIXTURE_GIT_FAIL" ]]; then return 91; fi
+  case "$3" in
+    ls-files) printf '%s\\n' "$FIXTURE_INDEX_ENTRY" ;;
+    ls-tree) printf '%s\\n' "$FIXTURE_HEAD_ENTRY" ;;
+    hash-object) printf '%s\\n' "$FIXTURE_WORK_OID" ;;
+    *) return 92 ;;
+  esac
+}
+''' + self.assertion + "\nprintf '%s\\n' 'fixture success'\n"
+        return subprocess.run(
+            ["/bin/bash", "-c", command], env=environment,
+            capture_output=True, text=True, check=False,
+        )
+
+    def assert_rejected(self, result, diagnostic):
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("fixture success", result.stdout)
+        self.assertIn(diagnostic, result.stderr)
+
+    def test_exact_committed_graph_passes(self):
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "fixture success\n")
+
+    def test_each_graph_conjunct_rejects_before_success(self):
+        cases = [
+            {"FIXTURE_HEAD_ENTRY": f"100644 blob {'2' * 40}\tCargo.lock"},
+            {"FIXTURE_WORK_OID": "2" * 40},
+            {"PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256": "0" * 64},
+        ]
+        for change in cases:
+            with self.subTest(change=change):
+                self.assert_rejected(self.invoke(**change), "must match HEAD, index, worktree")
+
+    def test_unreviewed_physical_lock_bytes_reject(self):
+        with (self.source / "Cargo.lock").open("ab") as output:
+            output.write(b"\n# unreviewed change\n")
+        self.assert_rejected(self.invoke(), "must match HEAD, index, worktree")
+
+    def test_missing_or_nonregular_index_entry_rejects(self):
+        for entry in ("", f"120000 {'1' * 40} 0\tCargo.lock", f"100644 {'1' * 40} 1\tCargo.lock"):
+            with self.subTest(entry=entry):
+                self.assert_rejected(
+                    self.invoke(FIXTURE_INDEX_ENTRY=entry), "one regular tracked index entry",
+                )
+
+    def test_missing_or_nonregular_committed_entry_rejects(self):
+        for entry in ("", f"120000 blob {'1' * 40}\tCargo.lock"):
+            with self.subTest(entry=entry):
+                self.assert_rejected(
+                    self.invoke(FIXTURE_HEAD_ENTRY=entry), "one committed regular file",
+                )
+
+    def test_each_tracking_policy_conjunct_rejects(self):
+        for policy in ("!/Cargo.lock\n", "**/Cargo.lock\n"):
+            with self.subTest(policy=policy):
+                (self.source / ".gitignore").write_text(policy)
+                self.assert_rejected(self.invoke(), "root lock tracking policy changed")
+        (self.source / ".gitignore").write_text("**/Cargo.lock\n!/Cargo.lock\n")
+        self.workflow.write_text("install -m 600 incoming/Cargo.lock source/Cargo.lock\n")
+        self.assert_rejected(self.invoke(), "root lock tracking policy changed")
+
+    def test_git_read_failure_cannot_report_success(self):
+        for operation in ("ls-files", "ls-tree", "hash-object"):
+            with self.subTest(operation=operation):
+                result = self.invoke(FIXTURE_GIT_FAIL=operation)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("fixture success", result.stdout)
+
+    def test_absence_assertion_distinguishes_match_absence_and_read_failure(self):
+        script = (ROOT / "ci/privacy_sdk_cargo_lockfile_test.sh").read_text()
+        begin = "# BEGIN explicit absence assertion."
+        end = "# END explicit absence assertion."
+        self.assertEqual(script.count(begin), 1)
+        self.assertEqual(script.count(end), 1)
+        function = script.split(begin, 1)[1].split(end, 1)[0]
+        source = self.source / "pattern-input"
+        source.write_text("current-policy\n")
+        for pattern, path, expected in [
+            ("retired-policy", source, 0),
+            ("current-policy", source, 1),
+            ("current-policy", self.source / "missing", 2),
+        ]:
+            with self.subTest(pattern=pattern, path=path):
+                result = subprocess.run(
+                    ["/bin/bash", "-c", "set -euo pipefail\n" + function +
+                     '\nexpect_no_match -Fq "$1" "$2"\necho fixture-success\n',
+                     "absence-test", pattern, str(path)],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertEqual("fixture-success" in result.stdout, expected == 0)
 
 
 if __name__ == "__main__":

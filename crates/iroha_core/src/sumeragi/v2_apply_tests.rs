@@ -3,6 +3,7 @@ use mv::storage::StorageReadOnly;
 
 #[derive(Default)]
 pub(super) struct FailureInjection {
+    pub(super) candidate_executions: std::sync::atomic::AtomicUsize,
     successful_frontier_pause: std::sync::Mutex<Option<Arc<SuccessfulApplyFrontierPause>>>,
     pub(super) kura_store: std::sync::atomic::AtomicBool,
     pub(super) wsv_checkpoint: std::sync::atomic::AtomicBool,

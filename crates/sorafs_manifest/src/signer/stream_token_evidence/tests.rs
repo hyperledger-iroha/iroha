@@ -1,4 +1,4 @@
-//! Independently signed observer simulations; these tests do not qualify deployed hardware.
+//! Independently signed observer fixtures for signer authorization and current state.
 
 use super::*;
 use crate::signer::{custody::*, receipt::*, state_observation::*, stream_token::*};
@@ -32,6 +32,40 @@ fn every_phase_produces_only_its_current_completed_or_release_marker() {
         }
         assert_positive(&mut evidence);
     }
+}
+
+#[test]
+fn before_admission_verifies_only_current_custody_and_rejects_substituted_signed_phase() {
+    assert_eq!(phases().len(), 7);
+    assert!(phases().contains(&Phase::BeforeAdmission));
+    assert!(is_current(Phase::BeforeAdmission));
+    let mut evidence = Evidence::new(Phase::BeforeAdmission);
+    assert!(matches!(
+        evidence.request.subject,
+        SignerStreamTokenObservationRequestSubjectV1::CurrentCustody { .. }
+    ));
+    assert!(matches!(
+        evidence.state.body.subject,
+        SignerStreamTokenStateSubjectV1::CurrentCustody { .. }
+    ));
+    // Serving admission consumes neither a completed receipt nor a token-operation claim.
+    evidence.receipt_bytes.clear();
+    assert_positive(&mut evidence);
+    for substituted in [Phase::Startup, Phase::BeforeProvider] {
+        let mut evidence = checked_fixture(Phase::BeforeAdmission);
+        evidence.state.body.phase = substituted;
+        evidence.resign();
+        assert_error(&mut evidence, EvidenceError::SourceMismatch);
+    }
+    let completed = Evidence::new(Phase::BeforeRelease);
+    let mut evidence = checked_fixture(Phase::BeforeAdmission);
+    evidence.state.body.phase = Phase::BeforeRelease;
+    evidence.state.body.subject = completed.state.body.subject;
+    evidence.resign();
+    assert_error(&mut evidence, EvidenceError::SourceMismatch);
+    let mut evidence = checked_fixture(Phase::BeforeAdmission);
+    evidence.phase = Phase::BeforeRelease;
+    assert_error(&mut evidence, EvidenceError::SourceMismatch);
 }
 
 #[test]

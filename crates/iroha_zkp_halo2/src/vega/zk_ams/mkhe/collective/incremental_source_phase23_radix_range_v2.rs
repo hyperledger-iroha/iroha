@@ -38,7 +38,23 @@ mod prepared_comparator_plane_v1;
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_comparator_plane_v1::PreparedComparatorStatementV1;
 #[path = "incremental_source_phase23_radix_range_v2/prepared_low_digit_plane_v1.rs"]
 mod prepared_low_digit_plane_v1;
-pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_low_digit_plane_v1::PreparedLowDigitStatementV1;
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_low_digit_plane_v1::{PreparedLowDigitStatementV1, LowDigitWorkspaceV1, LowDigitWorkspaceErrorV1};
+
+#[path = "incremental_source_phase23_radix_range_v2/prepared_difference_digit_plane_v1.rs"]
+mod prepared_difference_digit_plane_v1;
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_difference_digit_plane_v1::PreparedDifferenceDigitStatementV1;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_difference_digit_plane_v1::TestPreparedDifferenceDigitV1;
+
+#[path = "incremental_source_phase23_radix_range_v2/prepared_small_signed_plane_v1.rs"]
+mod prepared_small_signed_plane_v1;
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_small_signed_plane_v1::PreparedSmallSignedStatementV1;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_small_signed_plane_v1::TestPreparedSmallSignedV1;
+
+#[path = "incremental_source_phase23_radix_range_v2/ordered_storage_handoff_v1.rs"]
+mod ordered_storage_handoff_v1;
+pub(in crate::vega::zk_ams::mkhe) use ordered_storage_handoff_v1::MaterializedPlaneContextV1;
 
 const RADIX_WITNESS_VERSION_V2: u8 = 2;
 const RADIX_BASE_V2: u16 = 1 << 15;
@@ -970,8 +986,11 @@ struct Phase23RadixWitnessMaterializedV2
     snapshot: ConfidentialSpoolSnapshotV1,
     record: RadixWitnessMaterializationRecordV2,
     materialization_seal: RadixWitnessMaterializationSealV2,
-    // Process-local consuming cursor; never a proof, wire, or readiness field.
+    // Process-local consuming cursor for comparator and subsequent signed
+    // planes; never a proof, wire, or readiness field.
     next_comparator_plane: u16,
+    ordered_writer:
+        Option<crate::vega::zk_ams::mkhe::global_lookup_statement_v1::OrderedPlaneSpoolWriterV1>,
 }
 
 struct RadixWitnessProofBindingV2<R, K, P> {
@@ -1015,7 +1034,13 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> RadixWitnessProofBinding
             record,
             materialization_seal,
             next_comparator_plane: _,
+            ordered_writer,
         } = materialized;
+        // The internal unspooled preparation cannot consume an attached pair
+        // into an unrelated proof path; only the stored source handoff owns it.
+        if ordered_writer.is_some() {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
         let evidence = evidence
             .take()
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
@@ -1179,6 +1204,7 @@ pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_so
         record,
         materialization_seal,
         next_comparator_plane: 0,
+        ordered_writer: None,
     })
 }
 

@@ -6,14 +6,13 @@ from __future__ import annotations
 import json
 import os
 import re
-import selectors
-import signal
 import stat
-import subprocess
 import tempfile
-import time
 from pathlib import Path
 from typing import Any
+
+import sorafs_verifier_process as verifier_process
+from sorafs_path_identity import resolve_path_identity
 
 
 PROMOTION_SIGNER_ROLE = "promotion"
@@ -32,7 +31,6 @@ RECEIPT_VALIDATION_FIELDS = frozenset(
         "payload_length",
         "signature_digest_blake3_hex",
         "binding_digest_blake3_hex",
-        "backend",
         "service_id",
         "administrator_id",
         "role",
@@ -55,34 +53,6 @@ RECEIPT_VALIDATION_FIELDS = frozenset(
 )
 LOWER_DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 MAX_RECEIPT_VALIDATION_BYTES = 16 * 1024
-MAX_RECEIPT_VERIFIER_DIAGNOSTIC_BYTES = 16 * 1024
-RECEIPT_VERIFIER_TIMEOUT_SECS = 30
-RECEIPT_VERIFIER_CLEANUP_TIMEOUT_SECS = 1
-
-
-def _write_private_verifier_input(path: Path, payload: bytes, mode: int) -> None:
-    """Write one exact verifier input below a fresh private directory."""
-
-    descriptor = os.open(
-        path,
-        os.O_WRONLY
-        | os.O_CREAT
-        | os.O_EXCL
-        | getattr(os, "O_BINARY", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0),
-        mode,
-    )
-    try:
-        view = memoryview(payload)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise OSError("short verifier input write")
-            view = view[written:]
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def _read_private_verifier_output(path: Path) -> bytes:
@@ -129,183 +99,6 @@ def _read_private_verifier_output(path: Path) -> bytes:
         os.close(descriptor)
 
 
-def _verifier_process_group_exists(process: subprocess.Popen[bytes]) -> bool:
-    """Return whether the verifier's isolated POSIX process group is live."""
-
-    if os.name != "posix":
-        return process.poll() is None
-    try:
-        os.killpg(process.pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return True
-    return True
-
-
-def _kill_and_reap_verifier(process: subprocess.Popen[bytes]) -> bool:
-    """Kill the isolated verifier group and reap its direct child, boundedly."""
-
-    deadline = time.monotonic() + RECEIPT_VERIFIER_CLEANUP_TIMEOUT_SECS
-
-    def kill_group() -> bool:
-        try:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGKILL)
-            elif process.poll() is None:  # pragma: no cover - POSIX release host
-                process.kill()
-        except ProcessLookupError:
-            return True
-        except OSError:
-            return False
-        return True
-
-    try:
-        signal_ok = kill_group()
-        while process.poll() is None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return False
-            try:
-                process.wait(timeout=min(remaining, 0.05))
-            except subprocess.TimeoutExpired:
-                signal_ok = kill_group() and signal_ok
-
-        if os.name != "posix":  # pragma: no cover - POSIX release host
-            return signal_ok
-        while _verifier_process_group_exists(process):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return False
-            signal_ok = kill_group() and signal_ok
-            time.sleep(min(0.01, remaining))
-        return signal_ok
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return False
-
-
-def _close_verifier_pipe(
-    selector: selectors.BaseSelector,
-    pipe: Any,
-) -> bool:
-    """Unregister and close one verifier diagnostic pipe."""
-
-    closed = True
-    try:
-        selector.unregister(pipe)
-    except KeyError:
-        pass
-    except (OSError, ValueError):
-        closed = False
-    try:
-        pipe.close()
-    except OSError:
-        closed = False
-    return closed
-
-
-def _run_bounded_verifier(command: list[str], root: Path) -> str | None:
-    """Run one verifier with bounded diagnostics, time, and descendants."""
-
-    process: subprocess.Popen[bytes] | None = None
-    selector = selectors.DefaultSelector()
-    failure: str | None = None
-    cleanup_required = True
-    try:
-        process = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=root,
-            env={"LANG": "C", "LC_ALL": "C", "PATH": os.defpath},
-            bufsize=0,
-            start_new_session=os.name == "posix",
-            umask=0o077 if os.name == "posix" else -1,
-        )
-        assert process.stdout is not None
-        assert process.stderr is not None
-        for pipe in (process.stdout, process.stderr):
-            os.set_blocking(pipe.fileno(), False)
-            selector.register(pipe, selectors.EVENT_READ)
-
-        deadline = time.monotonic() + RECEIPT_VERIFIER_TIMEOUT_SECS
-        diagnostic_bytes = 0
-        while selector.get_map() and failure is None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                failure = "external software signer receipt verifier could not run"
-                break
-            for key, _events in selector.select(min(remaining, 0.05)):
-                allowance = (
-                    MAX_RECEIPT_VERIFIER_DIAGNOSTIC_BYTES - diagnostic_bytes
-                )
-                if allowance <= 0:
-                    failure = "external software signer receipt verification failed"
-                    break
-                try:
-                    chunk = os.read(key.fd, min(4096, allowance))
-                except BlockingIOError:
-                    continue
-                if not chunk:
-                    if not _close_verifier_pipe(selector, key.fileobj):
-                        failure = (
-                            "external software signer receipt verifier could not run"
-                        )
-                        break
-                    continue
-                diagnostic_bytes += len(chunk)
-                # The verifier contract forbids all diagnostics. Read no more
-                # than the shared cap and never retain or report
-                # verifier-controlled content after this invocation.
-                failure = "external software signer receipt verification failed"
-                break
-
-        if failure is None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                failure = "external software signer receipt verifier could not run"
-            else:
-                try:
-                    returncode = process.wait(timeout=remaining)
-                except subprocess.TimeoutExpired:
-                    failure = "external software signer receipt verifier could not run"
-                else:
-                    if returncode != 0:
-                        failure = (
-                            "external software signer receipt verification failed"
-                        )
-                    elif _verifier_process_group_exists(process):
-                        # A successful verifier must not leave descendants
-                        # behind, even when they closed the inherited pipes.
-                        failure = (
-                            "external software signer receipt verifier could not run"
-                        )
-                    else:
-                        cleanup_required = False
-    except (OSError, ValueError, subprocess.SubprocessError):
-        failure = "external software signer receipt verifier could not run"
-    finally:
-        cleanup_ok = True
-        if process is not None and cleanup_required:
-            cleanup_ok = _kill_and_reap_verifier(process)
-        for pipe in (
-            None if process is None else process.stdout,
-            None if process is None else process.stderr,
-        ):
-            if pipe is not None and not pipe.closed:
-                cleanup_ok = _close_verifier_pipe(selector, pipe) and cleanup_ok
-        try:
-            selector.close()
-        except OSError:
-            cleanup_ok = False
-        if not cleanup_ok:
-            failure = "external software signer receipt verifier could not run"
-    return failure
-
-
 def run_offline_receipt_verifier(
     *,
     verifier: bytes,
@@ -322,7 +115,9 @@ def run_offline_receipt_verifier(
         with tempfile.TemporaryDirectory(
             prefix="sorafs-promotion-receipt-"
         ) as temporary_directory:
-            root = Path(temporary_directory)
+            root = resolve_path_identity(Path(temporary_directory), [])
+            if root is None:
+                raise OSError("verifier private directory identity unavailable")
             verifier_path = root / "receipt-verifier"
             binding_path = root / "promotion.binding.norito"
             payload_path = root / "foundational.signing-payload.bin"
@@ -336,8 +131,8 @@ def run_offline_receipt_verifier(
                 (signature_path, signature, 0o400),
                 (receipt_path, receipt, 0o400),
             ):
-                _write_private_verifier_input(path, content, mode)
-            failure = _run_bounded_verifier(
+                verifier_process.write_private_input(path, content, mode)
+            verifier_process.run_verifier(
                 [
                     str(verifier_path),
                     "verify-receipt",
@@ -355,12 +150,14 @@ def run_offline_receipt_verifier(
                     str(validation_path),
                 ],
                 root,
+                max_stdout_bytes=0,
+                expected_stderr=b"",
             )
-            if failure is not None:
-                errors.append(failure)
-                return None, errors
             return _read_private_verifier_output(validation_path), errors
-    except (OSError, subprocess.SubprocessError):
+    except ValueError:
+        errors.append("external software signer receipt verification failed")
+        return None, errors
+    except OSError:
         errors.append("external software signer receipt verifier could not run")
         return None, errors
 
@@ -451,7 +248,6 @@ def validate_receipt_validation(
         "status": "valid",
         "operation_id_hex": operation_id_hex,
         "payload_length": payload_length,
-        "backend": "software",
         "service_id": service_id,
         "administrator_id": administrator_id,
         "role": PROMOTION_SIGNER_ROLE,

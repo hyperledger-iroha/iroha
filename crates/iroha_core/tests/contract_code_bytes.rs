@@ -299,7 +299,7 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
             event,
             EventBox::Data(data)
                 if matches!(
-                    data.as_arc().as_ref(),
+                    data.as_ref(),
                     DataEvent::SmartContract(SmartContractEvent::CodeRegistered(registered))
                         if registered.code_hash == code_hash && registered.registrar == auth
                 )
@@ -636,7 +636,7 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
             event,
             EventBox::Data(data)
                 if matches!(
-                    data.as_arc().as_ref(),
+                    data.as_ref(),
                     DataEvent::SmartContract(SmartContractEvent::CodeRegistered(registered))
                         if registered.code_hash == code_hash && registered.registrar == auth
                 )

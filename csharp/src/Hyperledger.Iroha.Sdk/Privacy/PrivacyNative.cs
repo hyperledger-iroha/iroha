@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
-using System.Threading;
 
 namespace Hyperledger.Iroha.Privacy;
 
@@ -222,8 +220,6 @@ public static class PrivacyNative
     public const int PrivacyExact12FixtureBundleMaxBytes =
         PrivacyExact12FixtureCodecV1.MaxArchiveBytes;
     public const uint RequiredBridgeAbiVersion = 23;
-    // Do not inherit the comparatively small worker stacks used by foreign managed runtimes.
-    private const int NativeWorkerStackBytes = 16 * 1024 * 1024;
     private const string LibraryName = "connect_norito_bridge";
     private static readonly bool Available = DetectAvailability();
     private delegate int NativeArchiveQuery(out IntPtr output, out UIntPtr outputLength);
@@ -294,15 +290,6 @@ public static class PrivacyNative
         NativeArchiveValidator validate,
         int maximumBytes)
     {
-        return RunWithNativeStack(() =>
-            ProbeNativeArchiveOnWorker(query, validate, maximumBytes));
-    }
-
-    private static bool ProbeNativeArchiveOnWorker(
-        NativeArchiveQuery query,
-        NativeArchiveValidator validate,
-        int maximumBytes)
-    {
         IntPtr pointer = IntPtr.Zero;
         UIntPtr length = UIntPtr.Zero;
         var status = query(out pointer, out length);
@@ -341,7 +328,7 @@ public static class PrivacyNative
             throw new InvalidOperationException("Native privacy bridge is unavailable.");
         }
 
-        return RunWithNativeStack(QueryExact12FixtureBundleOnWorker);
+        return QueryExact12FixtureBundle();
     }
 
     /// <summary>Returns this binary's canonical local compiled-profile catalog.</summary>
@@ -353,10 +340,10 @@ public static class PrivacyNative
                 "Native privacy compiled-profile catalog is unavailable.");
         }
 
-        return RunWithNativeStack(QueryCompiledProfileCatalogOnWorker);
+        return QueryCompiledProfileCatalog();
     }
 
-    private static PrivacyExact12FixtureBundleArchive QueryExact12FixtureBundleOnWorker()
+    private static PrivacyExact12FixtureBundleArchive QueryExact12FixtureBundle()
     {
         IntPtr pointer = IntPtr.Zero;
         UIntPtr length = UIntPtr.Zero;
@@ -387,7 +374,7 @@ public static class PrivacyNative
         }
     }
 
-    private static PrivacyCompiledProfileCatalogArchive QueryCompiledProfileCatalogOnWorker()
+    private static PrivacyCompiledProfileCatalogArchive QueryCompiledProfileCatalog()
     {
         IntPtr pointer = IntPtr.Zero;
         UIntPtr length = UIntPtr.Zero;
@@ -437,9 +424,9 @@ public static class PrivacyNative
                 "Native privacy compiled-profile catalog is unavailable.");
         }
         var snapshot = (byte[])archive.Clone();
-        var code = RunWithNativeStack(() => NativeValidateCompiledProfileCatalog(
+        var code = NativeValidateCompiledProfileCatalog(
             snapshot,
-            new UIntPtr((uint)snapshot.Length)));
+            new UIntPtr((uint)snapshot.Length));
         if (!Enum.IsDefined(typeof(PrivacyCompiledProfileCatalogValidationStatusV1), code))
         {
             throw new InvalidOperationException(
@@ -468,9 +455,9 @@ public static class PrivacyNative
             throw new InvalidOperationException("Native privacy bridge is unavailable.");
         }
         var snapshot = (byte[])archive.Clone();
-        var code = RunWithNativeStack(() => NativeValidateExact12FixtureBundle(
+        var code = NativeValidateExact12FixtureBundle(
             snapshot,
-            new UIntPtr((uint)snapshot.Length)));
+            new UIntPtr((uint)snapshot.Length));
         if (!Enum.IsDefined(typeof(PrivacyExact12FixtureValidationStatusV1), code))
         {
             throw new InvalidOperationException(
@@ -538,42 +525,14 @@ public static class PrivacyNative
                 "The mandatory native Exact12 capability validator is unavailable.");
         }
         var snapshot = (byte[])archive.Clone();
-        var status = RunWithNativeStack(() => NativeValidateExact12CapabilityManifest(
+        var status = NativeValidateExact12CapabilityManifest(
             snapshot,
-            new UIntPtr(checked((uint)snapshot.Length))));
+            new UIntPtr(checked((uint)snapshot.Length)));
         if (status != 0)
         {
             throw new PrivacyExact12CapabilityManifestException(
                 $"Native Exact12 evidence validation rejected status {status}.");
         }
-    }
-
-    private static T RunWithNativeStack<T>(Func<T> action)
-    {
-        ArgumentNullException.ThrowIfNull(action);
-        T result = default!;
-        ExceptionDispatchInfo? failure = null;
-        var worker = new Thread(
-            () =>
-            {
-                try
-                {
-                    result = action();
-                }
-                catch (Exception error)
-                {
-                    failure = ExceptionDispatchInfo.Capture(error);
-                }
-            },
-            NativeWorkerStackBytes)
-        {
-            IsBackground = true,
-            Name = "Iroha privacy native bridge",
-        };
-        worker.Start();
-        worker.Join();
-        failure?.Throw();
-        return result;
     }
 
     [DllImport(

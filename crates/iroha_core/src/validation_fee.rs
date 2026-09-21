@@ -4019,6 +4019,16 @@ fn native_instruction_ds_effect_disposition(
     audited_no_ds_effect!(
         iroha_data_model::isi::register::RegisterPeerWithPop,
         iroha_data_model::isi::register::RegisterCommitteePeerWithPop,
+        // Configure/enroll/revoke write only bounded native custody records and indexes.
+        // Core independently enforces provider-scoped authority, canonical enrollment and CAS;
+        // none of these actions changes asset balances, supply or provider ownership.
+        iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody,
+        // Deployment custody and reservation/terminal rows likewise contain only native control
+        // state and cryptographic commitments; their scoped permissions remain Core-enforced.
+        iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority,
+        // Account custody writes only separate native control records; Check writes nothing.
+        // This disposition grants no permission and exempts no accompanying DS movement.
+        iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAccountCustody,
         // The exact-roster QC is the complete authority for this control-plane
         // operation. Applying it changes only threshold-key session records.
         iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1,
@@ -4349,6 +4359,7 @@ pub(crate) mod tests {
     use iroha_model_base::metadata::Metadata;
     include!("validation_fee/support_tests.rs");
     include!("validation_fee/admission_tests.rs");
+    include!("validation_fee/account_custody_admission_tests.rs");
     include!("validation_fee/runtime_tests.rs");
     include!("validation_fee/multisig_batch_tests.rs");
 }

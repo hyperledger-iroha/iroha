@@ -705,14 +705,18 @@ public sealed partial class ToriiClientTests
             alternateAccountId = account.ToI105(AccountAddress.DefaultChainDiscriminant);
         }
         Assert.NotEqual(expected.Claim.AccountId, alternateAccountId);
+        var substituted = expected with
+        {
+            Claim = expected.Claim with { AccountId = alternateAccountId },
+        };
         using var handler = new RecordingHandler(_ =>
-            JsonResponse(vector.GetProperty("response").GetRawText(), HttpStatusCode.OK));
+            JsonResponse(JsonSerializer.Serialize(substituted), HttpStatusCode.OK));
         using var client = new ToriiClient(
             new Uri("https://torii.example"),
             new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() => client.PrepareAccountFaucetAsync(
-            expected.Claim with { AccountId = alternateAccountId },
+            expected.Claim,
             expected.Binding,
             expected.FeePayment,
             FaucetPolicy(vector, expected),
@@ -720,6 +724,7 @@ public sealed partial class ToriiClientTests
             TestContext.Current.CancellationToken));
 
         Assert.Contains("exact claim", error.Message, StringComparison.Ordinal);
+        Assert.NotNull(handler.LastRequest);
     }
 
     [Fact]

@@ -16604,7 +16604,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             request,
             transactionAdmissionIntent: admissionIntent);
         using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
-        using var client = BoundToriiClient(handler);
+        using var client = BoundContractToriiClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.CallContractAsync(
@@ -16612,6 +16612,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("admission intent", error.Message);
+        Assert.NotNull(handler.LastRequest);
     }
 
     [Fact]

@@ -1,8 +1,9 @@
-#![doc = "Governance ZK ballot basic test (requires explicit election creation)."]
+#![doc = "Pre-proof ballot admission and rejection of development-only retained keys."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-//! Governance ZK ballot basic test (requires explicit election creation).
+//! Pre-proof ballot admission and rejection of development-only retained keys.
+#[path = "zk_testkit.rs"]
 mod zk_testkit;
 use base64::Engine as _;
 use core::num::NonZeroU64;
@@ -22,7 +23,6 @@ use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError, InvalidParameterError},
         governance::CastZkBallot,
-        zk::CreateElection,
     },
     permission::Permission,
     prelude::Grant,
@@ -72,6 +72,7 @@ fn new_state() -> State {
     let bob = Account::new(bob_id.clone()).build(&bob_id);
     let world = World::with([domain], [alice, bob], Vec::<AssetDefinition>::new());
     let mut state = State::new_for_testing(world, kura, query_handle);
+    state.gov.citizenship_bond_amount = 0_u64.into();
     state.zk.halo2.enabled = true;
     state.zk.verify_timeout = Duration::ZERO;
     state
@@ -97,23 +98,20 @@ fn assert_instruction_error_contains(err: &InstructionExecutionError, expected: 
         "expected error containing \"{expected}\", got \"{rendered}\""
     );
 }
-fn install_ballot_election(
+fn seed_rejected_retained_election(
     stx: &mut StateTransaction<'_, '_>,
     election_id: &str,
-    create_diagnostic: &str,
-) -> zk_testkit::VoteTallyProofBundle {
-    let bundle = zk_testkit::vote_merkle8_bundle();
+) -> zk_testkit::DevVoteMembershipProofBundle {
+    let bundle = zk_testkit::dev_vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, stx)
         .expect("grant VK management");
-    iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
-        id: vk_id.clone(),
-        record: bundle.vk_record.clone(),
-    }
-    .execute(&ALICE_ID, stx)
-    .expect("register verifying key");
+    // Adversarial retained state only: this key cannot be registered in production.
+    stx.world
+        .verifying_keys_mut_for_testing()
+        .insert(vk_id.clone(), bundle.vk_record.clone());
     let parliament_perm: Permission = CanManageParliament.into();
     Grant::account_permission(parliament_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, stx)
@@ -125,118 +123,78 @@ fn install_ballot_election(
     Grant::account_permission(ballot_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, stx)
         .expect("grant CanSubmitGovernanceBallot");
-    let create = CreateElection {
-        election_id: election_id.to_string(),
-        options: 2,
-        eligible_root: bundle.root_bytes(),
-        start_ts: 0,
-        end_ts: 0,
-        vk_ballot: vk_id.clone(),
-        vk_tally: vk_id,
-        domain_tag: "gov:ballot:v1".to_string(),
-    };
-    create.execute(&ALICE_ID, stx).expect(create_diagnostic);
+    stx.world.elections_mut().insert(
+        election_id.to_owned(),
+        iroha_core::state::ElectionState {
+            options: 2,
+            tally: vec![0, 0],
+            eligible_root: bundle.root_bytes(),
+            vk_ballot: Some(vk_id.clone()),
+            vk_ballot_commitment: Some(bundle.vk_record.commitment),
+            vk_tally: Some(vk_id),
+            vk_tally_commitment: Some(bundle.vk_record.commitment),
+            domain_tag: "gov:ballot:v1".into(),
+            ..Default::default()
+        },
+    );
     stx.world.governance_referenda_mut().insert(
         election_id.to_string(),
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 0,
             h_end: 100,
-            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
+            plain_context:
+                iroha_data_model::governance::conviction::PlainVotingContextV1::NotApplicable,
+            plain_result:
+                iroha_data_model::governance::conviction::PlainVotingResultV1::NotApplicable,
         },
     );
     bundle
 }
 #[test]
-fn zk_ballot_records_and_dedupes() {
-    // Build minimal state/transaction
+fn development_ballot_retries_never_consume_a_nullifier() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
-    // Leader keypair not needed in this simplified setup
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
-    let mut sblock = state.block(header);
-    let mut stx = sblock.transaction();
-    // Register a real Halo2 verifying key and wire config defaults
-    let bundle = zk_testkit::vote_merkle8_bundle();
-    let vk_id = bundle.vk_id.clone();
-    // Submit two identical ballots (same proof → same derived nullifier) → second must fail
-    let proof_b64 = bundle.proof_b64();
-    let public_inputs = "{}".to_string();
-    let election_id = "referendum-1".to_string();
-    let instr = CastZkBallot {
+    let mut block = state.block(BlockHeader::new(
+        NonZeroU64::new(1).unwrap(),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut stx = block.transaction();
+    let election_id = "referendum-1".to_owned();
+    let bundle = seed_rejected_retained_election(&mut stx, &election_id);
+    let ballot = CastZkBallot {
         election_id: election_id.clone(),
-        proof_b64: proof_b64.clone(),
-        public_inputs_json: public_inputs.clone(),
+        proof_b64: bundle.proof_b64(),
+        public_inputs_json: "{}".into(),
     };
-    // Grant VK management permission and register a verifying key via instruction
-    let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
-    Grant::account_permission(perm, ALICE_ID.clone())
-        .execute(&ALICE_ID, &mut stx)
-        .expect("grant VK management");
-    iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
-        id: vk_id.clone(),
-        record: bundle.vk_record.clone(),
+    for _ in 0..2 {
+        let error = ballot.clone().execute(&ALICE_ID, &mut stx).unwrap_err();
+        assert_instruction_error_contains(&error, "ballot verifying key circuit mismatch");
+        assert_no_ballot_mutation(&mut stx, &election_id);
     }
-    .execute(&ALICE_ID, &mut stx)
-    .expect("register verifying key");
-    let parliament_perm: Permission = CanManageParliament.into();
-    Grant::account_permission(parliament_perm, ALICE_ID.clone())
-        .execute(&ALICE_ID, &mut stx)
-        .expect("grant CanManageParliament");
-    let ballot_perm: Permission = CanSubmitGovernanceBallot {
-        referendum_id: election_id.clone(),
-    }
-    .into();
-    Grant::account_permission(ballot_perm, ALICE_ID.clone())
-        .execute(&ALICE_ID, &mut stx)
-        .expect("grant CanSubmitGovernanceBallot");
-    // Guard: casting against an unknown election must fail
-    let err = instr.clone().execute(&ALICE_ID, &mut stx).unwrap_err();
-    let s = format!("{err}");
-    assert!(s.contains("unknown election id"));
-    stx.world.take_external_events();
-    let create = CreateElection {
-        election_id: election_id.clone(),
-        options: 2,
-        eligible_root: bundle.root_bytes(),
-        start_ts: 0,
-        end_ts: 0,
-        vk_ballot: vk_id.clone(),
-        vk_tally: vk_id,
-        domain_tag: "gov:ballot:v1".to_string(),
-    };
-    create.execute(&ALICE_ID, &mut stx).expect("create ok");
-    stx.world.governance_referenda_mut().insert(
-        election_id.clone(),
-        iroha_core::state::GovernanceReferendumRecord {
-            h_start: 0,
-            h_end: 100,
-            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
-            mode: iroha_core::state::GovernanceReferendumMode::Zk,
-        },
-    );
-    instr
-        .clone()
-        .execute(&ALICE_ID, &mut stx)
-        .expect("first ok");
-    // Check that a BallotAccepted event was emitted
-    let events = stx.world.take_external_events();
+}
+fn assert_no_ballot_mutation(stx: &mut StateTransaction<'_, '_>, election_id: &str) {
+    let election = stx.world.elections().get(election_id).unwrap();
+    assert!(election.ballot_nullifiers.is_empty());
+    assert!(election.ciphertexts.is_empty());
+    assert!(stx.world.governance_locks().get(election_id).is_none());
     assert!(
-        events.iter().any(|event| matches!(
-            event.as_data_event(),
-            Some(DataEvent::Governance(GovernanceEvent::BallotAccepted(_)))
-        )),
-        "expected a BallotAccepted event"
+        !stx.world
+            .take_external_events()
+            .iter()
+            .any(|event| matches!(
+                event.as_data_event(),
+                Some(DataEvent::Governance(
+                    GovernanceEvent::BallotAccepted(_)
+                        | GovernanceEvent::LockCreated(_)
+                        | GovernanceEvent::LockExtended(_)
+                ))
+            ))
     );
-    let err = CastZkBallot {
-        election_id,
-        proof_b64,
-        public_inputs_json: public_inputs,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .unwrap_err();
-    let s = format!("{err}");
-    assert!(s.contains("duplicate ballot nullifier"));
 }
 #[test]
 fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
@@ -249,7 +207,7 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "referendum-bond-required".to_string();
-    let bundle = install_ballot_election(&mut stx, &election_id, "create ok");
+    let bundle = seed_rejected_retained_election(&mut stx, &election_id);
     let err = CastZkBallot {
         election_id,
         proof_b64: bundle.proof_b64(),
@@ -267,40 +225,33 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
     )));
 }
 #[test]
-fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
+fn direction_hint_does_not_admit_a_development_ballot() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "referendum-direction-only".to_string();
-    let bundle = install_ballot_election(&mut stx, &election_id, "create ok");
-    CastZkBallot {
+    let bundle = seed_rejected_retained_election(&mut stx, &election_id);
+    let error = CastZkBallot {
         election_id: election_id.clone(),
         proof_b64: bundle.proof_b64(),
         public_inputs_json: r#"{"direction":"Aye"}"#.to_string(),
     }
     .execute(&ALICE_ID, &mut stx)
-    .expect("ballot ok");
-    let events = stx.world.take_external_events();
-    assert!(events.iter().any(|event| matches!(
-        event.as_data_event(),
-        Some(DataEvent::Governance(GovernanceEvent::BallotAccepted(_)))
-    )));
-    assert!(
-        stx.world.governance_locks().get(&election_id).is_none(),
-        "direction-only hints must not create a lock"
-    );
+    .expect_err("direction hints cannot admit the development relation");
+    assert_instruction_error_contains(&error, "ballot verifying key circuit mismatch");
+    assert_no_ballot_mutation(&mut stx, &election_id);
 }
 #[test]
-fn zk_ballot_accepts_commit_nullifier_hint() {
+fn commit_nullifier_hint_does_not_admit_a_development_ballot() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "referendum-commit-nullifier".to_string();
-    let bundle = install_ballot_election(&mut stx, &election_id, "create ok");
+    let bundle = seed_rejected_retained_election(&mut stx, &election_id);
     let commit_bytes = bundle.commit_bytes();
     let expected_nullifier = derive_ballot_nullifier(
         "gov:ballot:v1",
@@ -325,23 +276,21 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
         proof_b64: bundle.proof_b64(),
         public_inputs_json: public_inputs.clone(),
     };
-    instr
-        .clone()
-        .execute(&ALICE_ID, &mut stx)
-        .expect("first ok");
-    let err = instr.execute(&ALICE_ID, &mut stx).unwrap_err();
-    let s = format!("{err}");
-    assert!(s.contains("duplicate ballot nullifier"));
+    for _ in 0..2 {
+        let error = instr.clone().execute(&ALICE_ID, &mut stx).unwrap_err();
+        assert_instruction_error_contains(&error, "ballot verifying key circuit mismatch");
+        assert_no_ballot_mutation(&mut stx, &election_id);
+    }
 }
 #[test]
-fn zk_ballot_rejects_invalid_proof() {
+fn corrupted_development_envelope_is_rejected_before_proof_dispatch() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-invalid-proof".to_string();
-    let bundle = install_ballot_election(&mut stx, &election_id, "create election");
+    let bundle = seed_rejected_retained_election(&mut stx, &election_id);
     let mut corrupted_proof = bundle.proof_bytes.clone();
     if let Some(last) = corrupted_proof.last_mut() {
         *last ^= 0x01;
@@ -356,27 +305,27 @@ fn zk_ballot_rejects_invalid_proof() {
     .execute(&ALICE_ID, &mut stx)
     .unwrap_err();
     let s = format!("{err}");
-    assert!(s.contains("invalid proof"));
+    assert!(s.contains("ballot verifying key circuit mismatch"));
     let events = stx.world.take_external_events();
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::BallotRejected(rej)))
-            if rej.reason.contains("invalid proof")
+            if rej.reason.contains("ballot verifying key circuit mismatch")
     )));
 }
 #[test]
-fn zk_ballot_rejects_owner_mismatch_without_recording() {
+fn development_ballot_with_wrong_owner_never_records() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "referendum-owner-mismatch".to_string();
-    let bundle = install_ballot_election(&mut stx, &election_id, "create ok");
+    let bundle = seed_rejected_retained_election(&mut stx, &election_id);
     let amount = stx.gov.min_bond_amount.clone().max(Quantity::one());
-    let duration = stx.gov.conviction_step_blocks.max(1u64);
+    let duration = stx.gov.conviction_step_blocks.max(100u64);
     let public_inputs = format!(
-        "{{\"owner\":\"{}\",\"amount\":{},\"duration_blocks\":{}}}",
+        "{{\"owner\":\"{}\",\"amount\":\"{}\",\"duration_blocks\":{}}}",
         &*BOB_ID, amount, duration
     );
     let err = CastZkBallot {
@@ -386,7 +335,7 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
     }
     .execute(&ALICE_ID, &mut stx)
     .unwrap_err();
-    assert_instruction_error_contains(&err, "owner must equal authority");
+    assert_instruction_error_contains(&err, "ballot verifying key circuit mismatch");
     let st_after = stx
         .world
         .elections()
@@ -398,7 +347,7 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::BallotRejected(rej)))
-            if rej.reason.contains("owner must equal authority")
+            if rej.reason.contains("ballot verifying key circuit mismatch")
     )));
     assert!(!events.iter().any(|event| matches!(
         event.as_data_event(),
@@ -413,7 +362,7 @@ fn zk_ballot_rejects_malformed_public_inputs() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-public-inputs".to_string();
-    let bundle = install_ballot_election(&mut stx, &election_id, "create election");
+    let bundle = seed_rejected_retained_election(&mut stx, &election_id);
     let malformed_public_inputs = "{\"owner\": \"alice#wonderland\"".to_string();
     let err = CastZkBallot {
         election_id,
@@ -439,7 +388,7 @@ fn zk_ballot_rejects_non_object_public_inputs() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-public-inputs-object".to_string();
-    let bundle = install_ballot_election(&mut stx, &election_id, "create election");
+    let bundle = seed_rejected_retained_election(&mut stx, &election_id);
     let non_object_public_inputs = "[1,2,3]".to_string();
     let err = CastZkBallot {
         election_id,
@@ -466,32 +415,32 @@ fn zk_ballot_rejects_public_input_aliases() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-public-inputs-alias".to_string();
-    let bundle = install_ballot_election(&mut stx, &election_id, "create election");
+    let bundle = seed_rejected_retained_election(&mut stx, &election_id);
     let hex = "aa".repeat(32);
     let cases = [
         (
             format!(r#"{{"rootHintHex":"{hex}"}}"#),
-            "public inputs must use root_hint",
+            "public inputs contain unknown field `rootHintHex`",
         ),
         (
             format!(r#"{{"rootHint":"{hex}"}}"#),
-            "public inputs must use root_hint",
+            "public inputs contain unknown field `rootHint`",
         ),
         (
             format!(r#"{{"root_hint_hex":"{hex}"}}"#),
-            "public inputs must use root_hint",
+            "public inputs contain unknown field `root_hint_hex`",
         ),
         (
             format!(r#"{{"nullifierHex":"{hex}"}}"#),
-            "public inputs must use nullifier",
+            "public inputs contain unknown field `nullifierHex`",
         ),
         (
             format!(r#"{{"nullifier_hex":"{hex}"}}"#),
-            "public inputs must use nullifier",
+            "public inputs contain unknown field `nullifier_hex`",
         ),
         (
             r#"{"durationBlocks": 10}"#.to_string(),
-            "public inputs must use duration_blocks",
+            "public inputs contain unknown field `durationBlocks`",
         ),
     ];
     for (public_inputs, expected) in cases {
@@ -506,27 +455,24 @@ fn zk_ballot_rejects_public_input_aliases() {
     }
 }
 #[test]
-fn zk_ballot_accepts_null_public_input_hints() {
+fn null_input_hints_do_not_admit_a_development_ballot() {
     let mut state = new_state();
     state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-public-inputs-null".to_string();
-    let bundle = install_ballot_election(&mut stx, &election_id, "create election");
+    let bundle = seed_rejected_retained_election(&mut stx, &election_id);
     let public_inputs = r#"{"root_hint":null,"owner":null,"amount":null,"duration_blocks":null,"direction":null,"nullifier":null}"#.to_string();
-    CastZkBallot {
-        election_id,
+    let error = CastZkBallot {
+        election_id: election_id.clone(),
         proof_b64: bundle.proof_b64(),
         public_inputs_json: public_inputs,
     }
     .execute(&ALICE_ID, &mut stx)
-    .expect("null public input hints should be accepted");
-    let events = stx.world.take_external_events();
-    assert!(events.iter().any(|event| matches!(
-        event.as_data_event(),
-        Some(DataEvent::Governance(GovernanceEvent::BallotAccepted(_)))
-    )));
+    .expect_err("null hints cannot admit the development relation");
+    assert_instruction_error_contains(&error, "ballot verifying key circuit mismatch");
+    assert_no_ballot_mutation(&mut stx, &election_id);
 }
 #[test]
 fn zk_ballot_rejects_owner_non_string() {
@@ -536,7 +482,7 @@ fn zk_ballot_rejects_owner_non_string() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-owner-hint-type".to_string();
-    let bundle = install_ballot_election(&mut stx, &election_id, "create election");
+    let bundle = seed_rejected_retained_election(&mut stx, &election_id);
     let owner_non_string = "{\"owner\": 5}".to_string();
     let err = CastZkBallot {
         election_id,
@@ -562,7 +508,7 @@ fn zk_ballot_rejects_when_vk_commitment_mismatched() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let election_id = "ref-vk-commitment".to_string();
-    let bundle = install_ballot_election(&mut stx, &election_id, "create election");
+    let bundle = seed_rejected_retained_election(&mut stx, &election_id);
     let vk_id = bundle.vk_id.clone();
     // Corrupt the stored commitment while keeping the verifying key bytes intact.
     let mut corrupted = stx

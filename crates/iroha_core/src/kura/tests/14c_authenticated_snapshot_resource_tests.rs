@@ -199,6 +199,9 @@ fn read_signed_snapshot_physical_fixture(
         policy,
         #[cfg(feature = "telemetry")]
         crate::telemetry::StateTelemetry::default(),
+        &mv::allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::snapshot::MAX_READ_BUFFER_BYTES.get(),
+        ),
     )
 }
 

@@ -450,7 +450,7 @@ def test_por_generator_closed_set_count_matches_checked_in_managed_outputs() -> 
     }
     managed_paths.add("reference_sdk_validation_inventory_v1.json")
 
-    assert int(count_match.group(1)) == len(managed_paths) == 55
+    assert int(count_match.group(1)) == len(managed_paths) == 61
     assert {
         (
             "reference_sdk/"
@@ -461,6 +461,12 @@ def test_por_generator_closed_set_count_matches_checked_in_managed_outputs() -> 
             "appeal_finance_cancel_asset_lock_zero_expected_negative_"
             "validation_outcome_v1.json"
         ),
+        "reference_sdk/pop_membership_current_v1.to",
+        "reference_sdk/pop_membership_current_v1_validation_outcome.json",
+        "reference_sdk/pop_membership_missing_binding_v1.to",
+        "reference_sdk/pop_membership_missing_binding_v1_validation_outcome.json",
+        "reference_sdk/pop_membership_zero_binding_v1.to",
+        "reference_sdk/pop_membership_zero_binding_v1_validation_outcome.json",
     } <= managed_paths
 
 
@@ -777,18 +783,31 @@ def test_swift_native_bridge_contract_requires_universal_macos_slice() -> None:
     checker = read("scripts/check_mobile_sdk_artifacts.sh")
     assert "MOBILE_SDK_RUSTUP_BINARY" in checker
     assert (
-        "local slices=(ios-arm64 ios-arm64_x86_64-simulator "
-        "macos-arm64_x86_64)"
+        "for slice in ios-arm64 ios-arm64_x86_64-simulator "
+        "macos-arm64_x86_64; do"
         in checker
     )
-    assert "ios-arm64_x86_64-simulator|macos-arm64_x86_64)" in checker
-    assert '"macos-arm64_x86_64": {' in checker
-    assert '"architectures": ["arm64", "x86_64"]' in checker
-    assert (
-        "NoritoBridge Info.plist does not declare the canonical universal "
-        "Apple slices"
-        in checker
-    )
+    # The shell owns authenticated dispatch; the shared validator owns the
+    # closed slice inventory and checks the actual Info.plist metadata.
+    assert '"$ROOT_DIR/scripts/validate_norito_bridge_xcframework.py"' in checker
+    for argument in (
+        '--root "$ROOT_DIR"',
+        '--lockfile-path "$CARGO_LOCKFILE"',
+        '--xcframework "$xcframework"',
+        '--manifest "$manifest"',
+        '--manifest-link "$manifest_link"',
+        '--expected-link-target "NoritoBridge.xcframework/NoritoBridge.artifacts.json"',
+        '--swift-loader "$loader"',
+        "--verify-repository-provenance",
+    ):
+        assert argument in checker
+    assert 'if ! run_source_authenticated_python "${validation[@]}"; then' in checker
+    assert 'fail "strict NoritoBridge XCFramework validation failed"' in checker
+    validator = read("scripts/validate_norito_bridge_xcframework.py")
+    assert '"macos-arm64_x86_64": {' in validator
+    assert '"architectures": ["arm64", "x86_64"]' in validator
+    assert "set(metadata) != set(EXPECTED_SLICES)" in validator
+    assert 'library.get("SupportedArchitectures") != expected["architectures"]' in validator
 
     loader = read("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift")
     assert 'return "macos-arm64_x86_64"' in loader
@@ -813,7 +832,26 @@ def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_sk
     assert "Python native SDK artifacts must be rebuilt in the ABI-23 lane, not tracked" in runner
     assert 'export VIRTUAL_ENV="${SDK_SESSION}/venv"' in runner
     assert 'export PATH="${VIRTUAL_ENV}/bin:${PATH}"' in runner
-    assert '"${VENV_PYTHON}" -m maturin develop --release --locked' in runner
+    assert 'cd "${ROOT_DIR}/python/iroha_native"' in runner
+    assert (
+        '"${VENV_PYTHON}" -m maturin build --release --locked --out "${NATIVE_WHEELS}"'
+        in runner
+    )
+    assert "maturin develop" not in runner
+    assert 'cd "${ROOT_DIR}/python/iroha_python"' in runner
+    assert '-m pip --isolated wheel --no-deps --no-index' in runner
+    assert '--no-build-isolation --wheel-dir "${SDK_WHEELS}" .' in runner
+    assert "each Python owner must produce exactly one fresh wheel" in runner
+    assert 'WHEEL_VERIFIER="${ROOT_DIR}/ci/verify_privacy_python_wheel.py"' in runner
+    for owner in ("NATIVE", "SDK"):
+        assert f'--seal "${{{owner}_WHEEL}}"' in runner
+        assert (
+            f'--preflight {owner.lower()} "${{{owner}_WHEEL}}" "${{{owner}_SEAL}}"'
+            in runner
+        )
+    assert '-m pip --isolated install --no-compile --no-deps --no-index' in runner
+    assert 'NATIVE_EXTENSION="$(verify_installed_wheels)"' in runner
+    assert "verify_installed_wheels >/dev/null" in runner
     assert (
         '"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py"'
         in runner

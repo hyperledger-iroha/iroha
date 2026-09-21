@@ -1591,17 +1591,10 @@ fn validate_soracloud_fhe_stark_native_air_binding(
         native.proof.air.as_ref().ok_or_else(|| {
             invalid_parameter(format!("{label} proof requires native AIR section"))
         })?;
-    let expected_air_circuit_id =
-        crate::zk::normalize_stark_fri_circuit_id_for_backend(backend, &envelope.circuit_id)
-            .ok_or_else(|| {
-                invalid_parameter(format!("{label} native AIR expected circuit id is invalid"))
-            })?;
-    let actual_air_circuit_id =
-        crate::zk::normalize_stark_fri_circuit_id_for_backend(backend, &air.circuit_id)
-            .ok_or_else(|| {
-                invalid_parameter(format!("{label} native AIR circuit id is invalid"))
-            })?;
-    if actual_air_circuit_id != expected_air_circuit_id {
+    // The typed envelope has its exact bare protocol ID; this binding AIR has
+    // one profile-qualified identity. Never normalize proof-controlled bytes.
+    let expected_air_circuit_id = format!("{backend}:{}", envelope.circuit_id);
+    if air.circuit_id != expected_air_circuit_id {
         return Err(invalid_parameter(format!(
             "{label} native AIR circuit id mismatch"
         )));

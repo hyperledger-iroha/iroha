@@ -33,6 +33,8 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.conviction_step_blocks = 1;
+    gov_cfg.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+    gov_cfg.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
     state.set_gov(gov_cfg);
     // Build a signed block header at H=1
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
@@ -46,6 +48,12 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
     Grant::account_permission(ballot_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant ballot permission");
+    iroha_core::query::standalone_plain_test_fixture::fund_voter(
+        &mut stx,
+        &iroha_test_samples::ALICE_ID,
+        1_000_000_u64.into(),
+        0,
+    );
     stx.world.governance_referenda_mut().insert(
         rid.clone(),
         iroha_core::state::GovernanceReferendumRecord {
@@ -55,6 +63,8 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
             h_end: 11,
             status: iroha_core::state::GovernanceReferendumStatus::Open,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
+            plain_context: iroha_core::query::standalone_plain_test_fixture::context(&stx.gov, 0),
+            plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
         },
     );
     // First vote by ALICE

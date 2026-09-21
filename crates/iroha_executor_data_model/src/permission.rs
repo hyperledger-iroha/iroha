@@ -1081,6 +1081,48 @@ pub mod sorafs {
         }
     }
     permission! {
+        /// Permission to configure, enroll, or revoke final-promotion custody for one deployment.
+        #[norito(deny_unknown_fields)]
+        pub struct CanManageSorafsFinalPromotionCustody {
+            /// Stable deployment identifier governed by this permission.
+            pub deployment_id: String,
+        }
+    }
+    permission! {
+        /// Permission to reserve, complete, or expire final-promotion operations for one deployment.
+        #[norito(deny_unknown_fields)]
+        pub struct CanOperateSorafsFinalPromotion {
+            /// Stable deployment identifier governed by this permission.
+            pub deployment_id: String,
+        }
+    }
+    permission! {
+        /// Permission for an independent observer to check receipt signing eligibility for one deployment.
+        /// This grants no custody mutation or operation authority.
+        #[norito(deny_unknown_fields)]
+        pub struct CanCheckSorafsFinalPromotion {
+            /// Stable deployment identifier observed with this read-only capability.
+            pub deployment_id: String,
+        }
+    }
+    permission! {
+        /// Permission to configure, enroll, or revoke the transaction-account custody of one deployment.
+        #[norito(deny_unknown_fields)]
+        pub struct CanManageSorafsFinalPromotionAccountCustody {
+            /// Stable deployment identifier governed by this management capability.
+            pub deployment_id: String,
+        }
+    }
+    permission! {
+        /// Permission for an independent observer to check transaction-account custody for one deployment.
+        /// This grants no custody mutation or release transaction authority.
+        #[norito(deny_unknown_fields)]
+        pub struct CanCheckSorafsFinalPromotionAccountCustody {
+            /// Stable deployment identifier observed with this read-only capability.
+            pub deployment_id: String,
+        }
+    }
+    permission! {
         /// Permission to operate `SoraFS` repair tickets for a provider.
         #[derive(Copy)]
         pub struct CanOperateSorafsRepair {
@@ -1480,3 +1522,7 @@ mod tests {
         assert!(json.contains("PolicyJury"));
     }
 }
+
+#[cfg(test)]
+#[path = "final_promotion_permission_tests.rs"]
+mod final_promotion_permission_tests;

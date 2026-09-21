@@ -157,7 +157,7 @@ dev-tests = []
 # Enable internal test helpers (e.g., Topology and synthetic executor fixtures)
 # when building core tests. Production node builds must leave this disabled so
 # every user-provided executor path runs the admitted guest bytecode.
-iroha-core-tests = []
+iroha-core-tests = ["iroha_sccp/test-fixtures"]
 
 # Allow offline balance proof verification bypass + dummy backend in dev builds.
 

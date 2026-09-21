@@ -12,10 +12,10 @@ fn stream_token_broker_rejects_either_substituted_window_claim_and_scrubs_signat
     )
     .unwrap();
     let expected = expected();
-    let positive = stream_token_hardware_test_support::receipt(&request.payload);
+    let positive = stream_token_signer_test_support::receipt(&request.payload);
     validate_stream_token_receipt_result(&request, &positive.encode_canonical().unwrap()).unwrap();
     for change_issue in [true, false] {
-        let mut receipt = stream_token_hardware_test_support::receipt(&request.payload);
+        let mut receipt = stream_token_signer_test_support::receipt(&request.payload);
         if change_issue {
             receipt.request.issued_at_unix_ms += 1;
         } else {
@@ -36,7 +36,7 @@ fn stream_token_broker_rejects_either_substituted_window_claim_and_scrubs_signat
         Signature::try_from_bytes(&receipt.signatures[0].signature)
             .unwrap()
             .verify(
-                &stream_token_hardware_test_support::hardware_binding()
+                &stream_token_signer_test_support::signer_binding()
                     .custody()
                     .public_key,
                 &request.payload,

@@ -16,7 +16,7 @@ on:
           - python-sdk
           - swift-sdk
           - kotlin-sdk
-          - java-android
+          - java-source-kotlin
           - dotnet-sdk
           - contract-smoke
           - tvm-contract-smoke
@@ -323,8 +323,8 @@ jobs:
             dist/sccp-production-corridor/kotlin-sdk.manifest.json
           if-no-files-found: error
 
-  java-android:
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all' || github.event.inputs.phase == 'java-android' }}
+  java-source-kotlin:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all' || github.event.inputs.phase == 'java-source-kotlin' }}
     needs: runner-self-check
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -334,17 +334,17 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: Java Android SCCP prover corridor
+      - name: Java-source Kotlin JVM/Android SCCP prover corridor
         run: |
-          bash scripts/check_sccp_production_corridor.sh --phase java-android \
+          bash scripts/check_sccp_production_corridor.sh --phase java-source-kotlin \
             --log-dir dist/sccp-production-corridor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: sccp-production-corridor-java-android
+          name: sccp-production-corridor-java-source-kotlin
           path: |
-            dist/sccp-production-corridor/java-android.log
-            dist/sccp-production-corridor/java-android.manifest.json
+            dist/sccp-production-corridor/java-source-kotlin.log
+            dist/sccp-production-corridor/java-source-kotlin.manifest.json
           if-no-files-found: error
 
   dotnet-sdk:
@@ -527,7 +527,7 @@ jobs:
 
   sccp-production-corridor:
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all') }}
-    needs: [runner-self-check, rust-sccp, evidence-scripts, js-sdk, python-sdk, swift-sdk, kotlin-sdk, java-android, dotnet-sdk, contract-smoke, core-admission, runtime-api]
+    needs: [runner-self-check, rust-sccp, evidence-scripts, js-sdk, python-sdk, swift-sdk, kotlin-sdk, java-source-kotlin, dotnet-sdk, contract-smoke, core-admission, runtime-api]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

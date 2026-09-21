@@ -4,16 +4,17 @@
 //! domain. They borrow common fields from that same decoded observation and apply these private
 //! checks before verifying custody and a completed receipt. No raw state or successful individual
 //! check is a public qualification result. A signed observation is accountable observer evidence,
-//! not a consensus proof, hardware attestation or substitute for a genuine authoritative source.
+//! not a consensus proof or substitute for a genuine authoritative source.
 
 use super::{
     custody::{
         SignerCustodyAnchorV1, SignerCustodyAuthorityV1, SignerCustodyBindingV1,
         SignerCustodyTrustV1,
     },
-    protocol::valid_identity,
+    protocol::SIGNER_MAX_ID_BYTES_V1,
 };
 use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_primitives::production_identity::is_production_identity_v1;
 
 /// Maximum age and lifetime of an independently signed current-state observation: five minutes.
 pub const SIGNER_STATE_OBSERVATION_MAX_AGE_MS_V1: u64 = 300_000;
@@ -21,13 +22,13 @@ pub const SIGNER_STATE_OBSERVATION_MAX_AGE_MS_V1: u64 = 300_000;
 /// Independently configured observer identity, signing key and eligibility policy.
 ///
 /// No wire decoder or default is provided. Configuration/governance must pin these values
-/// independently of the observation, receipt, role signer and hardware attester. Constructing
+/// independently of the observation, receipt, role signer and signer authority. Constructing
 /// this configuration does not establish custody, finality, completion or observer independence.
 #[derive(Clone, Debug)]
 pub struct SignerStateObserverTrustV1 {
     /// Exact observer service, administrator and governed key/policy generation.
     pub authority: SignerCustodyAuthorityV1,
-    /// Pinned Ed25519 observer key, separate from the role and hardware-attestation keys.
+    /// Pinned Ed25519 observer key, separate from the role and authorization authority keys.
     pub public_key: PublicKey,
     /// Inclusive beginning of observer-key eligibility, in Unix milliseconds.
     pub active_from_unix_ms: u64,
@@ -62,8 +63,8 @@ impl SignerStateObserverTrustV1 {
             custody.authority.service_id.as_str(),
             custody.authority.administrator_id.as_str(),
         ];
-        if !valid_identity(&authority.service_id)
-            || !valid_identity(&authority.administrator_id)
+        if !is_production_identity_v1(&authority.service_id, SIGNER_MAX_ID_BYTES_V1)
+            || !is_production_identity_v1(&authority.administrator_id, SIGNER_MAX_ID_BYTES_V1)
             || authority.key_revision == 0
             || authority.policy_revision == 0
             || authority.policy_digest == [0; 32]

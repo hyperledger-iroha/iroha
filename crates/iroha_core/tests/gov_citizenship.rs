@@ -129,11 +129,19 @@ fn citizenship_gate_blocks_and_allows_governance() {
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.conviction_step_blocks = 10;
+    gov_cfg.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+    gov_cfg.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
     state.set_gov(gov_cfg);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     // Seed referendum and permissions.
+    iroha_core::query::standalone_plain_test_fixture::fund_voter(
+        &mut stx,
+        &iroha_test_samples::ALICE_ID,
+        1_000_000_u64.into(),
+        0,
+    );
     stx.world.governance_referenda_mut().insert(
         "citizen-ref".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
@@ -143,6 +151,8 @@ fn citizenship_gate_blocks_and_allows_governance() {
             h_end: 21,
             status: iroha_core::state::GovernanceReferendumStatus::Proposed,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
+            plain_context: iroha_core::query::standalone_plain_test_fixture::context(&stx.gov, 0),
+            plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
         },
     );
     let ballot_perm: Permission = CanSubmitGovernanceBallot {
@@ -186,6 +196,23 @@ fn citizenship_gate_blocks_and_allows_governance() {
             .is_some_and(|rec| rec.amount >= Quantity::from(10_u64))
     );
     assert!(stx.world.governance_locks().get("citizen-ref").is_some());
+    // Citizenship and voting hold separate real bonds; no extra quantity is minted on admission.
+    let balance = |account: &iroha_data_model::account::AccountId| {
+        stx.world
+            .assets()
+            .get(&AssetId::new(def_id.clone(), account.clone()))
+            .map_or_else(Quantity::zero, |asset| asset.clone().into_inner())
+    };
+    assert_eq!(balance(&ALICE_ID), Quantity::from(980_u64));
+    assert_eq!(balance(&BOB_ID), Quantity::from(10_u64));
+    assert_eq!(
+        balance(&iroha_test_samples::CARPENTER_ID),
+        Quantity::from(10_u64)
+    );
+    assert_eq!(
+        balance(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID),
+        Quantity::zero()
+    );
 }
 #[test]
 fn citizenship_records_persist_across_transactions() {

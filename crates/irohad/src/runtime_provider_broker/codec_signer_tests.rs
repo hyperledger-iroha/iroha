@@ -629,14 +629,14 @@ fn server_governance_signer_must_match_the_configured_publisher_identity() {
     let binding = ProviderBindingWireV1::try_from_binding(configured)
         .expect("project configured Governance signer");
     assert_eq!(binding, signer_binding_for_server());
-    make_server_observation(&binding, &server_test_backends())
+    make_server_observation(network_id(), &binding, &server_test_backends())
         .expect("accept exact configured signer identity");
     let mut substituted_peer = binding.clone();
     substituted_peer.governance_dag_publisher_peer_id =
         Some(b"12D3KooWRuntimeBrokerServerSecondary".to_vec());
     validate_wire_binding(&substituted_peer).expect("substituted peer remains structurally valid");
     assert!(matches!(
-        make_server_observation(&substituted_peer, &server_test_backends()),
+        make_server_observation(network_id(), &substituted_peer, &server_test_backends()),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     ));
     let mut substituted_key = binding;
@@ -644,7 +644,7 @@ fn server_governance_signer_must_match_the_configured_publisher_identity() {
         Some(server_test_request_auth_public_key());
     validate_wire_binding(&substituted_key).expect("substituted key remains structurally valid");
     assert!(matches!(
-        make_server_observation(&substituted_key, &server_test_backends()),
+        make_server_observation(network_id(), &substituted_key, &server_test_backends()),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     ));
 }
@@ -1085,7 +1085,7 @@ fn native_signer_payload_hard_cut_precedes_provider_use() {
     let state = proof_native_signer_test_state(signer.clone());
     let exact = native_transaction_signer_binding_from_wire(&state.catalog[0])
         .expect("native signer binding");
-    let payload = native_signer_test_payload(exact.authority().clone());
+    let payload = native_signer_test_payload(exact.role(), exact.authority().clone());
     let canonical = encode_native_transaction_payload(&payload).expect("canonical payload");
     assert_eq!(
         decode_native_transaction_payload(&canonical),
@@ -1124,9 +1124,10 @@ fn native_signer_payload_hard_cut_precedes_provider_use() {
     let other =
         iroha_crypto::KeyPair::try_from_seed(vec![0xD1; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("derive wrong native signer authority");
-    let wrong_authority = native_signer_test_payload(iroha_data_model::account::AccountId::new(
-        other.public_key().clone(),
-    ));
+    let wrong_authority = native_signer_test_payload(
+        Role::ProofOutcome,
+        iroha_data_model::account::AccountId::new(other.public_key().clone()),
+    );
     let wrong_request = make_operation_request(
         TEST_SESSION_ID,
         1,
@@ -1142,8 +1143,11 @@ fn native_signer_payload_hard_cut_precedes_provider_use() {
         Err(BrokerError::Rejected)
     );
     assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 0);
-    let cross_network =
-        native_signer_test_payload_for_network(test_network_id(0x16), exact.authority().clone());
+    let cross_network = native_signer_test_payload_for_network(
+        exact.role(),
+        test_network_id(0x16),
+        exact.authority().clone(),
+    );
     let cross_network_request = make_operation_request(
         TEST_SESSION_ID,
         2,
@@ -1206,7 +1210,7 @@ fn native_signer_rejects_tampered_and_drifting_provider_outputs() {
         let state = proof_native_signer_test_state(signer.clone());
         let exact = native_transaction_signer_binding_from_wire(&state.catalog[0])
             .expect("native signer binding");
-        let payload = native_signer_test_payload(exact.authority().clone());
+        let payload = native_signer_test_payload(exact.role(), exact.authority().clone());
         let request = make_operation_request(
             TEST_SESSION_ID,
             1,
@@ -1230,7 +1234,7 @@ fn appeal_finance_signer_rejects_cross_network_before_provider_use() {
         .as_ref()
         .expect("exact appeal-finance signer binding");
     let cross_network =
-        native_signer_test_payload_for_network(test_network_id(0x16), exact.authority.clone());
+        transaction_signer_test_payload_for_network(test_network_id(0x16), exact.authority.clone());
     let cross_network_request = make_operation_request(
         TEST_SESSION_ID,
         1,
@@ -1252,7 +1256,8 @@ fn appeal_finance_signer_rejects_cross_network_before_provider_use() {
         0,
         "the appeal-finance external signer must not see a foreign-network transaction"
     );
-    let exact_payload = native_signer_test_payload(exact.authority.clone());
+    let exact_payload =
+        transaction_signer_test_payload_for_network(network_id(), exact.authority.clone());
     let exact_request = make_operation_request(
         TEST_SESSION_ID,
         2,
@@ -1307,7 +1312,7 @@ fn native_signer_proxy_poisons_the_session_after_tamper_or_drift() {
             .sorafs_proof_outcome_signer
             .as_ref()
             .expect("resolved proof-outcome signer");
-        let payload = native_signer_test_payload(binding.authority().clone());
+        let payload = native_signer_test_payload(binding.role(), binding.authority().clone());
         assert_eq!(
             signer.sign(payload),
             Err(SigningError::QualificationChanged),
@@ -1333,7 +1338,7 @@ fn all_native_signer_roles_round_trip_over_the_stock_broker() {
     let dependencies =
         resolve_test_process(&catalog, &policy).expect("resolve all native signer broker roles");
     macro_rules! assert_role_round_trip {
-        ($field:ident, $slot:ident, $qualifier:ident) => {{
+        ($field:ident, $slot:ident, $qualifier:ident, $error:ident) => {{
             let binding = catalog
                 .iter()
                 .find(|binding| binding.slot() == IrohaRuntimeProviderSlotV1::$slot)
@@ -1345,9 +1350,16 @@ fn all_native_signer_roles_round_trip_over_the_stock_broker() {
                 .as_ref()
                 .expect("resolved native signer proxy")
                 .clone();
-            let signer = iroha_torii::$qualifier(binding.clone(), proxy)
+            let signer = iroha_torii::$qualifier(network_id(), binding.clone(), proxy)
                 .expect("outer registry re-qualifies native signer proxy");
-            let payload = native_signer_test_payload(binding.authority().clone());
+            let payload = native_signer_test_payload(binding.role(), binding.authority().clone());
+            let mut foreign = payload.clone();
+            foreign.domain =
+                iroha_data_model::transaction::TransactionDomain::Network(test_network_id(0x16));
+            assert_eq!(signer.sign(foreign), Err(iroha_torii::$error::Refused));
+            let mut absent = payload.clone();
+            absent.domain = iroha_data_model::transaction::TransactionDomain::Genesis;
+            assert_eq!(signer.sign(absent), Err(iroha_torii::$error::Refused));
             let signed = signer
                 .sign(payload.clone())
                 .expect("native signer broker signs exact payload");
@@ -1361,22 +1373,26 @@ fn all_native_signer_roles_round_trip_over_the_stock_broker() {
     assert_role_round_trip!(
         sorafs_proof_outcome_signer,
         ProofOutcomeTransactionSigner,
-        qualify_sorafs_proof_outcome_transaction_signer_v1
+        qualify_sorafs_proof_outcome_transaction_signer_v1,
+        SoraFsProofOutcomeSigningError
     );
     assert_role_round_trip!(
         sorafs_repair_transaction_signer,
         RepairTransactionSigner,
-        qualify_sorafs_repair_transaction_signer_v1
+        qualify_sorafs_repair_transaction_signer_v1,
+        SoraFsRepairTransactionSigningError
     );
     assert_role_round_trip!(
         sorafs_reserve_transaction_signer,
         ReserveTransactionSigner,
-        qualify_sorafs_reserve_transaction_signer_v1
+        qualify_sorafs_reserve_transaction_signer_v1,
+        SoraFsReserveTransactionSigningError
     );
     assert_role_round_trip!(
         sorafs_orderbook_transaction_signer,
         OrderbookTransactionSigner,
-        qualify_sorafs_orderbook_transaction_signer_v1
+        qualify_sorafs_orderbook_transaction_signer_v1,
+        SoraFsOrderbookTransactionSigningError
     );
     drop(dependencies);
     shutdown.request_shutdown();
@@ -1479,8 +1495,10 @@ fn moderation_transaction_signer_payload_and_result_are_exact() {
         );
     }
     assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 0);
-    let cross_network =
-        native_signer_test_payload_for_network(test_network_id(0x16), payload.authority().clone());
+    let cross_network = transaction_signer_test_payload_for_network(
+        test_network_id(0x16),
+        payload.authority().clone(),
+    );
     let cross_network_request = make_operation_request(
         TEST_SESSION_ID,
         2,

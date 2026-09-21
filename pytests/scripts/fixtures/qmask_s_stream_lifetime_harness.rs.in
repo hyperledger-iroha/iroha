@@ -1,0 +1,52 @@
+//! Compile-only leaf stand-ins for the included actual S-stream owner.
+#![allow(dead_code)]
+// Compile-only stand-ins for leaf I/O. The actual complete production stream
+// module is included unchanged; this harness tests its Rust ownership API only.
+mod vega { pub mod zk_ams { pub mod mkhe {
+use std::path::Path;
+const S_SLOTS_V1:u64=12800;
+const S_SLOT_BYTES_V1:u64=16384;
+const S_FIRST_BLOCK_SLOTS_V1:u64=8;
+const S_FILE_BYTES_V1:u64=S_SLOTS_V1*(S_SLOT_BYTES_V1+16);
+#[derive(Debug)] enum OrderedSnapshotErrorV1 { Poisoned,Order,Resource,Storage,Context,Capacity }
+#[derive(Debug)] enum StorageBudgetErrorV1 { IoLimit, Other }
+struct RnsNativeProofResourceBudgetV1;
+struct MemoryReservation;
+impl MemoryReservation { fn belongs_to_v1(&self,_:&RnsNativeProofResourceBudgetV1)->bool {true} }
+struct QMaskSFileMemoryV1 {binding:[u8;32],reservation:MemoryReservation}
+struct OrderedStorageReservationV1;
+impl OrderedStorageReservationV1 {
+ fn charge_reserved_io_v1(&mut self,_:u64)->Result<(),StorageBudgetErrorV1>{Ok(())}
+ fn require_sealed_v1(&self)->Result<(),StorageBudgetErrorV1>{Ok(())}
+ fn charge_read_io_v1(&mut self,_:u64)->Result<(),StorageBudgetErrorV1>{Ok(())}
+}
+struct ConfidentialSpoolChunkV1(Vec<u8>);
+impl ConfidentialSpoolChunkV1 {
+ fn len_v1(&self)->u64{self.0.len() as u64}
+ fn as_slice_v1(&self)->&[u8]{&self.0}
+}
+impl Drop for ConfidentialSpoolChunkV1 {fn drop(&mut self){self.0.fill(0);}}
+struct ConfidentialSpoolSnapshotV1([u8;32]);
+impl ConfidentialSpoolSnapshotV1 {
+ fn snapshot_digest_v1(&self)->&[u8;32]{&self.0}
+ fn slot_count_v1(&self)->u64{S_SLOTS_V1}
+ fn plaintext_len_v1(&self)->u64{S_SLOT_BYTES_V1}
+ fn ciphertext_record_len_v1(&self)->u64{S_SLOT_BYTES_V1+16}
+ fn file_len_v1(&self)->u64{S_FILE_BYTES_V1}
+ fn read_slot_v1(&mut self,_:u64,_:[u8;32])->Result<ConfidentialSpoolChunkV1,()>{Ok(ConfidentialSpoolChunkV1(vec![0;16384]))}
+}
+struct ConfidentialSpoolWriterV1;
+impl ConfidentialSpoolWriterV1 {fn seal_v1(self)->Result<ConfidentialSpoolSnapshotV1,()>{Ok(ConfidentialSpoolSnapshotV1([1;32]))}}
+struct QMaskSFileLiveV1{writer:ConfidentialSpoolWriterV1,reservation:OrderedStorageReservationV1,memory:QMaskSFileMemoryV1}
+struct QMaskSFileV1{live:Option<QMaskSFileLiveV1>,context:[u8;32],next_slot:u64,block_end_slot:u64}
+struct WrittenQMaskSBlockFileV1{file:QMaskSFileV1}
+impl WrittenQMaskSBlockFileV1 {fn require_block_binding_v1(&self)->Result<[u8;32],OrderedSnapshotErrorV1>{Ok([1;32])}}
+#[path="@SOURCE@"] mod actual_stream;
+fn make_file()->actual_stream::SealedQMaskSFileV1 {
+ WrittenQMaskSBlockFileV1{file:QMaskSFileV1{live:Some(QMaskSFileLiveV1{writer:ConfidentialSpoolWriterV1,reservation:OrderedStorageReservationV1,memory:QMaskSFileMemoryV1{binding:[1;32],reservation:MemoryReservation}}),context:[1;32],next_slot:S_SLOTS_V1,block_end_slot:S_SLOTS_V1}}.seal_v1().unwrap()
+}
+fn inspect(_: &[u8]){}
+fn probe(){
+@BODY@
+}
+}}}

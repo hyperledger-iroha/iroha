@@ -324,7 +324,7 @@ fn actual_source_driver_keeps_custody_order_and_completion_without_fake_provider
         "validate_radix_materialization_source_v1(",
         "validate_low_digit_preparation_start_v1(",
         "live.cursor.commit_prepared_low_digit_v1(&statement)?",
-        "validate_materialized_context_v1(&self)?;",
+        "validate_materialized_context_v1(&self).map_err(|_|LowDigitWorkspaceErrorV1::Source)?;",
         "Phase23GlobalLookupRadixSourceCursorV2::begin_v2(evidence)?",
         "cursor.read_next_canonical_block_v2(record,first_block+local_block)?",
         "live.cursor.complete_authenticated_source_replay_v1()?",
@@ -361,8 +361,18 @@ fn actual_source_driver_keeps_custody_order_and_completion_without_fake_provider
         .unwrap();
     assert!(
         entry
-            .find("validate_materialized_context_v1(&self)?;")
+            .find("validate_materialized_context_v1(&self)")
             .unwrap()
+            < entry.find("self.evidence.take()").unwrap()
+    );
+    assert!(
+        entry
+            .find("validate_materialized_context_v1(&self)")
+            .unwrap()
+            < entry.find("admit_low_digit_workspace_v1()").unwrap()
+    );
+    assert!(
+        entry.find("admit_low_digit_workspace_v1()").unwrap()
             < entry.find("self.evidence.take()").unwrap()
     );
     let emit = compact
@@ -384,4 +394,151 @@ fn actual_source_driver_keeps_custody_order_and_completion_without_fake_provider
             < finish.find("driver.next_plane=").unwrap()
     );
     assert_eq!(source.matches("next_plane: u16,").count(), 1);
+}
+
+#[test]
+fn low_digit_workspace_exact_capacity_refusal_preserves_credits_and_retries() {
+    use crate::vega::zk_ams::mkhe::rns_native_resource_budget::RnsNativeProofResourceBudgetV1;
+    let exact = LowDigitWorkspaceV1::bytes_v1();
+    assert_eq!(
+        exact,
+        1_048_576 + core::mem::size_of::<LowDigitWorkspaceV1>() as u64
+    );
+    let mut budget = RnsNativeProofResourceBudgetV1::with_test_workspace_limit_v1(exact);
+    let blocker = budget.reserve_workspace_v1(1, 0).unwrap();
+    for _ in 0..2 {
+        assert!(matches!(
+            LowDigitWorkspaceV1::admit_v1(&mut budget),
+            Err(LowDigitWorkspaceErrorV1::Capacity)
+        ));
+        assert_eq!(budget.live_bytes().unwrap(), 1);
+        assert_eq!(budget.consumed().unwrap(), 0);
+        assert_eq!(budget.peak_bytes().unwrap(), 1);
+    }
+    drop(blocker);
+    let workspace = LowDigitWorkspaceV1::admit_v1(&mut budget).unwrap();
+    assert!(workspace.belongs_to_v1(&budget));
+    assert!(!workspace.belongs_to_v1(&RnsNativeProofResourceBudgetV1::default()));
+    assert_eq!(budget.live_bytes().unwrap(), exact);
+    drop(workspace);
+    assert_eq!(budget.live_bytes().unwrap(), 0);
+}
+
+#[test]
+fn low_digit_workspace_covers_real_group_and_plane_until_both_are_destroyed() {
+    use crate::vega::zk_ams::mkhe::rns_native_resource_budget::RnsNativeProofResourceBudgetV1;
+    let _guard = super::super::tests::radix_witness_test_guard_v2();
+    let mut budget = RnsNativeProofResourceBudgetV1::with_test_workspace_limit_v1(
+        LowDigitWorkspaceV1::bytes_v1(),
+    );
+    let workspace = LowDigitWorkspaceV1::admit_v1(&mut budget).unwrap();
+    let before = zeroizing_t256_scalar_vec_drop_count_v1();
+    let group = complete_group_v1();
+    let values = group
+        .prepare_values_v1(low_digit_coordinate_v1(0).unwrap())
+        .unwrap();
+    assert_eq!(
+        budget.live_bytes().unwrap(),
+        LowDigitWorkspaceV1::bytes_v1()
+    );
+    assert!(matches!(
+        LowDigitWorkspaceV1::admit_v1(&mut budget),
+        Err(LowDigitWorkspaceErrorV1::Capacity)
+    ));
+    drop(values);
+    assert_eq!(zeroizing_t256_scalar_vec_drop_count_v1(), before + 1);
+    assert_eq!(
+        budget.live_bytes().unwrap(),
+        LowDigitWorkspaceV1::bytes_v1()
+    );
+    drop(group);
+    assert_eq!(zeroizing_t256_scalar_vec_drop_count_v1(), before + 2);
+    assert_eq!(
+        budget.live_bytes().unwrap(),
+        LowDigitWorkspaceV1::bytes_v1()
+    );
+    drop(workspace);
+    assert_eq!(budget.live_bytes().unwrap(), 0);
+}
+
+#[test]
+fn low_digit_workspace_unwind_erases_real_buffers_before_releasing_admission() {
+    use crate::vega::zk_ams::mkhe::rns_native_resource_budget::RnsNativeProofResourceBudgetV1;
+    let _guard = super::super::tests::radix_witness_test_guard_v2();
+    let mut budget = RnsNativeProofResourceBudgetV1::with_test_workspace_limit_v1(
+        LowDigitWorkspaceV1::bytes_v1(),
+    );
+    let before = zeroizing_t256_scalar_vec_drop_count_v1();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _workspace = LowDigitWorkspaceV1::admit_v1(&mut budget).unwrap();
+        let group = complete_group_v1();
+        let _values = group
+            .prepare_values_v1(low_digit_coordinate_v1(17).unwrap())
+            .unwrap();
+        panic!("original low-digit lifetime unwind");
+    }));
+    assert!(result.is_err());
+    assert_eq!(zeroizing_t256_scalar_vec_drop_count_v1(), before + 2);
+    assert_eq!(budget.live_bytes().unwrap(), 0);
+    assert_eq!(budget.consumed().unwrap(), 0);
+}
+
+#[test]
+fn low_digit_workspace_actual_driver_owns_the_admission_after_secret_fields() {
+    let source = include_str!("prepared_low_digit_plane_v1.rs");
+    let driver = source
+        .split("struct LowDigitPreparationLiveV1<R, K, P> {")
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    assert!(driver.find("group:").unwrap() < driver.find("_workspace:").unwrap());
+    let plane = source
+        .split("struct PreparedLowDigitPlaneLiveV1<R, K, P> {")
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    assert!(plane.find("values:").unwrap() < plane.find("driver:").unwrap());
+    let capacity = source
+        .split("Err(reason) =>")
+        .nth(1)
+        .unwrap()
+        .split("let result")
+        .next()
+        .unwrap();
+    assert!(capacity.contains("LowDigitWorkspaceErrorV1::Capacity"));
+    assert!(capacity.contains("Some(self)"));
+    assert!(capacity.contains("None"));
+    let owner = include_str!("prepared_low_digit_plane_v1/low_digit_workspace_v1.rs");
+    for forbidden in [
+        "impl Clone",
+        "impl Copy",
+        "Default::default()",
+        "pub fn",
+        "Vec<",
+        "Box<",
+    ] {
+        assert!(
+            !owner.contains(forbidden),
+            "unexpected admission surface: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn low_digit_workspace_terminal_refusal_cannot_recover_a_source() {
+    let refusal = LowDigitPreparationRefusalV1::<core::convert::Infallible, (), ()> {
+        reason: LowDigitWorkspaceErrorV1::Source,
+        source: None,
+    };
+    assert_eq!(refusal.reason_v1(), LowDigitWorkspaceErrorV1::Source);
+    let refusal = match refusal.retry_v1() {
+        Ok(_) => panic!("terminal refusal unexpectedly returned a source"),
+        Err(refusal) => refusal,
+    };
+    assert!(refusal.source.is_none());
+    assert_eq!(refusal.reason_v1(), LowDigitWorkspaceErrorV1::Source);
 }

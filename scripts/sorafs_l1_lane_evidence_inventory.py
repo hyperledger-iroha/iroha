@@ -91,7 +91,6 @@ SIGNER_BASE_FIELDS = frozenset(
         "role",
         "service_kind",
         "algorithm",
-        "backend",
         "service_id",
         "administrator_id",
         "key_revision",
@@ -105,7 +104,6 @@ INVENTORY_FIELDS = frozenset(
     {
         "schema",
         "status",
-        "signer_qualification",
         "generated_at_unix",
         "max_summary_age_secs",
         "summary_file_count",
@@ -530,7 +528,6 @@ def _signer(
         "role": SIGNER_ROLE,
         "service_kind": SIGNER_KIND,
         "algorithm": "ed25519",
-        "backend": "software",
         "service_id": service,
         "administrator_id": administrator,
         "key_revision": _positive_integer(key_revision, label="key_revision"),
@@ -555,7 +552,7 @@ def trusted_signer_binding(
     policy_revision: Any,
     policy_digest_sha256: Any,
 ) -> dict[str, Any]:
-    """Return the exact public software-signer binding expected by callers."""
+    """Return the exact public authenticated-signer binding expected by callers."""
 
     return _signer(
         _public_key(verification_public_key_hex),
@@ -785,7 +782,6 @@ def build_unsigned_inventory(
     return {
         "schema": INVENTORY_SCHEMA,
         "status": "ready",
-        "signer_qualification": "software-key-qualified",
         "generated_at_unix": generated,
         "max_summary_age_secs": MAX_SUMMARY_AGE_SECS,
         "summary_file_count": 17,
@@ -809,7 +805,7 @@ def build_unsigned_inventory(
 
 
 def signing_bytes(unsigned_inventory: Mapping[str, Any]) -> bytes:
-    """Return exact domain-separated bytes for the external software signer."""
+    """Return exact domain-separated bytes for the authenticated external signer."""
 
     _validate_inventory_shape(unsigned_inventory, signed=False)
     return SIGNING_DOMAIN + canonical_json_bytes(unsigned_inventory)
@@ -938,7 +934,6 @@ def verify_inventory(
     return {
         "schema": VERIFICATION_SCHEMA,
         "status": "ready",
-        "signer_qualification": "software-key-qualified",
         "inventory_sha256": hashlib.sha256(canonical_file_bytes(inventory)).hexdigest(),
         "summary_file_count": 17,
         "recognized_summary_count": 17,
@@ -949,7 +944,6 @@ def verify_inventory(
             for key in (
                 "role",
                 "service_kind",
-                "backend",
                 "algorithm",
                 "service_id",
                 "administrator_id",

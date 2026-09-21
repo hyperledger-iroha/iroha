@@ -16,6 +16,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Tag
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
@@ -23,6 +24,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 /** Scripted endpoints test mapping and rejection, never manufacture qualified native evidence. */
+@Tag("host-native")
 class KagemushaNativeCoreCoordinatorAdapterV1Test {
     @Test fun `all eleven typed methods map exact fields through native transport`() {
         val f = Fixture()

@@ -474,7 +474,8 @@ fn expected_operator_operation(method: &str, path: &str) -> bool {
             .any(|route| {
                 route.method() == method
                     && route.path() == path
-                    && route.surface() == ApiSurface::Operator
+                    && (route.surface() == ApiSurface::Operator
+                        || route.authentication() == AuthenticationPolicy::OperatorSignature)
             })
     }) {
         return true;
@@ -534,12 +535,14 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/multisig/proposals/query"
                     | "/v1/multisig/proposals/resolve"
                     | "/v1/multisig/spec"
+                    | "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule"
                     | "/v1/nfts/query"
                     | "/v1/proofs/query"
                     | "/v1/rwas/query"
                     | "/v1/soracloud/ciphertext/query"
                     | "/v1/pipeline/transactions/status"
                     | "/v1/pipeline/transactions/details"
+                    | "/v1/validation-fee/hijiri/quote"
                     | "/v1/zk/merkle-path"
                     | "/v1/zk/roots"
                     | "/v1/zk/verify-batch"
@@ -1515,7 +1518,7 @@ fn soracloud_release_openapi_matches_the_exact_closed_catalog_surface() {
             route.surface() == ApiSurface::Public && route.path().starts_with("/v1/soracloud/")
         })
         .collect::<Vec<_>>();
-    assert_eq!(routes.len(), 55, "canonical Soracloud release inventory");
+    assert_eq!(routes.len(), 51, "canonical Soracloud release inventory");
 
     let expected = routes
         .iter()
@@ -1545,7 +1548,7 @@ fn soracloud_release_openapi_matches_the_exact_closed_catalog_surface() {
                 })
         })
         .collect::<BTreeSet<_>>();
-    assert_eq!(actual.len(), 55, "canonical Soracloud OpenAPI inventory");
+    assert_eq!(actual.len(), 51, "canonical Soracloud OpenAPI inventory");
     assert_eq!(
         actual, expected,
         "Soracloud OpenAPI/catalog method-path equality"
@@ -1854,7 +1857,7 @@ fn soracloud_release_openapi_matches_the_exact_closed_catalog_surface() {
             "AgentAutonomyStatusResponse",
         ),
     ];
-    assert_eq!(exact_contracts.len(), 55);
+    assert_eq!(exact_contracts.len(), 51);
     assert_eq!(
         exact_contracts
             .iter()
@@ -2377,15 +2380,45 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
             "{name}.{network_property} reference drift"
         );
     }
-    assert_eq!(
-        property_ref(schemas, "KagemushaUnshieldPublicInputs", "network_tag"),
-        "#/components/schemas/KagemushaFixed32Bytes"
-    );
-    assert!(
-        !schemas["KagemushaUnshieldPublicInputs"]["properties"]
-            .as_object()
-            .expect("KagemushaUnshieldPublicInputs properties")
-            .contains_key("chain_tag")
+    assert!(!schemas.contains_key("KagemushaUnshieldPublicInputs"));
+    assert!(document["paths"].get("/v1/kagemusha/unshield").is_none());
+    for (path, schema) in [
+        ("/v1/games/capabilities", "GameCapabilitiesV1"),
+        ("/v1/games/sessions", "GameSessionListResponseV1"),
+        ("/v1/games/sessions/{session_id}", "GameSessionRecordV1"),
+        ("/v1/nft-offers/capabilities", "NftOfferCapabilitiesV1"),
+        ("/v1/nft-offers", "NftOfferListResponseV1"),
+        ("/v1/nft-offers/{offer_id}", "NftSaleRecordV1"),
+        (
+            "/v1/offline/assets/{asset_definition_id}/registration",
+            "OfflineAssetRegistrationV1",
+        ),
+    ] {
+        assert_eq!(
+            document["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+                ["$ref"],
+            Value::from(format!("{COMPONENT_SCHEMA_REF_PREFIX}{schema}")),
+            "{path} response type"
+        );
+        assert!(
+            schemas.contains_key(schema),
+            "missing response schema {schema}"
+        );
+    }
+    assert_strict_object_schema(
+        schemas,
+        "OfflineAssetRegistrationV1",
+        &[
+            "version",
+            "network_id",
+            "asset_definition_id",
+            "asset_incarnation_hex",
+            "scale",
+            "committed_height",
+            "committed_block_hash_hex",
+            "committed_at_ms",
+        ],
+        &[],
     );
     for name in openapi_contract_strings(
         "openapi.incoming_static_openapi_contracts_remain_bound_to_runtime_routes.strings.1",
@@ -2611,6 +2644,19 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
 #[test]
 fn static_account_operations_publish_exact_auth_and_private_responses() {
     let document = canonical_document();
+    assert!(document["paths"].get("/v1/gov/council/current").is_none());
+    let public = openapi_operation(&document, "/v1/node/capabilities", "get");
+    assert_eq!(
+        public["security"],
+        norito::json!([{}, {"IrohaApiToken": []}])
+    );
+    assert!(operation_header_requirements(public).is_empty());
+    assert!(!public.contains_key("x-iroha-canonical-auth-v1"));
+    assert!(
+        document["paths"]
+            .get("/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft")
+            .is_none()
+    );
     for (path, methods) in openapi_contract_rows(
         "openapi.static_account_operations_publish_exact_auth_and_private_responses.method_rows",
     )
@@ -3043,6 +3089,8 @@ fn musubi_provider_bundle_attestation_and_exact_release_contract_is_static() {
         Some("#/components/schemas/RegisterMusubiProviderBundleAttestationV1")
     );
 }
+// The shared typed contract macros must precede every lexical consumer.
+include!("tests/sorafs_contracts.rs");
 include!("tests/diagnostics_schemas.rs");
 include!("tests/fee_quote_contract.rs");
 include!("tests/finality_app_contracts.rs");
@@ -3055,7 +3103,66 @@ include!("tests/private_settlement_contract.rs");
 include!("tests/soracloud_lease_contracts.rs");
 include!("tests/sns_contract.rs");
 include!("tests/query_asset_absence_contract.rs");
-include!("tests/sorafs_contracts.rs");
 include!("tests/sorafs_pop_contracts.rs");
 include!("tests/vpn_da.rs");
 mod catalog_and_contracts;
+
+#[test]
+fn openapi_uint64_bounds_keep_exact_integer_tokens_recursively() {
+    fn check(value: &Value, path: &str, checked: &mut usize) {
+        match value {
+            Value::Object(object) => {
+                if object.get("format").and_then(Value::as_str) == Some("uint64") {
+                    for name in ["minimum", "maximum"] {
+                        let Some(bound) = object.get(name) else {
+                            continue;
+                        };
+                        // Native as_u64 requires the unsigned range and refuses every
+                        // float. Preserve exact integer tokens, including smaller caps.
+                        let integer = bound.as_u64().unwrap_or_else(|| {
+                            panic!("{path}.{name} must be an exact unsigned u64 integer")
+                        });
+                        assert_eq!(
+                            norito::json::to_json(bound).expect("serialize exact u64 bound"),
+                            integer.to_string(),
+                            "{path}.{name} token"
+                        );
+                        *checked += 1;
+                    }
+                }
+                for (key, child) in object {
+                    check(child, &format!("{path}/{key}"), checked);
+                }
+            }
+            Value::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    check(child, &format!("{path}/{index}"), checked);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for (owner, document) in [
+        ("authored", canonical_document()),
+        ("compiled", generate_spec()),
+    ] {
+        let mut checked = 0;
+        check(&document, owner, &mut checked);
+        assert!(
+            checked >= 110,
+            "{owner}: expected the retained u64 bound corpus"
+        );
+    }
+
+    // Prove the check's numeric accessor cannot silently round the old token.
+    let rounded: Value = norito::json::from_str("1.8446744073709552e+19")
+        .expect("the old rounded token is syntactically valid JSON");
+    assert!(rounded.as_u64().is_none());
+    let exact: Value =
+        norito::json::from_str("18446744073709551615").expect("u64::MAX is an exact JSON integer");
+    assert_eq!(exact.as_u64(), Some(u64::MAX));
+}
+
+#[path = "tests/privacy_release_qualification.rs"]
+mod privacy_release_qualification;

@@ -212,6 +212,7 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     ) {
         Ok(_) => panic!("ordinary signed snapshot must not repair a lost Kura suffix"),
         Err(error) => error,
@@ -323,6 +324,7 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("snapshot read should validate historical hashes without block bodies");
     assert_eq!(
@@ -386,6 +388,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("Fast mode must restore its required current snapshot");
     SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| {
@@ -484,6 +487,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("Fast restore must not consume same-size deferred snapshot.data contents");
     assert_eq!(restored_without_reading_payload.committed_height(), 1);
@@ -510,6 +514,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("Fast restore must bind but never read the deferred Merkle sidecar");
     assert_eq!(restored_without_reading_merkle.committed_height(), 1);
@@ -527,6 +532,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     ) {
         Ok(_) => panic!("Fast restore must retain exact network identity binding"),
         Err(error) => error,
@@ -561,6 +567,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     ) {
         Ok(_) => panic!("Fast restore must authenticate every manifest field"),
         Err(error) => error,
@@ -592,6 +599,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     ) {
         Ok(_) => panic!("Fast restore must retain ordinary outer signature verification"),
         Err(error) => error,
@@ -792,6 +800,7 @@ async fn snapshot_read_succeeds_without_selector_bootstrap() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("snapshot read");
     assert_eq!(snapshot_state.chain_id, expected_chain_id);
@@ -1127,6 +1136,7 @@ async fn idempotent_gc_fails_closed_when_rollback_chronology_is_ambiguous() {
         defaults::snapshot::MAX_PAYLOAD_BYTES,
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &snapshot_read_budget_for_testing(),
     )
     .expect_err("GC must not invent chronology for multiple authenticated extras");
     assert!(matches!(error, TryWriteError::PublicationIntegrity(_)));
@@ -1161,6 +1171,7 @@ async fn generation_gc_entry_limit_is_enforced_while_enumerating() {
         defaults::snapshot::MAX_PAYLOAD_BYTES,
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &snapshot_read_budget_for_testing(),
     )
     .expect_err("MAX+1 entries must stop bounded GC");
     assert!(matches!(error, TryWriteError::PublicationIntegrity(_)));
@@ -1194,6 +1205,7 @@ async fn post_pointer_gc_failures_report_durable_publication_success() {
             defaults::snapshot::MAX_PAYLOAD_BYTES,
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &snapshot_read_budget_for_testing(),
         )
         .expect("a durable pointer is success even when later maintenance fails");
         assert_eq!(current_generation_name(&store_dir), next_name);
@@ -1224,6 +1236,7 @@ async fn post_pointer_gc_rejects_same_path_generation_substitution() {
         defaults::snapshot::MAX_PAYLOAD_BYTES,
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
+        &snapshot_read_budget_for_testing(),
     )
     .expect("a durable pointer remains successful when GC rejects a substitution");
     assert_eq!(current_generation_name(&store_dir), next_name);
@@ -1341,6 +1354,7 @@ async fn cannot_find_snapshot_on_read_is_not_found() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     ) else {
         panic!("should not be ok")
     };
@@ -1367,6 +1381,7 @@ async fn cannot_parse_snapshot_on_read_is_error() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     ) else {
         panic!("should not be ok")
     };
@@ -1397,6 +1412,7 @@ async fn checksum_mismatch_rejected() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     ) else {
         panic!("should not be ok")
     };
@@ -1425,6 +1441,7 @@ async fn network_id_mismatch_rejected() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     ) else {
         panic!("should not be ok")
     };
@@ -1477,6 +1494,7 @@ async fn missing_checksum_rejected() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     ) else {
         panic!("should not be ok")
     };
@@ -1509,6 +1527,7 @@ async fn missing_merkle_rejected() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     ) else {
         panic!("should not be ok")
     };
@@ -1541,6 +1560,7 @@ async fn merkle_root_mismatch_rejected() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     ) else {
         panic!("should not be ok")
     };
@@ -1573,6 +1593,7 @@ async fn merkle_leaf_count_mismatch_rejected() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     ) else {
         panic!("should not be ok")
     };
@@ -1602,6 +1623,7 @@ async fn merkle_chunk_size_mismatch_rejected() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     ) else {
         panic!("should not be ok")
     };
@@ -1800,6 +1822,7 @@ async fn can_read_multiple_blocks() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
     )
     .unwrap();
     assert_eq!(state.view().height(), 2);
@@ -1861,6 +1884,7 @@ async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         <_>::default(),
+        &snapshot_read_budget_for_testing(),
     )
     .unwrap();
     assert_eq!(restored.view().height(), 2);

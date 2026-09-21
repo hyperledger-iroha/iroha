@@ -625,3 +625,6 @@ impl<Admission, Block, Components> PreparedCarrierJournals<Admission, Block, Com
 #[cfg(test)]
 #[path = "journals_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use decision_binding::publish_governance_fixture;

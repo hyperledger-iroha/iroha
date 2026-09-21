@@ -2,10 +2,14 @@
 
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::{SumeragiV2GenesisContextParameters, ValidatorPower},
+    block::consensus_v2::ValidatorPower,
+    isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
+};
+#[cfg(test)]
+use iroha_data_model::{
+    block::consensus_v2::SumeragiV2GenesisContextParameters,
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
-        KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalityGenesisParametersV1,
+        KagemushaMintFinalityEpochRosterTemplateV1, KagemushaMintFinalityGenesisParametersV1,
     },
 };
 
@@ -40,6 +44,7 @@ pub(crate) fn mint_finality_roster(
 }
 
 /// Build a real networkless signed-genesis template aligned with `roster`.
+#[cfg(test)]
 pub(crate) fn mint_finality_template(
     epoch: u64,
     roster: &[ValidatorPower],
@@ -70,6 +75,7 @@ pub(crate) fn mint_finality_template(
 }
 
 /// Build mandatory signed Kagemusha genesis parameters for a closed roster.
+#[cfg(test)]
 pub(crate) fn mint_finality_genesis_parameters(
     roster: &[ValidatorPower],
 ) -> KagemushaMintFinalityGenesisParametersV1 {
@@ -80,6 +86,7 @@ pub(crate) fn mint_finality_genesis_parameters(
 }
 
 /// Build the roster and its self-authenticating canonical identifier.
+#[cfg(test)]
 pub(crate) fn mint_finality_roster_and_id(
     network_id: NetworkId,
     epoch: u64,
@@ -93,6 +100,7 @@ pub(crate) fn mint_finality_roster_and_id(
 }
 
 /// Build a closed four-validator signed-genesis parameter fixture.
+#[cfg(test)]
 pub(crate) fn genesis_context_parameters() -> SumeragiV2GenesisContextParameters {
     SumeragiV2GenesisContextParameters::recommended()
 }

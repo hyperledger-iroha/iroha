@@ -7,17 +7,16 @@ usage() {
 release_sorafs_cli.sh --manifest <path> [options]
 
 Signs a canonical aggregate SoraFS release manifest through the reviewed
-`authenticated_external_signer` provider with exact `software` backend, then
+`authenticated_external_signer` provider, then
 verifies the manifest, raw public key, and 64-byte Ed25519 signature with a
-SHA256-pinned `iroha app sorafs toolkit release-manifest` binary. A successful run emits
-`software-key-qualified`. Iroha exposes no HSM-specific adapter or qualification
-claim; custody behind the authenticated external signer is deployment-owned.
+SHA256-pinned `iroha app sorafs toolkit release-manifest` binary. Signer implementation
+and key storage are operator choices; verification makes no backend-origin claim.
 
 Required:
   --manifest <path>
       Canonical aggregate release manifest JSON.
   --external-signer <path>
-      Executable adapter for the authenticated external software Ed25519 signer
+      Executable adapter for the authenticated external Ed25519 signer
       service. Its first two positional arguments are MANIFEST_PATH and a new
       SIGNATURE_OUTPUT_PATH; it must write exactly 64 raw signature bytes.
   --signing-public-key <path>
@@ -179,8 +178,6 @@ require_sha256() {
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly release_signing_provider="authenticated_external_signer"
-readonly release_signing_backend="software"
-readonly signer_qualification="software-key-qualified"
 workspace="$(cd "${script_dir}/.." && pwd)"
 manifest_path=""
 external_signer=""
@@ -276,7 +273,7 @@ require_sha256 \
 
 validate_existing_file_path "aggregate release manifest" "$manifest_path"
 validate_existing_executable_file_path \
-  "authenticated external software Ed25519 signer adapter" \
+  "authenticated external Ed25519 signer adapter" \
   "$external_signer"
 validate_existing_file_path "raw Ed25519 signing public key" "$signing_public_key"
 validate_existing_executable_file_path \
@@ -316,7 +313,7 @@ prepare_new_output_file_path \
   "release verification summary output" \
   "$verification_summary_out"
 
-echo "Signing aggregate release manifest through the authenticated external software Ed25519 signer..."
+echo "Signing aggregate release manifest through the authenticated external Ed25519 signer..."
 verification_json="$(
   python3 "$release_manifest_signing_helper" sign \
     --manifest "$manifest_path" \
@@ -343,5 +340,3 @@ echo "  Signature    : $signature_out"
 echo "  Public key   : $public_key_out"
 echo "  Verification : $verification_summary_out"
 echo "  Provider     : $release_signing_provider"
-echo "  Backend      : $release_signing_backend"
-echo "  Qualification: $signer_qualification"

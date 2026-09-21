@@ -28,6 +28,12 @@ fn create_election_rejects_plain_conflict() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     // Seed a Plain referendum with the same id
+    iroha_core::query::standalone_plain_test_fixture::fund_voter(
+        &mut stx,
+        &iroha_test_samples::ALICE_ID,
+        1_000_000_u64.into(),
+        0,
+    );
     stx.world.governance_referenda_mut().insert(
         "ref-conflict".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
@@ -35,6 +41,8 @@ fn create_election_rejects_plain_conflict() {
             h_end: 10,
             status: iroha_core::state::GovernanceReferendumStatus::Proposed,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
+            plain_context: iroha_core::query::standalone_plain_test_fixture::context(&stx.gov, 0),
+            plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
         },
     );
     let vk_id = VerifyingKeyId::new("halo2/ipa", "unqualified");

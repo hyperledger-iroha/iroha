@@ -28,6 +28,15 @@ pub(in crate::signer_operation) struct RecoveredSignerOperationV1 {
 }
 
 impl SignerOperationCoordinatorV1 {
+    pub(in crate::signer_operation) fn recover_completed(
+        &self,
+        recovered: RecoveredSignerOperationV1,
+    ) -> Result<CompletedSignerOperationV1, SignerOperationErrorV1> {
+        self.authority().recover_completed(recovered)
+    }
+}
+
+impl SignerOperationAuthorityV1<'_> {
     /// Recover only an exact committed response, under fresh unchanged independent custody state.
     ///
     /// The service reconstructs exact messages from its canonical persisted audit/response and
@@ -41,7 +50,7 @@ impl SignerOperationCoordinatorV1 {
             .intent
             .digest()
             .map_err(|_| SignerOperationErrorV1::InvalidOperation)?;
-        let custody = self.verify(&self.source.observe(&self.binding)?)?;
+        let mut custody = self.verify(&self.source.observe(self.binding)?)?;
         if recovered.original_custody != SignerOperationCustodyV1::from_verified(&custody) {
             return Err(SignerOperationErrorV1::CustodyChanged);
         }
@@ -55,22 +64,14 @@ impl SignerOperationCoordinatorV1 {
         {
             return Err(SignerOperationErrorV1::InvalidOperation);
         }
-        let mut operation = SignerOperationV1 {
-            coordinator: self,
-            intent: recovered.intent,
-            intent_digest,
-            reservation: recovered.reservation,
-            custody,
-            signatures: Vec::new(),
-            poisoned: false,
-        };
-        if recovered.signatures.len() != operation.required_purposes().len() {
+        let mut signatures = Vec::new();
+        if recovered.signatures.len() != required_purposes(recovered.intent.action).len() {
             return Err(SignerOperationErrorV1::InvalidOperation);
         }
         for (part, required) in recovered
             .signatures
             .into_iter()
-            .zip(operation.required_purposes())
+            .zip(required_purposes(recovered.intent.action))
         {
             if part.purpose != *required
                 || part.message.is_empty()
@@ -88,7 +89,7 @@ impl SignerOperationCoordinatorV1 {
             signature
                 .verify(&self.binding.public_key, &part.message)
                 .map_err(|_| SignerOperationErrorV1::InvalidSignature)?;
-            operation.signatures.push(StagedSignature {
+            signatures.push(StagedSignature {
                 purpose: part.purpose,
                 message_digest: digest_parts(
                     b"iroha.sorafs.signer.operation.message.v1",
@@ -98,9 +99,9 @@ impl SignerOperationCoordinatorV1 {
             });
         }
         let commitment = recovered.commitment;
-        if commitment.audit.sequence != operation.intent.previous_audit.sequence + 1
+        if commitment.audit.sequence != recovered.intent.previous_audit.sequence + 1
             || commitment.audit.digest == [0; 32]
-            || commitment.audit.digest == operation.intent.previous_audit.digest
+            || commitment.audit.digest == recovered.intent.previous_audit.digest
             || commitment.response_digest == [0; 32]
         {
             return Err(SignerOperationErrorV1::InvalidOperation);
@@ -116,8 +117,7 @@ impl SignerOperationCoordinatorV1 {
             ),
         ] {
             let digest = digest_parts(b"iroha.sorafs.signer.operation.message.v1", &[&message]);
-            if !operation
-                .signatures
+            if !signatures
                 .iter()
                 .any(|signature| signature.purpose == purpose && signature.message_digest == digest)
             {
@@ -126,8 +126,7 @@ impl SignerOperationCoordinatorV1 {
         }
         let encoded = Zeroizing::new(
             norito::encode_canonical(
-                &operation
-                    .signatures
+                &signatures
                     .iter()
                     .map(|signature| {
                         (
@@ -147,7 +146,12 @@ impl SignerOperationCoordinatorV1 {
         // The first authenticated completion observation happens after potentially expensive
         // signature verification, so a revocation/rotation during that work cannot release bytes.
         let request = SignerOperationCommitRequestV1 {
-            check: operation.check(),
+            check: reservation_check(
+                &recovered.intent,
+                intent_digest,
+                &custody,
+                recovered.reservation,
+            ),
             commitment,
             signatures_digest,
             original_custody: recovered.original_custody,
@@ -157,12 +161,17 @@ impl SignerOperationCoordinatorV1 {
                 .source
                 .observe_committed(&request, SignerCommittedObservationPhaseV1::AfterCommit)?,
         )?;
-        if !current.continues_active_state(&operation.custody) {
+        if !current.continues_active_state(&custody) {
             return Err(SignerOperationErrorV1::CustodyChanged);
         }
-        operation.custody = current;
+        custody = current;
         let request = SignerOperationCommitRequestV1 {
-            check: operation.check(),
+            check: reservation_check(
+                &recovered.intent,
+                intent_digest,
+                &custody,
+                recovered.reservation,
+            ),
             commitment,
             signatures_digest,
             original_custody: recovered.original_custody,
@@ -172,17 +181,17 @@ impl SignerOperationCoordinatorV1 {
                 .source
                 .observe_committed(&request, SignerCommittedObservationPhaseV1::BeforeRelease)?,
         )?;
-        if !current.continues_active_state(&operation.custody) {
+        if !current.continues_active_state(&custody) {
             return Err(SignerOperationErrorV1::CustodyChanged);
         }
         Ok(CompletedSignerOperationV1 {
             original_custody: recovered.original_custody,
             custody: current,
-            reservation: operation.reservation,
+            reservation: recovered.reservation,
             commitment,
             intent_digest,
             signatures_digest,
-            signatures: operation.signatures,
+            signatures,
         })
     }
 }

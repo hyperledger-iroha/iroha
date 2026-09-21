@@ -11575,12 +11575,82 @@ def test_serve_scheduler_ordinal_source_seal_rejects_stale_artifact(
         ),
         (
             "SumeragiV2AsyncNetwork.tla",
-            "  /\\ \\A node \\in ValidatorIds:\n"
-            "       /\\ AsyncTimeoutLifecycleOwned(node)\n"
-            "       /\\ AsyncRetransmitLifecycleOwned(node)\n"
-            "         => AsyncTimeoutLifecycleOrdinal(node) #\n"
-            "              AsyncRetransmitLifecycleOrdinal(node)",
-            "  /\\ TRUE",
+            '  /\\ \\A node \\in ValidatorIds:\n'
+            '       (AsyncTimeoutLifecycleOwned(node)\n'
+            '        /\\ AsyncRetransmitLifecycleOwned(node))\n'
+            '         => AsyncTimeoutLifecycleOrdinal(node) #\n'
+            '              AsyncRetransmitLifecycleOrdinal(node)',
+            '  /\\ TRUE',
+            "AsyncSharedSchedulerOrdinalInjectionInvariant must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            '  /\\ \\A node \\in ValidatorIds:\n'
+            '       (AsyncTimeoutLifecycleOwned(node)\n'
+            '        /\\ AsyncRetransmitLifecycleOwned(node))\n'
+            '         => AsyncTimeoutLifecycleOrdinal(node) #\n'
+            '              AsyncRetransmitLifecycleOrdinal(node)',
+            '  /\\ \\A node \\in ValidatorIds:\n'
+            '       /\\ AsyncTimeoutLifecycleOwned(node)\n'
+            '       /\\ AsyncRetransmitLifecycleOwned(node)\n'
+            '         => AsyncTimeoutLifecycleOrdinal(node) #\n'
+            '              AsyncRetransmitLifecycleOrdinal(node)',
+            "AsyncSharedSchedulerOrdinalInjectionInvariant must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            '  /\\ \\A node \\in ValidatorIds:\n'
+            '       (AsyncTimeoutLifecycleOwned(node)\n'
+            '        /\\ AsyncRetransmitLifecycleOwned(node))\n'
+            '         => AsyncTimeoutLifecycleOrdinal(node) #\n'
+            '              AsyncRetransmitLifecycleOrdinal(node)',
+            '  /\\ \\A node \\in ValidatorIds:\n'
+            '       (AsyncTimeoutLifecycleOwned(node)\n'
+            '        \\/ AsyncRetransmitLifecycleOwned(node))\n'
+            '         => AsyncTimeoutLifecycleOrdinal(node) #\n'
+            '              AsyncRetransmitLifecycleOrdinal(node)',
+            "AsyncSharedSchedulerOrdinalInjectionInvariant must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            '  /\\ \\A node \\in ValidatorIds:\n'
+            '       (AsyncTimeoutLifecycleOwned(node)\n'
+            '        /\\ AsyncRetransmitLifecycleOwned(node))\n'
+            '         => AsyncTimeoutLifecycleOrdinal(node) #\n'
+            '              AsyncRetransmitLifecycleOrdinal(node)',
+            '  /\\ \\A node \\in ValidatorIds:\n'
+            '       (AsyncTimeoutLifecycleOwned(node)\n'
+            '        /\\ AsyncRetransmitLifecycleOwned(node))\n'
+            '         => AsyncTimeoutLifecycleOrdinal(node) =\n'
+            '              AsyncRetransmitLifecycleOrdinal(node)',
+            "AsyncSharedSchedulerOrdinalInjectionInvariant must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            '  /\\ \\A node \\in ValidatorIds:\n'
+            '       (AsyncTimeoutLifecycleOwned(node)\n'
+            '        /\\ AsyncRetransmitLifecycleOwned(node))\n'
+            '         => AsyncTimeoutLifecycleOrdinal(node) #\n'
+            '              AsyncRetransmitLifecycleOrdinal(node)',
+            '  /\\ \\A node \\in ValidatorIds:\n'
+            '       (AsyncTimeoutLifecycleOwned(node)\n'
+            '        /\\ AsyncRetransmitLifecycleOwned(node))\n'
+            '         => AsyncTimeoutLifecycleOrdinal(node) #\n'
+            '              AsyncTimeoutLifecycleOrdinal(node)',
+            "AsyncSharedSchedulerOrdinalInjectionInvariant must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            '  /\\ \\A node \\in ValidatorIds:\n'
+            '       (AsyncTimeoutLifecycleOwned(node)\n'
+            '        /\\ AsyncRetransmitLifecycleOwned(node))\n'
+            '         => AsyncTimeoutLifecycleOrdinal(node) #\n'
+            '              AsyncRetransmitLifecycleOrdinal(node)',
+            '  /\\ \\A node \\in ValidatorIds:\n'
+            '       (AsyncTimeoutLifecycleOwned(node)\n'
+            '        /\\ AsyncRetransmitLifecycleOwned(node))\n'
+            '         => AsyncTimeoutLifecycleOrdinal(node) <=\n'
+            '              AsyncRetransmitLifecycleOrdinal(node)',
             "AsyncSharedSchedulerOrdinalInjectionInvariant must equal only",
         ),
         (
@@ -11591,10 +11661,11 @@ def test_serve_scheduler_ordinal_source_seal_rejects_stale_artifact(
         ),
         (
             "SumeragiV2AsyncNetwork.tla",
-            "  /\\ AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node)\n"
-            "  /\\ UNCHANGED AsyncIoVars",
-            "  /\\ TRUE\n  /\\ UNCHANGED AsyncIoVars",
-            "SerializedRuntimePrecedesServeIngressStep must equal only",
+            '  /\\ AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node)\n'
+            '  /\\ AsyncIoTimeoutLifecycleRetirementTransition(node)',
+            '  /\\ TRUE\n'
+            '  /\\ AsyncIoTimeoutLifecycleRetirementTransition(node)',
+            'SerializedRuntimePrecedesServeIngressStep must equal only',
         ),
         (
             "SumeragiV2AsyncNetwork.tla",
@@ -11625,18 +11696,18 @@ def test_serve_scheduler_ordinal_source_seal_rejects_stale_artifact(
         ),
         (
             "SumeragiV2AsyncNetwork.tla",
-            "               THEN IF /\\ asyncRunnerPhase[node] = \"Runtime\"\n"
-            "                         /\\ AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node)\n"
-            "                    THEN SerializedRuntimePrecedesServeIngressStep(node)\n"
-            "                    ELSE IF /\\ asyncRunnerPhase[node] = \"Local\"\n"
-            "                               /\\ AsyncOlderLocalLifecyclePrecedesServeIngress(node)\n"
-            "                         THEN SerializedLocalPrecedesServeIngressStep(node)\n"
-            "                         ELSE AsyncServeIngressTargetOnlyTurn(node)",
-            "               THEN IF /\\ asyncRunnerPhase[node] = \"Runtime\"\n"
-            "                         /\\ AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node)\n"
-            "                    THEN SerializedRuntimePrecedesServeIngressStep(node)\n"
-            "                    ELSE AsyncServeIngressTargetOnlyTurn(node)",
-            "RunNodeWork must equal only",
+            '                    ELSE IF /\\ asyncRunnerPhase[node] = "Runtime"\n'
+            '                         /\\ AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node)\n'
+            '                         THEN SerializedRuntimePrecedesServeIngressStep(node)\n'
+            '                         ELSE IF /\\ asyncRunnerPhase[node] = "Local"\n'
+            '                                    /\\ AsyncOlderLocalLifecyclePrecedesServeIngress(node)\n'
+            '                              THEN SerializedLocalPrecedesServeIngressStep(node)\n'
+            '                              ELSE AsyncServeIngressTargetOnlyTurn(node)',
+            '                    ELSE IF /\\ asyncRunnerPhase[node] = "Runtime"\n'
+            '                         /\\ AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node)\n'
+            '                         THEN SerializedRuntimePrecedesServeIngressStep(node)\n'
+            '                         ELSE AsyncServeIngressTargetOnlyTurn(node)',
+            'RunNodeWork must equal only',
         ),
         (
             "SumeragiV2AsyncNetwork.tla",

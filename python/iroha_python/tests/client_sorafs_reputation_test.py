@@ -598,7 +598,8 @@ def test_sorafs_reputation_witness_auth_is_exact_and_stream_is_single_attempt() 
     )
     client = ToriiClient("http://torii.example", session=session, max_retries=9)
     witness = base64_witness()
-    account = AccountAddress.from_account(public_key=bytes([0x36]) * 32)
+    public_key = Ed25519KeyPair.from_private_key(bytes([0x36]) * 32).public_key
+    account = AccountAddress.from_account(public_key=public_key)
     account_i105 = account.to_i105(0x02F1)
     headers = {
         "X-Iroha-Witness": witness,

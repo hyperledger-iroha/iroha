@@ -16,6 +16,13 @@ pub enum TryReadError {
     NonCanonicalSnapshotPayload,
     /// Snapshot exceeds a configured typed decode or transient resource boundary: {0}
     SnapshotResourceLimit(String),
+    /// Local snapshot read-buffer allocation admission refused: {0}
+    PayloadAllocation(#[source] mv::allocation::AllocationRefusal),
+    /// The allocator could not supply {requested_bytes} prepaid snapshot payload bytes
+    PayloadAllocatorFailure {
+        /// Exact requested byte allocation; no buffer was installed.
+        requested_bytes: usize,
+    },
     /// Snapshot artifact or directory binding changed at {0:?}
     SnapshotBindingChanged(PathBuf),
     /// Immutable snapshot generation at {path:?} is invalid: {reason}
@@ -130,6 +137,13 @@ pub enum TryReadError {
 /// Error variants for snapshot writing
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 pub(super) enum TryWriteError {
+    /// Local snapshot read-buffer allocation admission refused: {0}
+    PayloadAllocation(#[source] mv::allocation::AllocationRefusal),
+    /// The allocator could not supply {requested_bytes} prepaid snapshot payload bytes
+    PayloadAllocatorFailure {
+        /// Exact requested byte allocation; original generation evidence remains valid.
+        requested_bytes: usize,
+    },
     /// One stable snapshot observation could not be captured: {0}
     Capture(#[source] SnapshotCaptureError),
     /// Failed reading/writing {1:?} from disk

@@ -42,7 +42,7 @@ from urllib import request as urllib_request
 _SCRIPT_DIRECTORY = Path(os.path.abspath(__file__)).parent
 _MAX_BOOTSTRAP_MODULE_BYTES = 2 * 1024 * 1024
 _BOOTSTRAP_RELEASE_MODULE_SHA256 = {
-    "release_artifact_contract": "ad4a5bd832f95a55ef2d4bee8a451ef3f5af14d244a1a14a232ec5cc4d59e253",
+    "release_artifact_contract": "ae28b33969b6b9cc201877fc860b6936d0a162f3474fcabba9882f44339b3965",
     "release_manifest_signing": "c7dbbbd6f3b21e05cff934f2a9db47d331988c4fc3141e7ad7b2e2edfe7cab4a",
     "publish_plan": "a9d15abb6eaea794f4c8fa27283667b5d75165fee60cd081a1373dab00257d70",
     # This source owns the reviewed surface seal. Its one literal digest is
@@ -256,8 +256,6 @@ IMAGE_PLATFORM_TARGETS = {
 REQUIRED_IMAGE_PLATFORMS = tuple(IMAGE_PLATFORM_TARGETS)
 AGGREGATE_TARGET = "multi-target"
 RELEASE_SIGNING_PROVIDER = "authenticated_external_signer"
-RELEASE_SIGNING_BACKEND = "software"
-RELEASE_SIGNER_QUALIFICATION = "software-key-qualified"
 _FASTPQ_ROLLOUT_STAMP_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}")
 
 
@@ -801,7 +799,7 @@ def main() -> int:
     parser.add_argument(
         "--external-signer",
         help=(
-            "Reviewed adapter for the authenticated external software Ed25519 "
+            "Reviewed adapter for the authenticated external Ed25519 "
             "signer, invoked only with the final canonical aggregate-manifest "
             "path and a new raw-signature output path."
         ),
@@ -1950,8 +1948,6 @@ def main() -> int:
                 aggregate_signing_result.update(
                     {
                         "signing_provider": RELEASE_SIGNING_PROVIDER,
-                        "signing_backend": RELEASE_SIGNING_BACKEND,
-                        "signer_qualification": RELEASE_SIGNER_QUALIFICATION,
                     }
                 )
             except ReleaseManifestSignatureError as exc:
@@ -2101,17 +2097,6 @@ def main() -> int:
         lines.append("Aggregate manifest public key: release_manifest.json.pub")
         lines.append(
             "Aggregate manifest signing provider: " + RELEASE_SIGNING_PROVIDER
-        )
-        lines.append(
-            "Aggregate manifest signing backend: " + RELEASE_SIGNING_BACKEND
-        )
-        lines.append(
-            "Aggregate manifest signer qualification: "
-            + (
-                RELEASE_SIGNER_QUALIFICATION
-                if aggregate_signing_result is not None
-                else "unqualified (dry-run target: software-key-qualified)"
-            )
         )
         lines.append(
             "Aggregate manifest native verifier: "

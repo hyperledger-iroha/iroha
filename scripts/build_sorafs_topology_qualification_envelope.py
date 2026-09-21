@@ -115,8 +115,8 @@ UNLINK_DIR_FD_SUPPORTED = os.unlink in os.supports_dir_fd
 LINK_DIR_FD_SUPPORTED = os.link in os.supports_dir_fd
 LINK_NOFOLLOW_SUPPORTED = os.link in os.supports_follow_symlinks
 
-assert len(PREPARED_ENVELOPE_FIELDS) == 20
-assert len(SIGNED_QUALIFICATION_ENVELOPE_FIELDS) == 21
+assert len(PREPARED_ENVELOPE_FIELDS) == 19
+assert len(SIGNED_QUALIFICATION_ENVELOPE_FIELDS) == 20
 
 
 class TopologyEnvelopeError(ValueError):
@@ -200,7 +200,6 @@ def _trusted_signer_inputs(
     signer_errors: list[str] = []
     signer = validate_foundational_software_signer(
         {
-            "backend": "software",
             "service_id": args.topology_qualification_signer_service_id,
             "administrator_id": (
                 args.topology_qualification_signer_administrator_id
@@ -270,7 +269,6 @@ def build_prepared_envelope(args: argparse.Namespace) -> dict[str, Any]:
         "schema": SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
         **binding,
         "signer_authentication_kind": "external-ed25519",
-        "signer_backend": signer["signer_backend"],
         "signer_service_id": signer["signer_service_id"],
         "signer_administrator_id": signer["signer_administrator_id"],
         "signer_key_revision": signer["signer_key_revision"],

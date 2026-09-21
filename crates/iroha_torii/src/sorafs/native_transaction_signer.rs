@@ -4,14 +4,19 @@
 //! each injected signer to one immutable non-secret expected identity, probes that identity twice
 //! before accepting the provider, and revalidates it immediately before and after every signing
 //! operation. The facade also rejects an input owned by another authority and verifies that the
-//! provider returned the exact payload, authority, and a valid signature.
+//! provider returned the exact payload, authority, and a valid signature. Each signing request
+//! must contain exactly one direct instruction owned by its role before any request-time probe.
 use iroha_config::parameters::validate_production_runtime_handle;
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
+    NetworkId,
     account::AccountId,
     transaction::{SignedTransaction, TransactionPayload},
 };
 use std::sync::Arc;
+
+mod payload_authorization;
+pub use payload_authorization::sorafs_native_transaction_payload_matches_role_v1;
 /// One isolated native SoraFS transaction-signing role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
@@ -436,6 +441,7 @@ fn validate_snapshot(
     Ok(())
 }
 struct QualifiedNativeTransactionSignerV1<S: ?Sized> {
+    network_id: NetworkId,
     expected_role: SorafsNativeTransactionSignerRoleV1,
     binding: SorafsNativeTransactionSignerBindingV1,
     provider: Arc<S>,
@@ -445,6 +451,7 @@ where
     S: SorafsNativeTransactionSignerProviderV1 + ?Sized,
 {
     fn try_new(
+        network_id: NetworkId,
         expected_role: SorafsNativeTransactionSignerRoleV1,
         binding: SorafsNativeTransactionSignerBindingV1,
         provider: Arc<S>,
@@ -459,6 +466,7 @@ where
         }
         validate_snapshot(expected_role, &binding, &first)?;
         Ok(Self {
+            network_id,
             expected_role,
             binding,
             provider,
@@ -467,9 +475,6 @@ where
     fn revalidate(&self) -> Result<(), SorafsNativeTransactionSignerQualificationErrorV1> {
         let snapshot = probe_provider(self.provider.as_ref())?;
         validate_snapshot(self.expected_role, &self.binding, &snapshot)
-    }
-    fn accepts_payload(&self, payload: &TransactionPayload) -> bool {
-        payload.authority() == self.binding.authority()
     }
     fn accepts_transaction(
         &self,
@@ -528,8 +533,16 @@ macro_rules! define_qualified_signer {
                 &self,
                 payload: TransactionPayload,
             ) -> Result<SignedTransaction, $signing_error> {
-                if !self.inner.accepts_payload(&payload) {
+                if payload.authority() != self.inner.binding.authority() {
                     return Err($signing_error::InputAuthorityMismatch);
+                }
+                if payload.network_id() != Some(&self.inner.network_id)
+                    || !sorafs_native_transaction_payload_matches_role_v1(
+                        self.inner.expected_role,
+                        &payload,
+                    )
+                {
+                    return Err($signing_error::Refused);
                 }
                 self.inner
                     .revalidate()
@@ -553,17 +566,21 @@ macro_rules! define_qualified_signer {
         ///
         /// The provider is probed twice before this function returns. The returned trait object
         /// revalidates the same binding before every fallible public-identity probe and immediately
-        /// before and after every signing request.
+        /// before and after every signing request. Wrong-authority, cross-role, wrapped or
+        /// multi-instruction inputs are rejected before request-time provider probes. The network
+        /// is retained independently from native runtime construction, never from a request.
         ///
         /// # Errors
         ///
         /// Returns a payload-free error when the binding or provider identity
         /// is invalid, unavailable, substituted, stale, or unstable.
         pub fn $constructor(
+            network_id: NetworkId,
             binding: SorafsNativeTransactionSignerBindingV1,
             provider: Arc<dyn $trait_name>,
         ) -> Result<Arc<dyn $trait_name>, SorafsNativeTransactionSignerQualificationErrorV1> {
-            let inner = QualifiedNativeTransactionSignerV1::try_new($role, binding, provider)?;
+            let inner =
+                QualifiedNativeTransactionSignerV1::try_new(network_id, $role, binding, provider)?;
             Ok(Arc::new($wrapper { inner }))
         }
     };
@@ -602,6 +619,8 @@ define_qualified_signer!(
 );
 #[cfg(test)]
 mod tests {
+    mod payload_authorization;
+
     use super::*;
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
@@ -651,6 +670,7 @@ mod tests {
         >,
         sign_output: Mutex<TestSignOutput>,
         sign_calls: AtomicUsize,
+        probe_calls: AtomicUsize,
     }
     impl TestProvider {
         fn new(
@@ -679,6 +699,7 @@ mod tests {
                 qualification_after_sign: Mutex::new(None),
                 sign_output: Mutex::new(TestSignOutput::Exact),
                 sign_calls: AtomicUsize::new(0),
+                probe_calls: AtomicUsize::new(0),
             }
         }
         fn expected_binding(&self) -> SorafsNativeTransactionSignerBindingV1 {
@@ -802,18 +823,22 @@ mod tests {
     }
     impl SorafsNativeTransactionSignerProviderV1 for TestProvider {
         fn role(&self) -> SorafsNativeTransactionSignerRoleV1 {
+            self.probe_calls.fetch_add(1, Ordering::SeqCst);
             self.role
         }
         fn handle(&self) -> &str {
+            self.probe_calls.fetch_add(1, Ordering::SeqCst);
             &self.handle
         }
         fn authority(&self) -> AccountId {
+            self.probe_calls.fetch_add(1, Ordering::SeqCst);
             self.authority
                 .lock()
                 .expect("authority fixture lock")
                 .clone()
         }
         fn public_key(&self) -> Result<PublicKey, SorafsNativeTransactionSignerProbeErrorV1> {
+            self.probe_calls.fetch_add(1, Ordering::SeqCst);
             self.public_key
                 .lock()
                 .expect("public-key fixture lock")
@@ -825,6 +850,7 @@ mod tests {
             SorafsNativeTransactionSignerQualificationV1,
             SorafsNativeTransactionSignerProbeErrorV1,
         > {
+            self.probe_calls.fetch_add(1, Ordering::SeqCst);
             let current = *self
                 .qualification
                 .lock()
@@ -871,6 +897,7 @@ mod tests {
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
+        .with_instructions([payload_authorization::proof_instruction()])
         .into_payload()
         .expect("valid native signer fixture payload")
     }
@@ -881,29 +908,45 @@ mod tests {
             "provider://sorafs/proof-outcome/primary",
             0x11,
         ));
-        qualify_sorafs_proof_outcome_transaction_signer_v1(proof.expected_binding(), proof.clone())
-            .expect("qualify proof-outcome signer");
+        qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
+            proof.expected_binding(),
+            proof.clone(),
+        )
+        .expect("qualify proof-outcome signer");
         let repair = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::Repair,
             "provider://sorafs/repair/primary",
             0x12,
         ));
-        qualify_sorafs_repair_transaction_signer_v1(repair.expected_binding(), repair.clone())
-            .expect("qualify repair signer");
+        qualify_sorafs_repair_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
+            repair.expected_binding(),
+            repair.clone(),
+        )
+        .expect("qualify repair signer");
         let reserve = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::Reserve,
             "provider://sorafs/reserve/primary",
             0x13,
         ));
-        qualify_sorafs_reserve_transaction_signer_v1(reserve.expected_binding(), reserve.clone())
-            .expect("qualify reserve signer");
+        qualify_sorafs_reserve_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
+            reserve.expected_binding(),
+            reserve.clone(),
+        )
+        .expect("qualify reserve signer");
         let orderbook = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::Orderbook,
             "provider://sorafs/orderbook/primary",
             0x14,
         ));
-        qualify_sorafs_orderbook_transaction_signer_v1(orderbook.expected_binding(), orderbook)
-            .expect("qualify orderbook signer");
+        qualify_sorafs_orderbook_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
+            orderbook.expected_binding(),
+            orderbook,
+        )
+        .expect("qualify orderbook signer");
     }
     #[test]
     fn expected_bindings_enforce_handle_grammar_qualification_and_key_identity() {
@@ -1001,7 +1044,11 @@ mod tests {
             0x31,
         ));
         assert!(matches!(
-            qualify_sorafs_proof_outcome_transaction_signer_v1(expected.clone(), wrong_handle),
+            qualify_sorafs_proof_outcome_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                expected.clone(),
+                wrong_handle
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::HandleMismatch)
         ));
         let wrong_key = Arc::new(TestProvider::new(
@@ -1010,7 +1057,11 @@ mod tests {
             0x32,
         ));
         assert!(matches!(
-            qualify_sorafs_proof_outcome_transaction_signer_v1(expected.clone(), wrong_key),
+            qualify_sorafs_proof_outcome_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                expected.clone(),
+                wrong_key
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::PublicKeyMismatch)
         ));
         let wrong_authority_key = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
@@ -1018,7 +1069,11 @@ mod tests {
         *provider.authority.lock().expect("authority fixture lock") =
             AccountId::new(wrong_authority_key.public_key().clone());
         assert!(matches!(
-            qualify_sorafs_proof_outcome_transaction_signer_v1(expected.clone(), provider.clone()),
+            qualify_sorafs_proof_outcome_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                expected.clone(),
+                provider.clone()
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::AuthorityMismatch)
         ));
         *provider.authority.lock().expect("authority fixture lock") = expected.authority().clone();
@@ -1027,7 +1082,11 @@ mod tests {
             expected.qualification().policy_digest(),
         )));
         assert!(matches!(
-            qualify_sorafs_proof_outcome_transaction_signer_v1(expected.clone(), provider.clone()),
+            qualify_sorafs_proof_outcome_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                expected.clone(),
+                provider.clone()
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::RevisionMismatch)
         ));
         provider.set_qualification(Ok(SorafsNativeTransactionSignerQualificationV1::new(
@@ -1035,7 +1094,11 @@ mod tests {
             [0xB7; 32],
         )));
         assert!(matches!(
-            qualify_sorafs_proof_outcome_transaction_signer_v1(expected, provider),
+            qualify_sorafs_proof_outcome_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                expected,
+                provider
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::PolicyDigestMismatch)
         ));
     }
@@ -1051,12 +1114,20 @@ mod tests {
             0, [0xA7; 32],
         )));
         assert!(matches!(
-            qualify_sorafs_proof_outcome_transaction_signer_v1(binding.clone(), provider.clone()),
+            qualify_sorafs_proof_outcome_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                binding.clone(),
+                provider.clone()
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::InvalidProviderQualification)
         ));
         provider.set_qualification(Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable));
         assert!(matches!(
-            qualify_sorafs_proof_outcome_transaction_signer_v1(binding, provider.clone()),
+            qualify_sorafs_proof_outcome_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                binding,
+                provider.clone()
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderUnavailable)
         ));
     }
@@ -1074,7 +1145,11 @@ mod tests {
             .expect("public-key fixture lock") =
             Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable);
         assert!(matches!(
-            qualify_sorafs_proof_outcome_transaction_signer_v1(binding.clone(), expected_provider),
+            qualify_sorafs_proof_outcome_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                binding.clone(),
+                expected_provider
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderUnavailable)
         ));
         for handle in [
@@ -1091,7 +1166,11 @@ mod tests {
                 0x45,
             ));
             assert!(matches!(
-                qualify_sorafs_proof_outcome_transaction_signer_v1(binding.clone(), invalid_handle),
+                qualify_sorafs_proof_outcome_transaction_signer_v1(
+                    crate::signed_query_test_network_id(),
+                    binding.clone(),
+                    invalid_handle
+                ),
                 Err(SorafsNativeTransactionSignerQualificationErrorV1::InvalidProviderHandle)
             ));
         }
@@ -1104,6 +1183,7 @@ mod tests {
         ));
         assert!(matches!(
             qualify_sorafs_proof_outcome_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
                 binding.clone(),
                 unsupported_algorithm
             ),
@@ -1118,7 +1198,11 @@ mod tests {
             SorafsNativeTransactionSignerQualificationV1::new(8, [0xA7; 32]),
         ));
         assert!(matches!(
-            qualify_sorafs_proof_outcome_transaction_signer_v1(binding, drifting),
+            qualify_sorafs_proof_outcome_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                binding,
+                drifting
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderDrift)
         ));
     }
@@ -1130,7 +1214,11 @@ mod tests {
             0x51,
         ));
         assert!(matches!(
-            qualify_sorafs_repair_transaction_signer_v1(proof.expected_binding(), proof.clone()),
+            qualify_sorafs_repair_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                proof.expected_binding(),
+                proof.clone()
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::BindingRoleMismatch)
         ));
         let repair_binding = SorafsNativeTransactionSignerBindingV1::try_new(
@@ -1142,7 +1230,11 @@ mod tests {
         )
         .expect("valid repair-role binding shape");
         assert!(matches!(
-            qualify_sorafs_repair_transaction_signer_v1(repair_binding, proof),
+            qualify_sorafs_repair_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                repair_binding,
+                proof
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderRoleMismatch)
         ));
     }
@@ -1154,9 +1246,12 @@ mod tests {
             0x61,
         ));
         let pre_binding = pre_drift.expected_binding();
-        let pre_qualified =
-            qualify_sorafs_proof_outcome_transaction_signer_v1(pre_binding, pre_drift.clone())
-                .expect("qualify pre-sign drift fixture");
+        let pre_qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
+            pre_binding,
+            pre_drift.clone(),
+        )
+        .expect("qualify pre-sign drift fixture");
         pre_drift.set_qualification(Ok(SorafsNativeTransactionSignerQualificationV1::new(
             8, [0xA7; 32],
         )));
@@ -1171,9 +1266,12 @@ mod tests {
             0x62,
         ));
         let post_binding = post_drift.expected_binding();
-        let post_qualified =
-            qualify_sorafs_proof_outcome_transaction_signer_v1(post_binding, post_drift.clone())
-                .expect("qualify post-sign drift fixture");
+        let post_qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
+            post_binding,
+            post_drift.clone(),
+        )
+        .expect("qualify post-sign drift fixture");
         post_drift.drift_qualification_after_sign(Ok(
             SorafsNativeTransactionSignerQualificationV1::new(8, [0xA7; 32]),
         ));
@@ -1191,6 +1289,7 @@ mod tests {
             0x71,
         ));
         let qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
             provider.expected_binding(),
             provider.clone(),
         )
@@ -1210,9 +1309,12 @@ mod tests {
             0x72,
         ));
         let binding = provider.expected_binding();
-        let qualified =
-            qualify_sorafs_proof_outcome_transaction_signer_v1(binding.clone(), provider.clone())
-                .expect("qualify double-qualification drift fixture");
+        let qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
+            binding.clone(),
+            provider.clone(),
+        )
+        .expect("qualify double-qualification drift fixture");
         provider.set_qualification(Ok(SorafsNativeTransactionSignerQualificationV1::new(
             binding.qualification().revision() + 1,
             binding.qualification().policy_digest(),
@@ -1226,7 +1328,11 @@ mod tests {
             Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable)
         );
         assert!(matches!(
-            qualify_sorafs_proof_outcome_transaction_signer_v1(binding, qualified),
+            qualify_sorafs_proof_outcome_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                binding,
+                qualified
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderUnavailable)
         ));
     }
@@ -1238,9 +1344,12 @@ mod tests {
             0x73,
         ));
         let binding = provider.expected_binding();
-        let qualified =
-            qualify_sorafs_proof_outcome_transaction_signer_v1(binding.clone(), provider.clone())
-                .expect("qualify double-qualification unavailable fixture");
+        let qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
+            binding.clone(),
+            provider.clone(),
+        )
+        .expect("qualify double-qualification unavailable fixture");
         provider.set_qualification(Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable));
         assert_eq!(
             qualified.public_key(),
@@ -1251,7 +1360,11 @@ mod tests {
             Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable)
         );
         assert!(matches!(
-            qualify_sorafs_proof_outcome_transaction_signer_v1(binding, qualified),
+            qualify_sorafs_proof_outcome_transaction_signer_v1(
+                crate::signed_query_test_network_id(),
+                binding,
+                qualified
+            ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderUnavailable)
         ));
     }
@@ -1263,9 +1376,12 @@ mod tests {
             0x81,
         ));
         let binding = provider.expected_binding();
-        let qualified =
-            qualify_sorafs_proof_outcome_transaction_signer_v1(binding.clone(), provider.clone())
-                .expect("qualify immutable-facade fixture");
+        let qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
+            binding.clone(),
+            provider.clone(),
+        )
+        .expect("qualify immutable-facade fixture");
         let substituted = KeyPair::try_from_seed(vec![0x82; 32], Algorithm::Ed25519)
             .expect("derive accessor-substitution fixture");
         *provider.authority.lock().expect("authority fixture lock") =
@@ -1303,6 +1419,7 @@ mod tests {
             0x83,
         ));
         let qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
             provider.expected_binding(),
             provider.clone(),
         )
@@ -1323,6 +1440,7 @@ mod tests {
             0x85,
         ));
         let qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
             provider.expected_binding(),
             provider.clone(),
         )
@@ -1348,6 +1466,7 @@ mod tests {
             0x86,
         ));
         let qualified = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
             provider.expected_binding(),
             provider.clone(),
         )
@@ -1369,6 +1488,7 @@ mod tests {
             0x88,
         ));
         let exact = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
             exact_provider.expected_binding(),
             exact_provider.clone(),
         )
@@ -1384,6 +1504,7 @@ mod tests {
             0x89,
         ));
         let attached = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
             attached_provider.expected_binding(),
             attached_provider.clone(),
         )
@@ -1400,6 +1521,7 @@ mod tests {
             0x8A,
         ));
         let multisig = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            crate::signed_query_test_network_id(),
             multisig_provider.expected_binding(),
             multisig_provider.clone(),
         )

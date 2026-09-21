@@ -474,8 +474,11 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     drop(state.kura.try_publication_lease().unwrap());
     let revalidated = store
         .execute_retained_durable_validation(later.clone(), later.manifest_hash(), &mut service)
+        .unwrap()
+        .into_validated_receipt()
         .unwrap();
-    assert_eq!(revalidated.validated_receipt(), Some(&later_receipt));
+    assert_eq!(revalidated.durable().subject(), later.subject());
+    assert_eq!(revalidated, later_receipt);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
     let published = service

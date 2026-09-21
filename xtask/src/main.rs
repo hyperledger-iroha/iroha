@@ -176,7 +176,7 @@ enum CommandKind {
     ComputeFixtures {
         options: compute::ComputeFixtureOptions,
     },
-    ZkVoteTallyBundle {
+    ZkDevVoteFixture {
         output: PathBuf,
         verify: bool,
         print_hashes: bool,
@@ -1093,13 +1093,13 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
                 verify_address_vectors(&path)?;
             }
         },
-        CommandKind::ZkVoteTallyBundle {
+        CommandKind::ZkDevVoteFixture {
             output,
             verify,
             print_hashes,
             summary_target,
             attestation_target,
-        } => generate_vote_tally_bundle(
+        } => generate_dev_vote_fixture(
             output,
             verify,
             print_hashes,
@@ -2561,7 +2561,7 @@ where
             let target = target.unwrap_or(JsonTarget::File(default_address_vectors_path()?));
             Ok(CommandKind::AddressVectors { target, verify })
         }
-        "zk-vote-tally-bundle" => {
+        "zk-dev-vote-fixture" => {
             let mut output = None;
             let mut verify = false;
             let mut print_hashes = false;
@@ -2601,12 +2601,12 @@ where
                         }
                     }
                     flag => {
-                        return Err(format!("unknown flag for zk-vote-tally-bundle: {flag}").into());
+                        return Err(format!("unknown flag for zk-dev-vote-fixture: {flag}").into());
                     }
                 }
             }
-            let output = output.unwrap_or_else(default_vote_tally_path);
-            Ok(CommandKind::ZkVoteTallyBundle {
+            let output = output.unwrap_or_else(default_dev_vote_fixture_path);
+            Ok(CommandKind::ZkDevVoteFixture {
                 output,
                 verify,
                 print_hashes,
@@ -13933,7 +13933,7 @@ async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Optio
     }
     None
 }
-fn generate_vote_tally_bundle(
+fn generate_dev_vote_fixture(
     output: PathBuf,
     verify: bool,
     print_hashes: bool,
@@ -13952,7 +13952,7 @@ fn generate_vote_tally_bundle(
             let baseline_path = output.join(name);
             if !baseline_path.exists() {
                 return Err(format!(
-                    "expected fixture {} to exist; run `cargo xtask zk-vote-tally-bundle --out {} --print-hashes` first to materialize the baseline artifacts",
+                    "expected fixture {} to exist; run `cargo xtask zk-dev-vote-fixture --out {} --print-hashes` first to materialize the baseline artifacts",
                     baseline_path.display(),
                     output.display()
                 )
@@ -13962,7 +13962,10 @@ fn generate_vote_tally_bundle(
         let temp = TempDir::new()?;
         let _summary = write_bundle(temp.path())?;
         compare_bundle_dirs(temp.path(), &output)?;
-        println!("vote tally bundle matches fixtures at {}", output.display());
+        println!(
+            "development-only membership bundle matches fixtures at {}",
+            output.display()
+        );
         if print_hashes {
             print_bundle_hashes(&output)?;
         }
@@ -14355,8 +14358,8 @@ fn default_nexus_lane_commitment_dir() -> PathBuf {
 fn default_address_vectors_path() -> Result<PathBuf, Box<dyn Error>> {
     normalize_path(Path::new("fixtures/account/address_vectors.json"))
 }
-fn default_vote_tally_path() -> PathBuf {
-    workspace_root().join("fixtures/zk/vote_tally")
+fn default_dev_vote_fixture_path() -> PathBuf {
+    workspace_root().join("fixtures/zk/dev_vote_membership")
 }
 fn default_mochi_bundle_path() -> PathBuf {
     workspace_root().join("target/mochi-bundle")

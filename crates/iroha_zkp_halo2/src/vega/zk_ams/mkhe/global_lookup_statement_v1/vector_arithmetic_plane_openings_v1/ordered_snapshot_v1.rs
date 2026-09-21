@@ -7,13 +7,18 @@
 //! owner on success/error/unwind. Successful reads return that zeroizing owner;
 //! callers own its subsequent use and drop. No plaintext copies or secrets are
 //! retained in this module beyond the leaf handles and one in-flight chunk.
+//! A shared session ledger reserves both file lengths plus their write/seal I/O
+//! before file creation and retains that reservation through snapshot reads.
+//! Cancellation closes the detached files before releasing live-file credits;
+//! attempted authenticated record I/O is never refunded. All source/qPCS owners
+//! still need to share the same ledger in the future production integration.
 //! This does not extend the leaf's erasure, page-cache, fork, or RSS guarantees.
 
 use std::path::Path;
 
 use iroha_crypto::confidential_spool::{
-    CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1,
-    ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
+    CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1,
+    ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
 
 use crate::vega::{
@@ -26,6 +31,11 @@ use super::{
     SNAPSHOT_SLOT_TAG_BYTES_V1, SNAPSHOT_SLOTS_PER_PLANE_V1, VALUE_SLOTS_PER_PLANE_V1,
     plane_mapping_digest_v1,
 };
+
+#[path = "ordered_snapshot_v1/resource_budget_v1.rs"]
+mod resource_budget_v1;
+pub(in crate::vega::zk_ams::mkhe) use resource_budget_v1::OrderedStorageSessionBudgetV1;
+use resource_budget_v1::{OrderedStorageReservationV1, StorageBudgetErrorV1};
 
 const STORAGE_VERSION_V1: u64 = 1;
 const SEGMENTS_V1: usize = 2;
@@ -51,11 +61,12 @@ const _: () = {
 
 /// Coarse storage/shape rejection without paths, secret values, or leaf errors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum OrderedSnapshotErrorV1 {
+pub(in crate::vega::zk_ams::mkhe) enum OrderedSnapshotErrorV1 {
     Shape,
     Context,
     Order,
     Resource,
+    Capacity,
     Storage,
     Semantics,
     Poisoned,
@@ -332,41 +343,127 @@ fn validate_slot_v1(global_slot: u64, bytes: &[u8]) -> Result<(), OrderedSnapsho
     Ok(())
 }
 
+// Field order is deliberate: detached leaf files/keys drop before their spool
+// reservation. The crypto owner unlinks each file while empty before sizing;
+// no path/reopen/descriptor escape is available from this pair. This is not a
+// fork, kernel-cache or physical secure-deletion guarantee.
+struct ReservedSpoolPairV1<T> {
+    spools: [T; SEGMENTS_V1],
+    reservation: OrderedStorageReservationV1,
+}
+
 /// Move-only writer for the complete logical snapshot, never one segment.
 #[must_use = "dropping the pair closes both encrypted spools"]
-pub(super) struct OrderedPlaneSpoolWriterV1 {
-    live: Option<[ConfidentialSpoolWriterV1; SEGMENTS_V1]>,
+pub(in crate::vega::zk_ams::mkhe) struct OrderedPlaneSpoolWriterV1 {
+    live: Option<ReservedSpoolPairV1<ConfidentialSpoolWriterV1>>,
     plan: OrderedPlaneSpoolPlanV1,
     next_slot: u64,
 }
 impl OrderedPlaneSpoolWriterV1 {
     /// Construct both canonical files only after validating the full plan.
-    pub(super) fn create_v1(
+    pub(in crate::vega::zk_ams::mkhe) fn create_v1(
         directory: &Path,
         plane_context: [u8; 32],
+        budget: &mut OrderedStorageSessionBudgetV1,
     ) -> Result<Self, OrderedSnapshotErrorV1> {
         Self::create_with_plan_v1(
             directory,
             OrderedPlaneSpoolPlanV1::canonical_v1(plane_context)?,
+            budget,
         )
     }
+    #[cfg(test)]
+    pub(in crate::vega::zk_ams::mkhe) fn create_tiny_for_test_v1(
+        directory: &Path,
+        context: [u8; 32],
+        budget: &mut OrderedStorageSessionBudgetV1,
+    ) -> Result<Self, OrderedSnapshotErrorV1> {
+        let mapping = plane_mapping_digest_v1().map_err(|_| OrderedSnapshotErrorV1::Context)?;
+        Self::create_with_plan_v1(
+            directory,
+            OrderedPlaneSpoolPlanV1::build_v1(GeometryV1::Tiny, context, mapping)?,
+            budget,
+        )
+    }
+
     fn create_with_plan_v1(
         directory: &Path,
         plan: OrderedPlaneSpoolPlanV1,
+        budget: &mut OrderedStorageSessionBudgetV1,
+    ) -> Result<Self, OrderedSnapshotErrorV1> {
+        Self::create_with_plan_and_leaf_factory_v1(directory, plan, budget, |path, layout| {
+            ConfidentialSpoolWriterV1::create_in_v1(path, layout)
+        })
+    }
+    // One private construction path keeps admission ahead of both real crypto
+    // calls. Tests may fail/panic on the second factory call; no alternate leaf
+    // representation, source authority or public callback is accepted.
+    fn create_with_plan_and_leaf_factory_v1(
+        directory: &Path,
+        plan: OrderedPlaneSpoolPlanV1,
+        budget: &mut OrderedStorageSessionBudgetV1,
+        mut create_leaf: impl FnMut(
+            &Path,
+            ConfidentialSpoolLayoutV1,
+        )
+            -> Result<ConfidentialSpoolWriterV1, ConfidentialSpoolErrorV1>,
     ) -> Result<Self, OrderedSnapshotErrorV1> {
         plan.validate_v1()?;
-        let first = ConfidentialSpoolWriterV1::create_in_v1(directory, plan.layouts[0])
-            .map_err(|_| OrderedSnapshotErrorV1::Storage)?;
-        let second = ConfidentialSpoolWriterV1::create_in_v1(directory, plan.layouts[1])
-            .map_err(|_| OrderedSnapshotErrorV1::Storage)?;
+        let spool_bytes = plan.segments[0]
+            .file_bytes
+            .checked_add(plan.segments[1].file_bytes)
+            .ok_or(OrderedSnapshotErrorV1::Resource)?;
+        // Keep this binding before both leaf bindings: error/unwind destroys
+        // every already-created file before returning its reservation credits.
+        let reservation = budget
+            .reserve_files_v1(spool_bytes)
+            .map_err(|error| match error {
+                StorageBudgetErrorV1::SpoolLimit | StorageBudgetErrorV1::IoLimit => {
+                    OrderedSnapshotErrorV1::Capacity
+                }
+                _ => OrderedSnapshotErrorV1::Resource,
+            })?;
+        let first =
+            create_leaf(directory, plan.layouts[0]).map_err(|_| OrderedSnapshotErrorV1::Storage)?;
+        let second =
+            create_leaf(directory, plan.layouts[1]).map_err(|_| OrderedSnapshotErrorV1::Storage)?;
         Ok(Self {
-            live: Some([first, second]),
+            live: Some(ReservedSpoolPairV1 {
+                spools: [first, second],
+                reservation,
+            }),
             plan,
             next_slot: 0,
         })
     }
+    /// Require the context derived from the retained original source records.
+    pub(in crate::vega::zk_ams::mkhe) fn require_context_v1(
+        &self,
+        context: [u8; 32],
+    ) -> Result<(), OrderedSnapshotErrorV1> {
+        self.live.as_ref().ok_or(OrderedSnapshotErrorV1::Poisoned)?;
+        self.plan.validate_v1()?;
+        if self.plan.plane_context != context {
+            return Err(OrderedSnapshotErrorV1::Context);
+        }
+        Ok(())
+    }
+
+    /// Inspect the existing consuming cursor before extracting any source chunk.
+    pub(in crate::vega::zk_ams::mkhe) fn require_next_slot_v1(
+        &self,
+        expected: u64,
+    ) -> Result<(), OrderedSnapshotErrorV1> {
+        self.live.as_ref().ok_or(OrderedSnapshotErrorV1::Poisoned)?;
+        self.plan.validate_v1()?;
+        if self.next_slot != expected || expected > self.plan.total_slots {
+            return Err(OrderedSnapshotErrorV1::Order);
+        }
+        Ok(())
+    }
+
     /// Consume one exact next slot; any failure discards both retained files.
-    pub(super) fn write_slot_v1(
+    pub(in crate::vega::zk_ams::mkhe) fn write_slot_v1(
         &mut self,
         global_slot: u64,
         chunk: ConfidentialSpoolChunkV1,
@@ -377,7 +474,12 @@ impl OrderedPlaneSpoolWriterV1 {
         }
         let (segment, local) = self.plan.route_v1(global_slot)?;
         validate_slot_v1(global_slot, chunk.as_slice_v1())?;
-        live[segment]
+        // A record writes exactly plaintext bytes plus its authentication tag.
+        // Charge the full request even if a leaf fails after a partial write.
+        live.reservation
+            .charge_reserved_io_v1(SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1 + SNAPSHOT_SLOT_TAG_BYTES_V1)
+            .map_err(|_| OrderedSnapshotErrorV1::Resource)?;
+        live.spools[segment]
             .write_slot_v1(local, chunk)
             .map_err(|_| OrderedSnapshotErrorV1::Storage)?;
         self.next_slot = self
@@ -388,22 +490,40 @@ impl OrderedPlaneSpoolWriterV1 {
         Ok(())
     }
     /// Authenticate and consume both complete files; partial success cannot escape.
-    pub(super) fn seal_v1(self) -> Result<OrderedPlaneSpoolSnapshotV1, OrderedSnapshotErrorV1> {
+    pub(in crate::vega::zk_ams::mkhe) fn seal_v1(
+        self,
+    ) -> Result<OrderedPlaneSpoolSnapshotV1, OrderedSnapshotErrorV1> {
         let live = self.live.ok_or(OrderedSnapshotErrorV1::Poisoned)?;
         if self.next_slot != self.plan.total_slots {
             return Err(OrderedSnapshotErrorV1::Order);
         }
-        let [first, second] = live;
+        // Declare the reservation before extracted leaves so every early return
+        // closes both remaining leaf/snapshot handles before releasing credits.
+        let mut reservation = live.reservation;
+        let [first, second] = live.spools;
+        // Each leaf seal authenticates/hash-reads its complete ciphertext file.
+        reservation
+            .charge_reserved_io_v1(self.plan.segments[0].file_bytes)
+            .map_err(|_| OrderedSnapshotErrorV1::Resource)?;
         let first = first
             .seal_v1()
             .map_err(|_| OrderedSnapshotErrorV1::Storage)?;
+        reservation
+            .charge_reserved_io_v1(self.plan.segments[1].file_bytes)
+            .map_err(|_| OrderedSnapshotErrorV1::Resource)?;
         let second = second
             .seal_v1()
             .map_err(|_| OrderedSnapshotErrorV1::Storage)?;
+        reservation
+            .require_sealed_v1()
+            .map_err(|_| OrderedSnapshotErrorV1::Resource)?;
         let leaf_digests = [*first.snapshot_digest_v1(), *second.snapshot_digest_v1()];
         let digest = aggregate_digest_v1(&self.plan, leaf_digests)?;
         let snapshot = OrderedPlaneSpoolSnapshotV1 {
-            live: Some([first, second]),
+            live: Some(ReservedSpoolPairV1 {
+                spools: [first, second],
+                reservation,
+            }),
             plan: self.plan,
             leaf_digests,
             digest,
@@ -443,8 +563,8 @@ fn aggregate_digest_v1(
 
 /// One retained authenticated pair; its digest alone cannot authorize reads.
 #[must_use = "dropping the snapshot closes both encrypted files"]
-pub(super) struct OrderedPlaneSpoolSnapshotV1 {
-    live: Option<[ConfidentialSpoolSnapshotV1; SEGMENTS_V1]>,
+pub(in crate::vega::zk_ams::mkhe) struct OrderedPlaneSpoolSnapshotV1 {
+    live: Option<ReservedSpoolPairV1<ConfidentialSpoolSnapshotV1>>,
     plan: OrderedPlaneSpoolPlanV1,
     leaf_digests: [[u8; 32]; SEGMENTS_V1],
     digest: [u8; 32],
@@ -452,7 +572,7 @@ pub(super) struct OrderedPlaneSpoolSnapshotV1 {
 impl OrderedPlaneSpoolSnapshotV1 {
     fn validate_live_v1(&self) -> Result<(), OrderedSnapshotErrorV1> {
         let live = self.live.as_ref().ok_or(OrderedSnapshotErrorV1::Poisoned)?;
-        self.validate_pair_v1(live)
+        self.validate_pair_v1(&live.spools)
     }
     fn validate_pair_v1(
         &self,
@@ -477,19 +597,37 @@ impl OrderedPlaneSpoolSnapshotV1 {
         Ok(())
     }
     /// Return the actual ordered encrypted snapshot identity, never a proof receipt.
-    pub(super) fn snapshot_digest_v1(&self) -> Result<[u8; 32], OrderedSnapshotErrorV1> {
+    pub(in crate::vega::zk_ams::mkhe) fn snapshot_digest_v1(
+        &self,
+    ) -> Result<[u8; 32], OrderedSnapshotErrorV1> {
         self.validate_live_v1()?;
         Ok(self.digest)
     }
     /// Authenticate and validate a global slot while retaining one logical owner.
-    pub(super) fn read_slot_v1(
+    pub(in crate::vega::zk_ams::mkhe) fn read_slot_v1(
         &mut self,
         global_slot: u64,
     ) -> Result<ConfidentialSpoolChunkV1, OrderedSnapshotErrorV1> {
         let mut live = self.live.take().ok_or(OrderedSnapshotErrorV1::Poisoned)?;
-        self.validate_pair_v1(&live)?;
+        self.validate_pair_v1(&live.spools)?;
         let (segment, local) = self.plan.route_v1(global_slot)?;
-        let chunk = live[segment]
+        // Bounds/context preflight is complete before admitting an actual read.
+        // Admitted retries are new charges; failed/partial I/O is never refunded.
+        match live
+            .reservation
+            .charge_read_io_v1(SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1 + SNAPSHOT_SLOT_TAG_BYTES_V1)
+        {
+            Ok(()) => {}
+            Err(StorageBudgetErrorV1::IoLimit) => {
+                // Another writer may still own unspent I/O reservations. Local
+                // capacity pressure is not corrupted evidence: retain both exact
+                // files and their identity, without performing or charging a read.
+                self.live = Some(live);
+                return Err(OrderedSnapshotErrorV1::Capacity);
+            }
+            Err(_) => return Err(OrderedSnapshotErrorV1::Resource),
+        }
+        let chunk = live.spools[segment]
             .read_slot_v1(local, self.plan.contexts[segment])
             .map_err(|_| OrderedSnapshotErrorV1::Storage)?;
         validate_slot_v1(global_slot, chunk.as_slice_v1())?;
@@ -501,3 +639,14 @@ impl OrderedPlaneSpoolSnapshotV1 {
 #[cfg(test)]
 #[path = "ordered_snapshot_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ordered_snapshot_v1/resource_budget_storage_tests_v1.rs"]
+mod resource_budget_storage_tests_v1;
+
+#[path = "ordered_snapshot_v1/q_mask_s_file_v1.rs"]
+mod q_mask_s_file_v1;
+pub(in crate::vega::zk_ams::mkhe) use q_mask_s_file_v1::{
+    QMaskSFileMemoryV1, QMaskSFilePlanV1, QMaskSFileV1, SealedQMaskSFileV1,
+    WrittenQMaskSBlockFileV1,
+};

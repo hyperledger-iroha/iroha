@@ -686,10 +686,7 @@ impl InstructionDispatch for InstructionBox {
             sorafs::visit_bind_manifest_alias(executor, isi);
             return;
         }
-        if let Some(isi) =
-            any.downcast_ref::<iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody>()
-        {
-            sorafs::visit_mutate_stream_token_custody(executor, isi);
+        if sorafs::visit_custody_instruction(executor, self) {
             return;
         }
         if let Some(isi) = any.downcast_ref::<RegisterCapacityDeclaration>() {
@@ -1611,23 +1608,7 @@ pub mod sorafs {
         }
         deny!(executor, "Can't file SoraFS capacity dispute");
     }
-    /// Mutate stream-token custody only with the exact provider-scoped permission.
-    pub fn visit_mutate_stream_token_custody<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody,
-    ) {
-        let permission =
-            iroha_executor_data_model::permission::sorafs::CanManageSorafsStreamTokenCustody {
-                provider_id: isi.provider_id,
-            };
-        if permission.is_owned_by(&executor.context().authority, executor.host()) {
-            execute!(executor, isi);
-        }
-        deny!(
-            executor,
-            "Exact provider-scoped stream-token custody permission is required"
-        );
-    }
+    include!("sorafs_custody.rs");
     /// Resolve an authoritative capacity dispute when permitted.
     pub fn visit_resolve_capacity_dispute<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2342,6 +2323,11 @@ pub mod domain {
             | AnyPermission::CanOperateSorafsPopIssuer(_)
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
             | AnyPermission::CanManageSorafsStreamTokenCustody(_)
+            | AnyPermission::CanManageSorafsFinalPromotionCustody(_)
+            | AnyPermission::CanOperateSorafsFinalPromotion(_)
+            | AnyPermission::CanCheckSorafsFinalPromotion(_)
+            | AnyPermission::CanManageSorafsFinalPromotionAccountCustody(_)
+            | AnyPermission::CanCheckSorafsFinalPromotionAccountCustody(_)
             | AnyPermission::CanManageSoranetVpnQuoteIssuers(_)
             | AnyPermission::CanIssueSoranetVpnQuote(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
@@ -2815,6 +2801,11 @@ pub mod account {
             | AnyPermission::CanOperateSorafsPopIssuer(_)
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
             | AnyPermission::CanManageSorafsStreamTokenCustody(_)
+            | AnyPermission::CanManageSorafsFinalPromotionCustody(_)
+            | AnyPermission::CanOperateSorafsFinalPromotion(_)
+            | AnyPermission::CanCheckSorafsFinalPromotion(_)
+            | AnyPermission::CanManageSorafsFinalPromotionAccountCustody(_)
+            | AnyPermission::CanCheckSorafsFinalPromotionAccountCustody(_)
             | AnyPermission::CanManageSoranetVpnQuoteIssuers(_)
             | AnyPermission::CanIssueSoranetVpnQuote(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
@@ -3125,6 +3116,11 @@ pub mod asset_definition {
             | AnyPermission::CanOperateSorafsPopIssuer(_)
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
             | AnyPermission::CanManageSorafsStreamTokenCustody(_)
+            | AnyPermission::CanManageSorafsFinalPromotionCustody(_)
+            | AnyPermission::CanOperateSorafsFinalPromotion(_)
+            | AnyPermission::CanCheckSorafsFinalPromotion(_)
+            | AnyPermission::CanManageSorafsFinalPromotionAccountCustody(_)
+            | AnyPermission::CanCheckSorafsFinalPromotionAccountCustody(_)
             | AnyPermission::CanManageSoranetVpnQuoteIssuers(_)
             | AnyPermission::CanIssueSoranetVpnQuote(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
@@ -4543,6 +4539,11 @@ pub mod trigger {
             | AnyPermission::CanOperateSorafsPopIssuer(_)
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
             | AnyPermission::CanManageSorafsStreamTokenCustody(_)
+            | AnyPermission::CanManageSorafsFinalPromotionCustody(_)
+            | AnyPermission::CanOperateSorafsFinalPromotion(_)
+            | AnyPermission::CanCheckSorafsFinalPromotion(_)
+            | AnyPermission::CanManageSorafsFinalPromotionAccountCustody(_)
+            | AnyPermission::CanCheckSorafsFinalPromotionAccountCustody(_)
             | AnyPermission::CanManageSoranetVpnQuoteIssuers(_)
             | AnyPermission::CanIssueSoranetVpnQuote(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
@@ -4616,26 +4617,7 @@ pub mod trigger {
                 "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
             );
         }
-        fn sora_permissions() -> Vec<AnyPermission> {
-            vec![
-                AnyPermission::CanBindSorafsAlias(CanBindSorafsAlias),
-                AnyPermission::CanDeclareSorafsCapacity(CanDeclareSorafsCapacity),
-                AnyPermission::CanSubmitSorafsTelemetry(CanSubmitSorafsTelemetry),
-                AnyPermission::CanFileSorafsCapacityDispute(CanFileSorafsCapacityDispute),
-                AnyPermission::CanIssueSorafsReplicationOrder(CanIssueSorafsReplicationOrder),
-                AnyPermission::CanCompleteSorafsReplicationOrder(CanCompleteSorafsReplicationOrder),
-                AnyPermission::CanManageSorafsModeration(CanManageSorafsModeration),
-                AnyPermission::CanManageSorafsPopRegistry(CanManageSorafsPopRegistry),
-                AnyPermission::CanOperateSorafsPopIssuer(CanOperateSorafsPopIssuer),
-                AnyPermission::CanSetSorafsPricing(CanSetSorafsPricing),
-                AnyPermission::CanSetSorafsReservePolicy(CanSetSorafsReservePolicy),
-                AnyPermission::CanUpsertSorafsProviderCredit(CanUpsertSorafsProviderCredit),
-                AnyPermission::CanManageSoranetVpnQuoteIssuers(CanManageSoranetVpnQuoteIssuers),
-                AnyPermission::CanIssueSoranetVpnQuote(CanIssueSoranetVpnQuote),
-                AnyPermission::CanIngestSoranetPrivacy(CanIngestSoranetPrivacy),
-                AnyPermission::CanManageSccpGovernance(CanManageSccpGovernance),
-            ]
-        }
+        include!("sora_permission_association_tests.rs");
         #[test]
         fn asset_metadata_permissions_not_trigger_associated() {
             let trigger_id =
@@ -4666,18 +4648,6 @@ pub mod trigger {
             );
         }
         #[test]
-        fn sora_permissions_not_trigger_associated() {
-            let trigger_id =
-                TriggerId::from_str("metadata_cleanup").expect("trigger id must be valid");
-            for permission in sora_permissions() {
-                let permission = Permission::from(permission);
-                assert!(
-                    !is_permission_trigger_associated(&permission, &trigger_id),
-                    "Sora-specific permissions must not bind to triggers"
-                );
-            }
-        }
-        #[test]
         fn default_executor_forwards_the_complete_vpn_lifecycle() {
             let source = include_str!("mod.rs");
             let start = source
@@ -4696,34 +4666,6 @@ pub mod trigger {
                 assert!(
                     dispatch.contains(instruction),
                     "default executor VPN lifecycle dispatch omitted {instruction}"
-                );
-            }
-        }
-        #[test]
-        fn sora_permissions_not_domain_account_or_definition_associated() {
-            let domain_id =
-                DomainId::try_new("test", "universal").expect("domain id must be valid");
-            let account_id = sample_account_id(0x12, &domain_id);
-            let asset_definition_id = AssetDefinitionId::derive_from_components(
-                DomainId::try_new("test", "universal").unwrap(),
-                "token".parse().unwrap(),
-            );
-            for permission in sora_permissions() {
-                let permission = Permission::from(permission);
-                assert!(
-                    !domain::is_permission_domain_associated(&permission, &domain_id, &[]),
-                    "Sora-specific permissions must not bind to domains"
-                );
-                assert!(
-                    !account::is_permission_account_associated(&permission, &account_id),
-                    "Sora-specific permissions must not bind to accounts"
-                );
-                assert!(
-                    !asset_definition::is_permission_asset_definition_associated(
-                        &permission,
-                        &asset_definition_id
-                    ),
-                    "Sora-specific permissions must not bind to asset definitions"
                 );
             }
         }
@@ -4970,48 +4912,7 @@ pub mod trigger {
     }
 }
 include!("sorafs_permission_tests.rs");
-/// Permission-checked visitors for direct permission grants and revocations.
-pub mod permission {
-    use super::*;
-    macro_rules! impl_execute {
-        ($executor:ident, $isi:ident, $method:ident, $isi_type:ty) => {
-            let account_id = $isi.destination().clone();
-            let permission = $isi.object();
-            if let Ok(any_permission) = AnyPermission::try_from(permission) {
-                if !$executor.context().curr_block.is_genesis() {
-                    if let Err(error) = crate::permission::ValidateGrantRevoke::$method(
-                        &any_permission,
-                        &$executor.context().authority,
-                        $executor.context(),
-                        $executor.host(),
-                    ) {
-                        deny!($executor, error);
-                    }
-                }
-                let isi = &<$isi_type>::account_permission(any_permission, account_id);
-                execute!($executor, isi);
-            }
-            deny!(
-                $executor,
-                ValidationFail::NotPermitted(format!("{permission:?}: Unknown permission"))
-            );
-        };
-    }
-    /// Grants an account-level permission after validating the caller's authority.
-    pub fn visit_grant_account_permission<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &Grant<Permission, Account>,
-    ) {
-        impl_execute!(executor, isi, validate_grant, Grant<Permission, Account>);
-    }
-    /// Revokes an account-level permission once the caller passes permission checks.
-    pub fn visit_revoke_account_permission<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &Revoke<Permission, Account>,
-    ) {
-        impl_execute!(executor, isi, validate_revoke, Revoke<Permission, Account>);
-    }
-}
+include!("permission_visitors.rs");
 include!("dpn_permission_tests.rs");
 /// Permission-checked visitor for executor upgrade instructions.
 pub mod executor {

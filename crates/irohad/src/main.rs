@@ -6636,6 +6636,8 @@ fn snapshot_read_error_is_recoverable_for_bootstrap(
 ) -> bool {
     match error {
         TryReadSnapshotError::IO(_, _)
+        | TryReadSnapshotError::PayloadAllocation(_)
+        | TryReadSnapshotError::PayloadAllocatorFailure { .. }
         | TryReadSnapshotError::NetworkIdMismatch { .. }
         | TryReadSnapshotError::ZkConfigInstall(_) => false,
         TryReadSnapshotError::MismatchedHeight { .. } => hard_fork_snapshot_bootstrap,
@@ -6963,6 +6965,32 @@ mod snapshot_read_error_tests {
             &incompatible_zk,
             true,
         ));
+    }
+    #[test]
+    fn snapshot_read_buffer_refusal_never_authorizes_empty_state_fallback() {
+        let budget = mv::allocation::AllocationBudget::new(1);
+        let _occupied = budget.try_reserve_bytes(1).unwrap();
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        for error in [
+            TryReadSnapshotError::PayloadAllocation(refusal),
+            TryReadSnapshotError::PayloadAllocation(
+                mv::allocation::AllocationRefusal::DemandOverflow,
+            ),
+            TryReadSnapshotError::PayloadAllocatorFailure { requested_bytes: 1 },
+        ] {
+            for bootstrap in [false, true] {
+                assert!(!snapshot_read_error_is_recoverable_for_bootstrap(
+                    &error, bootstrap
+                ));
+                for emergency_fast in [false, true] {
+                    assert!(!snapshot_failure_allows_empty_state_fallback(
+                        &error,
+                        bootstrap,
+                        emergency_fast
+                    ));
+                }
+            }
+        }
     }
     #[test]
     fn snapshot_integrity_errors_are_recoverable() {
@@ -8063,9 +8091,13 @@ impl Iroha {
         } else {
             freeze_lane_manifests_for_startup_replay(&config.nexus)
                 .map_err(|error| Report::new(error).change_context(StartError::InitKura))
-                .map_err(|report| report.attach("lane manifest registry is not ready before snapshot restoration"))?
+                .map_err(|report| {
+                    report.attach("lane manifest registry is not ready before snapshot restoration")
+                })?
         };
         let mut loaded_state_from_snapshot = false;
+        let snapshot_read_buffer_budget =
+            mv::allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
         let snapshot_result = if snapshot_mode_allows_restore(config.snapshot.mode) {
             try_read_snapshot_with_bootstrap_policy(
                 config.snapshot.store_dir.resolve_relative_path(),
@@ -8082,6 +8114,7 @@ impl Iroha {
                 &config.snapshot.bootstrap,
                 #[cfg(feature = "telemetry")]
                 state_telemetry.clone(),
+                &snapshot_read_buffer_budget,
             )
         } else {
             iroha_logger::info!("Snapshot restore is disabled by configuration");
@@ -9740,8 +9773,12 @@ impl Iroha {
                 || config.common.key_pair.clone(),
                 |key| iroha_crypto::KeyPair::from(key.clone()),
             );
-            let snapshot_maker =
-                SnapshotMaker::from_config(&config.snapshot, Arc::clone(&state), signing_key);
+            let snapshot_maker = SnapshotMaker::from_config(
+                &config.snapshot,
+                Arc::clone(&state),
+                signing_key,
+                snapshot_read_buffer_budget,
+            );
             supervisor.monitor(SnapshotMaker::start(
                 snapshot_maker,
                 Arc::clone(&state),
@@ -9783,8 +9820,8 @@ impl Iroha {
         let sorafs_governance_dag_signer = runtime_deps.sorafs_governance_dag_signer.clone();
         let sorafs_governance_dag_checkpoint_store =
             runtime_deps.sorafs_governance_dag_checkpoint_store.clone();
-        let sorafs_stream_token_hardware_client =
-            runtime_deps.sorafs_stream_token_hardware_client.clone();
+        let sorafs_stream_token_signer_client =
+            runtime_deps.sorafs_stream_token_signer_client.clone();
         let sorafs_stream_token_state_observer =
             runtime_deps.sorafs_stream_token_state_observer.clone();
         let sorafs_stream_token_approved_anchor = runtime_deps.sorafs_stream_token_approved_anchor;
@@ -10687,8 +10724,8 @@ impl Iroha {
         } else {
             runtime_deps
         };
-        let runtime_deps = if let Some(client) = sorafs_stream_token_hardware_client {
-            runtime_deps.with_sorafs_stream_token_hardware_client(client)
+        let runtime_deps = if let Some(client) = sorafs_stream_token_signer_client {
+            runtime_deps.with_sorafs_stream_token_signer_client(client)
         } else {
             runtime_deps
         };
@@ -15647,7 +15684,7 @@ mod tests {
     #[test]
     fn standard_launcher_does_not_derive_six_sorafs_authority_signers_from_node_key() {
         let dependencies = IrohaRuntimeDeps::default();
-        assert!(dependencies.sorafs_stream_token_hardware_client.is_none());
+        assert!(dependencies.sorafs_stream_token_signer_client.is_none());
         assert!(dependencies.sorafs_stream_token_state_observer.is_none());
         assert!(dependencies.sorafs_stream_token_approved_anchor.is_none());
         assert!(dependencies.sorafs_proof_outcome_signer.is_none());
@@ -16608,7 +16645,7 @@ mod tests {
             .filter(|character| !character.is_whitespace())
             .collect();
         for builder in [
-            "with_sorafs_stream_token_hardware_client",
+            "with_sorafs_stream_token_signer_client",
             "with_sorafs_stream_token_state_observer",
             "with_sorafs_stream_token_approved_anchor",
             "with_sorafs_proof_outcome_signer",
@@ -18896,9 +18933,12 @@ mod tests {
                 .expect("fixture execution policy must be valid");
             let baseline = freeze_lane_manifests_for_startup_replay(&config.nexus)
                 .expect("fixture configured manifest baseline");
-            let startup_policies =
-                install_lane_policies_for_startup_replay(&mut state, config.nexus.clone(), &baseline)
-                    .expect("fixture lane policies must be ready before publishing geometry");
+            let startup_policies = install_lane_policies_for_startup_replay(
+                &mut state,
+                config.nexus.clone(),
+                &baseline,
+            )
+            .expect("fixture lane policies must be ready before publishing geometry");
             apply_state_geometry_config_before_kura_replay(&mut state, &startup_policies)
                 .expect("fixture Nexus geometry must be valid");
             (validation_root, state, kura)

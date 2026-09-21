@@ -5215,6 +5215,10 @@ impl V2ApplyService {
             .and_then(|bundle| bundle.merge_entry.as_ref());
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
         let mut voting_block = None;
+        #[cfg(test)]
+        self.test_failures
+            .candidate_executions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let prepared = ValidBlock::validate_and_prepare_sumeragi_v2_candidate_keep_voting_block(
             body.clone(),
             &topology,
@@ -5246,17 +5250,35 @@ impl V2ApplyService {
     }
     /// Revalidate one checksummed restart marker before it can restore vote authority.
     ///
-    /// An unfinished height re-executes the ordinary deterministic candidate
-    /// validator. If Kura already crossed finality, replaying against the
-    /// advanced world state would be both incorrect and needlessly expensive;
-    /// the cryptographically verified finality artifact instead authenticates
-    /// the exact proposal subject and execution commitment.
+    /// An undecided height re-executes the ordinary candidate validator. A
+    /// finalized marker instead authenticates the exact canonical execution
+    /// image. Finality can precede State publication: when State is still at
+    /// H-1, the existing serialized Apply path performs the sole recovery
+    /// execution. At H, Apply only repairs durable completion. Marker replay
+    /// must not execute either finalized case or infer State application from
+    /// Kura finality alone.
     pub(crate) fn revalidate_recovered_candidate(
         &self,
         context: &wire::HeightContext,
         body: &SignedBlock,
     ) -> Result<wire::ExecutionCommitment, V2ApplyError> {
-        if let Some(artifact) = self.kura.v2_finality_artifact(context.height)? {
+        let height = usize::try_from(context.height).map_err(|_| V2ApplyError::HeightOverflow)?;
+        let height = NonZeroUsize::new(height).ok_or(V2ApplyError::HeightOverflow)?;
+        let state_height = self.state.committed_height();
+        if state_height > height.get() {
+            return Err(V2ApplyError::StateAhead {
+                state_height,
+                decision_height: height.get(),
+            });
+        }
+        if state_height < height.get() && state_height.saturating_add(1) != height.get() {
+            return Err(V2ApplyError::StateGap {
+                state_height,
+                decision_height: height.get(),
+            });
+        }
+        if let Some(verified) = self.kura.v2_finality_apply_authority(context.height)? {
+            let artifact = verified.artifact();
             if artifact.height_context != *context || !body.is_resultless_proposal() {
                 return Err(V2ApplyError::Validation(
                     "recovered candidate differs from its verified finality context".to_owned(),
@@ -5276,7 +5298,33 @@ impl V2ApplyService {
                 ));
             }
             artifact.commit_qc.execution_commitment.validate()?;
+            // The retained header/wire digest authenticates finality even when
+            // the body is unavailable. Marker promotion additionally needs the
+            // actual canonical result-bearing image, read under that same
+            // verified authority rather than the resultless proposal or cache.
+            let executed = self
+                .kura
+                .read_block_body_with_verified_finality(height, &verified)
+                .map_err(V2ApplyError::CanonicalStorageRead)?
+                .ok_or_else(|| {
+                    V2ApplyError::LocalCanonicalState(
+                        "finalized marker recovery requires its canonical execution image"
+                            .to_owned(),
+                    )
+                })?;
+            if executed.is_resultless_proposal() {
+                return Err(V2ApplyError::LocalCanonicalState(
+                    "finalized marker recovery found a resultless canonical execution image"
+                        .to_owned(),
+                ));
+            }
             return Ok(artifact.commit_qc.execution_commitment);
+        }
+        if state_height == height.get() {
+            return Err(V2ApplyError::LocalCanonicalState(
+                "applied marker recovery requires its exact finalized execution evidence"
+                    .to_owned(),
+            ));
         }
         self.validate_candidate(context, body)
     }
@@ -5340,6 +5388,10 @@ impl V2ApplyService {
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
         let mut voting_block = None;
         let mut pipeline_events = Vec::new();
+        #[cfg(test)]
+        self.test_failures
+            .candidate_executions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (valid_block, mut state_block) =
             ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 body,

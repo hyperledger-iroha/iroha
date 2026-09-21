@@ -33,9 +33,9 @@ summary: Current SF-6 release automation and QA surfaces.
      JavaScript, JVM/Android, Swift, C#, Python, and Rust crate artifacts.
 5. **Signing & Attestation**
    - Governed Ed25519 signature over the canonical aggregate release manifest
-     from `signing_provider=authenticated_external_signer` with exact
-     `signing_backend=software`, verified by the SHA256-pinned native validator;
-     successful output is `signer_qualification=software-key-qualified`.
+     from `signing_provider=authenticated_external_signer`, verified by the
+     SHA256-pinned native validator. Signer implementation and key storage are
+     operator choices; the signature establishes no software or hardware origin claim.
    - OIDC/cosign attestations for build provenance only.
    - SBOM/provenance generation for artifacts that have committed packaging hooks.
 6. **Release Publishing**
@@ -69,7 +69,7 @@ summary: Current SF-6 release automation and QA surfaces.
   exact `sorafs-cli-v<version>` tag or reviewed manual dispatch, it builds the
   canonical manifest for the exact five candidate trees twice and uploads the
   byte-identical unsigned manifest for an operator to sign outside GitHub with
-  the independently administered external software Ed25519 signer. The
+  the independently administered external Ed25519 signer. The
   `sorafs-release-authentication` environment
   then admits a protected `sorafs-release-auth` runner only after the raw
   signature, raw public key, reviewed key fingerprint, native verifier path,
@@ -137,7 +137,7 @@ summary: Current SF-6 release automation and QA surfaces.
   intentionally absent: the final package manifest and checksum sidecars enter
   the canonical aggregate `release_manifest.json`, and only that final
   evidence-complete inventory is signed by the independently administered
-  external software Ed25519 signer through
+  external Ed25519 signer through
   `scripts/release_manifest_signing.py`.
   Packager options must provide explicit non-option-shaped values. Prebuilt
   binaries and the checked FFI header are rejected when they are symlinks,
@@ -386,12 +386,12 @@ external-evidence requirement.
   digest, and only then creates GitHub/Sigstore SLSA build
   provenance over the complete candidate set. The offline provenance bundle is
   retained with the candidate and verified together with the binaries. It does
-  not replace the aggregate external software Ed25519 signature or native
+  not replace the aggregate external Ed25519 signature or native
   verification receipt. Public promotion
   still requires a clean hosted run and the deployment/package canaries; source
   configuration alone is not release evidence.
 - The five-target CLI archive implementation is present, but a candidate is not source-complete until the strict source-file budget gate passes. Its hosted-run
-  artifacts, authenticated external software Ed25519 manifest signature and
+  artifacts, authenticated external Ed25519 manifest signature and
   reviewed fingerprint,
   GitHub OIDC/Sigstore attestations, registry publication/withdrawal receipts,
   and deployed provider/gateway smoke records are external evidence. The

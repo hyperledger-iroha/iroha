@@ -6,6 +6,9 @@ mod archive_index;
 mod fixture_write_tests;
 pub use archive_capture::ArchiveCaptureWait;
 pub mod cursor;
+pub mod final_promotion_account_custody;
+/// Coherent native deployment custody and durable final-promotion operation history.
+pub mod final_promotion_authority;
 pub mod index_status;
 mod journal_io;
 pub mod pagination;
@@ -15,7 +18,16 @@ pub mod projection_rowset;
 pub mod projection_shard;
 pub mod provider_ingest_finalized;
 pub mod reputation_finalized;
+pub(crate) mod signer_check;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub mod signer_check_test_fixture;
+pub(crate) mod signer_custody_history;
+/// Same-State durable block and revision-4 finality verification for signer consumers.
+pub mod signer_finality;
 pub mod snapshot;
+/// Explicit funded public-ballot setup; never production admission or finalized evidence.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub mod standalone_plain_test_fixture;
 pub mod store;
 /// Same-State historical native StreamToken custody control reader.
 pub mod stream_token_custody;

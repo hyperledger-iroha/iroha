@@ -7996,7 +7996,7 @@ def test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io() -> None:
     assert "validate_existing_file_path" in release_cli
     assert 'validate_existing_file_path "aggregate release manifest"' in release_cli
     assert re.search(
-        r'validate_existing_executable_file_path\s*\\\s*"authenticated external software Ed25519 signer adapter"\s*\\\s*"\$external_signer"',
+        r'validate_existing_executable_file_path\s*\\\s*"authenticated external Ed25519 signer adapter"\s*\\\s*"\$external_signer"',
         release_cli,
     )
     assert '"native release-manifest verifier"' in release_cli
@@ -8226,15 +8226,6 @@ def test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io() -> None:
     )
 
 
-def test_sorafs_release_http_clients_do_not_follow_redirects() -> None:
-    cli = read(IROHA_CLI_SORAFS_RS)
-    run_impls = ("TransparencyExplorerCanaryArgs", "TransparencyPublicationCanaryArgs", "ModerationQuarantineNotificationsDeliverArgs", "ModerationQuarantineNotificationsCanaryArgs", "ModerationQuarantineOperatorCanaryArgs")
-    assert all(".redirect(reqwest::redirect::Policy::none())" in cli.split(f"impl Run for {name}", 1)[1].split("\n}", 1)[0] for name in run_impls)
-    assert all(name in cli for name in ("fn moderation_quarantine_notifications_run_does_not_follow_cross_origin_redirects()", "fn sorafs_get_canary_runs_do_not_follow_cross_origin_redirects()"))
-    xtask = read(REPO_ROOT / "xtask" / "src" / "sorafs.rs"); probe = xtask.split("fn probe_headers_via_http(", 1)[1].split("\n}", 1)[0]
-    assert "Client::builder().redirect(reqwest::redirect::Policy::none())" in probe and "fn gateway_probe_rejects_cross_origin_head_and_get_redirects()" in xtask
-
-
 def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
     release_gate = read(REPO_ROOT / "ci" / "check_sorafs_cli_release.sh"); release_workflow = read(REPO_ROOT / ".github" / "workflows" / "sorafs-cli-release.yml"); manifest = read(SCRIPTS_DIR / "generate_sorafs_cli_release_manifest.py"); manifest_test = read(SCRIPTS_DIR / "tests" / "generate_sorafs_cli_release_manifest_test.py"); candidate_packager = read(SCRIPTS_DIR / "package_sorafs_cli_candidate.py"); candidate_packager_test = read(SCRIPTS_DIR / "tests" / "package_sorafs_cli_candidate_test.py"); provider_ingest_test = read(REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_provider_ingest_runtime" / "tests" / "quarantine_restart.rs"); provider_ingest_parent = read(REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_provider_ingest_runtime" / "tests.rs"); provider_ingest_contract = read(SCRIPTS_DIR / "tests" / "check_sorafs_provider_ingest_runtime_contract_test.py")
 
@@ -8271,7 +8262,7 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
     assert "scripts/tests/package_iroha_cli_release_test.py" in release_gate
     assert "python/iroha_python/scripts/release_smoke.sh" in release_gate
     required = (
-        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_release_http_clients_do_not_follow_redirects", "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_production_readiness_aggregate_gate_is_documented", "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs",
+        "scripts/tests/check_sorafs_rust_owner_contract_test.py", "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_production_readiness_aggregate_gate_is_documented", "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs",
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io",
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_validate_release_packager_rejects_symlink_stage_entries",
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_cli_release_gate_runs_helper_adversarial_tests",
@@ -20033,7 +20024,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "Aggregate promotion also rechecks the lane-proven reference SDK release digest relationships: manifest-bound artifact fingerprints must match `valid_release_manifest_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`, and governance-approval release-key fingerprints must match `valid_release_key_fingerprints` before final promotion can report ready.",
         "The reference SDK release gate fail-closes when more than one valid release manifest, policy, or release key anchor appears, and clears the mixed `valid_release_manifest_digests`, `valid_policy_digests`, or `valid_release_key_fingerprints` set before aggregate promotion can report ready.",
         "Release-manifest, policy, and release-key binding failures are recorded on the offending artifact before required-kind validity is computed, so the JSON summary matches the fail-closed release decision.",
-        "Signed-manifest policy, key, hardware backend, positive revisions, and finalized operation anchors are derived only from a freshly verified native hardware receipt. Governance approval separately requires policy and `--public-key-fingerprint-hex` inputs",
+        "Signed-manifest policy, key, positive revisions, and finalized operation anchors are derived only from a freshly verified native operation receipt. Governance approval separately requires policy and `--public-key-fingerprint-hex` inputs",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
         "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, Swift, and C# wrappers",
         "Archive live operator smoke evidence for the published `iroha` archives and cookbook replay before declaring SF-11 fully released",
@@ -23657,105 +23648,6 @@ def test_appeal_finance_live_dashboard_and_reconciliation_stay_open_in_docs() ->
     assert missing == []
 
 
-def test_commit_reveal_authoritative_ledger_foundation_is_pinned() -> None:
-    model = read(
-        REPO_ROOT
-        / "crates"
-        / "iroha_data_model"
-        / "src"
-        / "sorafs"
-        / "moderation_ledger.rs"
-    )
-    instructions = read(
-        REPO_ROOT / "crates" / "iroha_data_model" / "src" / "isi" / "sorafs.rs"
-    )
-    query_root = REPO_ROOT / "crates" / "iroha_data_model" / "src" / "query"
-    queries = read(query_root / "mod.rs") + read(query_root / "domain_queries.rs")
-    core_root = REPO_ROOT / "crates" / "iroha_core" / "src" / "smartcontracts" / "isi"
-    core_source = read(core_root / "sorafs_moderation.rs")
-    assert 'include!("sorafs/moderation_tail_tests.rs");' in core_source
-    core = core_source + read(core_root / "sorafs" / "moderation_tail_tests.rs")
-    executor_permission = read(
-        REPO_ROOT
-        / "crates"
-        / "iroha_executor_data_model"
-        / "src"
-        / "permission.rs"
-    )
-
-    for marker in (
-        "pub struct ModerationLedgerPolicyV1",
-        "pub struct ModerationAppealIntakeV1",
-        "pub struct ModerationPoPRegistrySnapshotV1",
-        "pub struct ModerationJurorEligibilityRecordV1",
-        "pub struct ModerationPanelSelectionV1",
-        "pub struct ModerationAppealRecordV1",
-        "pub enum ModerationAppealStatusV1",
-        "pub struct ModerationCaseRecordV1",
-        "pub struct ModerationCommitRecordV1",
-        "pub struct ModerationRevealRecordV1",
-        "pub struct ModerationChallengeRecordV1",
-        "pub struct ModerationOutcomeRecordV1",
-        "pub struct ModerationNoShowRecordV1",
-        "pub enum ModerationNoShowKindV1",
-        "pub enum ModerationOutcomeKindV1",
-        "pub fn sorafs_moderation_select_panel_v1",
-        "pub fn sorafs_moderation_panel_roster_hash_v1",
-    ):
-        assert marker in model
-
-    for instruction in (
-        "SetSorafsModerationPolicy",
-        "SubmitSorafsModerationAppeal",
-        "RegisterSorafsModerationJurorEligibility",
-        "FinalizeSorafsModerationSortition",
-        "AcceptSorafsModerationJurorAssignment",
-        "ActivateSorafsModerationCase",
-        "SubmitSorafsModerationCommit",
-        "RaiseSorafsModerationChallenge",
-        "ResolveSorafsModerationChallenge",
-        "SubmitSorafsModerationReveal",
-        "FinalizeSorafsModerationCase",
-    ):
-        assert f"pub struct {instruction}" in instructions
-        assert f"impl Execute for {instruction}" in core
-
-    assert "pub struct OpenSorafsModerationCase" not in instructions
-    assert "impl Execute for OpenSorafsModerationCase" not in core
-
-    for query in (
-        "FindSorafsModerationPolicy",
-        "FindSorafsModerationAppeal",
-        "FindSorafsModerationJurorEligibility",
-        "FindSorafsModerationCase",
-        "FindSorafsModerationCommit",
-        "FindSorafsModerationReveal",
-        "FindSorafsModerationChallenge",
-        "FindSorafsModerationOutcome",
-        "FindSorafsModerationNoShow",
-        "FindSorafsModerationStatus",
-    ):
-        assert f"pub struct {query}" in queries
-        assert f"impl ValidSingularQuery for {query}" in core
-
-    assert "pub struct CanManageSorafsModeration" in executor_permission
-    for adversarial_test in (
-        "duplicate_wrong_authority_phase_and_mismatched_reveal_are_atomic",
-        "accepted_challenge_blocks_reveal_and_closes_without_penalties",
-        "rejected_challenge_unblocks_reveals_and_tied_quorum_is_contested",
-        "missed_quorum_persists_distinct_no_show_penalties",
-        "bounds_permissions_and_counter_overflow_reject_without_partial_case",
-        "appeal_intake_is_authority_bound_replay_safe_and_transaction_atomic",
-        "private_pop_proof_sortition_and_activation_reject_adversarial_inputs",
-        "insufficient_pool_and_no_show_failover_exhaustion_are_terminal",
-        "primary_no_show_uses_next_unique_waitlist_juror_atomically",
-        "later_pop_revocation_rotation_does_not_rewrite_or_brick_admitted_snapshot",
-        "unresolved_challenge_expires_permissionlessly_and_fails_open",
-        "genesis_moderation_permission_bypass_matches_executor_policy",
-    ):
-        assert f"fn {adversarial_test}" in core
-
-
 def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> None:
     stale_phrases = (
         "summary: SFM-4b2 implementation status for appeal quote, settlement, and disbursement helpers plus the remaining escrow and service gates.",
@@ -27134,7 +27026,7 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     )
     assert "--evidence-dir artifacts/sorafs/production-readiness/summaries" in direct_example; assert "signer_receipt_bundle" in contract and 'unsigned.pop("signer_receipt_bundle", None)' in signer_evidence and "foundational prerequisite requires a signer receipt bundle" in signer_evidence
     assert "--gateway-load-summary artifacts/sorafs/gateway-load/summary.json" in runner_example; assert all(marker in checker for marker in ("software_signer_evidence.add_foundational_receipt_verifier_arguments(parser)", "software_signer_evidence.verifier_sha256_from_args(args)", "software_signer_evidence.validate_foundational_receipt_from_options(payload, signature, options, errors)")) and all(marker in runner for marker in ("production readiness runner requires a foundational signer receipt verifier", "production readiness runner requires a foundational signer verifier SHA-256", "--foundational-prerequisite-signer-verifier", "--foundational-prerequisite-signer-verifier-sha256"))
-    assert "--dry-run" not in runner_example; assert all(sum(line.split(maxsplit=1)[0] == flag for line in example.splitlines() if line.split()) == 1 for example in (direct_example, runner_example) for flag in ("--foundational-prerequisite-signer-verifier", "--foundational-prerequisite-signer-verifier-sha256")); assert '"""Return the exact ordered 22-input promotion replay set."""' in runner and "len(MODULE.production_input_paths(MODULE.parse_args(complete_args(tmp_path)))) == 22" in runner_test; assert all(marker in negative_runner for marker in ("_snapshot_foundational_verifier", "_install_foundational_verifier", "_require_foundational_verifier_unchanged", "--foundational-prerequisite-signer-verifier", "--foundational-prerequisite-signer-verifier-sha256")) and "test_foundational_verifier_is_staged_and_forwarded_outside_inventory" in negative_test; assert all(marker in receipt for marker in ("MAX_RECEIPT_VERIFIER_DIAGNOSTIC_BYTES", "RECEIPT_VERIFIER_TIMEOUT_SECS", "RECEIPT_VERIFIER_CLEANUP_TIMEOUT_SECS", "_run_bounded_verifier", "selectors.DefaultSelector()", 'start_new_session=os.name == "posix"', "umask=0o077", "os.killpg(process.pid, signal.SIGKILL)", "os.read(", "external software signer receipt verification failed", "external software signer receipt verifier could not run")) and all(marker in builder_test for marker in ("test_receipt_verifier_rejects_bounded_payload_free_diagnostics", "test_receipt_verifier_hard_timeout_reaps_process", "test_receipt_verifier_timeout_kills_inherited_pipe_descendant")); assert all(marker in version_map for marker in ("RELEASE_PACKAGE_IDS = frozenset(", '"sorafs-car"', '"sorafs-manifest"', '"sorafs-orchestrator"', "release_version must match every CLI release package version")) and "test_release_version_must_match_every_cli_release_package" in version_map_test
+    assert "--dry-run" not in runner_example; assert all(sum(line.split(maxsplit=1)[0] == flag for line in example.splitlines() if line.split()) == 1 for example in (direct_example, runner_example) for flag in ("--foundational-prerequisite-signer-verifier", "--foundational-prerequisite-signer-verifier-sha256")); assert '"""Return the exact ordered 22-input promotion replay set."""' in runner and "len(MODULE.production_input_paths(MODULE.parse_args(complete_args(tmp_path)))) == 22" in runner_test; assert all(marker in negative_runner for marker in ("_snapshot_foundational_verifier", "_install_foundational_verifier", "_require_foundational_verifier_unchanged", "--foundational-prerequisite-signer-verifier", "--foundational-prerequisite-signer-verifier-sha256")) and "test_foundational_verifier_is_staged_and_forwarded_outside_inventory" in negative_test; assert all(marker in read(SCRIPTS_DIR / "sorafs_verifier_process.py") for marker in ("MAX_VERIFIER_STDOUT_BYTES", "VERIFIER_TIMEOUT_SECS", "VERIFIER_CLEANUP_TIMEOUT_SECS", "def run_verifier(", "selectors.DefaultSelector()", "start_new_session=True", "umask=0o077", "os.killpg(process.pid, signal.SIGKILL)", "os.read(")) and all(marker in receipt for marker in ("verifier_process.run_verifier(", "max_stdout_bytes=0", "external software signer receipt verification failed", "external software signer receipt verifier could not run")) and all(marker in builder_test for marker in ("test_receipt_verifier_rejects_bounded_payload_free_diagnostics", "test_receipt_verifier_hard_timeout_reaps_process", "test_receipt_verifier_timeout_kills_inherited_pipe_descendant")); assert all(marker in version_map for marker in ("RELEASE_PACKAGE_IDS = frozenset(", '"sorafs-car"', '"sorafs-manifest"', '"sorafs-orchestrator"', "release_version must match every CLI release package version")) and "test_release_version_must_match_every_cli_release_package" in version_map_test
 
 
 def test_sorafs_production_readiness_aggregate_covers_every_lane_checker() -> None:

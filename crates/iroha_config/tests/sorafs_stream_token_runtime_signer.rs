@@ -1,4 +1,4 @@
-//! Validate the sole hardware stream-token configuration and independent public trust.
+//! Validate the sole signer stream-token configuration and independent public trust.
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair};
@@ -58,12 +58,12 @@ policy_digest_hex = "{policy_digest_hex}""#
         bindings
     })
 }
-const HARDWARE_PREFIX: &str = "sorafs.storage.stream_tokens.hardware";
+const SIGNER_PREFIX: &str = "sorafs.storage.stream_tokens.signer";
 const PROVIDER_HEX: &str = "abababababababababababababababababababababababababababababababab";
 fn quoted(value: &str) -> String {
     format!("\"{value}\"")
 }
-fn hardware_fields() -> Vec<(&'static str, String)> {
+fn signer_fields() -> Vec<(&'static str, String)> {
     [
         (
             "runtime_handle",
@@ -108,13 +108,13 @@ fn hardware_fields() -> Vec<(&'static str, String)> {
     ]
     .into()
 }
-fn hardware_tables(fields: &[(&str, String)]) -> String {
+fn signer_tables(fields: &[(&str, String)]) -> String {
     let mut source = String::new();
     for prefix in ["", "attester.", "observer."] {
         let suffix = prefix.strip_suffix('.').unwrap_or(prefix);
         write!(
             source,
-            "\n[{HARDWARE_PREFIX}{}]\n",
+            "\n[{SIGNER_PREFIX}{}]\n",
             if suffix.is_empty() {
                 String::new()
             } else {
@@ -147,15 +147,15 @@ admission_provider_policy_digest_hex = "{}"
 {}{}
 "#,
         "a5".repeat(32),
-        hardware_tables(fields),
+        signer_tables(fields),
         native_signer_bindings()
     )
 }
 fn enabled_overlay() -> String {
-    enabled_with_fields(&hardware_fields())
+    enabled_with_fields(&signer_fields())
 }
 fn replaced_field(field: &str, value: String) -> String {
-    let mut fields = hardware_fields();
+    let mut fields = signer_fields();
     fields
         .iter_mut()
         .find(|(name, _)| *name == field)
@@ -169,7 +169,7 @@ fn rejects(source: &str, expected: &str) {
 }
 #[test]
 fn enabled_stream_tokens_parse_one_exact_non_secret_runtime_binding() {
-    let actual = parse_overlay(&enabled_overlay()).expect("complete independent hardware binding");
+    let actual = parse_overlay(&enabled_overlay()).expect("complete independent signer binding");
     let storage = &actual.torii.sorafs_storage;
     assert_eq!(
         storage.provider_id.as_ref().expect("provider").as_bytes(),
@@ -177,15 +177,24 @@ fn enabled_stream_tokens_parse_one_exact_non_secret_runtime_binding() {
     );
     let tokens = &storage.stream_tokens;
     assert!(tokens.enabled);
-    let hardware = tokens.hardware.as_ref().expect("complete hardware config");
-    assert_eq!(hardware.runtime_handle, "hsm://sorafs/stream-token/primary");
-    assert_eq!(hardware.key_handle, "pkcs11:production/stream-token/key-7");
-    assert_eq!(hardware.service_id, "stream-primary");
-    assert_eq!(hardware.administrator_id, "stream-security-primary");
-    assert_eq!(hex::encode(hardware.public_key), public_key_hex(0x42));
-    assert_eq!((hardware.key_revision, hardware.policy_revision), (7, 9));
-    assert_eq!(hardware.policy_digest, [0xb4; 32]);
-    let attester = &hardware.attester;
+    let signer_backend = tokens.signer.as_ref().expect("complete signer config");
+    assert_eq!(
+        signer_backend.runtime_handle,
+        "hsm://sorafs/stream-token/primary"
+    );
+    assert_eq!(
+        signer_backend.key_handle,
+        "pkcs11:production/stream-token/key-7"
+    );
+    assert_eq!(signer_backend.service_id, "stream-primary");
+    assert_eq!(signer_backend.administrator_id, "stream-security-primary");
+    assert_eq!(hex::encode(signer_backend.public_key), public_key_hex(0x42));
+    assert_eq!(
+        (signer_backend.key_revision, signer_backend.policy_revision),
+        (7, 9)
+    );
+    assert_eq!(signer_backend.policy_digest, [0xb4; 32]);
+    let attester = &signer_backend.attester;
     assert_eq!(attester.authority.service_id, "custody-authority-primary");
     assert_eq!(
         attester.authority.administrator_id,
@@ -214,7 +223,7 @@ fn enabled_stream_tokens_parse_one_exact_non_secret_runtime_binding() {
         (attester.max_validity_ms, attester.max_anchor_age_ms),
         (1000000, 10000)
     );
-    let observer = &hardware.observer;
+    let observer = &signer_backend.observer;
     assert_eq!(
         observer.runtime_handle,
         "finalized-source:prod/stream-token/primary"
@@ -255,8 +264,8 @@ fn enabled_stream_tokens_parse_one_exact_non_secret_runtime_binding() {
     assert_eq!(tokens.admission_reconcile_max_items, 256);
     assert_eq!(tokens.admission_lease_ttl_ms, 120_000);
 }
-#[path = "sorafs_stream_token_runtime_signer/hardware_config_tests.rs"]
-mod hardware_config_tests;
+#[path = "sorafs_stream_token_runtime_signer/signer_config_tests.rs"]
+mod signer_config_tests;
 #[test]
 fn legacy_stream_token_signing_key_path_is_rejected_without_disclosing_it() {
     let retired_path = "/run/secrets/retired-stream-token-seed";
@@ -339,7 +348,7 @@ fn retired_sorafs_environment_aliases_remain_unvisited() {
 fn sorafs_configuration_has_no_production_environment_bindings() {
     let source = [
         include_str!("../src/parameters/user.rs"),
-        include_str!("../src/parameters/user/stream_token_hardware.rs"),
+        include_str!("../src/parameters/user/stream_token_signer.rs"),
         include_str!("../src/parameters/user/stream_token_admission.rs"),
     ]
     .join("\n");
@@ -352,3 +361,6 @@ fn sorafs_configuration_has_no_production_environment_bindings() {
         "SoraFS V1 behavior must be configured through canonical TOML only; found environment bindings: {bindings:?}"
     );
 }
+
+#[path = "sorafs_stream_token_runtime_signer/production_identity_tests.rs"]
+mod production_identity_tests;

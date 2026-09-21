@@ -1,3 +1,57 @@
+#[test]
+fn state_syscall_works_without_access_logging() {
+    let authority: AccountId = fixture_account("alice");
+    let mut host = local_contract_host(authority);
+    let mut vm = IVM::new(10_000);
+    let path: StatePath = "counter".parse().unwrap();
+    let path_ptr = store_state_path_tlv(&mut vm, &path);
+    let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
+    let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
+    vm.set_register(10, path_ptr);
+    vm.set_register(11, value_ptr);
+    assert_eq!(
+        host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+        Ok(test_state_value_gas(&path, value_bytes.len())),
+        "STATE_SET should succeed without access logging"
+    );
+    vm.set_register(10, path_ptr);
+    assert_eq!(
+        host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+        Ok(test_state_value_gas(&path, value_bytes.len())),
+        "STATE_GET should succeed without access logging"
+    );
+    let out_ptr = vm.register(10);
+    let tlv = vm.memory.validate_tlv(out_ptr).expect("state get tlv");
+    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+    let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
+    assert_eq!(value, 1);
+}
+#[test]
+fn state_set_budget_exhaustion_traps_without_staging_a_write() {
+    let authority: AccountId = fixture_account("alice");
+    let mut host = local_contract_host(authority);
+    host.restrict_output_limits(HostOutputLimits::new(0, u64::MAX));
+    let mut vm = IVM::new(10_000);
+    let path: StatePath = "counter".parse().expect("valid state path");
+    let path_ptr = store_state_path_tlv(&mut vm, &path);
+    let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
+    let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
+    vm.set_register(10, path_ptr);
+    vm.set_register(11, value_ptr);
+    assert_eq!(
+        host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+        Err(ivm::VMError::HostOutputBudgetExceeded {
+            resource: ivm::HostOutputResource::Items,
+            attempted: 1,
+            limit: 0,
+        })
+    );
+    assert!(
+        host.durable_state_overlay.is_empty(),
+        "a rejected durable write must not be staged"
+    );
+}
+
 // Existing namespace and generic/debug state boundary tests, included in host::tests.
 #[test]
 fn contract_state_namespace_access_covers_consensus_owned_prefixes() {

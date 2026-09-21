@@ -41,6 +41,20 @@ audit digests, and deal/snapshot/settlement identifiers have the same invariant.
 Use `norito::canonical_frame_len` when enforcing a full canonical frame-size
 limit; payload length hints and ambient-layout encoders do not define that size.
 
+### Public signer identities
+
+Signer identities use the shared
+[`iroha_primitives::production_identity`](../iroha_primitives/src/production_identity.rs)
+grammar: nonempty ASCII letters, digits, `.`, `_`, `-` and `:`, within each
+owner's byte limit. Bytes remain case-sensitive and are never normalized.
+Only whole alphanumeric components equal to `null`, `mock`, `test`, `dev`,
+`demo`, `fake`, `dummy` or `placeholder` are reserved, compared without ASCII
+case; non-alphanumeric characters delimit components. Thus `attester` and
+`attestation` are valid, while `production-TEST-primary` is rejected. Hardware
+handles share this reserved-component check and retain their own scheme,
+credential and length restrictions. Valid labels establish no key custody,
+administrative independence or signing permission.
+
 ### CLI helper
 
 The `sorafs_manifest_builder` binary emits chunk metadata and a manifest for

@@ -2189,35 +2189,38 @@ def _rust_delimiter_context(
 ) -> tuple[tuple[str, int, tuple[str, ...]], ...]:
     """Return every unmatched delimiter ancestor enclosing ``end``.
 
-    Item extraction asks for the same context separately when binding brace,
-    delimiter, and ancestor-attribute ownership. Cache that immutable parse so
-    mutation-matrix validation does not rescan a large production file for
-    each view of the same item.
+    Keep exact header offsets during the scan and tokenize only ancestors
+    that survive at ``end``. Completed descendants do not contribute to the
+    result; eagerly tokenizing their headers repeatedly evicts the bounded
+    source/token caches when several items share one large source file.
     """
-    stack: list[tuple[str, int, tuple[str, ...]]] = []
+    stack: list[tuple[str, int, int | None]] = []
     matching = {')': '(', ']': '[', '}': '{'}
     last_boundary = 0
     for index, char in enumerate(structural_source[:end]):
         if char in "([{":
-            stack.append(
-                (
-                    char,
-                    index,
-                    rust_code_tokens(structural_source[last_boundary:index]),
-                )
-            )
+            stack.append((char, index, last_boundary))
             if char == "{":
                 last_boundary = index + 1
         elif char in ")]}":
             if stack and stack[-1][0] == matching[char]:
                 stack.pop()
             else:
-                stack.append((f"unmatched:{char}", index, ()))
+                stack.append((f"unmatched:{char}", index, None))
             if char == "}":
                 last_boundary = index + 1
         elif char == ";":
             last_boundary = index + 1
-    return tuple(stack)
+    return tuple(
+        (
+            opener,
+            position,
+            ()
+            if header_start is None
+            else rust_code_tokens(structural_source[header_start:position]),
+        )
+        for opener, position, header_start in stack
+    )
 
 
 def _rust_brace_context(
@@ -36219,8 +36222,8 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "AsyncRetransmitLifecycleOwned(record.node) => "
                 "record.ordinal # "
                 "AsyncRetransmitLifecycleOrdinal(record.node) /\\ \\A node "
-                "\\in ValidatorIds: /\\ AsyncTimeoutLifecycleOwned(node) "
-                "/\\ AsyncRetransmitLifecycleOwned(node) => "
+                "\\in ValidatorIds: (AsyncTimeoutLifecycleOwned(node) "
+                "/\\ AsyncRetransmitLifecycleOwned(node)) => "
                 "AsyncTimeoutLifecycleOrdinal(node) # "
                 "AsyncRetransmitLifecycleOrdinal(node)"
             ),
@@ -45761,6 +45764,939 @@ def _async_candidate_semantic_identity_contract_errors(
     return errors
 
 
+def _async_candidate_causal_origin_type_contract_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Bind structural origin typing to its exact carrier/image premises.
+
+    Finite wire-domain disjointness follows from the complete existing
+    transport typing conjunction. These checks preserve that premise; they
+    do not promote finite comparison controls to a deductive proof receipt.
+    """
+
+    exact_operators = {'SumeragiV2AsyncNetwork.tla': {'AsyncCandidateQcSemanticPayloadTyped': '/\\ DOMAIN qc '
+                                                                            '= {"context", '
+                                                                            '"height", '
+                                                                            '"view", '
+                                                                            '"phase", '
+                                                                            '"subject"} '
+                                                                            '/\\ '
+                                                                            'qc.context '
+                                                                            '\\in '
+                                                                            'ContextRecords '
+                                                                            '/\\ qc.height '
+                                                                            '\\in Heights '
+                                                                            '/\\ qc.view '
+                                                                            '\\in Views '
+                                                                            '/\\ qc.phase '
+                                                                            '\\in Phases '
+                                                                            '/\\ '
+                                                                            'qc.subject '
+                                                                            '\\in Subjects',
+                                    'AsyncCandidatePrepareQcSemanticPayloadTyped': 'IF qc '
+                                                                                   '= '
+                                                                                   'NoPrepareQC '
+                                                                                   'THEN '
+                                                                                   'TRUE '
+                                                                                   'ELSE '
+                                                                                   'AsyncCandidateQcSemanticPayloadTyped(qc)',
+                                    'AsyncCandidateTcSemanticPayloadTyped': '/\\ DOMAIN tc '
+                                                                            '= {"context", '
+                                                                            '"height", '
+                                                                            '"view", '
+                                                                            '"highestPrepareQc"} '
+                                                                            '/\\ '
+                                                                            'tc.context '
+                                                                            '\\in '
+                                                                            'ContextRecords '
+                                                                            '/\\ tc.height '
+                                                                            '\\in Heights '
+                                                                            '/\\ tc.view '
+                                                                            '\\in Views '
+                                                                            '/\\ '
+                                                                            'AsyncCandidatePrepareQcSemanticPayloadTyped(tc.highestPrepareQc)',
+                                    'AsyncCandidateTcOptionSemanticPayloadTyped': 'IF tc = '
+                                                                                  'NoTimeoutCertificate '
+                                                                                  'THEN '
+                                                                                  'TRUE '
+                                                                                  'ELSE '
+                                                                                  'AsyncCandidateTcSemanticPayloadTyped(tc)',
+                                    'AsyncCandidateTimeoutVoteSemanticPayloadTyped': '/\\ '
+                                                                                     'DOMAIN '
+                                                                                     'vote '
+                                                                                     '= '
+                                                                                     '{"context", '
+                                                                                     '"height", '
+                                                                                     '"view", '
+                                                                                     '"signer", '
+                                                                                     '"highestPrepareQc", '
+                                                                                     '"highRank", '
+                                                                                     '"highSubject"} '
+                                                                                     '/\\ '
+                                                                                     'vote.context '
+                                                                                     '\\in '
+                                                                                     'ContextRecords '
+                                                                                     '/\\ '
+                                                                                     'vote.height '
+                                                                                     '\\in '
+                                                                                     'Heights '
+                                                                                     '/\\ '
+                                                                                     'vote.view '
+                                                                                     '\\in '
+                                                                                     'Views '
+                                                                                     '/\\ '
+                                                                                     'vote.signer '
+                                                                                     '\\in '
+                                                                                     'ValidatorIds '
+                                                                                     '/\\ '
+                                                                                     'AsyncCandidatePrepareQcSemanticPayloadTyped(vote.highestPrepareQc) '
+                                                                                     '/\\ '
+                                                                                     'vote.highRank '
+                                                                                     '\\in '
+                                                                                     'Ranks '
+                                                                                     '/\\ '
+                                                                                     'vote.highSubject '
+                                                                                     '\\in '
+                                                                                     'SubjectOrNone',
+                                    'AsyncCandidateProposalSemanticPayloadTyped': '/\\ '
+                                                                                  'DOMAIN '
+                                                                                  'proposal '
+                                                                                  '= '
+                                                                                  '{"context", '
+                                                                                  '"height", '
+                                                                                  '"view", '
+                                                                                  '"subject", '
+                                                                                  '"proposer", '
+                                                                                  '"timeoutCertificate", '
+                                                                                  '"highestPrepareQc", '
+                                                                                  '"justifyRank", '
+                                                                                  '"justifySubject"} '
+                                                                                  '/\\ '
+                                                                                  'proposal.context '
+                                                                                  '\\in '
+                                                                                  'ContextRecords '
+                                                                                  '/\\ '
+                                                                                  'proposal.height '
+                                                                                  '\\in '
+                                                                                  'Heights '
+                                                                                  '/\\ '
+                                                                                  'proposal.view '
+                                                                                  '\\in '
+                                                                                  'Views '
+                                                                                  '/\\ '
+                                                                                  'proposal.subject '
+                                                                                  '\\in '
+                                                                                  'Subjects '
+                                                                                  '/\\ '
+                                                                                  'proposal.proposer '
+                                                                                  '\\in '
+                                                                                  'ValidatorIds '
+                                                                                  '/\\ '
+                                                                                  'AsyncCandidateTcOptionSemanticPayloadTyped(proposal.timeoutCertificate) '
+                                                                                  '/\\ '
+                                                                                  'AsyncCandidatePrepareQcSemanticPayloadTyped(proposal.highestPrepareQc) '
+                                                                                  '/\\ '
+                                                                                  'proposal.justifyRank '
+                                                                                  '\\in '
+                                                                                  'Ranks '
+                                                                                  '/\\ '
+                                                                                  'proposal.justifySubject '
+                                                                                  '\\in '
+                                                                                  'SubjectOrNone',
+                                    'AsyncRouteNeutralCandidateItemStructurallyTyped': 'IF '
+                                                                                       'item '
+                                                                                       '= '
+                                                                                       'AsyncRouteNeutralCandidateItem(NoAsyncItem) '
+                                                                                       'THEN '
+                                                                                       'TRUE '
+                                                                                       'ELSE '
+                                                                                       '\\E '
+                                                                                       'wire '
+                                                                                       '\\in '
+                                                                                       'AsyncNetworkItems: '
+                                                                                       'item '
+                                                                                       '= '
+                                                                                       'AsyncRouteNeutralCandidateItem(wire)',
+                                    'AsyncRouteNeutralCandidateEvidenceStructurallyTyped': '/\\ '
+                                                                                           'DOMAIN '
+                                                                                           'evidence '
+                                                                                           '= '
+                                                                                           '{"kind", '
+                                                                                           '"payload"} '
+                                                                                           '/\\ '
+                                                                                           'CASE '
+                                                                                           'evidence.kind '
+                                                                                           '= '
+                                                                                           '"NoEvidence" '
+                                                                                           '-> '
+                                                                                           'evidence.payload '
+                                                                                           '= '
+                                                                                           'NoAsyncItem '
+                                                                                           '[] '
+                                                                                           'evidence.kind '
+                                                                                           '= '
+                                                                                           '"NetworkItem" '
+                                                                                           '-> '
+                                                                                           '\\E '
+                                                                                           'wire '
+                                                                                           '\\in '
+                                                                                           'AsyncNetworkItems: '
+                                                                                           '/\\ '
+                                                                                           'wire '
+                                                                                           '# '
+                                                                                           'NoAsyncItem '
+                                                                                           '/\\ '
+                                                                                           'evidence.payload '
+                                                                                           '= '
+                                                                                           'AsyncRouteNeutralCandidateItem(wire) '
+                                                                                           '[] '
+                                                                                           'evidence.kind '
+                                                                                           '= '
+                                                                                           '"Proposal" '
+                                                                                           '-> '
+                                                                                           'AsyncCandidateProposalSemanticPayloadTyped(evidence.payload) '
+                                                                                           '[] '
+                                                                                           'evidence.kind '
+                                                                                           '= '
+                                                                                           '"Vote" '
+                                                                                           '-> '
+                                                                                           'evidence.payload '
+                                                                                           '\\in '
+                                                                                           'VoteRecordSet '
+                                                                                           '[] '
+                                                                                           'evidence.kind '
+                                                                                           '= '
+                                                                                           '"TimeoutVote" '
+                                                                                           '-> '
+                                                                                           'AsyncCandidateTimeoutVoteSemanticPayloadTyped(evidence.payload) '
+                                                                                           '[] '
+                                                                                           'evidence.kind '
+                                                                                           '= '
+                                                                                           '"QC" '
+                                                                                           '-> '
+                                                                                           'AsyncCandidateQcSemanticPayloadTyped(evidence.payload) '
+                                                                                           '[] '
+                                                                                           'evidence.kind '
+                                                                                           '= '
+                                                                                           '"TC" '
+                                                                                           '-> '
+                                                                                           'AsyncCandidateTcSemanticPayloadTyped(evidence.payload) '
+                                                                                           '[] '
+                                                                                           'evidence.kind '
+                                                                                           '= '
+                                                                                           '"Body" '
+                                                                                           '-> '
+                                                                                           'evidence.payload '
+                                                                                           '\\in '
+                                                                                           'BodyRecordSet '
+                                                                                           '[] '
+                                                                                           'OTHER '
+                                                                                           '-> '
+                                                                                           'FALSE',
+                                    'AsyncCandidateCausalOriginTyped': '/\\ DOMAIN origin '
+                                                                       '= {"target", '
+                                                                       '"context", '
+                                                                       '"height", '
+                                                                       '"leader", "view", '
+                                                                       '"subject", '
+                                                                       '"phase", "owner", '
+                                                                       '"kind", "payload"} '
+                                                                       '/\\ origin.target '
+                                                                       '\\in ValidatorIds '
+                                                                       '/\\ origin.context '
+                                                                       '\\in '
+                                                                       'ContextRecords /\\ '
+                                                                       'origin.height \\in '
+                                                                       'Heights /\\ '
+                                                                       'origin.leader \\in '
+                                                                       'ValidatorIds /\\ '
+                                                                       'origin.view \\in '
+                                                                       'Views /\\ '
+                                                                       'origin.subject '
+                                                                       '\\in SubjectOrNone '
+                                                                       '/\\ origin.phase '
+                                                                       '\\in '
+                                                                       'AsyncWorkKinds /\\ '
+                                                                       'origin.owner \\in '
+                                                                       'ValidatorIds /\\ '
+                                                                       'origin.kind = '
+                                                                       '"CausalOrigin" /\\ '
+                                                                       'DOMAIN '
+                                                                       'origin.payload = '
+                                                                       '{"workKind", '
+                                                                       '"item", '
+                                                                       '"authority", '
+                                                                       '"body", '
+                                                                       '"manifest", '
+                                                                       '"commitment"} /\\ '
+                                                                       'origin.payload.workKind '
+                                                                       '\\in '
+                                                                       'AsyncWorkKinds /\\ '
+                                                                       'AsyncRouteNeutralCandidateItemStructurallyTyped(origin.payload.item) '
+                                                                       '/\\ '
+                                                                       'AsyncRouteNeutralCandidateEvidenceStructurallyTyped(origin.payload.authority) '
+                                                                       '/\\ '
+                                                                       'origin.payload.body '
+                                                                       '\\in SubjectOrNone '
+                                                                       '/\\ '
+                                                                       'origin.payload.manifest '
+                                                                       '\\in SubjectOrNone '
+                                                                       '/\\ '
+                                                                       'origin.payload.commitment '
+                                                                       '\\in SubjectOrNone '
+                                                                       '/\\ origin.owner = '
+                                                                       'origin.target /\\ '
+                                                                       'origin.leader = '
+                                                                       'Leader(origin.context, '
+                                                                       'origin.view) /\\ '
+                                                                       'origin.payload.workKind '
+                                                                       '= origin.phase',
+                                    'AsyncCandidateCausalOriginSet': '[target: '
+                                                                     'ValidatorIds, '
+                                                                     'context: '
+                                                                     'ContextRecords, '
+                                                                     'height: Heights, '
+                                                                     'leader: '
+                                                                     'ValidatorIds, view: '
+                                                                     'Views, subject: '
+                                                                     'SubjectOrNone, '
+                                                                     'phase: '
+                                                                     'AsyncWorkKinds, '
+                                                                     'owner: ValidatorIds, '
+                                                                     'kind: '
+                                                                     '{"CausalOrigin"}, '
+                                                                     'payload: [workKind: '
+                                                                     'AsyncWorkKinds, '
+                                                                     'item: '
+                                                                     'AsyncRouteNeutralCandidateItemSet, '
+                                                                     'authority: '
+                                                                     'AsyncRouteNeutralCandidateEvidenceSet, '
+                                                                     'body: SubjectOrNone, '
+                                                                     'manifest: '
+                                                                     'SubjectOrNone, '
+                                                                     'commitment: '
+                                                                     'SubjectOrNone]]',
+                                    'AsyncCandidateQcSemanticPayload': 'CertificateRefOf(qc)',
+                                    'AsyncCandidatePrepareQcSemanticPayload': 'IF qc = '
+                                                                              'NoPrepareQC '
+                                                                              'THEN '
+                                                                              'NoPrepareQC '
+                                                                              'ELSE '
+                                                                              'AsyncCandidateQcSemanticPayload(qc)',
+                                    'AsyncCandidateVoteSemanticPayload': '[context |-> '
+                                                                         'vote.context, '
+                                                                         'height |-> '
+                                                                         'vote.height, '
+                                                                         'view |-> '
+                                                                         'vote.view, phase '
+                                                                         '|-> vote.phase, '
+                                                                         'subject |-> '
+                                                                         'vote.subject, '
+                                                                         'signer |-> '
+                                                                         'vote.signer]',
+                                    'AsyncCandidateTimeoutVoteSemanticPayload': '[context '
+                                                                                '|-> '
+                                                                                'vote.context, '
+                                                                                'height '
+                                                                                '|-> '
+                                                                                'vote.height, '
+                                                                                'view |-> '
+                                                                                'vote.view, '
+                                                                                'signer '
+                                                                                '|-> '
+                                                                                'vote.signer, '
+                                                                                'highestPrepareQc '
+                                                                                '|-> '
+                                                                                'AsyncCandidatePrepareQcSemanticPayload(vote.highestPrepareQc), '
+                                                                                'highRank '
+                                                                                '|-> '
+                                                                                'vote.highRank, '
+                                                                                'highSubject '
+                                                                                '|-> '
+                                                                                'vote.highSubject]',
+                                    'AsyncCandidateTcSemanticPayload': 'IF tc = '
+                                                                       'NoTimeoutCertificate '
+                                                                       'THEN '
+                                                                       'NoTimeoutCertificate '
+                                                                       'ELSE [context |-> '
+                                                                       'tc.context, height '
+                                                                       '|-> tc.height, '
+                                                                       'view |-> tc.view, '
+                                                                       'highestPrepareQc '
+                                                                       '|-> '
+                                                                       'AsyncCandidatePrepareQcSemanticPayload( '
+                                                                       'tc.highestPrepareQc)]',
+                                    'AsyncCandidateProposalSemanticPayload': '[context |-> '
+                                                                             'proposal.context, '
+                                                                             'height |-> '
+                                                                             'proposal.height, '
+                                                                             'view |-> '
+                                                                             'proposal.view, '
+                                                                             'subject |-> '
+                                                                             'proposal.subject, '
+                                                                             'proposer |-> '
+                                                                             'proposal.proposer, '
+                                                                             'timeoutCertificate '
+                                                                             '|-> '
+                                                                             'AsyncCandidateTcSemanticPayload(proposal.timeoutCertificate), '
+                                                                             'highestPrepareQc '
+                                                                             '|-> '
+                                                                             'AsyncCandidatePrepareQcSemanticPayload( '
+                                                                             'proposal.highestPrepareQc), '
+                                                                             'justifyRank '
+                                                                             '|-> '
+                                                                             'proposal.justifyRank, '
+                                                                             'justifySubject '
+                                                                             '|-> '
+                                                                             'proposal.justifySubject]',
+                                    'AsyncRouteNeutralCandidateEvidence': 'IF evidence = '
+                                                                          'NoAsyncItem '
+                                                                          'THEN [kind |-> '
+                                                                          '"NoEvidence", '
+                                                                          'payload |-> '
+                                                                          'NoAsyncItem] '
+                                                                          'ELSE IF '
+                                                                          'evidence \\in '
+                                                                          'AsyncNetworkItems '
+                                                                          'THEN [kind |-> '
+                                                                          '"NetworkItem", '
+                                                                          'payload |-> '
+                                                                          'AsyncRouteNeutralCandidateItem(evidence)] '
+                                                                          'ELSE IF '
+                                                                          'evidence \\in '
+                                                                          'ProposalRecordSet '
+                                                                          'THEN [kind |-> '
+                                                                          '"Proposal", '
+                                                                          'payload |-> '
+                                                                          'AsyncCandidateProposalSemanticPayload(evidence)] '
+                                                                          'ELSE IF '
+                                                                          'evidence \\in '
+                                                                          'VoteRecordSet '
+                                                                          'THEN [kind |-> '
+                                                                          '"Vote", payload '
+                                                                          '|-> '
+                                                                          'AsyncCandidateVoteSemanticPayload(evidence)] '
+                                                                          'ELSE IF '
+                                                                          'evidence \\in '
+                                                                          'TimeoutVoteRecordSet '
+                                                                          'THEN [kind |-> '
+                                                                          '"TimeoutVote", '
+                                                                          'payload |-> '
+                                                                          'AsyncCandidateTimeoutVoteSemanticPayload( '
+                                                                          'evidence)] ELSE '
+                                                                          'IF evidence '
+                                                                          '\\in '
+                                                                          'QcRecordSet '
+                                                                          'THEN [kind |-> '
+                                                                          '"QC", payload '
+                                                                          '|-> '
+                                                                          'AsyncCandidateQcSemanticPayload( '
+                                                                          'evidence)] ELSE '
+                                                                          'IF evidence '
+                                                                          '\\in '
+                                                                          'TcRecordSet '
+                                                                          'THEN [kind |-> '
+                                                                          '"TC", payload '
+                                                                          '|-> '
+                                                                          'AsyncCandidateTcSemanticPayload( '
+                                                                          'evidence)] ELSE '
+                                                                          '[kind |-> '
+                                                                          '"Body", payload '
+                                                                          '|-> evidence]',
+                                    'AsyncEvidenceSet': 'AsyncNetworkItems \\cup '
+                                                        '{NoAsyncItem} \\cup '
+                                                        'ProposalRecordSet \\cup '
+                                                        'VoteRecordSet \\cup '
+                                                        'TimeoutVoteRecordSet \\cup '
+                                                        'QcRecordSet \\cup TcRecordSet '
+                                                        '\\cup BodyRecordSet',
+                                    'AsyncRouteNeutralCandidateItemSet': '{AsyncRouteNeutralCandidateItem(item): '
+                                                                         'item \\in '
+                                                                         'AsyncNetworkItems '
+                                                                         '\\cup '
+                                                                         '{NoAsyncItem}}',
+                                    'AsyncRouteNeutralCandidateEvidenceSet': '{AsyncRouteNeutralCandidateEvidence(evidence): '
+                                                                             'evidence '
+                                                                             '\\in '
+                                                                             'AsyncEvidenceSet}',
+                                    'AsyncNetworkItem': '[kind |-> kind, source |-> '
+                                                        'source, envelope |-> envelope]',
+                                    'FiniteAsyncNetworkItems': 'asyncSentItems \\cup '
+                                                               'asyncRetainedControl \\cup '
+                                                               'asyncActiveRequests \\cup '
+                                                               '{packet.item: packet \\in '
+                                                               'asyncTransport} \\cup '
+                                                               'FiniteAsyncPublishableControlItems',
+                                    'AsyncPacketContentTypeInvariant': '/\\ '
+                                                                       'IsFiniteSet(asyncTransport) '
+                                                                       '/\\ \\A packet '
+                                                                       '\\in '
+                                                                       'asyncTransport: '
+                                                                       'AsyncPacketTyped(packet) '
+                                                                       '/\\ '
+                                                                       'AsyncPacketRouteIdentityInvariant',
+                                    'AsyncTransportContentTypeInvariant': '/\\ '
+                                                                          'AsyncTransportHistoryTypeInvariant '
+                                                                          '/\\ '
+                                                                          'AsyncPacketContentTypeInvariant '
+                                                                          '/\\ '
+                                                                          'AsyncHeldChunksTypeInvariant',
+                                    'AsyncTransportTypeInvariant': '/\\ '
+                                                                   'AsyncTransportClockTypeInvariant '
+                                                                   '/\\ '
+                                                                   'AsyncTransportContentTypeInvariant',
+                                    'AsyncSchedulerTypeInvariant': '/\\ '
+                                                                   'AsyncRuntimeTypeInvariant '
+                                                                   '/\\ '
+                                                                   'AsyncIoTypeInvariant '
+                                                                   '/\\ '
+                                                                   'AsyncDeferredTypeInvariant '
+                                                                   '/\\ '
+                                                                   'AsyncTransportTypeInvariant '
+                                                                   '/\\ '
+                                                                   'AsyncIngressTypeInvariant '
+                                                                   '/\\ '
+                                                                   'AsyncHistoricalRecoveryTypeInvariant',
+                                    'AsyncTypeInvariant': '/\\ TypeInvariant /\\ '
+                                                          'AsyncSchedulerTypeInvariant /\\ '
+                                                          'AsyncProducerTypeInvariant /\\ '
+                                                          'AsyncServeProducerTurnTypeInvariant '
+                                                          '/\\ '
+                                                          'AsyncServiceActivationPairInvariant '
+                                                          '/\\ '
+                                                          'ReceivedTimeoutVotePoolInvariant',
+                                    'NoAsyncItem': '[kind |-> "NoItem", source |-> 0, '
+                                                   'envelope |-> AsyncBodyEnvelope(0, 0, '
+                                                   '0, AsyncHeartbeatSubject, '
+                                                   'NoAsyncChunk, 0)]',
+                                    'AsyncBodyEnvelope': '[recipient |-> recipient, height '
+                                                         '|-> blockHeight, view |-> '
+                                                         'roundView, subject |-> subject, '
+                                                         'chunk |-> chunk, nonce |-> '
+                                                         'nonce]',
+                                    'FiniteAsyncPublishableControlItems': '(UNION '
+                                                                          '{ProposalOutbox(request): '
+                                                                          'request \\in '
+                                                                          'signProposals}) '
+                                                                          '\\cup (UNION '
+                                                                          '{VoteOutbox(request): '
+                                                                          'request \\in '
+                                                                          'signVotes}) '
+                                                                          '\\cup (UNION '
+                                                                          '{TimeoutOutbox(request): '
+                                                                          'request \\in '
+                                                                          'signTimeouts}) '
+                                                                          '\\cup (UNION { '
+                                                                          'QcOutbox( node, '
+                                                                          'QC(context, '
+                                                                          'roundView, '
+                                                                          '"Prepare", '
+                                                                          'subject, '
+                                                                          'ProjectedVoteSignersAt( '
+                                                                          'node, '
+                                                                          'roundView, '
+                                                                          '"Prepare", '
+                                                                          'subject))): '
+                                                                          'node \\in '
+                                                                          'ValidatorIds, '
+                                                                          'roundView \\in '
+                                                                          'Views, subject '
+                                                                          '\\in Subjects})',
+                                    'ProposalOutbox': '{AsyncNetworkItem("Proposal", '
+                                                      'request.node, '
+                                                      'ProposalEnvelope(recipient, '
+                                                      'request.proposal)): recipient \\in '
+                                                      'CurrentVoters}',
+                                    'VoteOutbox': '{AsyncNetworkItem( IF '
+                                                  'request.vote.phase = "Prepare" THEN '
+                                                  '"PrepareVote" ELSE "CommitVote", '
+                                                  'request.node, VoteEnvelope(recipient, '
+                                                  'request.vote)): recipient \\in '
+                                                  'CurrentVoters \\ {request.node}}',
+                                    'QcOutbox': '{AsyncNetworkItem( IF qc.phase = '
+                                                '"Prepare" THEN "PrepareQC" ELSE '
+                                                '"CommitQC", node, QcEnvelope(recipient, '
+                                                'qc)): recipient \\in CurrentVoters}',
+                                    'TimeoutOutbox': '{AsyncNetworkItem("TimeoutVote", '
+                                                     'request.node, '
+                                                     'TimeoutEnvelope(recipient, '
+                                                     'request.vote)): recipient \\in '
+                                                     'CurrentVoters}'},
+     'SumeragiV2Core.tla': {'NoPrepareQC': '[kind |-> "NoPrepareQC"]',
+                            'NoTimeoutCertificate': '[kind |-> "NoTimeoutCertificate"]',
+                            'BodyRecordSet': '[node: ValidatorIds, context: '
+                                             'ContextRecords, view: Views, subject: '
+                                             'Subjects]',
+                            'VoteRecordSet': '[context: ContextRecords, height: Heights, '
+                                             'view: Views, phase: Phases, subject: '
+                                             'Subjects, signer: ValidatorIds]',
+                            'QcRecordSet': '[context: ContextRecords, height: Heights, '
+                                           'view: Views, phase: Phases, subject: Subjects, '
+                                           'signers: SUBSET ValidatorIds]',
+                            'CertificateRefOf': '[context |-> qc.context, height |-> '
+                                                'qc.height, view |-> qc.view, phase |-> '
+                                                'qc.phase, subject |-> qc.subject]',
+                            'PrepareQcOptionSet': '{NoPrepareQC} \\cup QcRecordSet',
+                            'TimeoutVoteRecordSet': '[context: ContextRecords, height: '
+                                                    'Heights, view: Views, signer: '
+                                                    'ValidatorIds, highestPrepareQc: '
+                                                    'PrepareQcOptionSet, highRank: Ranks, '
+                                                    'highSubject: SubjectOrNone]',
+                            'TcRecordSet': '[context: ContextRecords, height: Heights, '
+                                           'view: Views, votes: SUBSET '
+                                           'TimeoutVoteRecordSet, highestPrepareQc: '
+                                           'PrepareQcOptionSet]',
+                            'TimeoutCertificateOptionSet': '{NoTimeoutCertificate} \\cup '
+                                                           'TcRecordSet',
+                            'ProposalRecordSet': '[context: ContextRecords, height: '
+                                                 'Heights, view: Views, subject: Subjects, '
+                                                 'proposer: ValidatorIds, '
+                                                 'timeoutCertificate: '
+                                                 'TimeoutCertificateOptionSet, '
+                                                 'highestPrepareQc: PrepareQcOptionSet, '
+                                                 'justifyRank: Ranks, justifySubject: '
+                                                 'SubjectOrNone]'}}
+    errors: list[str] = []
+    for filename, operators in exact_operators.items():
+        path = formal_dir / filename
+        if path.is_symlink() or not path.is_file():
+            errors.append(f"{path}: origin type source must be a regular file")
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(f"{path}: cannot read origin type source: {error}")
+            continue
+        for symbol, expected in operators.items():
+            extracted = _top_level_operator_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(f"{path}: missing origin type operator {symbol}")
+                continue
+            body, line = extracted
+            if " ".join(body.split()) != expected:
+                errors.append(
+                    f"{path}:{line}: {symbol} must retain the exact reviewed "
+                    "structural origin carrier/image contract"
+                )
+
+        if filename != "SumeragiV2AsyncNetwork.tla":
+            continue
+        # These three predicates have larger independent contracts. Retain
+        # precisely the clauses used by the finite wire-domain premise here.
+        required_clauses = {
+            "AsyncItemTyped": ('/\\ DOMAIN item = {"kind", "source", "envelope"}',),
+            "AsyncPacketTyped": ("/\\ AsyncItemTyped(packet.item)",),
+            "AsyncTransportHistoryTypeInvariant": (
+                "/\\ \\A item \\in asyncSentItems: AsyncItemTyped(item)",
+                "/\\ \\A item \\in asyncRetainedControl: /\\ AsyncItemTyped(item)",
+                "/\\ asyncActiveRequests \\subseteq asyncSentItems",
+            ),
+        }
+        for symbol, clauses in required_clauses.items():
+            extracted = _top_level_operator_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(f"{path}: missing finite-wire type premise {symbol}")
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if any(normalized.count(clause) != 1 for clause in clauses):
+                errors.append(
+                    f"{path}:{line}: {symbol} must retain the exact finite-wire "
+                    "domain typing premise for structural origin membership"
+                )
+    return errors
+
+
+def _async_deferred_handoff_type_contract_errors(formal_dir: Path) -> list[str]:
+    """Bind raw carrier recognition without adding stronger ownership claims.
+
+    Reuse the complete normalized-image and finite-wire source contract. The
+    new predicates preserve product membership only; finite comparisons do
+    not discharge the separate structural-to-carrier TLAPS bridge.
+    """
+
+    errors = _async_candidate_causal_origin_type_contract_errors(formal_dir)
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    if path.is_symlink() or not path.is_file():
+        return errors + [f"{path}: deferred handoff source must be a regular file"]
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return errors + [f"{path}: cannot read deferred handoff source: {error}"]
+    exact_operators = {'AsyncCandidateProposalCarrierTyped': '/\\ DOMAIN proposal = {"context", "height", "view", "subject", '
+                                       '"proposer", "timeoutCertificate", "highestPrepareQc", "justifyRank", '
+                                       '"justifySubject"} /\\ proposal.context \\in ContextRecords /\\ '
+                                       'proposal.height \\in Heights /\\ proposal.view \\in Views /\\ '
+                                       'proposal.subject \\in Subjects /\\ proposal.proposer \\in '
+                                       'ValidatorIds /\\ IF proposal.timeoutCertificate = '
+                                       'NoTimeoutCertificate THEN TRUE ELSE '
+                                       'AsyncTcRecordTyped(proposal.timeoutCertificate) /\\ '
+                                       'proposal.highestPrepareQc \\in PrepareQcOptionSet /\\ '
+                                       'proposal.justifyRank \\in Ranks /\\ proposal.justifySubject \\in '
+                                       'SubjectOrNone',
+ 'AsyncCandidateEvidenceCarrierTyped': '\\/ evidence = NoAsyncItem \\/ evidence \\in AsyncNetworkItems \\/ '
+                                       'AsyncCandidateProposalCarrierTyped(evidence) \\/ evidence \\in '
+                                       'VoteRecordSet \\/ evidence \\in TimeoutVoteRecordSet \\/ evidence '
+                                       '\\in QcRecordSet \\/ AsyncTcRecordTyped(evidence) \\/ evidence \\in '
+                                       'BodyRecordSet',
+ 'AsyncCandidateCausalOriginCarrierTyped': '/\\ DOMAIN origin = {"target", "context", "height", "leader", '
+                                           '"view", "subject", "phase", "owner", "kind", "payload"} /\\ '
+                                           'origin.target \\in ValidatorIds /\\ origin.context \\in '
+                                           'ContextRecords /\\ origin.height \\in Heights /\\ origin.leader '
+                                           '\\in ValidatorIds /\\ origin.view \\in Views /\\ origin.subject '
+                                           '\\in SubjectOrNone /\\ origin.phase \\in AsyncWorkKinds /\\ '
+                                           'origin.owner \\in ValidatorIds /\\ origin.kind = "CausalOrigin" '
+                                           '/\\ DOMAIN origin.payload = {"workKind", "item", "authority", '
+                                           '"body", "manifest", "commitment"} /\\ origin.payload.workKind '
+                                           '\\in AsyncWorkKinds /\\ '
+                                           'AsyncRouteNeutralCandidateItemStructurallyTyped(origin.payload.item) '
+                                           '/\\ '
+                                           'AsyncRouteNeutralCandidateEvidenceStructurallyTyped(origin.payload.authority) '
+                                           '/\\ origin.payload.body \\in SubjectOrNone /\\ '
+                                           'origin.payload.manifest \\in SubjectOrNone /\\ '
+                                           'origin.payload.commitment \\in SubjectOrNone',
+ 'AsyncCandidateCarrierTyped': '/\\ DOMAIN candidate = AsyncCandidateDomain /\\ candidate.class \\in '
+                               'AsyncCommandClasses /\\ candidate.kind \\in AsyncWorkKinds /\\ '
+                               'candidate.node \\in ValidatorIds /\\ candidate.height \\in Heights /\\ '
+                               'candidate.view \\in Views /\\ candidate.subject \\in SubjectOrNone /\\ '
+                               'candidate.item \\in AsyncNetworkItems \\cup {NoAsyncItem} /\\ '
+                               'candidate.consumerContext \\in ContextRecords /\\ candidate.consumerView '
+                               '\\in Views /\\ candidate.consumerGeneration \\in Generations /\\ '
+                               'AsyncCandidateEvidenceCarrierTyped(candidate.evidence) /\\ '
+                               'candidate.bodyIdentity \\in SubjectOrNone /\\ candidate.manifestIdentity '
+                               '\\in SubjectOrNone /\\ candidate.commitmentIdentity \\in SubjectOrNone /\\ '
+                               'candidate.proposalRound \\in AsyncCandidateRoundSet /\\ '
+                               'candidate.semanticPhase \\in AsyncCandidateSemanticPhases /\\ '
+                               'AsyncCandidateCausalOriginCarrierTyped(candidate.causalOrigin)',
+ 'AsyncDeferredHandoffCarrierTyped': 'IF handoff = NoAsyncDeferredHandoff THEN TRUE ELSE /\\ DOMAIN handoff '
+                                     '= {"active", "candidate", "identity"} /\\ handoff.active = TRUE /\\ '
+                                     'AsyncCandidateCarrierTyped(handoff.candidate) /\\ handoff.identity = '
+                                     'ExactAsyncCandidateIdentity(handoff.candidate)',
+ 'AsyncDeferredHandoffMapCarrierTyped': '/\\ DOMAIN handoffs = ValidatorIds /\\ \\A node \\in ValidatorIds: '
+                                        'AsyncDeferredHandoffCarrierTyped(handoffs[node])',
+ 'AsyncCandidateSet': '[class: AsyncCommandClasses, kind: AsyncWorkKinds, node: ValidatorIds, height: '
+                      'Heights, view: Views, subject: SubjectOrNone, item: AsyncNetworkItems \\cup '
+                      '{NoAsyncItem}, consumerContext: ContextRecords, consumerView: Views, '
+                      'consumerGeneration: Generations, evidence: AsyncEvidenceSet, bodyIdentity: '
+                      'SubjectOrNone, manifestIdentity: SubjectOrNone, commitmentIdentity: SubjectOrNone, '
+                      'proposalRound: AsyncCandidateRoundSet, semanticPhase: AsyncCandidateSemanticPhases, '
+                      'causalOrigin: AsyncCandidateCausalOriginSet]',
+ 'AsyncCandidateDomain': '{"class", "kind", "node", "height", "view", "subject", "item", "consumerContext", '
+                         '"consumerView", "consumerGeneration", "evidence", "bodyIdentity", '
+                         '"manifestIdentity", "commitmentIdentity", "proposalRound", "semanticPhase", '
+                         '"causalOrigin"}',
+ 'AsyncEvidenceSet': 'AsyncNetworkItems \\cup {NoAsyncItem} \\cup ProposalRecordSet \\cup VoteRecordSet '
+                     '\\cup TimeoutVoteRecordSet \\cup QcRecordSet \\cup TcRecordSet \\cup BodyRecordSet',
+ 'AsyncTcRecordTyped': '/\\ DOMAIN tc = {"context", "height", "view", "votes", "highestPrepareQc"} /\\ '
+                       'tc.context \\in ContextRecords /\\ tc.height \\in Heights /\\ tc.view \\in Views /\\ '
+                       'tc.votes \\subseteq TimeoutVoteRecordSet /\\ tc.highestPrepareQc \\in '
+                       'PrepareQcOptionSet',
+ 'AsyncCandidateCausalOriginSet': '[target: ValidatorIds, context: ContextRecords, height: Heights, leader: '
+                                  'ValidatorIds, view: Views, subject: SubjectOrNone, phase: AsyncWorkKinds, '
+                                  'owner: ValidatorIds, kind: {"CausalOrigin"}, payload: [workKind: '
+                                  'AsyncWorkKinds, item: AsyncRouteNeutralCandidateItemSet, authority: '
+                                  'AsyncRouteNeutralCandidateEvidenceSet, body: SubjectOrNone, manifest: '
+                                  'SubjectOrNone, commitment: SubjectOrNone]]',
+ 'AsyncCandidateRound': '[context |-> roundContext, height |-> blockHeight, view |-> roundView]',
+ 'AsyncConsumerEventTag': '[context |-> candidate.consumerContext, height |-> '
+                          'candidate.consumerContext.height, node |-> candidate.node, view |-> '
+                          'candidate.consumerView, generation |-> candidate.consumerGeneration]',
+ 'AsyncWorkIdentity': '[class |-> candidate.class, kind |-> candidate.kind, node |-> candidate.node, height '
+                      '|-> candidate.height, view |-> candidate.view, subject |-> candidate.subject]',
+ 'AsyncCandidateSemanticStatement': '[context |-> candidate.causalOrigin.context, round |-> '
+                                    'AsyncCandidateRound( candidate.causalOrigin.context, candidate.height, '
+                                    'candidate.view), proposalRound |-> candidate.proposalRound, subject |-> '
+                                    'candidate.subject, phase |-> candidate.semanticPhase, '
+                                    'executionCommitment |-> candidate.commitmentIdentity]',
+ 'ExactAsyncCandidateIdentity': '[consumer |-> AsyncConsumerEventTag(candidate), payload |-> candidate.item, '
+                                'evidence |-> candidate.evidence, causalOrigin |-> candidate.causalOrigin, '
+                                'work |-> AsyncWorkIdentity(candidate), body |-> candidate.bodyIdentity, '
+                                'manifest |-> candidate.manifestIdentity, commitment |-> '
+                                'candidate.commitmentIdentity, semanticStatement |-> '
+                                'AsyncCandidateSemanticStatement(candidate)]',
+ 'NoAsyncDeferredHandoff': '[active |-> FALSE]',
+ 'AsyncDeferredHandoff': '[active |-> TRUE, candidate |-> candidate, identity |-> '
+                         'ExactAsyncCandidateIdentity(candidate)]',
+ 'AsyncDeferredHandoffSet': '{NoAsyncDeferredHandoff} \\cup {AsyncDeferredHandoff(candidate): candidate \\in '
+                            'AsyncCandidateSet}',
+ 'AsyncDeferredTopologyTypeInvariant': '/\\ DOMAIN asyncDeferredCompletionQueues = ValidatorIds /\\ DOMAIN '
+                                       'asyncDeferredProgressQueues = ValidatorIds /\\ DOMAIN '
+                                       'asyncDeferredNormalQueues = ValidatorIds /\\ '
+                                       'AsyncDeferredHandoffMapCarrierTyped(asyncDeferredHandoffs) /\\ '
+                                       'asyncNextDeferredClass \\in [ValidatorIds -> AsyncCommandClasses] '
+                                       '/\\ asyncDeferredDrainOwed \\in [ValidatorIds -> BOOLEAN]',
+ 'AsyncDeferredTypeInvariant': '/\\ AsyncDeferredTopologyTypeInvariant /\\ AsyncDeferredContentTypeInvariant'}
+    for symbol, expected in exact_operators.items():
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{path}: missing deferred handoff carrier operator {symbol}")
+            continue
+        actual, line = extracted
+        if " ".join(actual.split()) != expected:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the exact reviewed raw "
+                "deferred handoff carrier, sentinel, and identity contract"
+            )
+    return errors
+
+
+def _async_leader_wire_lifecycle_raw_type_contract_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Bind exact raw constructor recognition without bounding natural ordinals.
+
+    The unchanged stronger lifecycle type and original constructor/image remain
+    explicit contracts. Finite mutation controls do not discharge the separate
+    record-valued, unbounded-domain extensionality proof obligation.
+    """
+
+    errors: list[str] = []
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    if path.is_symlink() or not path.is_file():
+        return [f"{path}: leader-wire raw carrier source must be a regular file"]
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return [f"{path}: cannot read leader-wire raw carrier source: {error}"]
+    exact_operators = {'AsyncLeaderWireLifecycleRecordCarrierTyped': '/\\ DOMAIN record = {"recipient", "item", "identity", '
+                                               '"slot", "context", "height", "view", "subject", '
+                                               '"phase", "causalOrigin", "admissionOrdinal", '
+                                               '"physicalAdmissionOrdinal", "schedulerOrdinal", '
+                                               '"departurePhysicalCut", "status", '
+                                               '"ingressPredecessors"} /\\ record.item \\in '
+                                               'AsyncNetworkItems /\\ record.item.kind \\in '
+                                               'AsyncLeaderWireKinds /\\ record.context \\in '
+                                               'ContextRecords /\\ record.admissionOrdinal \\in Nat /\\ '
+                                               'record.admissionOrdinal # 0 /\\ '
+                                               'record.physicalAdmissionOrdinal \\in Nat /\\ '
+                                               'record.schedulerOrdinal \\in Nat /\\ '
+                                               'record.schedulerOrdinal # 0 /\\ '
+                                               'record.departurePhysicalCut \\in Nat /\\ record.status '
+                                               '\\in AsyncLeaderWireLifecycleStatuses /\\ '
+                                               'record.ingressPredecessors \\in [AsyncIngressSources -> '
+                                               '0..AsyncIngressCapacity] /\\ record.recipient = '
+                                               'record.item.envelope.recipient /\\ record.identity = '
+                                               'AsyncLeaderWireLifecycleIdentityAt(record.item, '
+                                               'record.context) /\\ record.slot = '
+                                               'AsyncLeaderWireLifecycleSlot(record.item) /\\ '
+                                               'record.height = DeliveryHeight(record.item) /\\ '
+                                               'record.view = DeliveryView(record.item) /\\ '
+                                               'record.subject = '
+                                               'AsyncLeaderWireLifecycleSubject(record.item) /\\ '
+                                               'record.phase = record.item.kind /\\ record.causalOrigin '
+                                               '= AsyncLeaderWireLifecycleCausalOriginAt(record.item, '
+                                               'record.context)',
+ 'AsyncLeaderWireLifecycleRecord': '[recipient |-> item.envelope.recipient, item |-> item, identity |-> '
+                                   'AsyncLeaderWireLifecycleIdentityAt(item, leaderContext), slot |-> '
+                                   'AsyncLeaderWireLifecycleSlot(item), context |-> leaderContext, '
+                                   'height |-> DeliveryHeight(item), view |-> DeliveryView(item), '
+                                   'subject |-> AsyncLeaderWireLifecycleSubject(item), phase |-> '
+                                   'item.kind, causalOrigin |-> '
+                                   'AsyncLeaderWireLifecycleCausalOriginAt(item, leaderContext), '
+                                   'admissionOrdinal |-> admissionOrdinal, physicalAdmissionOrdinal |-> '
+                                   'physicalAdmissionOrdinal, schedulerOrdinal |-> schedulerOrdinal, '
+                                   'departurePhysicalCut |-> departurePhysicalCut, status |-> status, '
+                                   'ingressPredecessors |-> ingressPredecessors]',
+ 'AsyncLeaderWireLifecycleRecordSet': '{AsyncLeaderWireLifecycleRecord( item, leaderContext, '
+                                      'admissionOrdinal, physicalAdmissionOrdinal, schedulerOrdinal, '
+                                      'departurePhysicalCut, status, ingressPredecessors): item \\in '
+                                      '{wire \\in AsyncNetworkItems: wire.kind \\in '
+                                      'AsyncLeaderWireKinds}, leaderContext \\in ContextRecords, '
+                                      'admissionOrdinal \\in Nat \\ {0}, physicalAdmissionOrdinal \\in '
+                                      'Nat, schedulerOrdinal \\in Nat \\ {0}, departurePhysicalCut \\in '
+                                      'Nat, status \\in AsyncLeaderWireLifecycleStatuses, '
+                                      'ingressPredecessors \\in [AsyncIngressSources -> '
+                                      '0..AsyncIngressCapacity]}',
+ 'AsyncLeaderWireLifecycleTyped': '/\\ DOMAIN record = {"recipient", "item", "identity", "slot", '
+                                  '"context", "height", "view", "subject", "phase", "causalOrigin", '
+                                  '"admissionOrdinal", "physicalAdmissionOrdinal", "schedulerOrdinal", '
+                                  '"departurePhysicalCut", "status", "ingressPredecessors"} /\\ '
+                                  'AsyncLeaderWireLifecycleRecordCarrierTyped(record) /\\ '
+                                  'record.recipient \\in ValidatorIds /\\ record.item.kind \\in '
+                                  'AsyncLeaderWireKinds /\\ record.item.envelope.recipient = '
+                                  'record.recipient /\\ record.slot = '
+                                  'AsyncLeaderWireLifecycleSlot(record.item) /\\ record.slot \\in '
+                                  'AsyncLeaderWireLifecycleSlotSet /\\ record.identity = '
+                                  'AsyncLeaderWireLifecycleIdentityAt(record.item, record.context) /\\ '
+                                  'record.context = context /\\ record.height = height /\\ '
+                                  'record.height = DeliveryHeight(record.item) /\\ record.view = '
+                                  'DeliveryView(record.item) /\\ record.subject = '
+                                  'AsyncLeaderWireLifecycleSubject(record.item) /\\ record.phase = '
+                                  'record.item.kind /\\ record.causalOrigin = '
+                                  'AsyncLeaderWireLifecycleCausalOriginAt( record.item, record.context) '
+                                  '/\\ record.admissionOrdinal \\in Nat \\ {0} /\\ '
+                                  'record.admissionOrdinal < '
+                                  'AsyncNextLeaderWireLifecycleAdmissionOrdinal( record.recipient) /\\ '
+                                  'record.physicalAdmissionOrdinal \\in Nat /\\ IF '
+                                  'AsyncLeaderWireLifecycleDormant(record) THEN '
+                                  'record.physicalAdmissionOrdinal = 0 ELSE /\\ '
+                                  'record.physicalAdmissionOrdinal \\in Nat \\ {0} /\\ '
+                                  'record.admissionOrdinal <= record.physicalAdmissionOrdinal /\\ '
+                                  'record.physicalAdmissionOrdinal < '
+                                  'AsyncNextIngressPhysicalOrdinal(record.recipient) /\\ '
+                                  'record.schedulerOrdinal \\in Nat \\ {0} /\\ record.schedulerOrdinal '
+                                  '< AsyncNextCandidateLifecycleOrdinal(record.recipient) /\\ '
+                                  'record.departurePhysicalCut \\in Nat /\\ IF record.status = '
+                                  '"Runtime" THEN /\\ record.physicalAdmissionOrdinal < '
+                                  'record.departurePhysicalCut /\\ record.departurePhysicalCut <= '
+                                  'AsyncNextIngressPhysicalOrdinal(record.recipient) ELSE IF '
+                                  'record.status \\in {"Ingress", "Dormant"} THEN '
+                                  'record.departurePhysicalCut = 0 ELSE record.departurePhysicalCut <= '
+                                  'AsyncNextIngressPhysicalOrdinal(record.recipient) /\\ record.status '
+                                  '\\in AsyncLeaderWireLifecycleStatuses /\\ record.ingressPredecessors '
+                                  '\\in [AsyncIngressSources -> 0..AsyncIngressCapacity] /\\ '
+                                  '(AsyncLeaderWireLifecycleDormant(record) => '
+                                  'record.ingressPredecessors = [source \\in AsyncIngressSources |-> '
+                                  '0])',
+ 'AsyncLeaderWireLifecycleTypeInvariant': '/\\ IsFiniteSet(asyncLeaderWireLifecycles) /\\ \\A record '
+                                          '\\in asyncLeaderWireLifecycles: '
+                                          'AsyncLeaderWireLifecycleRecordCarrierTyped(record) /\\ '
+                                          'Cardinality(asyncLeaderWireLifecycles) <= '
+                                          'Cardinality(AsyncLeaderWireLifecycleSlotSet) /\\ \\A record '
+                                          '\\in asyncLeaderWireLifecycles: '
+                                          'AsyncLeaderWireLifecycleTyped(record) /\\ '
+                                          'AsyncLeaderWireLifecycleSharedOrdinalInvariant',
+ 'AsyncLeaderWireLifecycleIdentityAt': '[context |-> leaderContext, height |-> DeliveryHeight(item), '
+                                       'view |-> DeliveryView(item), subject |-> '
+                                       'AsyncLeaderWireLifecycleSubject(item), phase |-> item.kind, '
+                                       'slot |-> AsyncLeaderWireLifecycleSlot(item), payload |-> '
+                                       'AsyncLeaderWireCanonicalLifecyclePayload(item)]',
+ 'AsyncLeaderWireLifecycleSlot': '[recipient |-> item.envelope.recipient, source |-> '
+                                 'AsyncLeaderWireLifecyclePhysicalOwner(item), phase |-> item.kind, '
+                                 'chunk |-> AsyncLeaderWireLifecycleChunk(item)]',
+ 'AsyncLeaderWireLifecycleSubject': 'IF item.kind = "TimeoutVote" THEN NoSubject ELSE '
+                                    'DeliverySubject(item)',
+ 'AsyncLeaderWireLifecycleCausalOriginAt': 'IF item.kind = "CertifiedResponse" THEN '
+                                           'AsyncCandidateCausalOrigin( "FetchCertifiedBody", '
+                                           'item.envelope.recipient, item.envelope.height, '
+                                           'item.envelope.view, item.envelope.subject, item, '
+                                           'leaderContext, item, item.envelope.subject, '
+                                           'item.envelope.subject, item.envelope.subject) ELSE '
+                                           'DeliveryCandidate(item).causalOrigin',
+ 'AsyncLeaderWireLifecycleStatuses': '{"Dormant", "Ingress", "Runtime", "VolatileTerminal", "Terminal"}',
+ 'AsyncLeaderWireKinds': 'AsyncControlKinds \\cup {"Chunk", "CertifiedResponse"}'}
+    for symbol, expected in exact_operators.items():
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{path}: missing leader-wire raw carrier operator {symbol}")
+            continue
+        actual, line = extracted
+        if " ".join(actual.split()) != expected:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the exact reviewed raw "
+                "leader-wire carrier, unbounded ordinals, and lifecycle constraints"
+            )
+    return errors
+
+
 def _async_candidate_proposal_round_contract_errors(
     formal_dir: Path,
 ) -> list[str]:
@@ -45932,12 +46868,16 @@ def _async_candidate_proposal_round_contract_errors(
         if (
             observed_carriers != expected_carriers
             or missing
+            or not observed.startswith(
+                "IFevidence=NoAsyncItemTHENdefaultRoundELSEIF"
+            )
             or not observed.endswith("ELSEdefaultRound")
         ):
             errors.append(
                 f"{path}:{line}: AsyncCandidateEvidenceProposalRound must "
                 "derive roots from the closed exact evidence table and use "
-                "defaultRound only for evidence-free roots; "
+                "defaultRound only for evidence-free roots, with the explicit "
+                "NoAsyncItem case before evaluating transport-owned carriers; "
                 f"carriers={observed_carriers!r}, missing={missing!r}"
             )
 
@@ -52164,8 +53104,7 @@ asyncServeProducerTurnReady' =
             '[node \\in ValidatorIds |-> "Completion"]',
         ),
         "AsyncDeferredTopologyTypeInvariant": (
-            "asyncDeferredHandoffs",
-            "[ValidatorIds -> AsyncDeferredHandoffSet]",
+            "AsyncDeferredHandoffMapCarrierTyped(asyncDeferredHandoffs)",
             "asyncNextDeferredClass \\in",
             "[ValidatorIds -> AsyncCommandClasses]",
         ),
@@ -71511,6 +72450,8 @@ def validate_ledger(
     errors.extend(
         _async_candidate_proposal_round_contract_errors(formal_dir)
     )
+    errors.extend(_async_deferred_handoff_type_contract_errors(formal_dir))
+    errors.extend(_async_leader_wire_lifecycle_raw_type_contract_errors(formal_dir))
     errors.extend(
         _adequate_leader_three_way_service_outcome_contract_errors(formal_dir)
     )

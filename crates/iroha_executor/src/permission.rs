@@ -203,6 +203,11 @@ declare_permissions! {
     iroha_executor_data_model::permission::sorafs::{CanOperateSorafsPopIssuer},
     iroha_executor_data_model::permission::sorafs::{CanUpsertSorafsProviderCredit},
     iroha_executor_data_model::permission::sorafs::{CanManageSorafsStreamTokenCustody},
+    iroha_executor_data_model::permission::sorafs::{CanManageSorafsFinalPromotionCustody},
+    iroha_executor_data_model::permission::sorafs::{CanOperateSorafsFinalPromotion},
+    iroha_executor_data_model::permission::sorafs::{CanCheckSorafsFinalPromotion},
+    iroha_executor_data_model::permission::sorafs::{CanManageSorafsFinalPromotionAccountCustody},
+    iroha_executor_data_model::permission::sorafs::{CanCheckSorafsFinalPromotionAccountCustody},
     iroha_executor_data_model::permission::soranet::{CanManageSoranetVpnQuoteIssuers},
     iroha_executor_data_model::permission::soranet::{CanIssueSoranetVpnQuote},
     iroha_executor_data_model::permission::soranet::{CanIngestSoranetPrivacy},
@@ -883,11 +888,13 @@ mod nexus {
 mod sorafs {
     use super::*;
     use iroha_executor_data_model::permission::sorafs::{
-        CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
-        CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
-        CanManageSorafsPopRegistry, CanManageSorafsStreamTokenCustody, CanOperateSorafsPopIssuer,
-        CanSetSorafsPricing, CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry,
-        CanUpsertSorafsProviderCredit,
+        CanBindSorafsAlias, CanCheckSorafsFinalPromotion,
+        CanCheckSorafsFinalPromotionAccountCustody, CanCompleteSorafsReplicationOrder,
+        CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
+        CanManageSorafsFinalPromotionAccountCustody, CanManageSorafsFinalPromotionCustody,
+        CanManageSorafsModeration, CanManageSorafsPopRegistry, CanManageSorafsStreamTokenCustody,
+        CanOperateSorafsFinalPromotion, CanOperateSorafsPopIssuer, CanSetSorafsPricing,
+        CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry, CanUpsertSorafsProviderCredit,
     };
     impl_owned_permission!(
         CanBindSorafsAlias,
@@ -903,6 +910,11 @@ mod sorafs {
         CanSetSorafsReservePolicy,
         CanUpsertSorafsProviderCredit,
         CanManageSorafsStreamTokenCustody,
+        CanManageSorafsFinalPromotionCustody,
+        CanOperateSorafsFinalPromotion,
+        CanCheckSorafsFinalPromotion,
+        CanManageSorafsFinalPromotionAccountCustody,
+        CanCheckSorafsFinalPromotionAccountCustody,
     );
 }
 mod soranet {
@@ -1979,3 +1991,11 @@ mod tests;
 #[cfg(test)]
 #[path = "stream_token_custody_permission_tests.rs"]
 mod stream_token_custody_permission_tests;
+
+#[cfg(test)]
+#[path = "final_promotion_permission_tests.rs"]
+mod final_promotion_permission_tests;
+
+#[cfg(test)]
+#[path = "final_promotion_account_permission_tests.rs"]
+mod final_promotion_account_permission_tests;

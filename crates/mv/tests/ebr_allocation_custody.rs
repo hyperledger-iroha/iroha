@@ -11,6 +11,11 @@ use std::{
 };
 
 use concread::ebrcell::EbrCell;
+use mv::{
+    allocation::{AllocationBudget, AllocationCharge},
+    cell::{Cell, CellAllocationCharges},
+    json::{CellSeeded, ValueFromJson},
+};
 
 struct ObservedAllocator;
 
@@ -166,6 +171,83 @@ fn collect_until(mut reclaimed: impl FnMut() -> bool) {
         );
         crossbeam_epoch::pin().flush();
         std::thread::yield_now();
+    }
+}
+
+struct RestoredCellCharge {
+    credit: AllocationCharge,
+    watched: bool,
+}
+
+impl Drop for RestoredCellCharge {
+    fn drop(&mut self) {
+        if self.watched {
+            assert!(
+                DEALLOCATED.load(SeqCst),
+                "restored Cell returned credits before physical EBR deallocation"
+            );
+            assert_eq!(FREED_SIZE.load(SeqCst), self.credit.layout().size());
+            assert_eq!(FREED_ALIGN.load(SeqCst), self.credit.layout().align());
+            WATCHED_ALLOCATION.store(0, SeqCst);
+        }
+        // The original credit field is dropped after the physical-free checks.
+    }
+}
+
+#[test]
+fn restored_cell_current_and_undo_refund_only_after_actual_ebr_deallocation() {
+    let _serial = TEST_SERIAL.lock().unwrap();
+    for watch_undo in [false, true] {
+        let [current_layout, undo_layout] = Cell::<u64, RestoredCellCharge>::allocation_layouts();
+        let pair_bytes = current_layout.size() + undo_layout.size();
+        let budget = AllocationBudget::new(pair_bytes);
+        let mut reservation = budget
+            .try_reserve_layouts([current_layout, undo_layout])
+            .unwrap();
+        let charges = CellAllocationCharges::new(
+            RestoredCellCharge {
+                credit: reservation.try_split(current_layout).unwrap(),
+                watched: !watch_undo,
+            },
+            RestoredCellCharge {
+                credit: reservation.try_split(undo_layout).unwrap(),
+                watched: watch_undo,
+            },
+        );
+        assert_eq!(reservation.remaining_bytes(), 0);
+        let cell = CellSeeded {
+            seed: ValueFromJson::<u64>::new(),
+        }
+        .deserialize_charged(
+            &mut norito::json::Parser::new(r#"{"revert":7,"blocks":11}"#),
+            charges,
+        )
+        .unwrap();
+        let unrelated = crossbeam_epoch::pin();
+        let current = cell.view();
+        let undo = cell.predecessor_view();
+        assert_eq!(*current, 11);
+        assert_eq!(*undo, Some(7));
+        DEALLOCATED.store(false, SeqCst);
+        FREED_SIZE.store(0, SeqCst);
+        FREED_ALIGN.store(0, SeqCst);
+        // repr(C) EBR allocations put the actual non-ZST value first. Observe
+        // each restored allocation independently, including Option<u64> undo.
+        let pointer = if watch_undo {
+            std::ptr::from_ref(undo.get()) as usize
+        } else {
+            std::ptr::from_ref(current.get()) as usize
+        };
+        WATCHED_ALLOCATION.store(pointer, SeqCst);
+        drop((current, undo));
+        drop(cell);
+        unrelated.flush();
+        assert!(!DEALLOCATED.load(SeqCst));
+        assert_eq!(budget.reserved_bytes(), pair_bytes);
+        drop(unrelated);
+        collect_until(|| budget.reserved_bytes() == 0);
+        assert!(DEALLOCATED.load(SeqCst));
+        assert_eq!(WATCHED_ALLOCATION.load(SeqCst), 0);
     }
 }
 
