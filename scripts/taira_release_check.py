@@ -29,7 +29,8 @@ filesystems stream only when all remaining copies fit beside the working reserve
 later Cargo writes can still allocate new blocks for changed cloned content.
 The default basic scope keeps deployment custody, authentication, application and
 startup admission checks plus real four-validator Applied transactions and restart.
-After configuration, MV and Concread ownership controls execute before exact Pending Kura
+After configuration, explicit MV ownership stages and the complete admitted-map,
+Concread admission/writer/checkpoint source census execute before exact Pending Kura
 recovery controls. Either prerequisite stops qualification on failure before
 other startup checks, shipping builds or network execution. These controls use
 the same complete native compile graph; focused development checks can compile
@@ -1961,6 +1962,15 @@ MV_OWNERSHIP_STAGES = (
         'storage::detached_tests::snapshot_json_and_history_projection_create_new_owners_with_exact_images',
         'storage::detached_tests::unchanged_replacement_and_undo_only_commit_have_distinct_pair_identity',
     )),
+    ('funded replacement restores original current and undo owners', (
+        'storage::admitted_tests::admitted_replacement_retains_mode_and_restored_preimages_through_detachment',
+        'storage::admitted_tests::admitted_replacement_contention_names_only_the_original_held_writer',
+        'storage::admitted_tests::admitted_replacement_of_empty_undo_still_records_replace_mode',
+        'storage::admitted_tests::admitted_replacement_final_undo_clear_refusal_preserves_original_pair',
+        'storage::admitted_tests::admitted_replacement_factory_cleanup_cannot_return_a_partial_owner',
+        'storage::admitted_tests::admitted_replacement_second_plan_refusal_returns_a_healthy_original_pair',
+        'storage::admitted_tests::admitted_replacement_planning_refusal_discards_the_restored_private_prefix',
+    )),
 )
 
 MV_EBR_STAGES = (("actual epoch allocation and retained capacity custody", (
@@ -2087,7 +2097,7 @@ CORE_STAGES += CORE_NATIVE_CONNECTION_STAGES
 
 
 MV_ADMITTED_MAP_STAGES = (
-    ('finite admitted map custody and original writer start', (
+    ('finite admitted map custody and original successors', (
         'complete_demand_refusal_allocates_nothing_and_retries_the_original_input_after_release',
         'nonuniform_nested_payloads_split_and_grow_while_original_readers_retain_actual_credits',
         'detached_public_owner_rejects_foreign_and_busy_maps_without_readmission_or_copy',
@@ -2106,6 +2116,34 @@ MV_ADMITTED_MAP_STAGES = (
         'caught_checkpoint_edit_panic_cannot_read_detach_or_publish_the_original_cursor',
         'checkpoint_capacity_refusal_keeps_child_state_and_original_input_for_retry',
         'checkpoint_buffer_refund_panic_restores_parent_ownership_and_forbids_publication',
+    )),
+    ('funded replacement and joint Storage allocation custody', (
+        'storage_replacement_funds_every_copy_and_preserves_original_readers',
+        'storage_replacement_capacity_refusal_restores_both_roots_after_partial_work',
+        'storage_replacement_copy_panic_aborts_original_pair_and_poisons_retry',
+        'prepaid_storage_reads_need_no_heap_credit_or_payload_copy',
+        'storage_joint_construction_refuses_before_any_original_tree_allocation',
+        'storage_block_refusal_preserves_both_original_trees_and_contention_wake',
+        'storage_insertion_reserves_whole_pair_before_copies_and_retries_original_inputs',
+        'storage_charged_splits_abort_without_allocation_and_preserve_sibling_first_absence',
+        'storage_clone_unwind_cannot_apply_part_of_the_original_pair',
+        'storage_touched_key_destructor_unwind_drains_original_buffer_before_refund',
+        'storage_pair_apply_retirement_panic_forbids_parent_publication',
+        'storage_touched_buffer_growth_panic_preserves_single_custody_of_moved_keys',
+    )),
+    ('funded map removal and joint Storage preimages', (
+        'admitted_removal_funds_all_path_sibling_and_separator_copies_until_empty',
+        'admitted_removal_refusal_and_absence_preserve_original_private_generation',
+        'admitted_removal_nested_abort_restores_original_nodes_at_full_capacity',
+        'admitted_removal_clone_unwind_cannot_publish_and_refunds_private_copies',
+        'storage_missing_removal_admits_first_absence_and_touch_before_remaining_clean',
+        'storage_removal_reserves_the_whole_pair_and_retains_returned_value_after_abort',
+        'storage_removal_merges_abort_at_full_budget_and_preserve_sibling_first_absence',
+        'storage_removal_copy_panic_before_and_after_undo_forbids_partial_apply',
+        'storage_removal_factory_cleanup_panic_keeps_transaction_rollback_armed',
+        'storage_missing_removal_planning_refusal_preserves_unmodified_witness_owners',
+    )),
+    ('original admitted writer start', (
         'admitted_empty_writer_starts_without_edits_and_grows_under_separate_admission',
         'admitted_populated_writer_shares_original_entries_and_aborts_without_allocations',
         'admitted_writer_start_refuses_one_byte_below_and_accepts_exact_complete_demand',
@@ -2121,6 +2159,34 @@ CONCREAD_STAGES = (
         'bptree::admission::tests::initial_node_admission_refusal_constructs_no_root_or_reader',
         'bptree::admission::tests::retained_edits_keep_the_original_cursor_and_refused_tracking_then_publish_once',
         'bptree::admission::tests::tracking_growth_checks_overflow_before_changing_demand_or_allocating',
+        'bptree::admission::tests::held_writer_demand_is_allocation_free_and_matches_admission_before_any_growth',
+        'bptree::admission::tests::nested_checkpoint_demand_tracks_retirement_growth_and_exact_abort_restoration',
+        'bptree::admission::tests::stale_observed_demand_never_skips_replanning_after_a_private_edit',
+        'bptree::admission::tests::held_demand_rechecks_actual_nested_layouts_and_returns_unsupported_original_input',
+        'bptree::admission::tests::whole_operation_demand_sum_checks_both_counts_and_preserves_refused_total',
+        'bptree::admission::tests::empty_writer_acquisition_funds_only_shells_and_retains_the_original_root',
+        'bptree::admission::tests::nested_writer_and_clear_callbacks_hold_both_original_locks_before_joint_refusal',
+        'bptree::admission::tests::clear_retires_the_entire_multilevel_tree_only_after_original_reader_release',
+        'bptree::admission::tests::checkpoint_clear_refusal_and_nested_apply_preserve_exact_outer_rollback',
+        'bptree::admission::tests::admission_panic_poison_rejects_new_writer_and_clear_before_callbacks',
+        'bptree::admission::tests::applying_retaining_transfers_both_checkpoints_before_any_original_charge_drop',
+        'bptree::admission::tests::completed_clear_cannot_publish_after_caught_unused_funding_panic',
+        'bptree::admission::tests::writer_and_clear_generation_exhaustion_refuse_before_admission_or_allocation',
+        'bptree::admission::tests::staged_pair_commit_retains_all_cleanup_until_both_original_locks_are_released',
+        'bptree::admission::tests::prepared_pair_abort_releases_original_owners_without_publishing_either_tree',
+        'bptree::admission::tests::removal_planning_rejects_descendant_minimum_before_admission_or_mutation',
+        'bptree::admission::tests::removal_planning_payload_visits_are_height_bounded_and_match_exact_refusal',
+        'bptree::admission::tests::original_owned_prepaid_edits_replan_and_refuse_before_copies_without_a_writer',
+        'bptree::admission::tests::original_owned_copy_panic_blocks_read_edit_and_reacquisition_without_poisoning_map',
+        'bptree::admission::tests::original_owned_stale_refusal_retains_actual_private_allocations_until_abort',
+        'bptree::admission::tests::prepaid_private_copy_updates_append_and_replacement_without_allocating_or_replanning',
+        'bptree::admission::tests::prepaid_private_copy_refuses_shared_leaf_without_allocating_or_mutating_it',
+        'bptree::admission::tests::prepaid_private_copy_retains_actual_allocation_custody_through_stale_abort',
+        'bptree::admission::tests::prepaid_private_copy_comparison_unwind_requires_original_owner_abort',
+        'bptree::admission::tests::prepaid_current_footprint_tracks_original_split_merge_overwrite_and_clear_nodes',
+        'bptree::admission::tests::prepaid_current_footprint_preserves_parent_through_checkpoint_and_publication_abort',
+        'bptree::admission::tests::prepaid_current_footprint_distinguishes_resident_floor_from_refundable_old_custody',
+        'bptree::admission::tests::prepaid_reader_predecessor_retains_original_generation_without_allocating_and_rejects_aba',
     )),
     ('admitted original B+ tree writer start', (
         'bptree::admission::tests::writer_start::start_plan_is_only_two_shells_and_empty_tracking_with_checked_generation',
@@ -2135,6 +2201,11 @@ CONCREAD_STAGES = (
         'internals::bptree::cursor::checkpoint::tests::nested_apply_transfers_original_buffers_and_outer_abort_restores_them',
         'internals::bptree::cursor::checkpoint::tests::applied_newest_tag_survives_and_sibling_reuse_follows_actual_child_reclamation',
         'internals::bptree::cursor::checkpoint::tests::exhausted_private_tag_refuses_without_allocating_or_changing_any_owner',
+        'internals::bptree::cursor::checkpoint::tests::untracked_final_generation_refuses_nested_checkpoint_and_restores_parent',
+        'internals::bptree::cursor::checkpoint::tests::untracked_abort_restores_parent_nodes_and_cuts_without_allocating_after_growth',
+        'internals::bptree::cursor::checkpoint::tests::public_untracked_checkpoint_reads_saved_values_and_applies_without_allocation',
+        'internals::bptree::cursor::checkpoint::tests::caught_untracked_insert_remove_and_mutable_clone_panics_fail_the_original_cursor',
+        'internals::bptree::cursor::checkpoint::tests::untracked_checkpoint_retains_only_live_rollback_metadata',
     )),
 )
 

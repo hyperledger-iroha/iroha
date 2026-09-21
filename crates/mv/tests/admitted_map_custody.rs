@@ -1465,6 +1465,204 @@ fn seed_storage(
     });
 }
 
+fn seed_replacement_storage(
+    storage: &AdmittedStorage,
+    budget: &AllocationBudget,
+    counters: &Arc<Counters>,
+) {
+    seed_storage(storage, budget, counters, 64);
+    budget.with_deferred_refund_notifications(|| {
+        let mut block = storage
+            .try_block_admitted(budget, |r| component_policy(r, counters))
+            .unwrap();
+        let mut tx = block.try_transaction().unwrap();
+        for order in 0..16 {
+            let (query, unused) = input(budget, order);
+            drop(unused);
+            drop(
+                tx.try_remove_admitted(&query, budget, |r| component_policy(r, counters))
+                    .unwrap(),
+            );
+        }
+        for order in (16..32).chain(64..80) {
+            let (key, value) = input(budget, order);
+            drop(
+                tx.try_insert_admitted(key, value, budget, |r| component_policy(r, counters))
+                    .unwrap(),
+            );
+        }
+        tx.apply();
+        block.commit();
+    });
+}
+
+#[test]
+fn storage_replacement_funds_every_copy_and_preserves_original_readers() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 24);
+    let counters = Arc::new(Counters::default());
+    let storage = storage(&budget, &counters);
+    seed_replacement_storage(&storage, &budget, &counters);
+    let retained = storage.view();
+    let original_pointer = retained.get(&20).unwrap().pointer();
+    let original_id = retained.get(&20).unwrap().id();
+    let copies_before = counters.values.load(SeqCst);
+    budget.with_deferred_refund_notifications(|| {
+        let first = NEXT_RECORD.load(SeqCst);
+        let (block, allocations) = counted(|| {
+            storage
+                .try_block_and_revert_admitted(&budget, |r| component_policy(r, &counters))
+                .unwrap()
+        });
+        assert_eq!(
+            allocations,
+            NEXT_RECORD.load(SeqCst) - first,
+            "every replacement allocation needs its original charge"
+        );
+        assert!(counters.values.load(SeqCst) > copies_before);
+        assert_eq!(block.mode(), mv::BlockMode::Replace);
+        assert!(block.is_dirty());
+        assert!(block.revert_map().is_empty());
+        assert_eq!(block.len(), 64);
+        for order in 0..64 {
+            assert_eq!(block.get(&order).unwrap().order, order);
+        }
+        assert!(block.get(&64).is_none());
+        assert_ne!(block.get(&20).unwrap().pointer(), original_pointer);
+        assert_live_credits(&budget);
+        block.commit();
+    });
+    assert_eq!(storage.view().len(), 64);
+    assert_eq!(retained.get(&20).unwrap().pointer(), original_pointer);
+    assert!(retained.get(&0).is_none());
+    assert!(retained.get(&64).is_some());
+    assert!(!RECORDS[original_id].freed.load(SeqCst));
+    assert!(!RECORDS[original_id].refunded.load(SeqCst));
+    assert_live_credits(&budget);
+    drop(retained);
+    drop(storage);
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn storage_replacement_capacity_refusal_restores_both_roots_after_partial_work() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 24);
+    let counters = Arc::new(Counters::default());
+    let storage = storage(&budget, &counters);
+    seed_replacement_storage(&storage, &budget, &counters);
+    let retained = storage.view();
+    let pointer = retained.get(&20).unwrap().pointer();
+    let baseline = budget.reserved_bytes();
+    budget.with_deferred_refund_notifications(|| {
+        let mut hold = Some(
+            budget
+                .try_reserve_bytes(budget.limit_bytes() - baseline)
+                .unwrap(),
+        );
+        let error = without_allocations(|| {
+            storage
+                .try_block_and_revert_admitted(&budget, |_| {
+                    panic!("joint shell refusal precedes policy construction")
+                })
+                .err()
+                .unwrap()
+        });
+        assert!(matches!(error, StorageAdmissionError::Capacity(_)));
+        drop(hold.take());
+        let copies_before = counters.values.load(SeqCst);
+        let first = NEXT_RECORD.load(SeqCst);
+        let (error, allocations) = counted(|| {
+            storage
+                .try_block_and_revert_admitted(&budget, |r| {
+                    // Consume remaining free capacity only once a real preimage copy
+                    // has started. Its already admitted edit can finish; a later edit
+                    // must refuse and discard all private work without undo replay.
+                    if hold.is_none() && counters.values.load(SeqCst) > copies_before {
+                        hold = Some(
+                            budget
+                                .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+                                .unwrap(),
+                        );
+                    }
+                    component_policy(r, &counters)
+                })
+                .err()
+                .expect("later edit exceeds the remaining original capacity")
+        });
+        assert!(matches!(error, StorageAdmissionError::Capacity(_)));
+        assert!(counters.values.load(SeqCst) > copies_before);
+        assert_eq!(allocations, NEXT_RECORD.load(SeqCst) - first);
+        reclaimed_since(first);
+        assert_eq!(
+            budget.reserved_bytes(),
+            baseline + hold.as_ref().unwrap().remaining_bytes()
+        );
+        drop(hold);
+        assert_eq!(budget.reserved_bytes(), baseline);
+        assert_eq!(storage.view().get(&20).unwrap().pointer(), pointer);
+        assert!(storage.view().get(&0).is_none());
+        assert!(storage.view().get(&64).is_some());
+        let retry = storage
+            .try_block_and_revert_admitted(&budget, |r| component_policy(r, &counters))
+            .unwrap();
+        assert_eq!(retry.len(), 64);
+        assert_eq!(retry.get(&0).unwrap().order, 0);
+        assert_eq!(retry.get(&20).unwrap().order, 20);
+        assert!(retry.get(&64).is_none());
+        without_allocations(|| drop(retry));
+    });
+    assert_live_credits(&budget);
+    drop(retained);
+    drop(storage);
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn storage_replacement_copy_panic_aborts_original_pair_and_poisons_retry() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 24);
+    let counters = Arc::new(Counters::default());
+    let storage = storage(&budget, &counters);
+    seed_replacement_storage(&storage, &budget, &counters);
+    let retained = storage.view();
+    let pointer = retained.get(&20).unwrap().pointer();
+    let baseline = budget.reserved_bytes();
+    budget.with_deferred_refund_notifications(|| {
+        let first = NEXT_RECORD.load(SeqCst);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _ = storage.try_block_and_revert_admitted(&budget, |r| Policy {
+                fail_at: Some(2),
+                ..component_policy(r, &counters)
+            });
+        }));
+        assert!(result.is_err());
+        reclaimed_since(first);
+        assert_eq!(budget.reserved_bytes(), baseline);
+        assert_eq!(storage.view().get(&20).unwrap().pointer(), pointer);
+        assert!(storage.view().get(&0).is_none());
+        assert!(storage.view().get(&64).is_some());
+        let error = without_allocations(|| {
+            storage
+                .try_block_and_revert_admitted(&budget, |_| {
+                    panic!("poison refuses before admission")
+                })
+                .err()
+                .unwrap()
+        });
+        assert!(matches!(error, StorageAdmissionError::Poisoned));
+    });
+    drop(retained);
+    drop(storage);
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
 #[test]
 fn prepaid_storage_reads_need_no_heap_credit_or_payload_copy() {
     fn scan(storage: &impl StorageReadOnly<Payload, Payload>, count: usize) {

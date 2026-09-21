@@ -173,6 +173,49 @@ fn partition(
         .expect("partition of original complete demand")
 }
 
+struct AdmittedWriters<'a, K: Key, V: Value, P: ClonePlanning<K, V>> {
+    revert: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, Option<V>, Prepaid<UndoPolicy<P>>>>,
+    blocks: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, Prepaid<P>>>,
+}
+
+// The original physical guards outlive every input copy, policy and returned
+// payload. A normal second-plan refusal remains a local refusal, not a panic.
+fn insert_copy<K: Key, V: Value, P: ClonePlanning<K, V>>(
+    writer: &mut BptreeMapWriteTxn<'_, K, V, Prepaid<P>>,
+    key: &K,
+    value: &V,
+    budget: &AllocationBudget,
+    provider: &mut impl FnMut(AllocationReservation) -> P,
+    notification: &ReleaseNotification,
+) -> Result<(), StorageAdmissionError> {
+    let current = writer.insertion_demand(key)?;
+    let mut copies = AllocationDemand::new();
+    P::plan_key(key, &mut copies)?;
+    P::plan_value(value, &mut copies)?;
+    let mut total = current;
+    total.add_demand(copies)?;
+    let mut reservation = budget.try_reserve_bytes(total.bytes())?;
+    let current_reservation = partition(&mut reservation, current);
+    let mut copier = provider(reservation);
+    let key = copier.clone_key(key);
+    let value = copier.clone_value(value);
+    let wait = notification.observe();
+    let previous = writer
+        .try_insert_admitted(key, value, |actual| {
+            if actual != current {
+                return Err(StorageAdmissionError::Changed);
+            }
+            Ok(provider(current_reservation))
+        })
+        .map_err(|((key, value), error)| {
+            drop((key, value));
+            acquisition_error(error, wait)
+        })?;
+    drop(previous);
+    drop(copier);
+    Ok(())
+}
+
 impl<K: Key, V: Value, P: ClonePlanning<K, V>> Storage<K, V, Prepaid<P>> {
     /// Construct both original trees from one reservation of their combined layouts.
     ///
@@ -207,23 +250,19 @@ impl<K: Key, V: Value, P: ClonePlanning<K, V>> Storage<K, V, Prepaid<P>> {
         })
     }
 
-    /// Acquire both original writers and clear the previous undo with one admission.
-    ///
-    /// The callback factory has the same contract as construction. Enclose this
-    /// call and the entire returned block lifetime in the budget's synchronous
-    /// refund-notification scope. Refusal never waits or publishes either tree.
-    pub fn try_block_admitted(
+    // Acquisition and publication use the same undo-before-current order.
+    // Clear admission includes the new empty undo leaf; retained admission
+    // leaves every original preimage available to replacement or restoration.
+    fn try_original_writers(
         &self,
         budget: &AllocationBudget,
-        mut provider: impl FnMut(AllocationReservation) -> P,
-    ) -> Result<Block<'_, K, V, Prepaid<P>>, StorageAdmissionError> {
-        // Use the same undo-before-current lock order as publication preparation.
-        // The outer clear runs only after the inner unchanged writer is acquired
-        // and the complete original shell/clear demand is reserved.
+        provider: &mut impl FnMut(AllocationReservation) -> P,
+        clear_undo: bool,
+    ) -> Result<AdmittedWriters<'_, K, V, P>, StorageAdmissionError> {
         let mut blocks = None;
         let undo_wait = self.revert_released.observe();
         let revert = acquire_writer(&self.revert_released, || {
-            self.revert.try_clear_admitted(|undo| {
+            let admit_pair = |undo: AllocationDemand| {
                 let mut undo_provider = None;
                 let current_wait = self.blocks_released.observe();
                 let writer = acquire_writer(&self.blocks_released, || {
@@ -239,16 +278,168 @@ impl<K: Key, V: Value, P: ClonePlanning<K, V>> Storage<K, V, Prepaid<P>> {
                 .map_err(|error| acquisition_error(error, current_wait))?;
                 blocks = Some(writer);
                 Ok(undo_provider.expect("joint original undo admission"))
-            })
+            };
+            if clear_undo {
+                self.revert.try_clear_admitted(admit_pair)
+            } else {
+                self.revert.try_write_admitted(admit_pair)
+            }
         })
         .map_err(|error| acquisition_error(error, undo_wait))?;
+        Ok(AdmittedWriters {
+            revert,
+            blocks: blocks.expect("joint original current writer"),
+        })
+    }
+
+    /// Acquire both original writers and clear the previous undo with one admission.
+    ///
+    /// The callback factory has the same contract as construction. Enclose this
+    /// call and the entire returned block lifetime in the budget's synchronous
+    /// refund-notification scope. Refusal never waits or publishes either tree.
+    pub fn try_block_admitted(
+        &self,
+        budget: &AllocationBudget,
+        mut provider: impl FnMut(AllocationReservation) -> P,
+    ) -> Result<Block<'_, K, V, Prepaid<P>>, StorageAdmissionError> {
+        let AdmittedWriters { revert, blocks } =
+            self.try_original_writers(budget, &mut provider, true)?;
+        drop(provider);
         Ok(Block::new(
             revert,
-            blocks.expect("joint original current writer"),
+            blocks,
             false,
             &self.publication,
             self.publication.capture(),
             BlockMode::Ordinary,
+        ))
+    }
+
+    /// Restore both exact images from an already authenticated snapshot.
+    ///
+    /// The caller must fence source capture with its publication generation and
+    /// authenticate the snapshot schema before restoration. Source roots and
+    /// payloads remain borrowed, so any refusal permits retry from the same
+    /// original snapshot. No current value or undo tombstone is inferred.
+    ///
+    /// Initial tree and writer storage, then each map edit and incoming payload
+    /// copy, are admitted before allocation using the supplied original policy.
+    /// The complete new store remains private until both images and factory
+    /// cleanup succeed. Keep restoration and all returned owners inside the
+    /// budget's refund-notification discipline. Source decoding, native mutex and
+    /// identity storage still require separate admission; this constructor does
+    /// not establish an aggregate execution or restore-work bound.
+    pub fn try_from_snapshot_with_node_custody<M: StorageMode<K, V>>(
+        snapshot: &super::snapshot::Snapshot<'_, K, V, M>,
+        budget: &AllocationBudget,
+        mut provider: impl FnMut(AllocationReservation) -> P,
+    ) -> Result<Self, StorageAdmissionError> {
+        let restored = Self::try_new_with_node_custody(budget, &mut provider)?;
+        let AdmittedWriters {
+            mut revert,
+            mut blocks,
+        } = restored.try_original_writers(budget, &mut provider, false)?;
+        for (key, value) in snapshot.current().iter() {
+            insert_copy(
+                &mut blocks,
+                key,
+                value,
+                budget,
+                &mut provider,
+                &restored.blocks_released,
+            )?;
+        }
+        for (key, value) in snapshot.revert_map().iter() {
+            insert_copy(
+                &mut revert,
+                key,
+                value,
+                budget,
+                &mut |reservation| UndoPolicy(provider(reservation)),
+                &restored.revert_released,
+            )?;
+        }
+        drop(provider);
+        // No external reader can observe this newly constructed target before
+        // both original writers have committed. Error/unwind drops it entirely.
+        blocks.release_with(|writer| writer.commit());
+        revert.release_with(|writer| writer.commit());
+        Ok(restored)
+    }
+
+    /// Acquire a replacement block, restoring the last block's original preimages.
+    ///
+    /// The original undo writer is acquired before the current writer. Their
+    /// shells are admitted together; each restored entry then admits its complete
+    /// map edit and any incoming payload copies before allocating. Undo is cleared
+    /// only after every preimage has been restored in the private current tree.
+    /// A refusal drops both private writers without publishing either tree, even
+    /// when an earlier preimage was already restored. This is per-edit admission,
+    /// not one aggregate reservation for the complete replacement.
+    ///
+    /// `provider` must consume only the supplied original reservation. All copies
+    /// use its explicit payload policy, including keys and values retained by the
+    /// committed undo generation. Keep this call and the complete returned block
+    /// lifetime inside the budget's synchronous refund-notification scope. Never
+    /// await capacity while holding the returned block. A panic while these
+    /// physical writers remain held aborts them and poisons their original locks.
+    /// No replacement block is returned if execution or factory cleanup unwinds.
+    pub fn try_block_and_revert_admitted(
+        &self,
+        budget: &AllocationBudget,
+        mut provider: impl FnMut(AllocationReservation) -> P,
+    ) -> Result<Block<'_, K, V, Prepaid<P>>, StorageAdmissionError> {
+        let AdmittedWriters {
+            mut revert,
+            mut blocks,
+        } = self.try_original_writers(budget, &mut provider, false)?;
+        let undo_wait = self.revert_released.observe();
+        let predecessor = self.publication.capture();
+
+        // Borrow the original held undo root throughout restoration. A private
+        // current edit cannot invalidate these keys or nested preimage owners.
+        for (key, before) in revert.iter() {
+            match before {
+                Some(value) => {
+                    insert_copy(
+                        &mut blocks,
+                        key,
+                        value,
+                        budget,
+                        &mut provider,
+                        &self.blocks_released,
+                    )?;
+                }
+                None => {
+                    let current_wait = self.blocks_released.observe();
+                    let previous = blocks
+                        .try_remove_admitted(key, |demand| {
+                            Ok::<_, StorageAdmissionError>(provider(
+                                budget.try_reserve_bytes(demand.bytes())?,
+                            ))
+                        })
+                        .map_err(|error| acquisition_error(error, current_wait))?;
+                    drop(previous);
+                }
+            }
+        }
+        revert
+            .try_clear_admitted(|demand| {
+                Ok::<_, StorageAdmissionError>(UndoPolicy(provider(
+                    budget.try_reserve_bytes(demand.bytes())?,
+                )))
+            })
+            .map_err(|error| acquisition_error(error, undo_wait))?;
+        // User-owned factory cleanup must finish while both writers still abort
+        // on unwind; no partially restored block may escape a failed destructor.
+        drop(provider);
+        Ok(Block::new(
+            revert,
+            blocks,
+            true,
+            &self.publication,
+            predecessor,
+            BlockMode::Replace,
         ))
     }
 }

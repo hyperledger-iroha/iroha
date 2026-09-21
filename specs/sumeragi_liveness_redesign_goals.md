@@ -1,5 +1,7 @@
 # Sumeragi liveness redesign goals
 
+Current retained-execution prerequisite: [admitted Storage replacement](../docs/history/2026-09-21/admitted-storage-replacement.md) now funds rollback through the original current/undo trees and preserves both committed roots on refusal. Concrete World payload, restore/history and aggregate execution admission remain required. The original Apply service already survives startup; unfinished-height recovery must retain a funded execution owner before exposing validation markers. This does not activate the retained production validator or close L1–L6.
+
 Current participant custody work: the [source-coupled record](../docs/history/2026-09-21/participant-publication-custody.md) describes the original-Kura readback boundary and distinguishes remaining scalar AMX consumers from the new Native Decision path. The latter owns its sealed application markers and does not require the old participant representation. Retire that representation with its remaining consumers; do not reopen rejected MergeQC execution. Scoped checkpoint133 validation does not close L1–L6.
 
 Work location: `/Users/takemiyamakoto/dev/iroha`, branch `optimizations`. All ongoing source edits and validation use this checkout; temporary source checkouts are retired from this workflow.
@@ -1560,7 +1562,7 @@ The same stages cover EBR Cell pairs and current-only replacement, retaining
 unscheduled old allocations until unlock before entering the epoch collector.
 Successful physical release disarms poisoning during later retirement cleanup.
 Arbitrary cleanup and wake callbacks run after every participant unlocks. Carry
-these owners through concrete model payload policies, closed removal/mutation,
+these owners through concrete model payload policies, closed mutation,
 State generation refusal and configured aggregate memory/work admission; native
 runtime and identity allocation remain outside this boundary. The
 [allocation-free State scan](../docs/history/2026-09-21/allocation-free-state-scans.md)

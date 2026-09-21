@@ -7,10 +7,10 @@
 use crate::{
     Key, Value,
     cell::{Block as CellBlock, Cell},
-    storage::{Block as StorageBlock, Storage, StorageReadOnly},
+    storage::{Block as StorageBlock, Storage, StorageMode, StorageReadOnly},
 };
 use concread::{
-    bptree::{BptreeMap, BptreeMapReadTxn},
+    bptree::{BptreeMap, BptreeMapReadTxn, MapMode},
     ebrcell::EbrCell,
 };
 use core::{fmt, marker::PhantomData};
@@ -456,7 +456,7 @@ where
         })
     }
 }
-impl<K, V> JsonSerialize for Storage<K, V>
+impl<K, V, M: StorageMode<K, V>> JsonSerialize for Storage<K, V, M>
 where
     K: JsonKeyCodec + Key,
     V: JsonSerialize + Value,
@@ -473,7 +473,7 @@ where
         out.push('}');
     }
 }
-impl<K, V> JsonSerialize for StorageBlock<'_, K, V>
+impl<K, V, M: StorageMode<K, V>> JsonSerialize for StorageBlock<'_, K, V, M>
 where
     K: JsonKeyCodec + Key,
     V: JsonSerialize + Value,
@@ -507,8 +507,8 @@ where
 /// previously touched key. A newly touched key records its current value as undo,
 /// even when removing an absent key. Both maps are streamed in storage-key order;
 /// no existing key, value, or full store is cloned or decoded.
-pub fn json_serialize_storage_block_with_changes<K, V>(
-    block: &StorageBlock<'_, K, V>,
+pub fn json_serialize_storage_block_with_changes<K, V, M: StorageMode<K, V>>(
+    block: &StorageBlock<'_, K, V, M>,
     changes: &BTreeMap<K, Option<V>>,
     out: &mut String,
 ) where
@@ -655,7 +655,7 @@ where
     }
     out.push('}');
 }
-fn write_blocks<K, V>(blocks: &BptreeMapReadTxn<'_, K, V>, out: &mut String)
+fn write_blocks<K, V, M: MapMode>(blocks: &BptreeMapReadTxn<'_, K, V, M>, out: &mut String)
 where
     K: JsonKeyCodec + Clone + Ord + fmt::Debug + Send + Sync + 'static,
     V: JsonSerialize + Clone + Send + Sync + 'static,

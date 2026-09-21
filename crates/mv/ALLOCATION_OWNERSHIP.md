@@ -53,7 +53,8 @@ most two additional separator copies per level. Complete admission precedes
 buffer growth or mutation. Missing keys need no admission or allocation. The
 same removal engine serves both modes; no alternate tree or inverse-insert
 rollback is introduced. `MapAdmissionError` names refusal for acquisition and
-all closed map edits. Storage removal still needs joint undo/touch admission.
+all closed map edits. Storage removal combines that demand with its original
+undo and touched-key owners as described below.
 
 Attached writers in either map mode lend exclusive transaction checkpoints. A
 new private generation tag forces edits to copy parent nodes; nested guards
@@ -98,6 +99,17 @@ reservations partition one original admission without another pool acquisition.
 Both map construction demands and block shell/undo-clear demands are likewise
 combined before allocation. Busy acquisition returns the original release observer.
 
+Prepaid block replacement now acquires the original undo and current writers in
+that order and funds their shells together. It borrows the held undo preimages,
+admits each restoration's map edit and incoming payload copies, then admits undo
+clear. Capacity or planning refusal discards both private trees, including an
+already restored prefix. Successful acquisition retains replacement mode and a
+fresh empty undo tree; subsequent edits record preimages from that restored state.
+Second-plan refusal remains typed, and provider cleanup completes before a block
+can escape. The [replacement record](../../docs/history/2026-09-21/admitted-storage-replacement.md)
+describes allocator and retry controls. This is per-edit admission, not a bound
+on complete replacement work or aggregate State execution.
+
 Private apply moves both checkpoints' retired bookkeeping without destruction,
 then releases it with the parent failure flag still armed. Final pair publication
 prepares both map owners before node transfer, retains physical guards and cleanup
@@ -110,7 +122,7 @@ records scoped evidence and remaining boundaries.
 Production State still instantiates Untracked maps. Initial root and reader blocks
 carry exact original charges, but native mutex/runtime and MV identity/notification
 storage remain outside constructor admission. Real model payload policies,
-general closed mutation/replacement, State generation refusal and configured
+general closed mutation, funded restore/history, State generation refusal and configured
 aggregate execution memory/work remain unfinished. Sorted touched-key insertion
 shifts its suffix and needs a bounded work policy before activation. Final-tree
 teardown walks original child pointers with a bounded stack and allocates nothing.

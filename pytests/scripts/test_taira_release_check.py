@@ -41,6 +41,8 @@ from unittest.mock import MagicMock, patch
 # Twenty-two dispatcher controls preserve reversible upgrade custody and native preparation.
 # Two native canary receipt controls retain unsuccessful evidence and exact proof bindings.
 # Fifty-one native connection controls preserve transport, Queue and retained execution owners.
+# Sixty-two additional closed-custody controls cover the complete current admitted-map
+# and Concread source census plus seven funded Storage replacement unit tests.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -49,8 +51,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 40 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 40 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 40 + 62 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 40 + 62 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -495,6 +497,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "cell::charged_allocation_tests::": 7,
             "storage::publication_tests::": 9,
             "storage::detached_tests::": 9,
+            "storage::admitted_tests::": 7,
         }
         for platform in ("darwin", "linux"):
             spec = importlib.util.spec_from_file_location("mv_ownership_gate", gate.__file__)
@@ -505,10 +508,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 42)
+                self.assertEqual(len(library), 49)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 42), ("mv-ebr", 5), ("mv-map", 9), ("mv-admitted-map", 21), ("concread", 17)):
+                for harness, count in (("mv", 49), ("mv-ebr", 5), ("mv-map", 9), ("mv-admitted-map", 43), ("concread", 50)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -531,13 +534,19 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         admission_source = (root / "vendor/concread/src/bptree/admission_tests.rs").read_text()
         ordinary, writer = admission_source.split("mod writer_start {", 1)
         checkpoint = names((root / "vendor/concread/src/internals/bptree/checkpoint_tests.rs").read_text())
+        replacement = [name for name in names(
+            (root / "crates/mv/src/storage/admitted_tests.rs").read_text()
+        ) if name.startswith("admitted_replacement_")]
+        self.assertEqual(len(replacement), 7)
+        self.assertIn('#[path = "storage/admitted_tests.rs"]\nmod admitted_tests;',
+                      (root / "crates/mv/src/storage.rs").read_text())
         expected = {
             "mv-admitted-map": admitted,
             "concread": [*("bptree::admission::tests::" + name for name in names(ordinary)),
                          *("bptree::admission::tests::writer_start::" + name for name in names(writer)),
                          *("internals::bptree::cursor::checkpoint::tests::" + name for name in checkpoint)],
         }
-        self.assertEqual((len(admitted), len(names(ordinary)), len(names(writer)), len(checkpoint)), (21, 7, 6, 4))
+        self.assertEqual((len(admitted), len(names(ordinary)), len(names(writer)), len(checkpoint)), (43, 35, 6, 9))
         self.assertIn('#[path = "admission_tests.rs"]\nmod tests;',
                       (root / "vendor/concread/src/bptree/admission.rs").read_text())
         self.assertIn('#[path = "checkpoint.rs"]\nmod checkpoint;',
@@ -548,6 +557,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             for harness, actual_source_names in expected.items():
                 self.assertEqual([name for _, names in selected[harness] for name in names], actual_source_names)
+            prefix = "storage::admitted_tests::admitted_replacement_"
+            selected_replacement = [name for _, names in selected["mv"] for name in names
+                                    if name.startswith(prefix)]
+            self.assertEqual(selected_replacement,
+                             ["storage::admitted_tests::" + name for name in replacement])
         self.assertEqual(gate.HARNESS_TARGETS["mv-admitted-map"][3], ["-p", "mv", "--test", "admitted_map_custody"])
         self.assertEqual(gate.HARNESS_TARGETS["concread"][3], ["-p", "concread", "--lib"])
 
@@ -1780,7 +1794,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
     def test_changed_mv_artifact_or_census_invalidates_independent_checkpoint(self):
         for scope in gate.QUALIFICATION_SCOPES:
             for harness in gate.MV_OWNERSHIP_HARNESSES:
-                for changed in ("artifact", "census"):
+                for changed in ("artifact", "census", "tail-census", "duplicate", "renamed"):
                     copies, checkpoint = self.copies(), MagicMock()
                     selected = gate.qualification_stages(scope)
                     early, _, _ = gate.native_harness_plan(selected, ())
@@ -1792,7 +1806,14 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                         row["sha256"] = "changed-mv-artifact"
                     else:
                         row = next(row for row in evidence["selected_tests"] if row["selection"] == harness)
-                        row["stages"][0]["tests"].pop()
+                        if changed == "census":
+                            row["stages"][0]["tests"].pop()
+                        elif changed == "tail-census":
+                            row["stages"][-1]["tests"].pop()
+                        elif changed == "duplicate":
+                            row["stages"][-1]["tests"].append(row["stages"][-1]["tests"][-1])
+                        else:
+                            row["stages"][-1]["tests"][-1] += "_retired_name"
                     error = gate.SelectedRegressionFailures(["fresh MV preflight failed"])
 
                     def run(name, *args, **_kwargs):
