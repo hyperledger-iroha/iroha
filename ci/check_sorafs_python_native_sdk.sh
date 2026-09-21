@@ -107,6 +107,9 @@ NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi23.json"
   --python "${VENV_PYTHON}"
 
 JUNIT_REPORT="${SDK_SESSION}/pytest.xml"
+# Require the private wheel owners in conftest; source-tree imports would not
+# exercise the artifacts authenticated above and rechecked after the suite.
+IROHA_PYTHON_TEST_INSTALLED_PACKAGE=1 \
 "${VENV_PYTHON}" -m pytest -q -p no:cacheprovider \
   --junitxml "${JUNIT_REPORT}" \
   tests/cancel_asset_lock_v1_test.py \

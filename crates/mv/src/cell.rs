@@ -971,3 +971,11 @@ impl<V: Value, Charge: Send + Sync + 'static> crate::BlockRetirement for Block<'
 #[cfg(test)]
 #[path = "cell/aggregate_acquisition_tests.rs"]
 mod aggregate_acquisition_tests;
+
+#[cfg(test)]
+#[path = "cell/executing_writers_tests.rs"]
+mod executing_writers_tests;
+
+#[cfg(test)]
+#[path = "cell/partial_acquisition_tests.rs"]
+mod partial_acquisition_tests;

@@ -17,6 +17,7 @@ workflow = Path(sys.argv[2]).read_text(encoding="utf-8")
 required_runner_tokens = (
     'NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi23.json"',
     'tests/client_hard_cut_contract_test.py',
+    'IROHA_PYTHON_TEST_INSTALLED_PACKAGE=1 \\\n"${VENV_PYTHON}" -m pytest',
     'VERIFY_EVIDENCE_ARGS=()',
     'if [[ -n "${SORAFS_PYTHON_SDK_EVIDENCE_DIR:-}" ]]; then',
     '--evidence-dir "${SORAFS_PYTHON_SDK_EVIDENCE_DIR}"',

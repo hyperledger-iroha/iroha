@@ -87,7 +87,7 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
     ),
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "b464b36f2ad4bf07c7ec969f14d97b7d29b99e27dd74b1f47ecd1dcaabf0014c"
+        "0ce65185b396f72cf66b2929b0564f2d33175275ae9335b5dca86c8fc504b697"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
         "c881a4f0e313b7c00823f62fa2d4e766c04c3b365eeb1847423c7a30cba7a9f6"
@@ -262,7 +262,7 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "b464b36f2ad4bf07c7ec969f14d97b7d29b99e27dd74b1f47ecd1dcaabf0014c"
+        "0ce65185b396f72cf66b2929b0564f2d33175275ae9335b5dca86c8fc504b697"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"

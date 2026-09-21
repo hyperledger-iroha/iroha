@@ -4544,6 +4544,7 @@ record_corridor_log \
 # exact pass count rejects deleted, added, skipped, or xfailed fidelity cases.
 proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_proof_ledger_test.py
+  pytests/scripts/sumeragi_v2_tlc_result_contract_test.py
   pytests/scripts/sumeragi_v2_verus_evidence_test.py
   pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py
   pytests/scripts/sumeragi_v2_reviewed_rust_source_test.py
@@ -4569,9 +4570,10 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_api_authority_separation_requires_async_diagnostics_owner
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
-# Actual collection binds 6,172 unique cases across these 24 exact selectors,
+# Actual collection binds 6,795 unique cases across these 25 exact selectors,
 # including all Native and in-flight Kura reconciliation controls and the
-# complete semantic reconciliation suite. Collection fixes the required census;
+# complete semantic reconciliation suite and 66 shared TLC result controls.
+# Collection fixes the required census;
 # this gate requires every selected case to execute and pass.
 release_gate_boundary "preflight-proof-fidelity:before" || exit $?
 set +e
@@ -4581,15 +4583,15 @@ proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^6172 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^6795 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 6172 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 6795 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 6172 \
+  preflight-proof-fidelity pytest 6795 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"

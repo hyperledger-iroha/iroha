@@ -4,8 +4,9 @@ Current retained-execution prerequisite: [admitted Storage restoration](../docs/
 
 Current participant custody work: the [source-coupled record](../docs/history/2026-09-21/participant-publication-custody.md) describes the original-Kura readback boundary and distinguishes remaining scalar AMX consumers from the new Native Decision path. The latter owns its sealed application markers and does not require the old participant representation. Retire that representation with its remaining consumers; do not reopen rejected MergeQC execution. Scoped checkpoint133 validation does not close L1–L6.
 
-Authorized integration location: `/Users/takemiyamakoto/dev/iroha`, branch
-`optimizations`. Implementation and validation for this task use only this checkout.
+Current integration location: `/Users/takemiyamakoto/devstuff/iroha`, branch
+`optimizations`. All ongoing source integration and validation use this checkout;
+no other branch or worktree is authorized for this work.
 
 Set: 2026-09-16. Overall goal: **Active**. Implementation and qualification are
 open. Starting source: `b2e4c86cc2586038ea16e94de3d7aefe94ea4040`.

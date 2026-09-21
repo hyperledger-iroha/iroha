@@ -90,6 +90,27 @@ python3 -m pytest -q \
   scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py \
   scripts/tests/sorafs_reference_sdk_supply_chain_test.py \
   scripts/tests/sorafs_reference_sdk_signed_manifest_test.py \
+  scripts/tests/sorafs_java_consumer_artifact_test.py \
+  scripts/tests/sorafs_java_dependency_origins_test.py \
+  scripts/tests/sorafs_sdk_artifact_index_test.py \
+  scripts/tests/python_wheel_byte_owner_test.py \
+  scripts/tests/python_installed_content_owner_test.py \
+  scripts/tests/python_zip_directory_admission_test.py \
+  scripts/tests/sorafs_python_child_runner_test.py \
+  scripts/tests/sorafs_python_consumer_artifact_test.py \
+  scripts/tests/build_sorafs_python_consumer_artifact_test.py \
+  scripts/tests/check_native_sdk_abi23_artifact_test.py \
+  scripts/tests/check_native_sdk_bounded_probe_test.py \
+  scripts/tests/sorafs_python_environment_test.py \
+  scripts/tests/sorafs_python_process_test.py \
+  scripts/tests/sorafs_python_producer_inputs_test.py \
+  scripts/tests/sorafs_python_package_source_test.py \
+  scripts/tests/sorafs_python_publication_test.py \
+  scripts/tests/sorafs_python_archive_test.py \
+  scripts/tests/sorafs_python_commands_test.py \
+  scripts/tests/sorafs_python_runtime_publication_join_test.py \
+  scripts/tests/sorafs_python_runtime_inputs_test.py \
+  scripts/tests/sorafs_python_dependency_install_test.py \
   scripts/tests/sorafs_reference_sdk_receipt_verifier_test.py \
   scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py \
   scripts/tests/build_sorafs_reference_sdk_release_canary_test.py \

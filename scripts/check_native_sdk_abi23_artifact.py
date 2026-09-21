@@ -18,12 +18,15 @@ import ctypes
 import hashlib
 import importlib.util
 import json
+import locale
+import math
 import os
 import re
 import shutil
 import stat
 import subprocess
 import sys
+import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -56,6 +59,8 @@ SCHEMA = "iroha.native-sdk-abi23-artifact.v1"
 REQUIRED_BRIDGE_ABI_VERSION = 23
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_SYMBOL_TOOL_OUTPUT_BYTES = 16 * 1024 * 1024
+MAX_ABI_PROBE_OUTPUT_BYTES = 4096
+MAX_PROBE_STDERR_BYTES = 4096
 MAX_EXPORTED_SYMBOLS = 1_000_000
 MAX_EVIDENCE_DIRECTORY_PATH_BYTES = 4 * 1024
 MAX_EVIDENCE_DIRECTORY_COMPONENTS = 64
@@ -505,6 +510,127 @@ def _parse_symbol_tool_output(raw: bytes, output_format: str) -> tuple[str, ...]
     return tuple(symbols)
 
 
+class _ProbeOutputLimitExceeded(subprocess.SubprocessError):
+    """An owned probe exceeded its independently bounded stdout or stderr."""
+
+
+def _windows_pipe_available(descriptor: int) -> int | None:
+    """Peek one owned Windows pipe without blocking (including Python 3.10).
+
+    None means that the writer has closed. Zero means no bytes are ready yet.
+    Unlike selectors/os.set_blocking, this API supports pre-3.12 Windows pipes.
+    """
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    peek = kernel.PeekNamedPipe
+    peek.argtypes = (wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                     wintypes.LPVOID, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID)
+    peek.restype = wintypes.BOOL
+    available = wintypes.DWORD()
+    if not peek(msvcrt.get_osfhandle(descriptor), None, 0, None, ctypes.byref(available), None):
+        error = ctypes.get_last_error()
+        if error in (109, 233):  # ERROR_BROKEN_PIPE, ERROR_PIPE_NOT_CONNECTED
+            return None
+        raise ctypes.WinError(error)
+    return available.value
+
+
+def _read_probe_pipe(descriptor: int, maximum: int) -> bytes | None:
+    """Read one bounded available chunk, returning None when it would block."""
+    if os.name == "nt":
+        available = _windows_pipe_available(descriptor)
+        if available is None:
+            return b""
+        if not available:
+            return None
+        maximum = min(maximum, available)
+    try:
+        return os.read(descriptor, maximum)
+    except (BlockingIOError, InterruptedError):
+        return None
+
+
+def _stop_owned_probe(process: subprocess.Popen) -> None:
+    """Terminate/reap only this invocation's direct child, preserving its owner."""
+    if process.poll() is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=0.2)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=2)
+
+
+def _run_bounded_probe(command: Sequence[str], *, stdout_limit: int,
+                       stderr_limit: int, timeout_seconds: float = 30,
+                       env: Mapping[str, str] | None = None) -> subprocess.CompletedProcess:
+    """Drain actual probe streams within byte/wall limits before allocating more.
+
+    There are no queues, reader threads, unbounded communicate calls or output
+    spool files. POSIX uses nonblocking reads; Windows peeks the owned anonymous
+    pipes before reading. Both preserve the caller's process group/session so
+    an outer producer can stop the complete invocation. This helper reaps its
+    direct child; it does not claim standalone arbitrary-descendant containment.
+    Inherited writers still hit the same finite deadline and fail.
+    """
+    if (any(type(value) is not int or not 0 <= value <= MAX_SYMBOL_TOOL_OUTPUT_BYTES
+            for value in (stdout_limit, stderr_limit))
+            or type(timeout_seconds) not in (int, float)
+            or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 30):
+        raise ValueError("invalid bounded native probe limits")
+    buffers = (bytearray(), bytearray())
+    limits = (stdout_limit, stderr_limit)
+    process = None
+    streams = []
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        process = subprocess.Popen(list(command), stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   bufsize=0, close_fds=True, env=env,
+                                   start_new_session=False)
+        streams = [process.stdout, process.stderr]
+        if os.name != "nt":
+            for stream in streams:
+                os.set_blocking(stream.fileno(), False)
+        pending = {0, 1}
+        while pending or process.poll() is None:
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(list(command), timeout_seconds,
+                                                output=bytes(buffers[0]), stderr=bytes(buffers[1]))
+            progressed = False
+            for index in tuple(pending):
+                raw = _read_probe_pipe(streams[index].fileno(), min(65536, limits[index] - len(buffers[index]) + 1))
+                if raw is None:
+                    continue
+                progressed = True
+                if not raw:
+                    pending.remove(index)
+                    continue
+                if len(raw) > limits[index] - len(buffers[index]):
+                    raise _ProbeOutputLimitExceeded(
+                        "native probe " + ("stdout" if index == 0 else "stderr") + " exceeded its byte limit")
+                buffers[index].extend(raw)
+            if not progressed:
+                time.sleep(min(0.01, max(0, deadline - time.monotonic())))
+        return subprocess.CompletedProcess(list(command), process.wait(timeout=0),
+                                           bytes(buffers[0]), bytes(buffers[1]))
+    except BaseException:
+        if process is not None:
+            _stop_owned_probe(process)
+        raise
+    finally:
+        for stream in streams:
+            stream.close()
+
+
 def inspect_exported_symbols(path: Path, *, required: bool) -> tuple[str, ...] | None:
     """Read a native binary's export table with the host platform's tooling."""
 
@@ -516,11 +642,10 @@ def inspect_exported_symbols(path: Path, *, required: bool) -> tuple[str, ...] |
         environment = os.environ.copy()
         environment["LC_ALL"] = "C"
         try:
-            result = subprocess.run(
+            result = _run_bounded_probe(
                 [executable, *arguments],
-                check=False,
-                capture_output=True,
-                timeout=30,
+                stdout_limit=MAX_SYMBOL_TOOL_OUTPUT_BYTES,
+                stderr_limit=MAX_PROBE_STDERR_BYTES,
                 env=environment,
             )
         except (OSError, subprocess.SubprocessError) as error:
@@ -644,17 +769,19 @@ def _probe_subprocess(
     *,
     label: str,
 ) -> int:
-    result = subprocess.run(
-        list(command),
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    try:
+        result = _run_bounded_probe(command, stdout_limit=MAX_ABI_PROBE_OUTPUT_BYTES,
+                                    stderr_limit=MAX_PROBE_STDERR_BYTES)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ArtifactContractError(f"{label} failed: {error}") from error
+    # Preserve subprocess text=True's locale decoding and universal newlines.
+    encoding = locale.getpreferredencoding(False)
+    stderr = result.stderr.decode(encoding).replace("\r\n", "\n").replace("\r", "\n")
+    stdout = result.stdout.decode(encoding).replace("\r\n", "\n").replace("\r", "\n")
     if result.returncode != 0:
-        detail = result.stderr.strip()[:4096]
+        detail = stderr.strip()[:4096]
         fail(f"{label} failed" + (f": {detail}" if detail else ""))
-    raw = result.stdout.strip()
+    raw = stdout.strip()
     if not raw.isascii() or not raw.isdecimal():
         fail(f"{label} returned a noncanonical ABI version")
     return int(raw)
@@ -765,6 +892,7 @@ print(version, end="")
         (
             python,
             "-I",
+            "-B",
             "-c",
             source,
             str(path),

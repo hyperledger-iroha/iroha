@@ -38,7 +38,7 @@
     "crates/iroha_core/src/queue.rs": 27208,
     "crates/iroha_core/src/queue/journal.rs": 6477,
     "crates/iroha_core/src/queue/lane_reservation_tests.rs": 3100,
-    "crates/iroha_core/src/queue/reservation_journal.rs": 5323,
+    "crates/iroha_core/src/queue/reservation_journal.rs": 5190,
     "crates/iroha_core/src/queue/router.rs": 16218,
     "crates/iroha_core/src/smartcontracts/isi/asset.rs": 8159,
     "crates/iroha_core/src/smartcontracts/isi/domain.rs": 11351,

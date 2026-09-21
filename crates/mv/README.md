@@ -243,7 +243,10 @@ Cell opening acquires both original EBR writers before cloning either value. A
 partial pair retains completed generations and unused charges until both guards
 release; the complete pair keeps joint ownership through Block and
 CurrentReplacement abandonment, detachment and publication-lock acquisition.
-Known undo poison rejects before waiting for current. Canonical current/undo
+Known undo poison rejects before waiting for current; known current poison
+rejects before either payload clone. Abandoned private payloads are destroyed
+after both writers unlock, so a destructor panic cannot poison those released
+writers. Canonical current/undo
 JSON fields are unchanged. See the [Cell custody record](../../docs/history/2026-09-21/cell-pair-custody.md)
 for measured scope and remaining aggregate boundaries.
 
