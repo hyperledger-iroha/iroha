@@ -341,3 +341,10 @@ either owner. Direct native construction delegates to the same clone kernel.
 Writer Drop unlocks before private payload reclamation; aggregates must also
 retain payloads until all sibling guards release. The [Cell custody record](../../docs/history/2026-09-21/cell-pair-custody.md)
 describes the MV joint owner and scoped evidence.
+
+Caller-owned aggregate acquisition can now retain actual consumed-phase unwind
+notifications in the same original-source batch. Foreign batches preserve the
+unchanged guard and do not call the transition. Observed release records physical
+poison before later payload cleanup. `BptreeMapWriteTxn::abort_retaining` unlocks
+into an opaque original cleanup owner even if an edit failed; unlike detach, it
+exposes no read, edit, reattachment or publication capability.

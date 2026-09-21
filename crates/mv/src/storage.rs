@@ -16,6 +16,9 @@ use physical::PreparedStorageWriters;
 #[path = "storage/acquisition.rs"]
 mod acquisition;
 pub use acquisition::BlockAcquisitionSlot;
+#[path = "storage/capture.rs"]
+mod capture;
+pub use capture::BlockCaptureSlot;
 pub use physical::PublicationRetirement;
 
 /// Published map cleanup and its original capture/installation reservations.
@@ -678,15 +681,23 @@ impl<K: Key, V: Value, Admission, Installation, M: StorageMode<K, V>>
 
 // Retain both release signals until both original physical writers are free.
 // Notification unwind must not poison an already released healthy writer.
-fn detach_pair<K: Key, V: Value, M: StorageMode<K, V>>(
+fn detach_pair_retaining<K: Key, V: Value, M: StorageMode<K, V>>(
     blocks: ReleaseGuard<'_, BptreeMapWriteTxn<'_, K, V, M>>,
     revert: ReleaseGuard<'_, BptreeMapWriteTxn<'_, K, Option<V>, M>>,
-) -> (BptreeMapOwned<K, V, M>, BptreeMapOwned<K, Option<V>, M>) {
-    let blocks = blocks.release_retaining(|writer| writer.detach());
-    let revert = revert.release_retaining(|writer| writer.detach());
-    let blocks = blocks.release_with(|owner| owner);
-    let revert = revert.release_with(|owner| owner);
-    (blocks, revert)
+) -> (
+    BptreeMapOwned<K, V, M>,
+    BptreeMapOwned<K, Option<V>, M>,
+    crate::CaptureCleanup,
+) {
+    // Both cursor flags were checked while the caller still owned its Block.
+    // Exclusive ownership prevents a new edit between that check and detach.
+    let (blocks, current_release) = blocks.release_deferred(|writer| writer.detach());
+    let (revert, undo_release) = revert.release_deferred(|writer| writer.detach());
+    (
+        blocks,
+        revert,
+        crate::CaptureCleanup::new(current_release, undo_release),
+    )
 }
 
 // Prepare every fallible lock/invariant check before the first map transfers
@@ -757,28 +768,11 @@ mod block {
             self,
             admission: Admission,
         ) -> Detached<K, V, Admission, M> {
-            self.assert_operable();
-            let Self {
-                writers,
-                dirty,
-                failed: _,
-                predecessor,
-                next,
-                mode,
-            } = self;
-            let OriginalWriters { revert, blocks } = writers.into_original();
-            let (blocks, revert) = detach_pair(blocks, revert);
-            Detached {
-                revert,
-                blocks,
-                metadata: DetachedMetadata {
-                    predecessor,
-                    mode,
-                    dirty,
-                    next,
-                    admission,
-                },
-            }
+            let mut slot = self.capture_slot();
+            slot.capture_admitted(admission);
+            let (journal, cleanup) = crate::BlockCapture::into_detached(slot);
+            drop(cleanup);
+            journal
         }
 
         pub(super) fn publish(self) {
@@ -914,9 +908,11 @@ mod block {
             self,
             admit: impl FnOnce(&Self) -> Result<Admission, E>,
         ) -> Result<Detached<K, V, Admission>, E> {
-            self.assert_operable();
-            let admission = admit(&self)?;
-            Ok(self.detach_owned(admission))
+            let mut slot = self.capture_slot();
+            crate::BlockCapture::try_capture(&mut slot, admit)?;
+            let (journal, cleanup) = crate::BlockCapture::into_detached(slot);
+            drop(cleanup);
+            Ok(journal)
         }
         /// Create transaction for the block.
         pub fn transaction(&mut self) -> Transaction<'_, K, V> {

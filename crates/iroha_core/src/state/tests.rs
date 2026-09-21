@@ -122,10 +122,12 @@ use std::{
 mod committed_hash_journal_tests;
 #[path = "transaction_stack_tests.rs"]
 mod transaction_stack_tests;
-#[path = "world_stack_tests.rs"]
-mod world_stack_tests;
+#[path = "world_capture_tests.rs"]
+mod world_capture_tests;
 #[path = "world_complete_drop_tests.rs"]
 mod world_complete_drop_tests;
+#[path = "world_stack_tests.rs"]
+mod world_stack_tests;
 macro_rules! let_row { ($($tokens:tt)*) => { let $($tokens)*; }; }
 macro_rules! state_test {
     (consensus_stack $name:ident $($body:tt)*) => {

@@ -14,7 +14,10 @@ use physical::PreparedCellWriters;
 #[path = "cell/acquisition.rs"]
 mod acquisition;
 pub use acquisition::BlockAcquisitionSlot;
+#[path = "cell/capture.rs"]
+mod capture;
 use acquisition::{CellWriters, OriginalCellWriters};
+pub use capture::BlockCaptureSlot;
 pub use physical::PublishedPublication;
 /// Multi-version storage for a single value.
 ///
@@ -618,27 +621,11 @@ mod block {
             self,
             admit: impl FnOnce(&Self) -> Result<Admission, E>,
         ) -> Result<Detached<V, Admission, Charge>, E> {
-            let admission = admit(&self)?;
-            let next = NextPublication::new();
-            let Self {
-                writers,
-                dirty,
-                predecessor,
-                mode,
-                publication: _,
-            } = self;
-            let (revert, blocks) = writers.detach();
-            Ok(Detached {
-                revert,
-                blocks,
-                metadata: DetachedMetadata {
-                    predecessor,
-                    mode,
-                    dirty,
-                    next,
-                    admission,
-                },
-            })
+            let mut slot = self.capture_slot();
+            crate::BlockCapture::try_capture(&mut slot, admit)?;
+            let (journal, cleanup) = crate::BlockCapture::into_detached(slot);
+            drop(cleanup);
+            Ok(journal)
         }
         /// Read the value before this block's first mutable access.
         ///

@@ -11,13 +11,7 @@ use concread::{
 #[must_use = "initialize or abandon the original acquisition slot"]
 pub struct BlockAcquisitionSlot<'a, K: Key, V: Value> {
     target: &'a Storage<K, V>,
-    raw_revert: Option<ReleaseGuard<'a, BptreeMapWriterAcquisition<'a, K, Option<V>>>>,
-    raw_blocks: Option<ReleaseGuard<'a, BptreeMapWriterAcquisition<'a, K, V>>>,
-    revert: Option<ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, Option<V>>>>,
-    blocks: Option<ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V>>>,
-    undo_retirement: Option<BptreeMapAbandonment<K, Option<V>>>,
-    current_retirement: Option<BptreeMapAbandonment<K, V>>,
-    block: Option<Block<'a, K, V>>,
+    phase: AcquisitionPhase<'a, K, V>,
     started: bool,
     complete: bool,
     // Last: recorded native notifications survive payload/charge destruction.
@@ -25,17 +19,84 @@ pub struct BlockAcquisitionSlot<'a, K: Key, V: Value> {
     current_release: DeferredReleaseBatch,
 }
 
+// A role owns only its current physical phase. Raw, converted and retired
+// handles must not occupy simultaneous stack slots in every World field.
+enum WriterPhase<'a, K: Key, V: Value> {
+    Empty,
+    Raw(ReleaseGuard<'a, BptreeMapWriterAcquisition<'a, K, V>>),
+    Writer(ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V>>),
+    Retired(BptreeMapAbandonment<K, V>),
+}
+
+impl<'a, K: Key, V: Value> WriterPhase<'a, K, V> {
+    fn is_poisoned(&self) -> bool {
+        match self {
+            Self::Raw(raw) => raw.is_poisoned(),
+            _ => panic!("original raw writer"),
+        }
+    }
+
+    fn take_raw(&mut self) -> ReleaseGuard<'a, BptreeMapWriterAcquisition<'a, K, V>> {
+        match std::mem::replace(self, Self::Empty) {
+            Self::Raw(raw) => raw,
+            other => {
+                *self = other;
+                panic!("original raw writer")
+            }
+        }
+    }
+
+    fn take_writer(&mut self) -> ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V>> {
+        match std::mem::replace(self, Self::Empty) {
+            Self::Writer(writer) => writer,
+            other => {
+                *self = other;
+                panic!("original converted writer")
+            }
+        }
+    }
+
+    fn release(&mut self, target: &BptreeMap<K, V>, releases: &mut DeferredReleaseBatch) {
+        match std::mem::replace(self, Self::Empty) {
+            Self::Empty => {}
+            Self::Raw(raw) => {
+                raw.try_release_into_observed(releases, drop, || target.is_poisoned())
+                    .unwrap_or_else(|_| unreachable!("original raw release source"));
+            }
+            Self::Writer(writer) => {
+                let retirement = writer
+                    .try_release_into_observed(
+                        releases,
+                        |writer| writer.abort_retaining(),
+                        || target.is_poisoned(),
+                    )
+                    .unwrap_or_else(|_| unreachable!("original converted release source"));
+                *self = Self::Retired(retirement);
+            }
+            Self::Retired(retirement) => *self = Self::Retired(retirement),
+        }
+    }
+}
+
+// Once both converted writers move into Block, the earlier phase storage is
+// reused. The block is installed here before any reset/replacement payload code.
+enum AcquisitionPhase<'a, K: Key, V: Value> {
+    Empty,
+    Pending {
+        undo: WriterPhase<'a, K, Option<V>>,
+        current: WriterPhase<'a, K, V>,
+    },
+    Block(Block<'a, K, V>),
+}
+
 impl<'a, K: Key, V: Value> BlockAcquisitionSlot<'a, K, V> {
     pub(super) fn new(target: &'a Storage<K, V>) -> Self {
         Self {
             target,
-            raw_revert: None,
-            raw_blocks: None,
-            revert: None,
-            blocks: None,
-            undo_retirement: None,
-            current_retirement: None,
-            block: None,
+            phase: AcquisitionPhase::Pending {
+                undo: WriterPhase::Empty,
+                current: WriterPhase::Empty,
+            },
             started: false,
             complete: false,
             undo_release: target.revert_released.deferred_batch(),
@@ -51,35 +112,27 @@ impl<'a, K: Key, V: Value> crate::BlockAcquisition for BlockAcquisitionSlot<'a, 
         assert!(!self.started, "original storage acquisition is one-shot");
         self.started = true;
         let target = self.target;
-        self.raw_revert = Some(
+        let AcquisitionPhase::Pending { undo, current } = &mut self.phase else {
+            panic!("original pending acquisition");
+        };
+        *undo = WriterPhase::Raw(
             target
                 .revert_released
                 .poisoning_guard(target.revert.acquire_writer()),
         );
-        assert!(
-            !self
-                .raw_revert
-                .as_ref()
-                .expect("original undo")
-                .is_poisoned(),
-            "original undo writer is poisoned"
-        );
-        self.raw_blocks = Some(
+        assert!(!undo.is_poisoned(), "original undo writer is poisoned");
+        *current = WriterPhase::Raw(
             target
                 .blocks_released
                 .poisoning_guard(target.blocks.acquire_writer()),
         );
         assert!(
-            !self
-                .raw_blocks
-                .as_ref()
-                .expect("original current")
-                .is_poisoned(),
+            !current.is_poisoned(),
             "original storage writer is poisoned"
         );
-        let undo = self.raw_revert.take().expect("original undo");
-        self.revert = Some(
-            match undo
+        let raw = undo.take_raw();
+        *undo = WriterPhase::Writer(
+            match raw
                 .try_map_preserving_release_into(
                     &mut self.undo_release,
                     |undo| Ok::<_, (_, std::convert::Infallible)>(undo.write()),
@@ -91,9 +144,9 @@ impl<'a, K: Key, V: Value> crate::BlockAcquisition for BlockAcquisitionSlot<'a, 
                 Err((_, never)) => match never {},
             },
         );
-        let current = self.raw_blocks.take().expect("original current");
-        self.blocks = Some(
-            match current
+        let raw = current.take_raw();
+        *current = WriterPhase::Writer(
+            match raw
                 .try_map_preserving_release_into(
                     &mut self.current_release,
                     |current| Ok::<_, (_, std::convert::Infallible)>(current.write()),
@@ -108,17 +161,16 @@ impl<'a, K: Key, V: Value> crate::BlockAcquisition for BlockAcquisitionSlot<'a, 
         // The caller slot owns completed writers before identity lookup and all
         // reset/replacement operations that may invoke arbitrary payload code.
         let predecessor = target.publication.capture();
-        self.block = Some(Block::new(
-            StorageWriters::new(
-                target,
-                self.revert.take().expect("original undo writer"),
-                self.blocks.take().expect("original current writer"),
-            ),
+        let writers = StorageWriters::new(target, undo.take_writer(), current.take_writer());
+        self.phase = AcquisitionPhase::Block(Block::new(
+            writers,
             mode == BlockMode::Replace,
             predecessor,
             mode,
         ));
-        let block = self.block.as_mut().expect("original storage block");
+        let AcquisitionPhase::Block(block) = &mut self.phase else {
+            unreachable!("original storage block");
+        };
         block.failed = true;
         let OriginalWriters { revert, blocks } = block.writers.as_mut();
         if mode == BlockMode::Replace {
@@ -137,44 +189,13 @@ impl<'a, K: Key, V: Value> crate::BlockAcquisition for BlockAcquisitionSlot<'a, 
     fn release(&mut self) {
         self.complete = false;
         self.started = true;
-        if let Some(block) = &mut self.block {
-            crate::BlockRetirement::release_writers(block);
-        }
-        let target = self.target;
-        if let Some(writer) = self.blocks.take() {
-            self.current_retirement = Some(
-                writer
-                    .try_release_into_observed(
-                        &mut self.current_release,
-                        |writer| writer.abort_retaining(),
-                        || target.blocks.is_poisoned(),
-                    )
-                    .unwrap_or_else(|_| unreachable!("original current release source")),
-            );
-        }
-        if let Some(writer) = self.revert.take() {
-            self.undo_retirement = Some(
-                writer
-                    .try_release_into_observed(
-                        &mut self.undo_release,
-                        |writer| writer.abort_retaining(),
-                        || target.revert.is_poisoned(),
-                    )
-                    .unwrap_or_else(|_| unreachable!("original undo release source")),
-            );
-        }
-        if let Some(current) = self.raw_blocks.take() {
-            current
-                .try_release_into_observed(&mut self.current_release, drop, || {
-                    target.blocks.is_poisoned()
-                })
-                .unwrap_or_else(|_| unreachable!("original current release source"));
-        }
-        if let Some(undo) = self.raw_revert.take() {
-            undo.try_release_into_observed(&mut self.undo_release, drop, || {
-                target.revert.is_poisoned()
-            })
-            .unwrap_or_else(|_| unreachable!("original undo release source"));
+        match &mut self.phase {
+            AcquisitionPhase::Empty => {}
+            AcquisitionPhase::Block(block) => crate::BlockRetirement::release_writers(block),
+            AcquisitionPhase::Pending { undo, current } => {
+                current.release(&self.target.blocks, &mut self.current_release);
+                undo.release(&self.target.revert, &mut self.undo_release);
+            }
         }
     }
 
@@ -183,7 +204,13 @@ impl<'a, K: Key, V: Value> crate::BlockAcquisition for BlockAcquisitionSlot<'a, 
             self.complete,
             "original storage initialization did not complete"
         );
-        self.block.take().expect("original completed storage block")
+        match std::mem::replace(&mut self.phase, AcquisitionPhase::Empty) {
+            AcquisitionPhase::Block(block) => block,
+            other => {
+                self.phase = other;
+                panic!("original completed storage block")
+            }
+        }
     }
 }
 

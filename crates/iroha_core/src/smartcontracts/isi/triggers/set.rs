@@ -14,7 +14,8 @@ mod acquisition;
 mod detachment;
 pub(crate) use acquisition::SetBlockAcquisition;
 pub(crate) use detachment::{
-    AbortedSet, DetachError, DetachedSet, PreparedSet, PublishedSet, SetPublicationError,
+    AbortedSet, DetachError, DetachedSet, PreparedSet, PublishedSet, SetBlockCapture,
+    SetPublicationError,
 };
 
 use super::{

@@ -953,9 +953,14 @@ fn pair_abandonment_releases_both_writers(prepare_first: bool) {
             drop(original);
         }));
         assert_eq!(result.is_err(), mode != 0);
+        // Raw acquisition distinguishes released poisoned locks from held locks
+        // without constructing or cloning another successor during the probe.
+        assert!(target.revert.try_acquire_writer().is_some());
+        assert!(target.blocks.try_acquire_writer().is_some());
         let expected = match mode {
             1 => (true, true),
-            2 if !prepare_first => (false, true),
+            // Both physical writers are already unlocked before either
+            // original payload can panic during retained cleanup.
             _ => (false, false),
         };
         assert_eq!(

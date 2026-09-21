@@ -18,6 +18,8 @@ mod publication_tests;
 
 #[path = "set_acquisition_tests.rs"]
 mod acquisition_tests;
+#[path = "set_capture_tests.rs"]
+mod capture_tests;
 
 fn id(value: &str) -> TriggerId {
     value.parse().unwrap()

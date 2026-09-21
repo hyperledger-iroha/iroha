@@ -37,9 +37,9 @@ impl Wake for ProbeActiveOnIdsRelease {
             self.failed.fetch_add(1, Ordering::SeqCst);
             return;
         };
-        match original.try_prepare_publication(&self.set.active_data_trigger_ids, |_, _| {
-            Ok::<_, ()>(())
-        }) {
+        match original
+            .try_prepare_publication(&self.set.active_data_trigger_ids, |_, _| Ok::<_, ()>(()))
+        {
             Ok(prepared) => {
                 self.acquired.fetch_add(1, Ordering::SeqCst);
                 let (original, cleanup) = prepared.abort();
@@ -107,7 +107,11 @@ fn complete_trigger_drop_releases_siblings(replacement: bool) {
     assert_eq!(callback.failed.load(Ordering::SeqCst), 0);
     assert_eq!(callback.acquired.load(Ordering::SeqCst), 1);
     assert!(ids.matches_current(&set.ids));
-    assert!(active.unwrap().matches_current(&set.active_data_trigger_ids));
+    assert!(
+        active
+            .unwrap()
+            .matches_current(&set.active_data_trigger_ids)
+    );
     assert_eq!(images(&set), before);
 }
 

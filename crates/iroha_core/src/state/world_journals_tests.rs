@@ -232,27 +232,24 @@ fn typed_wrappers_retain_actual_named_storage_cell_and_trigger_values() {
         original.smart_contract_state.remove(path("capture/noop"));
         *original.soradns_last_publish_ms.get_mut() = Some(22);
         register_trigger(&mut original, "typed_trigger");
-        // These are the same generic typed captures used by the generated
-        // aggregate. The rest of the real original block drops in this scope.
-        (
-            CaptureWorldField::capture(
-                original.smart_contract_state,
-                "smart_contract_state",
-                |target: &World| &target.smart_contract_state,
-            )
-            .unwrap(),
-            CaptureWorldField::capture(
-                original.soradns_last_publish_ms,
-                "soradns_last_publish_ms",
-                |target: &World| &target.soradns_last_publish_ms,
-            )
-            .unwrap(),
-            CaptureWorldField::capture(original.triggers, "triggers", |target: &World| {
-                &target.triggers
-            })
-            .unwrap(),
-        )
+        let original = original.into_fields();
+        // Retain capture notifications until the rest of the actual World
+        // fields have left this scope and released their physical writers.
+        let mut storage = original.smart_contract_state.into_capture();
+        let mut cell = original.soradns_last_publish_ms.into_capture();
+        let mut triggers = original.triggers.into_capture();
+        storage.capture().unwrap();
+        cell.capture().unwrap();
+        triggers.capture().unwrap();
+        (storage, cell, triggers)
     };
+    let storage = storage.retain("smart_contract_state", |world: &World| {
+        &world.smart_contract_state
+    });
+    let cell = cell.retain("soradns_last_publish_ms", |world: &World| {
+        &world.soradns_last_publish_ms
+    });
+    let triggers = triggers.retain("triggers", |world: &World| &world.triggers);
     let touches = storage
         .journal
         .as_ref()

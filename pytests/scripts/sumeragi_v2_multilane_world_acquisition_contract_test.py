@@ -31,7 +31,7 @@ def test_world_acquisition_accepts_actual_aggregate_owners(fixture):
     pytest.param("declare_world_acquisition", '$(fields.$prefix.release_writers();)*', '$(let _ = &fields.$prefix;)*', id="complete-prefix-releases-before-cleanup"),
     pytest.param("declare_world_acquisition", '$(fields.$privacy.release_writers();)*', '$(let _ = &fields.$privacy;)*', id="complete-privacy-releases-before-cleanup"),
     pytest.param("declare_world_acquisition", '$(fields.$suffix.release_writers();)*', '$(let _ = &fields.$suffix;)*', id="complete-suffix-releases-before-cleanup"),
-    pytest.param("build_world_block_from_fields", '$($prefix: Some($state.$prefix.block_acquisition()),)*', '$($prefix: Some($state.$prefix.block()),)*', id="all-slots-exist-before-construction"),
+    pytest.param("build_world_block_from_fields", '$(pending.$prefix = Some($state.$prefix.block_acquisition());)*', '$(pending.$prefix = Some($state.$prefix.block());)*', id="all-slots-exist-before-construction"),
     pytest.param("build_world_block_from_fields", 'pending.initialize($mode);', 'pending.initialize(mv::BlockMode::Ordinary);', id="world-retains-requested-mode"),
     pytest.param("World::block_and_revert", 'mv::BlockMode::Replace', 'mv::BlockMode::Ordinary', id="world-replacement-remains-replacement"),
     pytest.param("WorldBlock::drop", 'self.release_writers();', 'let _ = &self.fields;', id="world-drop-releases-before-field-cleanup"),

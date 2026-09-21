@@ -65,8 +65,8 @@ trigger_acquisition! {
 
 impl<'set> SetBlock<'set> {
     pub(super) fn into_fields(mut self) -> SetBlockFields<'set> {
-        // TODO: carry aggregate retirement through consuming capture/commit;
-        // their existing fieldwise transitions take ownership from this point.
+        // Capture only performs inert moves before its caller owns every slot.
+        // TODO: retain aggregate retirement through consuming commit too.
         self.fields.take().expect("original trigger block fields")
     }
 }

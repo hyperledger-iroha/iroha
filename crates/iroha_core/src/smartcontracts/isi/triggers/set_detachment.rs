@@ -18,6 +18,10 @@
 use super::*;
 use mv::storage::Detached as DetachedStorage;
 
+#[path = "set_capture.rs"]
+mod capture;
+pub(crate) use capture::SetBlockCapture;
+
 #[path = "set_publication.rs"]
 mod publication;
 pub(crate) use publication::{AbortedSet, PreparedSet, PublishedSet, SetPublicationError};
@@ -110,56 +114,11 @@ impl SetBlock<'_> {
         self,
         admit: impl FnOnce(&Self) -> Result<Admission, E>,
     ) -> Result<DetachedSet<Admission>, DetachError<E>> {
-        let mode = self.capture_mode().map_err(|error| match error {
-            DetachError::InconsistentMode {
-                field,
-                expected,
-                actual,
-            } => DetachError::InconsistentMode {
-                field,
-                expected,
-                actual,
-            },
-            DetachError::Admission(impossible) => match impossible {},
-        })?;
-        let admission = admit(&self).map_err(DetachError::Admission)?;
-        let SetBlockFields {
-            data_triggers,
-            pipeline_triggers,
-            time_triggers,
-            by_call_triggers,
-            ids,
-            active_data_trigger_ids,
-            active_pipeline_trigger_ids,
-            active_time_trigger_ids,
-            active_by_call_trigger_ids,
-            contracts,
-        } = self.into_fields();
-        // The outer admission already covers every store. No new semantic
-        // admission or fallible decision is made between individual captures.
-        Ok(DetachedSet {
-            mode,
-            data_triggers: capture_admitted(data_triggers),
-            pipeline_triggers: capture_admitted(pipeline_triggers),
-            time_triggers: capture_admitted(time_triggers),
-            by_call_triggers: capture_admitted(by_call_triggers),
-            ids: capture_admitted(ids),
-            active_data_trigger_ids: capture_admitted(active_data_trigger_ids),
-            active_pipeline_trigger_ids: capture_admitted(active_pipeline_trigger_ids),
-            active_time_trigger_ids: capture_admitted(active_time_trigger_ids),
-            active_by_call_trigger_ids: capture_admitted(active_by_call_trigger_ids),
-            contracts: capture_admitted(contracts),
-            admission,
-        })
-    }
-}
-
-fn capture_admitted<K: mv::Key, V: mv::Value>(
-    original: StorageBlock<'_, K, V>,
-) -> DetachedStorage<K, V, ()> {
-    match original.try_detach(|_| Ok::<(), core::convert::Infallible>(())) {
-        Ok(detached) => detached,
-        Err(impossible) => match impossible {},
+        let mut pending = self.capture_slot();
+        pending.try_capture(admit)?;
+        let (journal, cleanup) = pending.into_detached();
+        drop(cleanup);
+        Ok(journal)
     }
 }
 

@@ -1923,13 +1923,36 @@ CORE_WORLD_ACQUISITION_STAGES = (("original World and trigger aggregate acquisit
 )), )
 CORE_STAGES += CORE_WORLD_ACQUISITION_STAGES
 CORE_STARTUP_STAGES += CORE_WORLD_ACQUISITION_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_WORLD_ACQUISITION_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
+
+
+CORE_WORLD_CAPTURE_STAGES = (("original World and trigger capture custody", (
+    'state::tests::world_capture_tests::ordinary_world_capture_unlocks_peers_before_parameters_notification',
+    'state::tests::world_capture_tests::replacement_world_capture_unlocks_peers_before_parameters_notification',
+    'state::tests::world_capture_tests::refused_world_capture_releases_all_writers_before_original_notifications',
+    'state::tests::world_capture_tests::panicked_world_capture_releases_all_writers_and_preserves_native_poison',
+    'smartcontracts::isi::triggers::set::detachment::tests::capture_tests::ordinary_trigger_capture_unlocks_active_index_before_ids_notification',
+    'smartcontracts::isi::triggers::set::detachment::tests::capture_tests::replacement_trigger_capture_unlocks_active_index_before_ids_notification',
+    'smartcontracts::isi::triggers::set::detachment::tests::capture_tests::ordinary_nested_world_capture_unlocks_later_cell_before_trigger_ids_notification',
+    'smartcontracts::isi::triggers::set::detachment::tests::capture_tests::replacement_nested_world_capture_unlocks_later_cell_before_trigger_ids_notification',
+)), )
+CORE_STAGES += CORE_WORLD_CAPTURE_STAGES
+CORE_STARTUP_STAGES += CORE_WORLD_CAPTURE_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_WORLD_CAPTURE_STAGES
 
 
 # Portable ownership prerequisites; every selected leaf runs in both scopes.
 MV_OWNERSHIP_HARNESSES = ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
 
 MV_OWNERSHIP_STAGES = (
+    ("caller-owned capture and original notification custody", (
+        'capture_tests::capture_slots_keep_exact_ordinary_and_replacement_journals_until_all_writers_release',
+        'capture_tests::capture_slots_keep_successful_sibling_through_admission_refusal_and_caught_panic',
+        'capture_tests::capture_slots_failed_map_precheck_keeps_original_block_for_joint_abandonment',
+        'capture_tests::capture_slots_outer_unwind_preserves_actual_attached_writer_poison_only',
+        'capture_tests::capture_slots_admission_cleanup_panic_happens_after_all_physical_unlocks',
+    )),
     ("caller-owned aggregate acquisition and terminal retirement", (
         'cell::aggregate_acquisition_tests::caller_owned_cell_slots_release_all_before_later_clone_unwind_cleanup',
         'cell::aggregate_acquisition_tests::caller_owned_cell_slots_retain_known_poison_until_earlier_slot_unlocks',
@@ -2305,12 +2328,6 @@ MV_ADMITTED_MAP_STAGES = (
 )
 
 CONCREAD_STAGES = (
-    ("original native phase and failed cursor retirement", (
-        'release::tests::retained_phase_transfer_and_refusal_keep_original_source_without_early_wake',
-        'release::tests::retained_phase_unwind_records_actual_release_without_running_waiter',
-        'release::tests::retained_observed_release_preserves_poison_predating_normal_cleanup',
-        'bptree::abandonment_tests::failed_cursor_abandonment_unlocks_without_reopening_publication_authority',
-    )),
     ('original EBR acquisition and unlocked reclamation', (
         'ebrcell::acquisition_tests::raw_acquisition_and_refusal_retain_the_exact_writer_without_cloning',
         'ebrcell::acquisition_tests::acquired_clone_and_attachment_keep_the_original_allocation',
@@ -2340,6 +2357,12 @@ CONCREAD_STAGES = (
         'release::tests::release_batch_empty_and_foreign_transfer_preserve_original_custody',
         'release::tests::release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes',
         'release::tests::release_batch_records_actual_physical_poison_without_later_cleanup_poison',
+        'release::tests::retained_phase_transfer_and_refusal_keep_original_source_without_early_wake',
+        'release::tests::retained_phase_unwind_records_actual_release_without_running_waiter',
+        'release::tests::retained_observed_release_preserves_poison_predating_normal_cleanup',
+    )),
+    ('failed native cursor retains cleanup after unlock', (
+        'bptree::abandonment_tests::failed_cursor_abandonment_unlocks_without_reopening_publication_authority',
     )),
     ('actual reader mutex readiness', (
         'internals::lincowcell::identity_preparation_tests::reader_wait_survives_refused_writer_release_and_registration_races',
@@ -3835,7 +3858,7 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
 def validate_mv_test_registration(root: Path) -> None:
     """Reject stale registered MV names before Cargo; native listing stays authoritative.
 
-    This is a bounded lexical guard for thirteen explicit, flat test modules, not a
+    This is a bounded lexical guard for fourteen explicit, flat test modules, not a
     Rust parser or a claim that the selected subset exhausts each module.
     The existing pure lexer runs from the same captured source as this gate.
     """
@@ -3843,6 +3866,7 @@ def validate_mv_test_registration(root: Path) -> None:
         ("publication::nonblocking_tests::", "publication.rs", "publication_nonblocking_tests.rs", "nonblocking_tests"),
         ("allocation::tests::", "allocation.rs", "allocation_tests.rs", "tests"),
         ("release_tests::", "lib.rs", "release_tests.rs", "release_tests"),
+        ("capture_tests::", "lib.rs", "capture_tests.rs", "capture_tests"),
         ("cell::charged_allocation_tests::", "cell.rs", "cell/charged_allocation_tests.rs", "charged_allocation_tests"),
         ("cell::publication_tests::", "cell.rs", "cell/publication_tests.rs", "publication_tests"),
         ("cell::aggregate_acquisition_tests::", "cell.rs", "cell/aggregate_acquisition_tests.rs", "aggregate_acquisition_tests"),

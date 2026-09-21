@@ -1559,6 +1559,17 @@ mod world_journals;
 pub(crate) mod world_projection;
 
 #[macro_use]
+/// Exercise actual World capture while retaining journals through a test observation.
+#[cfg(test)]
+pub(crate) fn inspect_trigger_world_capture_for_testing(
+    original: WorldBlock<'_>,
+    inspect: impl FnOnce(),
+) {
+    let journals = original.try_detach_journals(|_| Ok::<(), ()>(())).unwrap();
+    inspect();
+    drop(journals);
+}
+
 mod world_acquisition;
 
 macro_rules! build_world_transaction_from_fields {
