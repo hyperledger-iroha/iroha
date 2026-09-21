@@ -249,7 +249,8 @@ fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryRes
 }
 /// Decode the public Torii failure contract without inventing query-store state.
 /// Only an explicit asset-absence code with its typed identity proves a missing
-/// asset. Generic status codes and diagnostics never establish query-store state.
+/// asset. Typed asset-absence details require that code and HTTP 404. Generic
+/// status codes and diagnostics never establish query-store state.
 fn decode_query_failure(response: &http::Response<Vec<u8>>) -> QueryError {
     const MAX_ERROR_BYTES: usize = 64 * 1024;
     let protocol_error = |reason: &str| {
@@ -281,20 +282,23 @@ fn decode_query_failure(response: &http::Response<Vec<u8>>) -> QueryError {
         },
         _ => return protocol_error("requires application/x-norito or application/json"),
     };
+    let missing_asset = envelope
+        .details
+        .as_ref()
+        .and_then(|details| details.query_asset_not_found.as_ref());
     if envelope.code() == "query_asset_not_found" {
         if response.status() != StatusCode::NOT_FOUND {
             return protocol_error("claims asset absence without HTTP 404");
         }
-        let Some(asset_id) = envelope
-            .details
-            .as_ref()
-            .and_then(|details| details.query_asset_not_found.as_ref())
-        else {
+        let Some(asset_id) = missing_asset else {
             return protocol_error("claims asset absence without its typed asset identity");
         };
         return QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
             crate::data_model::query::error::FindError::Asset(Box::new(asset_id.clone())),
         )));
+    }
+    if missing_asset.is_some() {
+        return protocol_error("carries asset absence details without query_asset_not_found code");
     }
     // ErrorEnvelope is the node's public, redacted diagnostic. Never display
     // unparsed upstream bytes or infer ValidationFail variants from status alone.
@@ -898,6 +902,16 @@ mod query_errors_handling {
                     .with_details(details.clone()),
             ),
             (
+                StatusCode::FORBIDDEN,
+                ErrorEnvelope::new("query_validation_failed", "permission denied")
+                    .with_details(details.clone()),
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorEnvelope::new("internal_server_error", "query failed")
+                    .with_details(details.clone()),
+            ),
+            (
                 StatusCode::GONE,
                 ErrorEnvelope::new("query_asset_not_found", "asset is missing")
                     .with_details(details.clone()),
@@ -921,10 +935,12 @@ mod query_errors_handling {
                     .status(status)
                     .header(CONTENT_TYPE, media_type)
                     .body(body)?;
-                assert!(matches!(
-                    decode_query_response(&response),
-                    Err(QueryError::Other(_))
-                ));
+                let error = decode_query_response(&response).expect_err("invalid asset absence");
+                assert!(
+                    matches!(error, QueryError::Other(_)),
+                    "{status} {} ({media_type}) returned {error:?}",
+                    envelope.code()
+                );
             }
         }
         for value in [
