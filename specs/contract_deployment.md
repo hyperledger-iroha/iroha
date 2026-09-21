@@ -55,10 +55,12 @@ is `iroha contract derive-address --network-id <NETWORK_ID> ...`.
   `contract_code[code_hash]` after verifying the self-describing `CNTR`
   artifact and recomputing its canonical hash. If bytes for a hash already
   exist they must match exactly; differing bytes raise an invariant violation.
-- `RegisterSmartContractCode` inserts/overwrites the manifest for a given
-  `code_hash` only after the matching bytecode is already stored. The stored
-  bytes must verify as a `CNTR` artifact whose embedded manifest payload
-  matches the submitted manifest payload.
+- `RegisterSmartContractCode` inserts a manifest for a given `code_hash` only
+  after the matching bytecode is already stored. The stored bytes must verify
+  as a `CNTR` artifact whose embedded manifest payload matches the submitted
+  manifest payload. Repeating the same unsigned payload with another valid
+  submitter signature preserves the first stored provenance; changing that
+  payload is rejected.
 - Code size is capped by the custom parameter `max_contract_code_bytes`
   (default 16 MiB). Override it with a `SetParameter(Custom)` transaction before
   registering larger artifacts.
@@ -179,18 +181,56 @@ native transactions rather than by a separate Torii deployment limiter.
 
 ## Governance integration & protected namespaces
 
+The first-release permission state must seed the exact
+`CanGrantSmartContractCodeManagement` root in genesis if the network needs
+privileged code management. Permission identifiers are matched exactly; old
+registrar tokens do not confer either current management capability. Updating
+node binaries does not rename persisted permissions or create this root, and
+ordinary post-genesis grants cannot create it. Public paid artifact creation
+does not require the root, but privileged removal and delegation do. A public
+network with a different permission state needs an explicitly approved
+operator rollout plan; these tools perform no state migration or network reset.
+
+The shipped Taira source template (`configs/soranexus/taira/genesis.template.json`)
+sets `executor: null`, so genesis installs no executor artifact and uses Core's
+`Executor::Initial` admission. This source default does not prove the deployed
+executor state: a later `Upgrade` can install `Executor::UserProvided`. A
+state-preserving rollout must verify that state and retain the exact genesis,
+`NetworkId`, address profile, and ledger. If a user-provided executor is present,
+qualify its exact artifact against the candidate node's ABI, data model, and
+admission rules; install an updated reviewed `.to` artifact when required through
+an authority already holding `CanUpgradeExecutor`. That capability cannot be
+created by an ordinary post-genesis grant. The native and default executor paths
+forward immutable artifact creation to Core; ordinary developers need neither
+executor-upgrade authority nor either global code-management capability.
+
+Qualification must cover retained-state restart and replay across the validator
+set, current Torii routes, and fee and alias policy. A passing basic doctor,
+including account capabilities and faucet policy, is necessary but does not
+qualify deployment end to end. A fresh ordinary account must register and fund,
+acquire its namespace through paid `EnsureAlias`, create a verified immutable
+artifact, deploy under its own alias scope with quoted fees, observe the exact
+transaction as `Applied`, and verify contract readback. Repairing a missing
+discovery route alone does not establish those outcomes.
+
 - Set the custom parameter `gov_protected_namespaces` (JSON array of namespace
   strings) to enable admission gating. Torii exposes helpers under
   `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
-- `CanRegisterSmartContractCode` authorizes artifact upload, manifest
-  registration, and unreferenced bytecode removal. Granting or revoking that
-  token requires `CanManageSmartContractCodeRegistrars`, which may itself be
-  granted or revoked only in genesis. A registrar cannot delegate its own registrar privilege;
-  account onboarding and fee funding grant neither capability. It does not
-  authorize an address lifecycle takeover. `ActivateContractInstance` and
-  `DeactivateContractInstance` require the current account owner and the exact
-  lifecycle `expected_revision`; raw activation cannot create an address.
+- Registered developers may create immutable verified artifacts without a global
+  management grant. Every native upload, finalization, manifest registration, and
+  deployment transaction remains subject to signed fee admission. Upload staging
+  is account-owned. Identical unsigned manifest content is idempotent across
+  valid submitter signatures while retaining the first stored provenance.
+- `CanManageSmartContractCode` retains privileged unreferenced-bytecode removal
+  and entrypoint delegation controls. Its grant/revoke authority remains
+  `CanGrantSmartContractCodeManagement`, which is genesis-rooted. Public creation
+  never grants either capability or permits address lifecycle takeover.
+  `ActivateContractInstance` and `DeactivateContractInstance` require the current
+  account owner and exact lifecycle `expected_revision`; raw activation cannot
+  create an address. Acquiring an available owned domain through paid `EnsureAlias`
+  derives only its exact management scope for aliases such as
+  `coffee::developer.universal`.
 - Direct `CommitContractDeployment` creates a revisioned lifecycle owned by its
   submitting account. It rejects every protected namespace, even when the
   submitter holds governance permissions. Protected addresses are created only
@@ -220,7 +260,7 @@ native transactions rather than by a separate Torii deployment limiter.
 
 - `musubi deploy` owns package deployment through the shared
   `iroha_contract_deploy` service. It verifies immutable `.to` bytes, checks the
-  registered authority and exact effective registrar/alias permissions, quotes
+  registered authority and exact effective alias permissions, quotes
   every native transaction, and persists the signed sequence in an owner-only
   deployment journal. Upload chunks and finalization precede manifest
   registration and one atomic deployment commit. Recovery polls each previously

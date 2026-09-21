@@ -224,13 +224,12 @@ fn hash_world_contract(entry: &IvmBytecodeEntry) -> core::result::Result<Hash, S
 /// Stored together with usage counts so triggers sharing the same blob can be deduplicated.
 type TriggerContractStore = Storage<HashOf<IvmBytecode>, IvmBytecodeEntry>;
 type TriggerContractStoreBlock<'set> = StorageBlock<'set, HashOf<IvmBytecode>, IvmBytecodeEntry>;
-type TriggerContractStoreTransaction<'block, 'set> =
-    StorageTransaction<'block, 'set, HashOf<IvmBytecode>, IvmBytecodeEntry>;
+type TriggerContractStoreTransaction<'block> =
+    StorageTransaction<'block, HashOf<IvmBytecode>, IvmBytecodeEntry>;
 type TriggerContractStoreView<'set> = StorageView<'set, HashOf<IvmBytecode>, IvmBytecodeEntry>;
 type ActiveTriggerIdStore = Storage<TriggerId, ()>;
 type ActiveTriggerIdStoreBlock<'set> = StorageBlock<'set, TriggerId, ()>;
-type ActiveTriggerIdStoreTransaction<'block, 'set> =
-    StorageTransaction<'block, 'set, TriggerId, ()>;
+type ActiveTriggerIdStoreTransaction<'block> = StorageTransaction<'block, TriggerId, ()>;
 type ActiveTriggerIdStoreView<'set> = StorageView<'set, TriggerId, ()>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1218,7 +1217,7 @@ mod merge_write_set_tests {
     }
 }
 /// Trigger set for transaction's aggregated changes
-pub struct SetTransaction<'block, 'set> {
+pub struct SetTransaction<'block> {
     /// Last transaction-local trigger lifecycle generation allocated.
     next_registration_generation: u64,
     /// Per-ID registration generation within this transaction overlay.
@@ -1235,27 +1234,26 @@ pub struct SetTransaction<'block, 'set> {
     /// Deterministic, transaction-local postings for bounded data-event matching.
     data_trigger_index: DataTriggerIndex,
     /// Triggers using [`DataEventFilter`]
-    data_triggers: StorageTransaction<'block, 'set, TriggerId, LoadedAction<DataEventFilter>>,
+    data_triggers: StorageTransaction<'block, TriggerId, LoadedAction<DataEventFilter>>,
     /// Triggers using [`PipelineEventFilterBox`]
-    pipeline_triggers:
-        StorageTransaction<'block, 'set, TriggerId, LoadedAction<PipelineEventFilterBox>>,
+    pipeline_triggers: StorageTransaction<'block, TriggerId, LoadedAction<PipelineEventFilterBox>>,
     /// Triggers using [`TimeEventFilter`]
-    time_triggers: StorageTransaction<'block, 'set, TriggerId, LoadedAction<TimeEventFilter>>,
+    time_triggers: StorageTransaction<'block, TriggerId, LoadedAction<TimeEventFilter>>,
     /// Triggers using [`ExecuteTriggerEventFilter`]
     by_call_triggers:
-        StorageTransaction<'block, 'set, TriggerId, LoadedAction<ExecuteTriggerEventFilter>>,
+        StorageTransaction<'block, TriggerId, LoadedAction<ExecuteTriggerEventFilter>>,
     /// Trigger ids with type of events they process
-    ids: StorageTransaction<'block, 'set, TriggerId, TriggeringEventType>,
+    ids: StorageTransaction<'block, TriggerId, TriggeringEventType>,
     /// Active data trigger ids.
-    active_data_trigger_ids: ActiveTriggerIdStoreTransaction<'block, 'set>,
+    active_data_trigger_ids: ActiveTriggerIdStoreTransaction<'block>,
     /// Active pipeline trigger ids.
-    active_pipeline_trigger_ids: ActiveTriggerIdStoreTransaction<'block, 'set>,
+    active_pipeline_trigger_ids: ActiveTriggerIdStoreTransaction<'block>,
     /// Active time trigger ids.
-    active_time_trigger_ids: ActiveTriggerIdStoreTransaction<'block, 'set>,
+    active_time_trigger_ids: ActiveTriggerIdStoreTransaction<'block>,
     /// Active by-call trigger ids.
-    active_by_call_trigger_ids: ActiveTriggerIdStoreTransaction<'block, 'set>,
+    active_by_call_trigger_ids: ActiveTriggerIdStoreTransaction<'block>,
     /// Original [`IvmBytecode`]s by [`TriggerId`] for querying purposes.
-    contracts: TriggerContractStoreTransaction<'block, 'set>,
+    contracts: TriggerContractStoreTransaction<'block>,
 }
 /// Consistent point in time view of the [`Set`]
 pub struct SetView<'set> {
@@ -1941,7 +1939,7 @@ macro_rules! impl_set_ro {
     )*};
 }
 impl_set_ro! {
-    SetBlock<'_>, SetTransaction<'_, '_>, SetView<'_>
+    SetBlock<'_>, SetTransaction<'_>, SetView<'_>
 }
 impl Set {
     /// Create struct to apply block's changes
@@ -2000,9 +1998,9 @@ impl Set {
         removed
     }
 }
-impl<'set> SetBlock<'set> {
+impl SetBlock<'_> {
     /// Create struct to apply transaction's changes
-    pub fn transaction(&mut self) -> SetTransaction<'_, 'set> {
+    pub fn transaction(&mut self) -> SetTransaction<'_> {
         let data_trigger_index = DataTriggerIndex::from_triggers(&self.data_triggers);
         SetTransaction {
             next_registration_generation: 0,
@@ -2065,7 +2063,7 @@ impl TriggeringEventFilter for DataEventFilter {}
 impl TriggeringEventFilter for PipelineEventFilterBox {}
 impl TriggeringEventFilter for TimeEventFilter {}
 impl TriggeringEventFilter for ExecuteTriggerEventFilter {}
-impl<'block, 'set> SetTransaction<'block, 'set> {
+impl<'block> SetTransaction<'block> {
     /// Current transaction-local registration generation for `id`.
     ///
     /// IDs inherited from the parent block have generation zero. Every
@@ -2119,7 +2117,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         .then_some(generation)
     }
     fn set_active_id(
-        active_ids: &mut ActiveTriggerIdStoreTransaction<'block, 'set>,
+        active_ids: &mut ActiveTriggerIdStoreTransaction<'block>,
         id: &TriggerId,
         active: bool,
     ) {
@@ -2394,7 +2392,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         &mut self,
         trigger: SpecializedTrigger<F>,
         event_type: TriggeringEventType,
-        map: impl FnOnce(&mut Self) -> &mut StorageTransaction<'block, 'set, TriggerId, LoadedAction<F>>,
+        map: impl FnOnce(&mut Self) -> &mut StorageTransaction<'block, TriggerId, LoadedAction<F>>,
     ) -> bool {
         let SpecializedTrigger {
             id: trigger_id,
@@ -2598,8 +2596,8 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
     ///
     /// Returns `true` if trigger was removed and `false` otherwise.
     fn remove_from<F: mv::Value + EventFilter>(
-        contracts: &mut TriggerContractStoreTransaction<'block, 'set>,
-        triggers: &mut StorageTransaction<'block, 'set, TriggerId, LoadedAction<F>>,
+        contracts: &mut TriggerContractStoreTransaction<'block>,
+        triggers: &mut StorageTransaction<'block, TriggerId, LoadedAction<F>>,
         trigger_id: TriggerId,
     ) -> bool {
         triggers
@@ -2712,10 +2710,10 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
     /// Remove actions with zero execution count from `triggers`
     fn remove_zeros<F: mv::Value + EventFilter>(
         removed: &mut Vec<TriggerId>,
-        ids: &mut StorageTransaction<'block, 'set, TriggerId, TriggeringEventType>,
-        active_ids: &mut ActiveTriggerIdStoreTransaction<'block, 'set>,
-        contracts: &mut TriggerContractStoreTransaction<'block, 'set>,
-        triggers: &mut StorageTransaction<'block, 'set, TriggerId, LoadedAction<F>>,
+        ids: &mut StorageTransaction<'block, TriggerId, TriggeringEventType>,
+        active_ids: &mut ActiveTriggerIdStoreTransaction<'block>,
+        contracts: &mut TriggerContractStoreTransaction<'block>,
+        triggers: &mut StorageTransaction<'block, TriggerId, LoadedAction<F>>,
     ) {
         let mut to_remove: Vec<TriggerId> = triggers
             .iter()

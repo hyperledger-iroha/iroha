@@ -54,7 +54,7 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "41343a63f1fb3bf4cd550e697f316b8e50fe18e06d6daffba48605e228ddda74";
+    "1bd32f52a73c4e4785fa7cea53104734f5940e0cfe0cb0a26f01cac7b5720d5c";
 const CANONICAL_ROLLOUT_PLAN_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_rollout_plan_v1.json");
 const CANONICAL_CARGO_LOCK_V1: &[u8] = include_bytes!("../../../../Cargo.lock");
@@ -514,9 +514,9 @@ fn validate_nevo_review_v1(genesis: &[u8], review: &[u8]) -> color_eyre::Result<
             "registered_before_alias_intents": true,
             "unregistered_after_alias_intents": true,
         },
-        "contract_deployment_permission_grant": {
+        "contract_code_management_permission_grant": {
             "account_id": (api_signer),
-            "permission": "CanRegisterSmartContractCode",
+            "permission": "CanManageSmartContractCode",
             "payload": null,
         },
         "dpn_permission_grants": [
@@ -1853,17 +1853,9 @@ fn render_release_genesis_v1(
     {
         bail!("Taira genesis final transaction is not instruction-only");
     }
-    let rendered = json_pretty_bytes_v1(&genesis, "Taira privacy release genesis")?;
-    validate_genesis_manifest_json(bytes)
-        .wrap_err("Taira release genesis exceeds fixed resource bounds")?;
-    if nevo_review.is_none() && rendered != bytes {
-        bail!("Taira release genesis changed while proving that privacy activation is absent");
-    }
-    Ok(if nevo_review.is_some() {
-        bytes.to_vec()
-    } else {
-        rendered
-    })
+    // Both branches proved the exact source image; no genesis field was edited.
+    // Preserve its reviewed digest instead of normalizing incidental JSON formatting.
+    Ok(bytes.to_vec())
 }
 fn registered_account_id_v1(instruction: &JsonValue) -> Option<&str> {
     instruction
@@ -2077,7 +2069,7 @@ mod tests {
         account::address::AccountAddress,
         alias_setup::ResolvedAccountAliasV1,
         block::BlockHeader,
-        isi::{RegisterBox, UnregisterBox},
+        isi::{GrantBox, RegisterBox, UnregisterBox},
         permission::Permission,
         privacy::{
             BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
@@ -2085,8 +2077,9 @@ mod tests {
             PrivacyProtocolLifecycleV1,
         },
     };
-    use iroha_executor_data_model::permission::account::{
-        AccountAliasPermissionScope, CanManageAccountAlias,
+    use iroha_executor_data_model::permission::{
+        account::{AccountAliasPermissionScope, CanManageAccountAlias},
+        smart_contract::CanManageSmartContractCode,
     };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::topology::DataSpaceId;
@@ -2535,6 +2528,36 @@ mod tests {
         assert_eq!(golden, base);
     }
     #[test]
+    fn nevo_overlay_grants_current_contract_code_management_authority() {
+        iroha_genesis::init_instruction_registry();
+        let _chain_discriminant =
+            ChainDiscriminantGuard::enter(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
+        let overlay: JsonValue = norito::json::from_slice(CANONICAL_NEVO_OVERLAY_V1)
+            .expect("decode canonical NEVO overlay");
+        let instructions = iroha_genesis::genesis_instructions_json::from_value(
+            overlay.get("instructions").expect("overlay instructions"),
+        )
+        .expect("decode canonical NEVO instructions");
+        let GrantBox::Permission(grant) = instructions[18]
+            .as_any()
+            .downcast_ref::<GrantBox>()
+            .expect("contract code management grant")
+        else {
+            panic!("instruction 18 must grant contract code management permission");
+        };
+        assert_eq!(
+            grant.object(),
+            &Permission::from(CanManageSmartContractCode)
+        );
+        assert_eq!(
+            grant.destination(),
+            &AccountAddress::parse_encoded(GOLDEN_NEVO_API_SIGNER_V2, None)
+                .expect("canonical API signer")
+                .to_account_id()
+                .expect("single-controller API signer")
+        );
+    }
+    #[test]
     fn validate_only_nevo_review_rejects_digest_unbound_identity_mutation() {
         let _caller_network = ChainDiscriminantGuard::enter(42);
         let directory = tempfile::tempdir().expect("create NEVO validation directory");
@@ -2681,6 +2704,34 @@ mod tests {
                 "public-input digest and token-hash splices must fail native admission"
             );
         }
+    }
+    #[test]
+    fn nevo_genesis_render_uses_pinned_address_profile_and_restores_the_caller() {
+        let _caller = ChainDiscriminantGuard::enter(753);
+        let rendered = render_release_genesis_v1(CANONICAL_GENESIS_TEMPLATE_V1, None)
+            .expect("Taira genesis decoding uses its verified profile, not the caller profile");
+        assert_eq!(rendered, CANONICAL_GENESIS_TEMPLATE_V1);
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            753
+        );
+        let mut empty: JsonValue = norito::json::from_slice(CANONICAL_GENESIS_TEMPLATE_V1)
+            .expect("parse pinned source for the rejected candidate");
+        empty
+            .as_object_mut()
+            .expect("genesis object")
+            .insert("transactions".to_owned(), JsonValue::Array(Vec::new()));
+        let empty = json_pretty_bytes_v1(&empty, "empty candidate").expect("encode candidate");
+        assert!(
+            render_release_genesis_v1(&empty, None)
+                .expect_err("empty transaction list must fail after entering its declared profile")
+                .to_string()
+                .contains("no transactions")
+        );
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            753
+        );
     }
     #[test]
     fn reviewed_nevo_genesis_carries_exact_ephemeral_alias_authority() {

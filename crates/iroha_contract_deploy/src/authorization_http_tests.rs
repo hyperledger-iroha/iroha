@@ -93,20 +93,18 @@ fn public_permission_pages_traverse_more_than_500_items_and_empty_final_page() -
     let first = (0..500)
         .map(|index| Permission::new(format!("UnrelatedPermission{index}"), Json::new(())))
         .collect::<Vec<_>>();
-    let register: Permission = CanRegisterSmartContractCode.into();
     let manage: Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
     }
     .into();
     // The public merger reports the returned page count, even after route deduplication.
-    let second = [first[0].clone(), register.clone(), manage.clone()];
+    let second = [first[0].clone(), manage.clone()];
     let (result, requests) = read_scripted_permissions(vec![
         (complete_headers(), page(&first)?),
         (complete_headers(), page(&second)?),
         (complete_headers(), page(&[])?),
     ])?;
     let authorization = result?;
-    assert_eq!(authorization.register_code_permission, register);
     assert_eq!(authorization.manage_alias_permission, manage);
     assert_eq!(requests.len(), 3);
     for (request, offset) in requests.iter().zip([0, 500, 1000]) {
@@ -153,7 +151,7 @@ fn public_permission_pages_reject_incomplete_or_misrepresented_evidence() -> Res
         result
             .unwrap_err()
             .to_string()
-            .contains("CanRegisterSmartContractCode")
+            .contains("CanManageAccountAlias")
     );
     assert_eq!(requests.len(), 1);
     Ok(())

@@ -35,8 +35,8 @@ fn validate_initial_permission_payload_constraints(
         }};
     }
     match permission.name().as_ref() {
-        "CanRegisterSmartContractCode"
-        | "CanManageSmartContractCodeRegistrars"
+        "CanManageSmartContractCode"
+        | "CanGrantSmartContractCodeManagement"
         | "CanManageSoracloud"
         | "CanBindSorafsAlias"
         | "CanDeclareSorafsCapacity"
@@ -541,10 +541,10 @@ fn initial_permission_capability_root_authority(
             let token = decode!(executor_permission::trigger::CanModifyTriggerMetadata);
             initial_trigger_authority(state_transaction, authority, &token.trigger)?
         }
-        "CanRegisterSmartContractCode" => {
-            let _ = decode!(executor_permission::smart_contract::CanRegisterSmartContractCode);
+        "CanManageSmartContractCode" => {
+            let _ = decode!(executor_permission::smart_contract::CanManageSmartContractCode);
             let manager: Permission =
-                executor_permission::smart_contract::CanManageSmartContractCodeRegistrars.into();
+                executor_permission::smart_contract::CanGrantSmartContractCodeManagement.into();
             authority_has_permission(&state_transaction.world, authority, &manager)?
         }
         "CanInvokeContractEntrypoint" => {
@@ -555,10 +555,10 @@ fn initial_permission_capability_root_authority(
                         .to_owned(),
                 ));
             }
-            let registrar: Permission =
-                executor_permission::smart_contract::CanRegisterSmartContractCode.into();
+            let code_manager: Permission =
+                executor_permission::smart_contract::CanManageSmartContractCode.into();
             let _ = contract_runtime_context;
-            authority_has_permission(&state_transaction.world, authority, &registrar)?
+            authority_has_permission(&state_transaction.world, authority, &code_manager)?
         }
         "CanExecuteSettlement" => {
             let token = decode!(executor_permission::settlement::CanExecuteSettlement);
@@ -694,7 +694,7 @@ fn initial_permission_delegation_allowed(
     } else {
         !matches!(
             permission.name().as_ref(),
-            "CanRegisterSmartContractCode"
+            "CanManageSmartContractCode"
                 | "CanReadAccountData"
                 | "CanResolveAccountAlias"
                 | "CanIssueSoranetVpnQuote"
@@ -2512,8 +2512,8 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageKagemushaReserve",
     "CanManageRoles",
     "CanUpgradeExecutor",
-    "CanRegisterSmartContractCode",
-    "CanManageSmartContractCodeRegistrars",
+    "CanManageSmartContractCode",
+    "CanGrantSmartContractCodeManagement",
     "CanInvokeContractEntrypoint",
     "CanExecuteSettlement",
     "CanManageFxCorridors",

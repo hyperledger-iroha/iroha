@@ -1,7 +1,8 @@
-//! Closed insertion admission for the existing synchronous map engine.
+//! Closed writer and insertion admission for the existing synchronous map engine.
 
 use super::*;
-use crate::internals::bptree::node::{Branch, Leaf, Node, TXID_MASK, TXID_SHF};
+use crate::internals::bptree::cursor::checked_next_generation;
+use crate::internals::bptree::node::{Branch, Leaf, Node};
 use crate::internals::lincowcell::{InitialCharges, WriterAdmission, WriterCharges, WriterLayouts};
 use crossbeam_utils::CachePadded;
 use std::alloc::Layout;
@@ -71,7 +72,7 @@ pub trait ClonePlanning<K, V>: NodeCloning<K, V> {
     fn plan_value(value: &V, demand: &mut AllocationDemand) -> Result<(), PlanningError>;
 }
 
-/// A complete insertion demand cannot be established before allocation.
+/// A complete allocation demand cannot be established before allocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlanningError {
     /// A count, layout, byte sum or generation exceeds its representable limit.
@@ -80,7 +81,7 @@ pub enum PlanningError {
     UnsupportedPayload,
 }
 
-/// Local refusal before constructing any insertion allocation.
+/// Local refusal before constructing an admitted writer or insertion allocation.
 #[derive(Debug)]
 pub enum InsertAdmissionError<E> {
     /// Another writer currently owns the original map lock.
@@ -93,6 +94,39 @@ pub enum InsertAdmissionError<E> {
     Planning(PlanningError),
     /// The original provider refused the complete checked demand.
     Refused(E),
+}
+
+struct WriterStartPlan {
+    demand: AllocationDemand,
+    tracking_layout: Layout,
+}
+
+fn plan_writer_start<K, V, P>(
+    source: &SuperBlock<K, V, Prepaid<P>>,
+    shells: WriterLayouts,
+) -> Result<WriterStartPlan, PlanningError>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: NodeCloning<K, V>,
+{
+    checked_next_generation(source.txid).ok_or(PlanningError::Overflow)?;
+    type Buffer<K, V, C> = FixedTrackingBuffer<*mut Node<K, V, C>, C>;
+    let tracking_layout =
+        Buffer::<K, V, P::Charge>::allocation_layout(0).map_err(|_| PlanningError::Overflow)?;
+    let mut demand = AllocationDemand::new();
+    for layout in [
+        shells.cursor,
+        shells.reader,
+        tracking_layout,
+        tracking_layout,
+    ] {
+        demand.add_layout(layout)?;
+    }
+    Ok(WriterStartPlan {
+        demand,
+        tracking_layout,
+    })
 }
 
 struct InsertPlan {
@@ -120,11 +154,7 @@ where
     V: Clone,
     P: ClonePlanning<K, V>,
 {
-    source
-        .txid
-        .checked_add(1)
-        .filter(|txid| *txid < (TXID_MASK >> TXID_SHF))
-        .ok_or(PlanningError::Overflow)?;
+    checked_next_generation(source.txid).ok_or(PlanningError::Overflow)?;
     // SAFETY: the source is retained under its original writer lock.
     let mut plan = unsafe { plan_tree_insert::<K, V, P>(source.root, source.size, key) }?;
     for layout in [shells.cursor, shells.reader] {
@@ -281,6 +311,73 @@ impl<K, V, P> BptreeMap<K, V, Prepaid<P>>
 where
     K: Clone + Ord + Debug + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
+    P: NodeCloning<K, V>,
+{
+    /// Admit an original writer without inserting or copying any tree entry.
+    ///
+    /// The callback runs once under the original nonblocking writer lock, after
+    /// checked generation preflight and before either shell is allocated. Its
+    /// complete demand covers the original cursor and next-reader shells; both
+    /// fixed tracking buffers have explicit zero capacity and zero allocation.
+    /// The provider supplies their zero-layout charges without inventing an
+    /// allocator event. A later closed insertion admits its own buffer growth,
+    /// nodes and payload copies; no payload planning is needed to start a writer.
+    ///
+    /// Busy, poison, overflow or refusal leaves the published map unchanged and
+    /// allocates nothing. Successful acquisition preserves the original root,
+    /// length and contents. Call `detach` to retain this same private cursor.
+    /// The caller must keep acquisition, the returned writer and its cleanup in
+    /// the original budget's synchronous refund-notification deferral scope.
+    /// A panic while dropping unused funding aborts the new cursor and poisons
+    /// the original writer lock; no partially sealed writer is returned.
+    pub fn try_write_admitted<E>(
+        &self,
+        admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
+    ) -> Result<BptreeMapWriteTxn<'_, K, V, Prepaid<P>>, InsertAdmissionError<E>> {
+        let acquired = self.inner.try_write_charged(|source, shells| {
+            let plan = plan_writer_start::<K, V, P>(source, shells)
+                .map_err(InsertAdmissionError::Planning)?;
+            let mut provider = Prepaid(Some(
+                admit(plan.demand).map_err(InsertAdmissionError::Refused)?,
+            ));
+            let first_charge = provider.take_node_charge(plan.tracking_layout);
+            let first = FixedTrackingBuffer::try_new(0, first_charge)
+                .unwrap_or_else(|_| unreachable!("planned empty first buffer layout"));
+            let last_charge = provider.take_node_charge(plan.tracking_layout);
+            let last = FixedTrackingBuffer::try_new(0, last_charge)
+                .unwrap_or_else(|_| unreachable!("planned empty retirement buffer layout"));
+            let charges = WriterCharges {
+                cursor: provider.take_node_charge(shells.cursor),
+                reader: provider.take_node_charge(shells.reader),
+            };
+            Ok(WriterAdmission {
+                charges,
+                input: (provider, first, last),
+            })
+        });
+        let mut writer = match acquired {
+            Ok(Some(writer)) => writer,
+            Ok(None) => {
+                return Err(if self.inner.is_poisoned() {
+                    InsertAdmissionError::Poisoned
+                } else {
+                    InsertAdmissionError::Busy
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        // Seal this no-edit operation under the same panic discipline as an
+        // insertion: cleanup must succeed before the cursor becomes operable.
+        writer.as_mut().begin_admitted_edit();
+        writer.as_mut().finish_admitted_funding();
+        Ok(BptreeMapWriteTxn { inner: writer })
+    }
+}
+
+impl<K, V, P> BptreeMap<K, V, Prepaid<P>>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Construct an empty map with prepaid node, root and initial reader owners.
@@ -369,7 +466,7 @@ where
                     } else {
                         InsertAdmissionError::Busy
                     },
-                ))
+                ));
             }
             Err(error) => return Err((input.take().expect("original refused input"), error)),
         };
@@ -455,7 +552,7 @@ fn edit_admitted<K, V, P, E>(
     key: K,
     value: V,
     admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    saved: Option<&mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, P>>,
+    saved: Option<&mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
 ) -> Result<Option<V>, ((K, V), InsertAdmissionError<E>)>
 where
     K: Clone + Ord + Debug,
@@ -492,24 +589,44 @@ where
     Ok(previous)
 }
 
-/// An exclusive transaction-start checkpoint of an original prepaid map writer.
+/// An exclusive transaction-start checkpoint of an original map writer.
 ///
 /// Dropping this guard aborts its private edits without allocating or obtaining
 /// new credit. Applying it keeps those edits private in the same writer. Nested
-/// guards resolve in LIFO order through exclusive reborrows. No publication,
-/// detachment or unrestricted mutable payload access exists through this guard.
+/// guards resolve in LIFO order through exclusive reborrows. Publication and
+/// detachment are unavailable through the borrowed guard. Untracked checkpoints
+/// permit ordinary edits; prepaid checkpoints permit only admitted insertion.
 ///
-/// The entire original writer and checkpoint lifetime must remain inside its
-/// budget's synchronous refund-notification deferral scope. An edit or cleanup
-/// panic makes the original cursor unusable even if caught before the physical
-/// writer guard unwinds; abort that writer instead of publishing it.
-pub struct BptreeMapCheckpoint<'a, K, V, P>
+/// Keep a prepaid writer and all its checkpoints inside its budget's synchronous
+/// refund-notification deferral scope. An internal edit or cleanup panic makes
+/// the original cursor unusable even if caught before its physical writer guard
+/// unwinds; abort that writer instead of publishing it.
+pub struct BptreeMapCheckpoint<'a, K, V, M = Untracked>
 where
     K: Clone + Ord + Debug + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    P: ClonePlanning<K, V>,
+    M: MapMode + NodeCloning<K, V>,
 {
-    inner: crate::internals::bptree::cursor::CursorCheckpoint<'a, K, V, P>,
+    inner: crate::internals::bptree::cursor::CursorCheckpoint<'a, K, V, M>,
+}
+
+impl<K, V, M> BptreeMapWriteTxn<'_, K, V, M>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Begin an allocation-free private checkpoint under this original writer.
+    ///
+    /// Checked generation exhaustion refuses before changing any owner. Prepaid
+    /// writers must remain inside their original budget's refund-deferral scope.
+    pub fn checkpoint(&mut self) -> Result<BptreeMapCheckpoint<'_, K, V, M>, PlanningError> {
+        self.inner
+            .as_mut()
+            .checkpoint()
+            .map(|inner| BptreeMapCheckpoint { inner })
+            .ok_or(PlanningError::Overflow)
+    }
 }
 
 impl<K, V, P> BptreeMapWriteTxn<'_, K, V, Prepaid<P>>
@@ -518,18 +635,6 @@ where
     V: Clone + Send + Sync + 'static,
     P: ClonePlanning<K, V>,
 {
-    /// Begin an allocation-free private checkpoint under this original writer.
-    ///
-    /// Checked generation exhaustion refuses before changing any owner. Keep
-    /// the entire writer lifetime in its original budget's refund-deferral scope.
-    pub fn checkpoint(&mut self) -> Result<BptreeMapCheckpoint<'_, K, V, P>, PlanningError> {
-        self.inner
-            .as_mut()
-            .checkpoint()
-            .map(|inner| BptreeMapCheckpoint { inner })
-            .ok_or(PlanningError::Overflow)
-    }
-
     /// Admit one closed insertion while retaining this original physical writer.
     ///
     /// Refusal returns the original input before mutation; successful edits
@@ -545,11 +650,11 @@ where
     }
 }
 
-impl<K, V, P> BptreeMapCheckpoint<'_, K, V, P>
+impl<K, V, M> BptreeMapCheckpoint<'_, K, V, M>
 where
     K: Clone + Ord + Debug + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    P: ClonePlanning<K, V>,
+    M: MapMode + NodeCloning<K, V>,
 {
     /// Borrow an immutable value from this private checkpoint's current state.
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
@@ -560,21 +665,120 @@ where
         self.inner.as_ref().search(key)
     }
 
+    /// Borrow the original value at this checkpoint's start, without copying it.
+    ///
+    /// The parent root remains retained even after child edits remove or replace
+    /// the entry. This reference cannot outlive the exclusive checkpoint guard.
+    pub fn get_before<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.inner.get_before(key)
+    }
+
+    /// Whether the checkpoint's current state contains this key.
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.get(key).is_some()
+    }
+
+    /// Number of entries in the checkpoint's current state.
+    pub fn len(&self) -> usize {
+        self.inner.as_ref().len()
+    }
+
+    /// Whether the checkpoint's current state contains no entries.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Borrow ordered entries directly from this checkpoint's original cursor.
+    pub fn iter(&self) -> Iter<'_, K, V, M::Charge> {
+        self.inner.as_ref().kv_iter()
+    }
+
+    /// Borrow ordered keys directly from this checkpoint's original cursor.
+    pub fn keys(&self) -> KeyIter<'_, K, V, M::Charge> {
+        self.inner.as_ref().k_iter()
+    }
+
+    /// Borrow ordered values directly from this checkpoint's original cursor.
+    pub fn values(&self) -> ValueIter<'_, K, V, M::Charge> {
+        self.inner.as_ref().v_iter()
+    }
+
+    /// Borrow entries within the requested key bounds.
+    pub fn range<R, T>(&self, range: R) -> RangeIter<'_, K, V, M::Charge>
+    where
+        K: Borrow<T>,
+        T: Ord + ?Sized,
+        R: RangeBounds<T>,
+    {
+        self.inner.as_ref().range(range)
+    }
+
+    /// Borrow the current minimum key and value.
+    pub fn first_key_value(&self) -> Option<(&K, &V)> {
+        self.inner.as_ref().first_key_value()
+    }
+
+    /// Borrow the current maximum key and value.
+    pub fn last_key_value(&self) -> Option<(&K, &V)> {
+        self.inner.as_ref().last_key_value()
+    }
+
     /// Borrow a snapshot whose lifetime cannot escape this exclusive guard.
-    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V, Prepaid<P>> {
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V, M> {
         BptreeMapReadSnapshot {
             inner: SnapshotType::W(self.inner.as_ref()),
         }
     }
 
     /// Begin a nested private checkpoint; overflow leaves the parent unchanged.
-    pub fn checkpoint(&mut self) -> Result<BptreeMapCheckpoint<'_, K, V, P>, PlanningError> {
+    pub fn checkpoint(&mut self) -> Result<BptreeMapCheckpoint<'_, K, V, M>, PlanningError> {
         self.inner
             .checkpoint()
             .map(|inner| BptreeMapCheckpoint { inner })
             .ok_or(PlanningError::Overflow)
     }
 
+    /// Keep all child edits private in the original writer; does not publish.
+    pub fn apply(self) {
+        self.inner.apply();
+    }
+}
+
+impl<K, V> BptreeMapCheckpoint<'_, K, V>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    /// Insert or replace an entry, returning the previous private value.
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.inner.edit_parts().0.insert(key, value)
+    }
+
+    /// Remove an entry from this private checkpoint.
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        self.inner.edit_parts().0.remove(key)
+    }
+
+    /// Clone the original path before borrowing a private mutable value.
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        self.inner.edit_parts().0.get_mut_ref(key)
+    }
+}
+
+impl<K, V, P> BptreeMapCheckpoint<'_, K, V, Prepaid<P>>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
     /// Admit one closed edit while retaining exact parent rollback ownership.
     pub fn try_insert_admitted<E>(
         &mut self,
@@ -584,11 +788,6 @@ where
     ) -> Result<Option<V>, ((K, V), InsertAdmissionError<E>)> {
         let (cursor, buffers) = self.inner.edit_parts();
         edit_admitted(cursor, key, value, admit, Some(buffers))
-    }
-
-    /// Keep all child edits private in the original writer; does not publish.
-    pub fn apply(self) {
-        self.inner.apply();
     }
 }
 

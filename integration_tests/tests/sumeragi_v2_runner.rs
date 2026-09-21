@@ -5,7 +5,6 @@ use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
-    client::QueryError,
     crypto::{Algorithm, Hash, HashOf, KeyPair},
     data_model::{
         Identifiable, Level, NetworkId,
@@ -26,7 +25,8 @@ use iroha::{
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
         isi::{InstructionBox, Log, Register, register::RegisterBox},
         parameter::system::SumeragiNposParameters,
-        prelude::FindAccountById,
+        prelude::FindAccounts,
+        query::{dsl::IntoPredicate as _, prelude::QueryBuilderExt},
         transaction::Executable,
     },
 };
@@ -4202,48 +4202,23 @@ async fn wait_for_held_quorum_evidence(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-/// Recognize only the direct account query's canonical missing-entity rejection.
-fn is_missing_account_response(error: &QueryError) -> bool {
-    matches!(error, QueryError::Http { status, code, .. }
-        if status.as_u16() == 404 && code == "query_validation_failed")
-}
-
 /// Query one exact account without mistaking transport or authorization errors for absence.
 fn query_account_visibility(client: &Client, expected: &AccountId) -> Result<bool> {
-    match client
+    let stored = client
         .client()
-        .query_single(FindAccountById::new(expected.clone()))
-    {
-        Ok(stored) if stored.id() == expected => Ok(true),
-        Ok(stored) => Err(eyre!(
+        .query(FindAccounts)
+        .filter_with(|account| account.equals("id", expected.clone()).into_predicate())
+        .execute_single_opt()?;
+    match stored {
+        Some(stored) if stored.id() == expected => Ok(true),
+        Some(stored) => Err(eyre!(
             "account query for {expected} returned unexpected account {}",
             stored.id()
         )),
-        Err(error) if is_missing_account_response(&error) => Ok(false),
-        Err(error) => Err(eyre!(error)),
+        None => Ok(false),
     }
 }
 
-#[test]
-fn account_absence_requires_the_exact_http_rejection() {
-    for (status, code, expected) in [
-        (404_u16, "query_validation_failed", true),
-        (404, "route_not_found", false),
-        (403, "query_validation_failed", false),
-        (400, "query_validation_failed", false),
-        (503, "internal_server_error", false),
-    ] {
-        let error = QueryError::Http {
-            status: status.try_into().expect("fixture HTTP status"),
-            code: code.to_owned(),
-            message: "public diagnostic is not classification authority".to_owned(),
-        };
-        assert_eq!(is_missing_account_response(&error), expected);
-    }
-    assert!(!is_missing_account_response(&QueryError::Other(eyre!(
-        "404 query_validation_failed"
-    ))));
-}
 async fn assert_accounts_absent(peers: &[NetworkPeer], accounts: &[AccountId]) -> Result<()> {
     for peer in peers {
         for account in accounts {

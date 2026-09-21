@@ -2772,7 +2772,7 @@ mod tests {
         let mut stx = state_block.transaction();
         let alice = ALICE_ID.clone();
         let token =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
         let permission: permission::Permission = token.into();
         dm::Grant::account_permission(permission, alice.clone()).execute(&alice, &mut stx)?;
         let (code, manifest) = minimal_contract_artifact();
@@ -2812,7 +2812,7 @@ mod tests {
         manifest.code_hash = Some(h);
         manifest.provenance = None;
         let token =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
         let perm: permission::Permission = token.into();
         dm::Grant::account_permission(perm, alice.clone()).execute(&alice, &mut stx)?;
         let err = smart_contract_code::RegisterSmartContractCode { manifest }
@@ -2843,7 +2843,7 @@ mod tests {
         manifest.code_hash = Some(h);
         let manifest = manifest.signed(&checked_keypair());
         let token =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
         let perm: permission::Permission = token.into();
         dm::Grant::account_permission(perm, alice.clone()).execute(&alice, &mut stx)?;
         let err = smart_contract_code::RegisterSmartContractCode { manifest }

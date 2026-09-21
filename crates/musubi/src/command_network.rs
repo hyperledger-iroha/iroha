@@ -28,9 +28,15 @@ struct ConfigureArgs {
     selection: SelectionArgs,
     /// Workspace network name, for example taira.
     name: String,
-    /// Native client file with the exact genesis network identity and account profile.
-    #[arg(long, value_name = "PATH")]
-    config: PathBuf,
+    /// Existing native client file instead of the integrated developer wallet.
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["wallet", "wallet_dir"])]
+    config: Option<PathBuf>,
+    /// Integrated wallet to bind; defaults to the local wallet named default.
+    #[arg(long, value_name = "NAME")]
+    wallet: Option<String>,
+    /// Private wallet store outside projects.
+    #[arg(long, value_name = "DIRECTORY")]
+    wallet_dir: Option<PathBuf>,
     /// Explicit payer for SDK-quoted deployment fees.
     #[arg(long, value_enum)]
     fee_payer: Option<FeePayer>,
@@ -305,7 +311,7 @@ pub(super) fn run_network(
                 networks.push(selected.json());
             }
             if networks.is_empty() {
-                message.push_str("Taira address profile is available for local compilation. Configure a client before deployment.\n");
+                message.push_str("Taira is available for local compilation. Create and fund a wallet with `musubi wallet create` and `musubi wallet fund`, then bind it with `musubi network configure taira`.\n");
             }
             Ok(Success {
                 message,
@@ -367,7 +373,30 @@ fn configure(root: &Path, args: &ConfigureArgs, contract: Option<&str>) -> Comma
     let _lock = writer
         .lock_exclusive(Path::new("Musubi.networks.lock"))
         .map_err(atomic_diagnostic)?;
-    let config = absolute_reference(&args.config)?;
+    let mut document = read_bindings(root)?;
+    let retained_config = if args.wallet.is_none() && args.wallet_dir.is_none() {
+        document
+            .get("networks")
+            .and_then(toml::Value::as_table)
+            .and_then(|networks| networks.get(&args.name))
+            .and_then(toml::Value::as_table)
+            .and_then(|binding| binding.get("config"))
+            .and_then(toml::Value::as_str)
+            .map(|path| resolve_reference(root, Path::new(path)))
+    } else {
+        None
+    };
+    let config = if let Some(config) = &args.config {
+        absolute_reference(config)?
+    } else if let Some(config) = retained_config {
+        config
+    } else {
+        let store =
+            wallet::open_store(Some(&root.join("Musubi.toml")), args.wallet_dir.as_deref())?;
+        store
+            .config_path(args.wallet.as_deref().unwrap_or("default"))
+            .map_err(wallet::wallet_error)?
+    };
     let image = RegistryPublicConfigImageV1::load(Some(&config))
         .map_err(|error| registry_diagnostic(error, ErrorCode::Usage))?;
     let (network_id, profile) = image
@@ -378,7 +407,6 @@ fn configure(root: &Path, args: &ConfigureArgs, contract: Option<&str>) -> Comma
     {
         return Err(binding_changed(&args.name));
     }
-    let mut document = read_bindings(root)?;
     document.insert("version".to_owned(), toml::Value::Integer(1));
     document.insert("default".to_owned(), toml::Value::String(args.name.clone()));
     let networks = document
@@ -409,6 +437,14 @@ fn configure(root: &Path, args: &ConfigureArgs, contract: Option<&str>) -> Comma
     );
     if let Some(fee) = fee_selection_table(args, profile)? {
         binding.insert("fee".to_owned(), toml::Value::Table(fee));
+    } else if !binding.contains_key("fee") {
+        binding.insert(
+            "fee".to_owned(),
+            toml::Value::Table(toml::Table::from_iter([(
+                "payer".to_owned(),
+                toml::Value::String("authority".to_owned()),
+            )])),
+        );
     }
     if let (Some(target), Some(alias)) = (contract, &args.alias) {
         validate_contract_key(target)?;
@@ -736,8 +772,8 @@ fn binding_changed(name: &str) -> Diagnostic {
 }
 
 fn missing_binding(name: &str) -> Diagnostic {
-    Diagnostic::new(ErrorCode::Usage, "deployment requires an explicit native client configuration")
-        .with_help(format!("run `musubi network configure {name} --config <client.toml> --fee-payer authority --contract <target> --alias <name::domain>`"))
+    Diagnostic::new(ErrorCode::Usage, "deployment needs a wallet bound to the selected network")
+        .with_help(format!("create and fund a wallet with `musubi wallet create` and `musubi wallet fund`, acquire a domain with `musubi wallet namespace <your-domain>`, then run `musubi network configure {name} --wallet default --contract <target> --alias <name::your-domain>`"))
 }
 
 #[cfg(test)]
@@ -814,7 +850,9 @@ mod tests {
             command: NetworkCommand::Configure(ConfigureArgs {
                 selection: SelectionArgs::default(),
                 name: "taira".to_owned(),
-                config: path.clone(),
+                config: Some(path.clone()),
+                wallet: None,
+                wallet_dir: None,
                 fee_payer: None,
                 fee_program: None,
                 fee_program_revision: None,
@@ -872,7 +910,9 @@ mod tests {
         let args = ConfigureArgs {
             selection: SelectionArgs::default(),
             name: "taira".to_owned(),
-            config: config.clone(),
+            config: Some(config.clone()),
+            wallet: None,
+            wallet_dir: None,
             fee_payer: Some(FeePayer::Authority),
             fee_program: None,
             fee_program_revision: None,
@@ -895,8 +935,22 @@ mod tests {
                 .message
                 .contains("Alias: demo/coffee-club::coffee-club -> coffee-club::universal")
         );
+        let update = ConfigureArgs {
+            config: None,
+            fee_payer: None,
+            contract: Some("espresso".to_owned()),
+            alias: Some("espresso::universal".parse().expect("second alias")),
+            ..args
+        };
+        configure(dir.path(), &update, Some("demo/coffee-club::espresso")).expect(
+            "adding an alias retains the selected wallet without reading the default wallet",
+        );
         let selected = select_network(dir.path(), None, None, None).expect("persisted default");
         assert_eq!(selected.config.as_deref(), Some(config.as_path()));
+        assert_eq!(
+            selected.contracts["demo/coffee-club::espresso"].to_string(),
+            "espresso::universal"
+        );
         assert_eq!(
             selected.fee_payment,
             Some(FeePaymentIntent::authority(Vec::new(), None))
@@ -937,7 +991,9 @@ mod tests {
         let mut args = ConfigureArgs {
             selection: SelectionArgs::default(),
             name: "taira".to_owned(),
-            config: PathBuf::from("unused.toml"),
+            config: Some(PathBuf::from("unused.toml")),
+            wallet: None,
+            wallet_dir: None,
             fee_payer: None,
             fee_program: None,
             fee_program_revision: None,
@@ -1062,7 +1118,9 @@ mod tests {
         let args = ConfigureArgs {
             selection: SelectionArgs::default(),
             name: "taira".to_owned(),
-            config: public_config(root.path()),
+            config: Some(public_config(root.path())),
+            wallet: None,
+            wallet_dir: None,
             fee_payer: None,
             fee_program: None,
             fee_program_revision: None,

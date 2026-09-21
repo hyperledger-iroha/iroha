@@ -1,9 +1,8 @@
 //! Exact native plan authentication and ambiguous submission recovery.
 use super::*;
 use iroha::data_model::{nexus::FeeDebitSource, transaction::Executable};
-use iroha_executor_data_model::permission::{
-    account::{AccountAliasPermissionScope, CanManageAccountAlias},
-    smart_contract::CanRegisterSmartContractCode,
+use iroha_executor_data_model::permission::account::{
+    AccountAliasPermissionScope, CanManageAccountAlias,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -95,7 +94,6 @@ nonce = false
         authority: config.account.clone(),
         authorization: DeploymentAuthorization {
             account_exists: true,
-            register_code_permission: CanRegisterSmartContractCode.into(),
             manage_alias_permission: CanManageAccountAlias {
                 scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }

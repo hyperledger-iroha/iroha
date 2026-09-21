@@ -413,6 +413,303 @@ def require_sortition_registration_guards(world: str) -> None:
         )
 
 
+def require_block_start_enactment_phases(state: str) -> None:
+    """Bind original ordered start ownership to bounded borrowed phase helpers."""
+    state_path = "crates/iroha_core/src/state.rs"
+    constructor = section(
+        state,
+        "    fn block_with_owned_start_stages<'state, E, T, R>(",
+        "    /// Release expired private locks inside their original block transaction.",
+        state_path,
+    )
+    phases = section(
+        constructor,
+        "        // Height-trigger: open/close referenda at scheduled heights",
+        "        let current_slot =",
+        state_path,
+    )
+    # This small statement region contains only the original height and the two
+    # unconditional calls. Ignore line comments, but reject hidden conditions,
+    # substituted owners/heights, duplicate calls, or swapped execution order.
+    phases = re.sub(r"//[^\n]*", "", phases)
+    expected = (
+        "let now_h = sb._curr_block.height().get();"
+        "Self::apply_block_start_private_settlement_expiry(&mut sb, now_h);"
+        "Self::apply_block_start_parliament_enactments(&mut sb, now_h);"
+    )
+    if re.sub(r"\s+", "", phases) != re.sub(r"\s+", "", expected):
+        raise RuntimeError(f"{state_path}: start phases must use the original block and height in order")
+    compact = re.sub(r"\s+", "", constructor)
+    ordered = (
+        "letcontinuation=before_start(&mutsb)?;",
+        "Self::apply_block_start_private_settlement_expiry(&mutsb,now_h);",
+        "Self::apply_block_start_parliament_enactments(&mutsb,now_h);",
+        "sb.start_of_block_effects_applied=true;",
+        "sb.capture_execution_output_capacity();",
+        "letresult=after_start(&mutsb,continuation)?;",
+    )
+    positions = [compact.find(token) for token in ordered]
+    if any(compact.count(token) != 1 for token in ordered) or positions != sorted(positions):
+        raise RuntimeError(f"{state_path}: start phases must finish before the original continuation")
+    expiry = section(
+        state,
+        "    fn apply_block_start_private_settlement_expiry(",
+        "    /// Resolve due Parliament effects before entering after-start execution.",
+        state_path,
+    )
+    require_all(state_path, expiry, (
+        "barrier.manifest.expiry_height < now_h",
+        "let mut expiry = sb.transaction();",
+        ".reconcile_expired_private_settlement_staged_locks_v1()",
+        "expiry.apply();",
+    ))
+    due_enactment = section(
+        state,
+        "    fn apply_block_start_parliament_enactments(",
+        "    /// Apply scheduled world transitions within their shared transaction.",
+        state_path,
+    )
+    require_all(
+        state_path,
+        due_enactment,
+        (
+            ".parliament_certified_enactments.iter().next()",
+            "*enact_at_height < now_h",
+            ".parliament_certified_enactments",
+            ".get(&now_h)",
+            "for governance_attempt_id in due_parliament_certificates",
+            "execute_due_parliament_certificate_v1(",
+            "record_due_parliament_execution_failure_v1(",
+            '"Parliament certified-enactment index retained a due bucket',
+        ),
+    )
+    if "sb.world.parliament_attempts.iter()" in due_enactment:
+        raise RuntimeError(
+            f"{state_path}: block-start enactment selection regressed to an unbounded Parliament attempt scan"
+        )
+
+    compact_due = re.sub(r"\s+", "", due_enactment)
+    ordered_due = (
+        "letmutenactment=sb.transaction();",
+        "execute_due_parliament_certificate_v1(",
+        "DueParliamentCertificateExecutionV1::EffectFailed",
+        "drop(enactment);",
+        "letmutfailure=sb.transaction();",
+        "record_due_parliament_execution_failure_v1(",
+        "failure.apply();",
+    )
+    positions = [compact_due.find(token) for token in ordered_due]
+    if any(compact_due.count(token) != 1 for token in ordered_due) or positions != sorted(positions):
+        raise RuntimeError(f"{state_path}: a failed effect must drop before its original failure recorder")
+
+
+def require_parliament_event_capture(state: str) -> None:
+    """Capture the committed telemetry projection before draining original events."""
+    state_path = "crates/iroha_core/src/state.rs"
+    parliament_event_capture = section(
+        state,
+        "    fn apply_without_execution_inner(",
+        "    fn pin_new_autoscale_lane_committee(",
+        state_path,
+    )
+    require_all(
+        state_path,
+        parliament_event_capture,
+        (
+            "let parliament_transitions = self",
+            "crate::telemetry::parliament_lifecycle_metric_projection(event)",
+            ".collect::<Vec<_>>();",
+            "self.pending_parliament_telemetry_events",
+            ".extend(parliament_transitions);",
+            "Ok(self.world.take_external_events())",
+        ),
+    )
+    if parliament_event_capture.count("self.world.take_external_events()") != 1:
+        raise RuntimeError(f"{state_path}: Parliament event capture must drain exactly once after projection")
+    capture_order = tuple(
+        parliament_event_capture.find(token)
+        for token in (
+            "let parliament_transitions = self",
+            "crate::telemetry::parliament_lifecycle_metric_projection(event)",
+            ".collect::<Vec<_>>();",
+            "self.pending_parliament_telemetry_events",
+            ".extend(parliament_transitions);",
+            "Ok(self.world.take_external_events())",
+        )
+    )
+    if tuple(sorted(capture_order)) != capture_order:
+        raise RuntimeError(
+            f"{state_path}: Parliament telemetry projection must be captured before "
+            "the external-event buffer is drained"
+        )
+    if "record_committed_parliament_transition(" in parliament_event_capture:
+        raise RuntimeError(
+            f"{state_path}: Parliament transition telemetry must not publish before commit"
+        )
+
+
+def require_parliament_commit_publication(state: str) -> None:
+    """Publish Parliament metrics only after prepared State commits, with replay guards."""
+    path = "crates/iroha_core/src/state.rs"
+    commit = section(state, "    fn commit_inner(",
+                     "    fn mint_canonical_carrier_commit_metadata_authorization(", path)
+    # These bindings cover the current fail-before-publication protocol. There is
+    # no deferred commit_error or block_metadata_committed flag: every fallible
+    # World/geometry step precedes the original State publication scope.
+    compact = re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", commit))
+    prepare = section(compact, "letworld=world_commit::PreparedWorldCommit::prepare(",
+                      "lettiered_snapshot=", path)
+    if not prepare.endswith("TransactionsBlockError::WorldCommitPreparation})?;"):
+        raise RuntimeError(f"{path}: World preparation must propagate refusal before publication")
+    geometry = section(compact, "ifletErr(err)=geometry_result{", "autoscale_start.elapsed()", path)
+    if not geometry.endswith("returnErr(TransactionsBlockError::from(err));}"):
+        raise RuntimeError(f"{path}: geometry refusal must return before State publication")
+    ordered = (
+        "letcommitted_parliament_attempt_counts=world.parliament_attempt_counts.is_dirty()",
+        "letworld=world_commit::PreparedWorldCommit::prepare(",
+        "ifletErr(err)=geometry_result{",
+        "block_hashes.prepare_commit();{",
+        "transactions.publish();",
+        "canonical_runtime.commit();",
+        "world.commit();",
+        "block_hashes.commit();",
+        "drop(autoscale_lifecycle_guard);",
+    )
+    positions = [compact.find(token) for token in ordered]
+    if any(compact.count(token) != 1 for token in ordered) or positions != sorted(positions):
+        raise RuntimeError(f"{path}: Parliament telemetry requires ordered prepared State publication")
+    publication = section(compact, "block_hashes.prepare_commit();{",
+                          "ifletSome(post)=lifecycle_post_publication{", path)
+    writer_order = (
+        "let_state_write_lock=state_write_lock.lock();",
+        "let_view_generation=state_ref.begin_state_view_write();",
+        "transactions.publish();", "world.commit();", "block_hashes.commit();",
+    )
+    writer_positions = [publication.find(token) for token in writer_order]
+    if any(publication.count(token) != 1 for token in writer_order) or writer_positions != sorted(writer_positions):
+        raise RuntimeError(f"{path}: canonical publication requires the original State writer and generation")
+    # The original writer scope must directly execute publication. An intact
+    # statement nested in a conditional, or an explicitly released guard, is not
+    # the modeled successful commit boundary. Ignore string braces in logging.
+    lexical = re.sub(r'"(?:\\.|[^"\\])*"', '""', publication)
+    for token in writer_order:
+        before = lexical[:lexical.index(token)]
+        if before.count("{") != before.count("}"):
+            raise RuntimeError(f"{path}: State publication must be unconditional under its original writer")
+    if "drop(_state_write_lock);" in publication or "drop(_view_generation);" in publication:
+        raise RuntimeError(f"{path}: State publication must retain its original writer and generation")
+    # Match the exact nested control-flow region, not independent tokens which
+    # could survive while replay guards or the publisher move to another scope.
+    telemetry = section(compact, 'ifletSome(post)=da_post_publication{post.publish(state_ref);}',
+                        "if!verified_lane_relay_records.is_empty(){", path)
+    start = telemetry.find('#[cfg(feature="telemetry")]if!replay_prevalidation{')
+    expected = """
+        #[cfg(feature="telemetry")]
+        if !replay_prevalidation {
+            if !authenticated_replay_commit {
+                for (transition, no_result_kind) in pending_parliament_telemetry_events {
+                    state_ref.telemetry.record_committed_parliament_transition(transition, no_result_kind);
+                }
+            }
+            if let Some(counts) = committed_parliament_attempt_counts {
+                let (status_counts, stage_counts) = counts.telemetry_counts();
+                state_ref.telemetry.set_parliament_attempt_counts(status_counts, stage_counts);
+            }
+            if let Some(citizens_total) = committed_citizens_total {
+                state_ref.telemetry.record_citizens_total(citizens_total);
+            }
+        }
+    """
+    expected = re.sub(r"\s+", "", expected)
+    if start < 0 or telemetry[start:] != expected:
+        raise RuntimeError(f"{path}: Parliament telemetry requires exact replay-guarded transition and gauge scopes")
+    if compact.find(expected) <= positions[-1]:
+        raise RuntimeError(f"{path}: Parliament telemetry must follow successful canonical publication")
+    if compact.count(".record_committed_parliament_transition(") != 1:
+        raise RuntimeError(f"{path}: Parliament commit must have one exact transition-metric publisher")
+
+
+def require_parliament_beacon_requirement(beacon: str) -> None:
+    """One exact indexed requirement survives deferred activation and candidate gating."""
+    path = "crates/iroha_core/src/sumeragi/v2_beacon.rs"
+    def compact(text: str) -> str:
+        return re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", text))
+
+    requirement = section(beacon,
+        "    fn required_for_height(context: &wire::HeightContext, state: &State) -> bool {",
+        "    /// Activate only on real carrier demand,", path)
+    expected = """
+        let npos_boundary_requested = context.mode == wire::ConsensusMode::Npos
+            && context.height.checked_add(1) == Some(context.epoch_end_height);
+        let world = state.world_view();
+        let logical_beacon_id = BeaconSessionId::for_network_v1(&context.network_id);
+        let parliament_requested = world.parliament_required_beacon_pulse_slots
+            .get(&(logical_beacon_id, context.height))
+            .is_some_and(|attempts| !attempts.is_empty());
+        npos_boundary_requested || parliament_requested
+    }
+    """
+    if compact(requirement) != compact(expected):
+        raise RuntimeError(f"{path}: mandatory beacon demand must use the exact committed network-height index")
+    opened = compact(section(beacon, "    pub(crate) fn open(",
+        "    /// Retain the height's pulse requirement without starting an idle ceremony.", path))
+    required_assignment = "letrequired_for_consensus=Self::required_for_height(context,state);"
+    require_all(path, opened, (
+        "context.validate()?;", required_assignment,
+        "if!required_for_consensus{returnOk(Self{",
+        "letactive=matchactive{Ok(active)=>Some(active),Err(_)if!required_for_consensus=>None,Err(error)=>returnErr(error),};",
+        "signer,required_for_consensus,active,deferred_state:None,",
+    ))
+    if opened.count("letrequired_for_consensus") != 1:
+        raise RuntimeError(f"{path}: immediate beacon activation must retain one original requirement")
+    deferred = compact(section(beacon, "    pub(crate) fn open_deferred(",
+        "    fn required_for_height(", path))
+    require_all(path, deferred, (
+        "context.validate()?;",
+        "letrequired_for_consensus=local_validator.is_some()&&Self::required_for_height(context,state.as_ref());",
+        "required_for_consensus,active:None,deferred_state:required_for_consensus.then_some(state),",
+    ))
+    if deferred.count("letrequired_for_consensus") != 1:
+        raise RuntimeError(f"{path}: deferred beacon activation must retain one original requirement")
+    activation = section(beacon, "    pub(crate) fn activate(&mut self) -> Result<(), V2GlobalBeaconError> {",
+                         "    /// Return whether committed state requests a pulse attempt at this height.", path)
+    expected_activation = """
+        if self.active.is_some() || !self.required_for_consensus { return Ok(()); }
+        let state = self.deferred_state.as_ref().ok_or(V2GlobalBeaconError::State(
+            "mandatory beacon activation lost its committed state owner",
+        ))?;
+        let activated = Self::open(&self.context, state, self.local_validator, self.signer.clone(),)?;
+        *self = activated;
+        Ok(())
+    }
+    """
+    if compact(activation) != compact(expected_activation):
+        raise RuntimeError(f"{path}: deferred beacon must authenticate the original activation before replacement")
+    getter = section(beacon, "    pub(crate) const fn pulse_required_for_consensus(&self) -> bool {",
+                     "    /// Route the height-bound pulse through a view and emit the local share.", path)
+    if compact(getter) != "self.required_for_consensus}":
+        raise RuntimeError(f"{path}: candidate requirement must be the original committed beacon demand")
+    opening = section(beacon, "    pub(crate) fn open(",
+                      "    /// Return whether committed state requests a pulse attempt at this height.", path)
+    if "attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)" in opening:
+        raise RuntimeError(f"{path}: beacon production regressed to an unbounded Parliament attempt scan")
+
+    beacon_attach = section(
+        beacon,
+        "    pub(crate) fn attach_candidate_effects(",
+        "        Ok(())\n    }",
+        path,
+    )
+    require_all(
+        path,
+        beacon_attach,
+        (
+            "if self.pulse_required_for_consensus() && pulse.is_none()",
+            '"required finalized pulse is absent for the candidate view"',
+            "effects.finalized_global_beacon_pulse = pulse;",
+        ),
+    )
+
 def main() -> int:
     ivm_executable_path = "crates/iroha_data_model/src/transaction/executable.rs"
     ivm_executable = read(ivm_executable_path)
@@ -1478,101 +1775,8 @@ def main() -> int:
             "pub(crate) global_beacon_pulse_slots: Storage<(BeaconSessionId, u64), [u8; 32]>",
         ),
     )
-    parliament_event_capture = section(
-        state,
-        "    fn apply_without_execution_inner(",
-        "    fn pin_new_autoscale_lane_committee(",
-        state_path,
-    )
-    require_all(
-        state_path,
-        parliament_event_capture,
-        (
-            "let parliament_transitions = self",
-            "crate::telemetry::parliament_lifecycle_metric_projection(event)",
-            ".collect::<Vec<_>>();",
-            "self.pending_parliament_telemetry_events",
-            ".extend(parliament_transitions);",
-            "let events = self.world.take_external_events();",
-        ),
-    )
-    capture_order = tuple(
-        parliament_event_capture.find(token)
-        for token in (
-            "let parliament_transitions = self",
-            "crate::telemetry::parliament_lifecycle_metric_projection(event)",
-            ".collect::<Vec<_>>();",
-            "self.pending_parliament_telemetry_events",
-            ".extend(parliament_transitions);",
-            "let events = self.world.take_external_events();",
-        )
-    )
-    if tuple(sorted(capture_order)) != capture_order:
-        raise RuntimeError(
-            f"{state_path}: Parliament telemetry projection must be captured before "
-            "the external-event buffer is drained"
-        )
-    if "record_committed_parliament_transition(" in parliament_event_capture:
-        raise RuntimeError(
-            f"{state_path}: Parliament transition telemetry must not publish before commit"
-        )
-    parliament_commit = section(
-        state,
-        "    fn commit_inner(",
-        "    fn mint_canonical_carrier_commit_metadata_authorization(",
-        state_path,
-    )
-    require_all(
-        state_path,
-        parliament_commit,
-        (
-            "let committed_parliament_attempt_counts = world",
-            ".parliament_attempt_counts",
-            ".is_dirty()",
-            "if let Some(err) = commit_error",
-            "drop(autoscale_lifecycle_guard);",
-            "if block_metadata_committed && !replay_prevalidation",
-            "if !authenticated_replay_commit",
-            "for (transition, no_result_kind) in pending_parliament_telemetry_events",
-            ".record_committed_parliament_transition(transition, no_result_kind);",
-            "if let Some(counts) = committed_parliament_attempt_counts",
-            ".set_parliament_attempt_counts(status_counts, stage_counts);",
-        ),
-    )
-    commit_publication_start = parliament_commit.find(
-        "if block_metadata_committed && !replay_prevalidation"
-    )
-    commit_publication_order = (
-        parliament_commit.find("if let Some(err) = commit_error"),
-        parliament_commit.find("drop(autoscale_lifecycle_guard);"),
-        commit_publication_start,
-        parliament_commit.find(
-            "if !authenticated_replay_commit", commit_publication_start
-        ),
-        parliament_commit.find(
-            ".record_committed_parliament_transition(transition, no_result_kind);",
-            commit_publication_start,
-        ),
-        parliament_commit.find(
-            "if let Some(counts) = committed_parliament_attempt_counts",
-            commit_publication_start,
-        ),
-        parliament_commit.find(
-            ".set_parliament_attempt_counts(status_counts, stage_counts);",
-            commit_publication_start,
-        ),
-    )
-    if tuple(sorted(commit_publication_order)) != commit_publication_order:
-        raise RuntimeError(
-            f"{state_path}: Parliament telemetry must publish only after the canonical "
-            "commit succeeds, then refresh derived gauges"
-        )
-    if parliament_commit.count(
-        ".record_committed_parliament_transition(transition, no_result_kind);"
-    ) != 1:
-        raise RuntimeError(
-            f"{state_path}: Parliament commit must have one exact transition-metric publisher"
-        )
+    require_parliament_event_capture(state)
+    require_parliament_commit_publication(state)
     parliament_startup = section(
         state,
         "    fn new_inner(",
@@ -2529,30 +2733,7 @@ def main() -> int:
             f"{state_path}: restore publishes the reservation index before complete validation"
         )
 
-    due_enactment = section(
-        state,
-        "        // Height-trigger: open/close referenda at scheduled heights",
-        "        let current_slot =",
-        state_path,
-    )
-    require_all(
-        state_path,
-        due_enactment,
-        (
-            ".parliament_certified_enactments.iter().next()",
-            "*enact_at_height < now_h",
-            ".parliament_certified_enactments",
-            ".get(&now_h)",
-            "for governance_attempt_id in due_parliament_certificates",
-            "execute_due_parliament_certificate_v1(",
-            "record_due_parliament_execution_failure_v1(",
-            '"Parliament certified-enactment index retained a due bucket',
-        ),
-    )
-    if "sb.world.parliament_attempts.iter()" in due_enactment:
-        raise RuntimeError(
-            f"{state_path}: block-start enactment selection regressed to an unbounded Parliament attempt scan"
-        )
+    require_block_start_enactment_phases(state)
 
     mv_storage_path = "crates/mv/src/storage.rs"
     mv_storage = read(mv_storage_path)
@@ -3892,45 +4073,7 @@ def main() -> int:
 
     beacon_runtime_path = "crates/iroha_core/src/sumeragi/v2_beacon.rs"
     beacon_runtime = read(beacon_runtime_path)
-    beacon_open = section(
-        beacon_runtime,
-        "    pub(crate) fn open(",
-        "    /// Return whether committed state requests a pulse attempt at this height.",
-        beacon_runtime_path,
-    )
-    require_all(
-        beacon_runtime_path,
-        beacon_open,
-        (
-            "let parliament_requested_at_height =",
-            ".parliament_required_beacon_pulse_slots",
-            ".get(&(logical_beacon_id, context.height))",
-            "let required_for_consensus = npos_boundary_requested || parliament_requested_at_height;",
-            "Err(_) if !required_for_consensus => None",
-            "requested: true,",
-            "required_for_consensus,",
-        ),
-    )
-    if "attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)" in beacon_open:
-        raise RuntimeError(
-            f"{beacon_runtime_path}: beacon production regressed to an unbounded Parliament attempt scan"
-        )
-    beacon_attach = section(
-        beacon_runtime,
-        "    pub(crate) fn attach_candidate_effects(",
-        "        Ok(())\n    }",
-        beacon_runtime_path,
-    )
-    require_all(
-        beacon_runtime_path,
-        beacon_attach,
-        (
-            "if self.pulse_required_for_consensus() && pulse.is_none()",
-            '"required finalized pulse is absent for the candidate view"',
-            "effects.finalized_global_beacon_pulse = pulse;",
-        ),
-    )
-
+    require_parliament_beacon_requirement(beacon_runtime)
     beacon_state_path = "crates/iroha_core/src/beacon.rs"
     beacon_state = read(beacon_state_path)
     require_all(

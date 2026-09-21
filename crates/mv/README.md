@@ -18,6 +18,10 @@ State projection. Storage entries are ordered by key; cell and map records keep
 exact before/after values without making another value copy or change list.
 Applied children retain the first block preimage, while dropped children leave
 no block delta. A replacement block starts after reverting the discarded tip.
+A caught direct Storage block-edit panic makes that owner unusable for value
+reads, further edits, capture or publication. Both current and undo cursor states
+are checked before either publishes, including a failure retained by an aborted
+child checkpoint. Abandon the failed block; it cannot supply a partial successor.
 
 These APIs report touches, including no-op mutation and absent-to-absent removal.
 Consumers must compare their canonical value projections before committing a
@@ -83,16 +87,21 @@ physical free. Further admitted edits retain that same private cursor and
 publication shell, replacing exhausted bookkeeping only after complete admission.
 Refusal returns the original owner and input; intermediate edits stay private.
 Initial root and reader blocks retain their exact charges through reclamation.
-An exclusive prepaid checkpoint can abort child edits back to the original
-parent root and tracking buffers without allocating, including at full capacity.
-Nested apply keeps edits private; only the original writer can publish. A caught
-edit or cleanup panic forbids further use of that cursor.
+Exclusive checkpoints borrow current and saved-root values in either map mode.
+Abort restores the original parent root without allocating; prepaid mode also
+restores its exact tracking buffers, including at full capacity. Nested apply
+keeps edits private; only the original writer can publish. A caught edit or
+cleanup panic forbids further use of that cursor. Prepaid mutation remains closed.
 Real MV budget regressions exercise this public boundary. Production Storage
-now uses the same B+tree engine for current and block-undo data, retaining both
+uses the same B+tree engine for current and block-undo data, retaining both
 original generations through snapshots and publication retries. Ordinary block
-opening no longer deep-clones prior undo values before clearing them. These maps
-remain Untracked pending native lock/runtime, joint edit and transaction admission,
-concrete model payload policies and configured aggregate integration.
+opening no longer deep-clones prior undo values before clearing them. Transactions
+retain both parent checkpoints and borrow their original preimages; abort restores
+both roots without inverse edits, allocation or cloning. Apply resolves both
+checkpoints only after checking failures and dropping transaction touch keys.
+These maps remain Untracked pending native lock/runtime, joint current/undo/touch
+admission, generation-refusal propagation, concrete model payload policies and
+configured aggregate integration.
 
 TODO: compose these component publications with exact aggregate State predecessor
 ownership, membership, hash history, archive/resource reservations and finality.

@@ -2,19 +2,20 @@
 #[allow(clippy::too_many_lines)]
 fn manager_sponsored_contract_registration_survives_block_and_committed_replay() {
     for parallel_apply in [false, true] {
-        let chain_id =
-            ChainId::try_from(format!("contract-registrar-manager-block-{parallel_apply}"))
-                .expect("canonical contract-deployment test chain id");
+        let chain_id = ChainId::try_from(format!(
+            "contract-code-management-grant-block-{parallel_apply}"
+        ))
+        .expect("canonical contract-deployment test chain id");
         let network_id = deterministic_test_network_id(0x10);
         let leader = crate::block::checked_keypair();
-        let (manager, manager_keypair) = gen_account_in("registrar-manager");
+        let (manager, manager_keypair) = gen_account_in("code-management-granter");
         let (authority, authority_keypair) = gen_account_in("builder");
         let (adversary, adversary_keypair) = gen_account_in("adversary");
         let (missing, missing_keypair) = gen_account_in("missing-self-grant");
         let (malformed, malformed_keypair) = gen_account_in("malformed-self-grant");
-        let manager_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCodeRegistrars.into();
+        let manager_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanGrantSmartContractCodeManagement.into();
         let permission: Permission =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                 .into();
         let accepted_hash = Hash::new(b"manager-sponsored builder upload");
         let existing_replay_hash = Hash::new(b"existing authority bootstrap replay");
@@ -190,7 +191,7 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
             .collect::<Vec<_>>();
         assert!(
             registration_errors.is_empty(),
-            "genesis-seeded manager must sponsor registration and exact registrar grant with parallel_apply={parallel_apply}: {registration_errors:?}"
+            "genesis-seeded manager must sponsor registration and exact code-management grant with parallel_apply={parallel_apply}: {registration_errors:?}"
         );
         registration_state_block
             .world
@@ -267,7 +268,7 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
             deployment_state_block
                 .world
                 .account_permissions_iter(&authority)
-                .expect("builder registrar permissions")
+                .expect("builder code-management permissions")
                 .any(|stored| stored == &permission)
         );
         assert!(
@@ -306,7 +307,7 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
             52,
         );
         let malformed_permission = Permission::new(
-            "CanRegisterSmartContractCode".to_owned(),
+            "CanManageSmartContractCode".to_owned(),
             Json::new("not-the-unit-payload"),
         );
         let malformed_self_grant = make_bootstrap_transaction(
@@ -433,7 +434,7 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
         assert!(
             replay_world
                 .account_permissions_iter(&authority)
-                .expect("replayed builder registrar permissions")
+                .expect("replayed builder code-management permissions")
                 .any(|stored| stored == &permission)
         );
         assert!(

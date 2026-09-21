@@ -2527,7 +2527,7 @@ mod tests {
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{account::AccountId, permission, prelude as dm};
     use iroha_executor_data_model::permission::{
-        governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
+        governance::CanEnactGovernance, smart_contract::CanManageSmartContractCode,
     };
     use std::{
         borrow::Cow,
@@ -3132,10 +3132,10 @@ mod tests {
             0,
         ));
         let mut stx = block.transaction();
-        let register_permission: permission::Permission = CanRegisterSmartContractCode.into();
+        let register_permission: permission::Permission = CanManageSmartContractCode.into();
         dm::Grant::account_permission(register_permission, authority.clone())
             .execute(authority, &mut stx)
-            .expect("grant CanRegisterSmartContractCode");
+            .expect("grant CanManageSmartContractCode");
         let enact_permission: permission::Permission = CanEnactGovernance.into();
         dm::Grant::account_permission(enact_permission, authority.clone())
             .execute(authority, &mut stx)

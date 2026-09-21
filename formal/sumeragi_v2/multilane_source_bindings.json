@@ -12791,7 +12791,7 @@
             "header: BlockHeader",
             "lease: &'geometry crate::kura::KuraPublicationLease<'kura>",
             "if !self.matches_publication_target(target, header)",
-            "if self.requires_queue_custody()",
+            "if !self.has_queue_custody(target, header, queue)",
             "return Err(LaneLifecycleError::Storage(",
             "self.resume_under(backend, lease)?;",
             "if let Some(raw) = &mut self.raw",
@@ -12832,7 +12832,7 @@
             "self\n            .target\n            .tiered_backend\n            .try_lock_or_wait()",
             ".map_err(|wait| crate::state::LaneLifecycleError::PublicationBusy {\n                field: \"tiered_backend\",\n                wait,\n            })?;",
             "journals\n            .geometry\n            .prepare_under(&backend, &journals.components._fences._kura)?;",
-            "journals.geometry.complete_under(\n            self.target,\n            journals.effects.header,\n            &mut backend,\n            &journals.components._fences._kura,\n        )?",
+            "journals.geometry.complete_under(\n            self.target,\n            journals.effects.header,\n            &mut backend,\n            &journals.components._fences._kura,\n            journals.components._fences._queue.as_ref(),\n        )?",
             "Ok(completed.updated_da_mapping().is_some())"
           ]
         },
@@ -12843,6 +12843,7 @@
           "required_tokens": [
             "drop(write)",
             "drop(lifecycle)",
+            "drop(queue)",
             "drop(kura)",
             "commit"
           ]
@@ -12858,8 +12859,11 @@
             "journals.staged_legacy_source()",
             "journals\n            .geometry\n            .matches_publication_target(self.target, journals.effects.header)",
             "journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()",
-            "journals.geometry.requires_queue_custody()",
+            "journals.geometry.has_queue_custody(\n            self.target,\n            journals.effects.header,\n            journals.components._fences._queue.as_ref(),\n        )",
             "Some(CarrierPublicationError::QueueRetirementRequired)",
+            "journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())",
+            "self\n            .decision\n            .journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())",
+            "CarrierPublicationError::QueueRetirement(error)",
             "journals.native_amx_manifest.entries().is_empty()",
             "return Err((self.abort(), error))",
             "let update_da_mapping = match self.try_complete_geometry()",
@@ -13606,7 +13610,8 @@
             "identity: V2BodyStoreInstanceIdentity",
             "candidates: Vec<Candidate<P::Owner>>",
             "markers: Vec<Marker>",
-            "limit: usize"
+            "limit: usize",
+            "_descriptor_admission: [AllocationCharge; 2]"
           ]
         },
         {
@@ -13614,9 +13619,14 @@
           "kind": "method",
           "symbol": "RetainedBodyValidationService::new",
           "required_tokens": [
+            "budget: &AllocationBudget",
+            "let layouts = Self::descriptor_layouts(limit)?",
+            "let mut reservation = budget.try_reserve_layouts(layouts)?",
+            "let descriptor_admission = [\n            reservation.try_split(layouts[0])?,\n            reservation.try_split(layouts[1])?,\n        ]",
+            "drop(reservation)",
             "candidates.try_reserve_exact(limit)?",
             "markers.try_reserve_exact(limit)?",
-            "Ok(Self {\n            validator,\n            identity,\n            candidates,\n            markers,\n            limit,\n        })"
+            "Ok(Self {\n            validator,\n            identity,\n            candidates,\n            markers,\n            limit,\n            _descriptor_admission: descriptor_admission,\n        })"
           ]
         },
         {
@@ -13680,9 +13690,8 @@
           "kind": "method",
           "symbol": "V2BodyStore::retained_validation_service",
           "required_tokens": [
-            "RetainedBodyValidationService::new(",
-            "self.instance_identity()",
-            "self.capacity.max_body_entries"
+            "budget: &mv::allocation::AllocationBudget",
+            "RetainedBodyValidationService::new(\n            validator,\n            self.instance_identity(),\n            self.capacity.max_body_entries,\n            budget,\n        )"
           ]
         },
         {
@@ -13781,6 +13790,272 @@
           "required_tokens": [
             "#[cfg(test)]\n    Observe",
             "MaintainAndAttest { pending_canonical_bytes: u64 }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "method",
+          "symbol": "RetainedBodyValidationService::descriptor_layouts",
+          "required_tokens": [
+            "Layout::array::<Candidate<P::Owner>>(limit)\n                .map_err(|_| AllocationRefusal::DemandOverflow)?",
+            "Layout::array::<Marker>(limit).map_err(|_| AllocationRefusal::DemandOverflow)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "method",
+          "symbol": "RetainedBodyValidationService::descriptor_bytes",
+          "required_tokens": [
+            "Self::descriptor_layouts(limit)?",
+            ".try_fold(0, |total: usize, layout|",
+            "total\n                    .checked_add(layout.size())\n                    .ok_or(AllocationRefusal::DemandOverflow)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_body_store/retained_validation.rs",
+          "kind": "method",
+          "symbol": "V2BodyStore::retained_validation_descriptor_bytes",
+          "required_tokens": [
+            "RetainedBodyValidationService::<P>::descriptor_bytes(self.capacity.max_body_entries)",
+            ".map_err(super::super::v2_apply::validation_custody::CarrierCustodyError::from)",
+            ".map_err(V2BodyStoreError::from)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+          "kind": "method",
+          "symbol": "V2ApplyService::carrier_queue_source",
+          "required_tokens": [
+            "carrier_queue_retirement::OriginalCarrierQueue::new(&self.state, &self.queue)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/carrier_queue_retirement.rs",
+          "kind": "struct",
+          "symbol": "OriginalCarrierQueue",
+          "required_tokens": [
+            "state: &'service State",
+            "queue: &'service Queue"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/carrier_queue_retirement.rs",
+          "kind": "method",
+          "symbol": "OriginalCarrierQueue::new",
+          "required_tokens": [
+            "pub(super) fn new(state: &'service State, queue: &'service Queue) -> Self",
+            "Self { state, queue }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/carrier_queue_retirement.rs",
+          "kind": "method",
+          "symbol": "OriginalCarrierQueue::belongs_to",
+          "required_tokens": [
+            "core::ptr::eq(self.state, state)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/carrier_queue_retirement.rs",
+          "kind": "method",
+          "symbol": "OriginalCarrierQueue::owns_cut",
+          "required_tokens": [
+            "cut.belongs_to(self.queue)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/carrier_queue_retirement.rs",
+          "kind": "method",
+          "symbol": "OriginalCarrierQueue::try_observe",
+          "required_tokens": [
+            "Result<QueueLaneRetirementObserver<'service>, mv::ReleaseWait>",
+            "self.queue.try_lock_lane_retirement_observer()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "QueueLaneRetirementCut::belongs_to",
+          "required_tokens": [
+            "core::ptr::eq(self.observer.queue, queue)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "QueueLaneRetirementCut::durability_faulted",
+          "required_tokens": [
+            "self.observer.durability_faulted()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "QueueLaneRetirementObserver::durability_faulted",
+          "required_tokens": [
+            "self.queue.transaction_selection_durability_faulted()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "QueueLaneRetirementCut::lane_pending_work_release",
+          "required_tokens": [
+            "self.observer.queue.lane_pending_work_release_locked(\n            &self.reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        )"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "QueueLaneRetirementObserver::lane_pending_work_release",
+          "required_tokens": [
+            "let _mutation = self.queue.push_remove_lock.lock()",
+            "let reservations = self.queue.lane_reservations.lock()",
+            "self.queue.lane_pending_work_release_locked(\n            &reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        )"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::lane_pending_work_release_locked",
+          "required_tokens": [
+            "if hash_is_zero(lane_incarnation)",
+            "return Err(QueueLaneRetirementUnavailable::InvalidIncarnation)",
+            "let scope = (lane_id, dataspace_id, lane_incarnation)",
+            "self\n            .lane_retirement_releases\n            .lock()\n            .entry(scope)\n            .or_default()\n            .observe()",
+            "if self.transaction_selection_durability_faulted()",
+            "Err(QueueLaneRetirementUnavailable::DurabilityFault)",
+            "Self::lane_retirement_reservation_snapshot(\n            reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        )",
+            ".is_none_or(|owned| self.lane_has_pending_route_work(&owned, lane_id, dataspace_id))",
+            "Ok(Some(wait))",
+            "Ok(None)",
+            "if !matches!(&result, Ok(Some(_)))",
+            "self.lane_retirement_releases.lock().remove(&scope)",
+            "drop(source.guard(scope))",
+            "result"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
+          "kind": "struct",
+          "symbol": "CarrierQueueRetirement",
+          "required_tokens": [
+            "state_owner: Arc<BlockHashOwner>",
+            "header: BlockHeader",
+            "routes: Vec<(LaneId, DataSpaceId, Hash)>",
+            "_cut: QueueLaneRetirementCut<'queue>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
+          "kind": "enum",
+          "symbol": "CarrierQueueRetirementError",
+          "required_tokens": [
+            "Missing",
+            "ForeignState",
+            "ForeignQueue",
+            "Busy {\n        field: &'static str,\n        wait: mv::ReleaseWait,\n    }",
+            "Pending {\n        lane: LaneId,\n        dataspace: DataSpaceId,\n        incarnation: Hash,\n        wait: mv::ReleaseWait,\n    }",
+            "Unavailable(QueueLaneRetirementUnavailable)",
+            "Geometry(LaneLifecycleError)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
+          "kind": "method",
+          "symbol": "CarrierQueueRetirement::try_new",
+          "required_tokens": [
+            "if !source.belongs_to(target) || !geometry.matches_publication_target(target, header)",
+            "return Err(CarrierQueueRetirementError::ForeignState)",
+            "if !source.owns_cut(&cut)",
+            "return Err(CarrierQueueRetirementError::ForeignQueue)",
+            "geometry\n            .for_each_retirement_route(|lane, dataspace, incarnation| {\n                routes.push((lane, dataspace, incarnation));\n                Ok(())\n            })",
+            ".map_err(CarrierQueueRetirementError::Geometry)?",
+            "for &(lane, dataspace, incarnation) in &routes",
+            "match cut.lane_pending_work_release(lane, dataspace, incarnation)",
+            "Ok(None) => {}",
+            "Ok(Some(wait)) => {\n                    return Err(CarrierQueueRetirementError::Pending {\n                        lane,\n                        dataspace,\n                        incarnation,\n                        wait,\n                    });\n                }",
+            "Err(error) => return Err(CarrierQueueRetirementError::Unavailable(error))",
+            "state_owner: Arc::clone(&target.block_hashes.owner)",
+            "header,\n            routes,\n            _cut: cut"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
+          "kind": "method",
+          "symbol": "CarrierQueueRetirement::ensure_available",
+          "required_tokens": [
+            "if self._cut.durability_faulted()",
+            "Err(CarrierQueueRetirementError::Unavailable(\n                QueueLaneRetirementUnavailable::DurabilityFault,\n            ))",
+            "else {\n            Ok(())\n        }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
+          "kind": "method",
+          "symbol": "CarrierQueueRetirement::authenticates",
+          "required_tokens": [
+            "if self.ensure_available().is_err()\n            || !Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)\n            || self.header != header\n            || !geometry.matches_publication_target(target, header)",
+            "return false",
+            "let mut index = 0",
+            "let result = geometry.for_each_retirement_route(|lane, dataspace, incarnation|",
+            "if self.routes.get(index) != Some(&(lane, dataspace, incarnation))",
+            "return Err(LaneLifecycleError::Storage(",
+            "index += 1",
+            "Ok(())",
+            "result.is_ok() && index == self.routes.len()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "PreparedCarrierGeometry::for_each_retirement_route",
+          "required_tokens": [
+            "let Some(pending) = &self._pending else {\n            return Ok(());\n        }",
+            "let update = &pending.catalog_update",
+            "pending.plan.retire.iter().chain(\n            update\n                .replaced_lane_ids\n                .iter()\n                .filter(|lane| !pending.plan.retire.contains(lane)),\n        )",
+            "update\n                .previous_catalog\n                .lanes()\n                .iter()\n                .find(|entry| entry.id == *lane)\n                .ok_or_else(||",
+            "update\n                .previous_lane_incarnations\n                .get(lane)\n                .copied()\n                .filter(|incarnation| !lane_incarnation_is_zero(*incarnation))\n                .ok_or_else(||",
+            "visit(*lane, previous.dataspace_id, incarnation)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_geometry_preparation.rs",
+          "kind": "method",
+          "symbol": "PreparedCarrierGeometry::has_queue_custody",
+          "required_tokens": [
+            "!self.requires_queue_custody()\n            || queue.is_some_and(|queue| queue.authenticates(target, self, header))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "struct",
+          "symbol": "CarrierFences",
+          "required_tokens": [
+            "_state: StateFences<'target>",
+            "_queue: Option<CarrierQueueRetirement<'target>>",
+            "_kura: KuraPublicationLease<'target>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "struct",
+          "symbol": "AcquiredCarrierComponents",
+          "required_tokens": [
+            "_fences: CarrierFences<'target>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "method",
+          "symbol": "StateFences::try_acquire",
+          "required_tokens": [
+            "lock.try_lock_or_wait()",
+            "CarrierPhysicalPreparationError::Fence { field, wait }",
+            "let commit = acquire(\"state_commit_lock\", &target.state_commit_lock)?",
+            "let lifecycle = acquire(\"lane_lifecycle_lock\", &target.lane_lifecycle_lock)?",
+            "let write = acquire(\"state_write_lock\", &target.state_write_lock)?",
+            "_write: write,\n            _lifecycle: lifecycle,\n            _commit: commit"
           ]
         }
       ]

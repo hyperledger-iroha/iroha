@@ -1446,3 +1446,240 @@ async fn query_fanout_worker_clone_survives_cancelled_response() {
     drop(worker_reservation);
     assert_eq!(semaphore.available_permits(), 1);
 }
+
+fn singular_asset_absence_fixture() -> (
+    iroha_data_model::asset::AssetId,
+    Vec<u8>,
+    QueryFanoutMemoryEnvelope,
+) {
+    let asset = iroha_data_model::asset::AssetId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal")
+                .expect("fixture domain"),
+            "xor".parse().expect("fixture asset name"),
+        ),
+        iroha_test_samples::ALICE_ID.clone(),
+    );
+    let request = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Singular(
+            iroha_data_model::query::SingularQueryBox::FindAssetById(
+                iroha_data_model::query::asset::prelude::FindAssetById::new(asset.clone()),
+            ),
+        ),
+        iroha_test_samples::ALICE_ID.clone(),
+    );
+    let envelope = QueryFanoutMemoryEnvelope::for_request_lengths(64_000_000, 4_096, 8_192)
+        .expect("fixture envelope");
+    let frame = encode_verified_singular_fanout_request_bounded(&request, envelope)
+        .expect("fixture verified request");
+    (asset, frame, envelope)
+}
+fn singular_asset_absence_response(asset: iroha_data_model::asset::AssetId) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        NoritoBody(
+            ErrorEnvelope::new("query_asset_not_found", "asset missing").with_details(
+                ErrorDetails {
+                    query_asset_not_found: Some(asset),
+                    ..Default::default()
+                },
+            ),
+        ),
+    )
+        .into_response()
+}
+#[tokio::test]
+async fn singular_asset_absence_requires_every_route_to_match_the_original_selector() {
+    let (asset, frame, envelope) = singular_asset_absence_fixture();
+    for format in [ResponseFormat::Norito, ResponseFormat::Json] {
+        let mut skipped = SingularRoutedQueryErrors::default();
+        for _ in 0..4 {
+            skipped
+                .record_and_drop(
+                    singular_asset_absence_response(asset.clone()),
+                    &frame,
+                    envelope,
+                    Duration::from_secs(1),
+                )
+                .await
+                .expect("canonical matching route absence");
+        }
+        let response = skipped.into_response(&frame, envelope, format);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let bytes = axum::body::to_bytes(response.into_body(), envelope.final_body_bytes)
+            .await
+            .expect("bounded aggregate absence");
+        let error: ErrorEnvelope = match format {
+            ResponseFormat::Norito => {
+                norito::decode_from_bytes(&bytes).expect("Norito error envelope")
+            }
+            ResponseFormat::Json => norito::json::from_slice(&bytes).expect("JSON error envelope"),
+        };
+        assert_eq!(error.code(), "query_asset_not_found");
+        assert_eq!(
+            error.details.expect("typed details").query_asset_not_found,
+            Some(asset.clone())
+        );
+    }
+}
+#[tokio::test]
+async fn singular_asset_absence_rejects_a_different_selector() {
+    let (asset, frame, envelope) = singular_asset_absence_fixture();
+    let other = iroha_data_model::asset::AssetId::new(
+        asset.definition().clone(),
+        iroha_test_samples::BOB_ID.clone(),
+    );
+    let response = SingularRoutedQueryErrors::default()
+        .record_and_drop(
+            singular_asset_absence_response(other),
+            &frame,
+            envelope,
+            Duration::from_secs(1),
+        )
+        .await
+        .expect_err("another account's asset absence cannot prove the requested asset missing");
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert!(torii_response_has_reject_code(
+        &response,
+        "route_unavailable"
+    ));
+}
+#[tokio::test]
+async fn singular_asset_absence_rejects_malformed_noncanonical_and_unbound_errors() {
+    let (asset, frame, envelope) = singular_asset_absence_fixture();
+    let original = singular_asset_absence_response(asset);
+    let bytes = axum::body::to_bytes(original.into_body(), envelope.route_body_bytes)
+        .await
+        .expect("fixture envelope bytes");
+    let mut trailing = bytes.to_vec();
+    trailing.push(0);
+    let unbound = norito::to_bytes(&ErrorEnvelope::new(
+        "query_asset_not_found",
+        "missing details",
+    ))
+    .expect("unbound fixture envelope");
+    for body in [b"invalid Norito".to_vec(), trailing, unbound] {
+        let response = Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(axum::http::header::CONTENT_TYPE, utils::NORITO_MIME_TYPE)
+            .header("x-iroha-reject-code", "query_asset_not_found")
+            .body(Body::from(body))
+            .expect("malformed response");
+        let rejected = SingularRoutedQueryErrors::default()
+            .record_and_drop(response, &frame, envelope, Duration::from_secs(1))
+            .await
+            .expect_err("invalid body cannot be authenticated from its header");
+        assert_eq!(rejected.status(), StatusCode::BAD_GATEWAY);
+        assert!(torii_response_has_reject_code(
+            &rejected,
+            "route_unavailable"
+        ));
+    }
+}
+#[tokio::test]
+async fn singular_asset_absence_keeps_generic_not_found_unproven() {
+    let (asset, frame, envelope) = singular_asset_absence_fixture();
+    let mut skipped = SingularRoutedQueryErrors::default();
+    for response in [
+        singular_asset_absence_response(asset),
+        torii_proxy_error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "unspecified route absence",
+        ),
+    ] {
+        skipped
+            .record_and_drop(response, &frame, envelope, Duration::from_secs(1))
+            .await
+            .expect("skippable route response");
+    }
+    let response = skipped.into_response(&frame, envelope, ResponseFormat::Norito);
+    let error = response_error(response).await;
+    assert_eq!(error.code(), "not_found");
+    assert!(error.details.is_none());
+}
+#[tokio::test]
+async fn singular_asset_absence_unavailable_routes_outrank_missing_in_both_orders() {
+    let (asset, frame, envelope) = singular_asset_absence_fixture();
+    for unavailable_first in [false, true] {
+        let mut skipped = SingularRoutedQueryErrors::default();
+        for unavailable in [unavailable_first, !unavailable_first] {
+            let response = if unavailable {
+                torii_proxy_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "route_unavailable",
+                    "route unavailable",
+                )
+            } else {
+                singular_asset_absence_response(asset.clone())
+            };
+            skipped
+                .record_and_drop(response, &frame, envelope, Duration::from_secs(1))
+                .await
+                .expect("skippable route response");
+        }
+        let response = skipped.into_response(&frame, envelope, ResponseFormat::Norito);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let error = response_error(response).await;
+        assert_eq!(error.code(), "route_unavailable");
+        assert!(error.details.is_none());
+    }
+}
+#[tokio::test]
+async fn singular_asset_absence_releases_body_and_extension_leases_on_every_exit() {
+    let (asset, frame, envelope) = singular_asset_absence_fixture();
+    for outcome in 0..4 {
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = semaphore.clone().try_acquire_owned().expect("route lease");
+        let mut response = singular_asset_absence_response(asset.clone());
+        let mut limits = envelope;
+        match outcome {
+            0 => {}
+            1 => limits.route_body_bytes = 1,
+            2 => {
+                *response.body_mut() = Body::from_stream(futures::stream::pending::<
+                    Result<Bytes, std::convert::Infallible>,
+                >());
+            }
+            _ => {
+                response
+                    .headers_mut()
+                    .remove(axum::http::header::CONTENT_TYPE);
+                *response.body_mut() = Body::from_stream(futures::stream::pending::<
+                    Result<Bytes, std::convert::Infallible>,
+                >());
+            }
+        }
+        let response = hold_query_fanout_memory_in_response_body(
+            response,
+            QueryFanoutMemoryReservation::new(permit),
+        );
+        let result = SingularRoutedQueryErrors::default()
+            .record_and_drop(response, &frame, limits, Duration::from_millis(1))
+            .await;
+        assert_eq!(result.is_err(), matches!(outcome, 1 | 2));
+        assert_eq!(
+            semaphore.available_permits(),
+            1,
+            "route body and extension lease must be released before advancing"
+        );
+    }
+}
+#[tokio::test]
+async fn singular_asset_absence_obeys_decode_allocation_ceiling() {
+    let (asset, frame, mut envelope) = singular_asset_absence_fixture();
+    envelope.decode_allocated_bytes = 1;
+    let response = SingularRoutedQueryErrors::default()
+        .record_and_drop(
+            singular_asset_absence_response(asset),
+            &frame,
+            envelope,
+            Duration::from_secs(1),
+        )
+        .await
+        .expect_err("typed errors remain inside the allocated decode phase");
+    assert!(torii_response_has_reject_code(
+        &response,
+        "route_unavailable"
+    ));
+}

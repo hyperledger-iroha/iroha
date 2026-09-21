@@ -3054,6 +3054,7 @@ include!("tests/public_contract_call.rs");
 include!("tests/private_settlement_contract.rs");
 include!("tests/soracloud_lease_contracts.rs");
 include!("tests/sns_contract.rs");
+include!("tests/query_asset_absence_contract.rs");
 include!("tests/sorafs_contracts.rs");
 include!("tests/sorafs_pop_contracts.rs");
 include!("tests/vpn_da.rs");

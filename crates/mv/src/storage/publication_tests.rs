@@ -1,6 +1,7 @@
 //! Exact detached map installation, including refusal, replacement and retained readers.
 
 use super::*;
+use std::collections::BTreeMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},

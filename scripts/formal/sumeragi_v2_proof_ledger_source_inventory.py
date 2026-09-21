@@ -133,6 +133,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'block/tx_order_validation_revalidation_test.rs',
         'block/rejected_live_batch_fee_tests.rs',
         'block/fee_admission_tests.rs',
+        'block/public_contract_creation_fee_tests.rs',
         'block/bootstrap_and_genesis_tests.rs',
     ),
     'crates/iroha_config/src/parameters/actual.rs': (

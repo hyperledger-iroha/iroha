@@ -756,17 +756,21 @@ pub mod executor {
 pub mod smart_contract {
     use super::*;
     permission! {
-        /// Genesis-rooted authority to grant and revoke contract code registration permission.
+        /// Genesis-rooted authority to grant and revoke privileged contract-code management.
         ///
         /// This capability does not itself authorize deployment or alias management. An approved
-        /// registrar manager may sponsor builders without allowing registrars to delegate onward.
+        /// code-management grant authority may authorize privileged artifact administration without
+        /// allowing code managers to grant that authority onward. Public immutable artifact
+        /// creation needs neither token.
         #[derive(Copy)]
-        pub struct CanManageSmartContractCodeRegistrars;
+        pub struct CanGrantSmartContractCodeManagement;
     }
     permission! {
-        /// Permission to register smart contract code artifacts.
+        /// Privileged unreferenced-artifact removal and contract-entrypoint delegation authority.
+        ///
+        /// Registered accounts may create immutable verified artifacts without this capability.
         #[derive(Copy)]
-        pub struct CanRegisterSmartContractCode;
+        pub struct CanManageSmartContractCode;
     }
     permission! {
         /// Permission to invoke one exact entrypoint of one deployed contract instance.

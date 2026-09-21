@@ -4750,6 +4750,7 @@ dependencies = [
  "rand 0.9.4",
  "rand_core 0.6.4",
  "reqwest",
+ "rustix 1.1.4",
  "sha2",
  "sorafs_chunker",
  "sorafs_manifest",
@@ -4762,6 +4763,7 @@ dependencies = [
  "tracing",
  "tungstenite 0.28.0",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -4811,6 +4813,7 @@ dependencies = [
  "iroha_test_samples",
  "iroha_torii_shared",
  "iroha_version",
+ "iroha_wallet",
  "iroha_zkp_halo2",
  "ivm",
  "norito",
@@ -5099,6 +5102,7 @@ dependencies = [
  "norito",
  "norito_derive",
  "p256",
+ "regex",
  "rustc-hash 2.1.2",
  "sha2",
  "sorafs_manifest",
@@ -5968,6 +5972,32 @@ dependencies = [
  "quote",
  "syn 2.0.117",
  "trybuild",
+]
+
+[[package]]
+name = "iroha_wallet"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "eyre",
+ "hex",
+ "iroha",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_model_base",
+ "iroha_primitives",
+ "iroha_test_samples",
+ "iroha_torii_shared",
+ "iroha_version",
+ "norito",
+ "rand 0.9.4",
+ "reqwest",
+ "rustix 1.1.4",
+ "scrypt",
+ "sha2",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+ "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -6951,6 +6981,7 @@ dependencies = [
  "iroha_musubi_service",
  "iroha_primitives",
  "iroha_storage_client",
+ "iroha_wallet",
  "ivm",
  "norito",
  "rustix 1.1.4",

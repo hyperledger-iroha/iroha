@@ -31,6 +31,8 @@ use std::{borrow::Cow, num::NonZeroU8, sync::Arc};
 use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
+#[path = "accounts_faucet_policy_tests.rs"]
+mod policy_tests;
 struct FaucetTestContext {
     app: iroha_torii::TestApiRouterRuntime,
     state: Arc<State>,
@@ -46,6 +48,7 @@ struct FaucetTestContext {
     pow_scrypt_r: u32,
     pow_scrypt_p: u32,
     pow_max_anchor_age_blocks: u64,
+    _data_dir: tempfile::TempDir,
 }
 fn checked_faucet_account_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
@@ -112,6 +115,28 @@ fn build_faucet_test_context_with_enabled(
     faucet_enabled: bool,
 ) -> FaucetTestContext {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let data_dir = tempfile::tempdir().expect("isolated faucet Torii persistence");
+    cfg.torii.data_dir = data_dir
+        .path()
+        .canonicalize()
+        .expect("canonical fixture directory");
+    cfg.torii.sorafs_storage.data_dir = cfg.torii.data_dir.join("sorafs");
+    cfg.torii.sorafs_discovery.replay_checkpoint_path =
+        cfg.torii.data_dir.join("provider-replay.to");
+    cfg.torii.da_ingest.replay_cache_store_dir = cfg.torii.data_dir.join("da-replay");
+    cfg.torii.da_ingest.manifest_store_dir = cfg.torii.data_dir.join("da-manifests");
+    cfg.torii.sorafs_gc.state_dir = Some(cfg.torii.sorafs_storage.data_dir.join("gc"));
+    cfg.torii.sorafs_por.state_dir = cfg.torii.sorafs_storage.data_dir.join("por");
+    cfg.torii.sorafs_por.drand.state_path = cfg
+        .torii
+        .sorafs_por
+        .state_dir
+        .join(iroha_config::parameters::defaults::sorafs::por::DRAND_STATE_FILE);
+    cfg.torii.sorafs_por.vrf_state_path = cfg
+        .torii
+        .sorafs_por
+        .state_dir
+        .join(iroha_config::parameters::defaults::sorafs::por::VRF_STATE_FILE);
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -271,6 +296,7 @@ fn build_faucet_test_context_with_enabled(
         pow_scrypt_r,
         pow_scrypt_p,
         pow_max_anchor_age_blocks,
+        _data_dir: data_dir,
     }
 }
 const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v1";
@@ -461,6 +487,7 @@ fn advance_faucet_chain(context: &FaucetTestContext, blocks: u64) {
 #[tokio::test]
 async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         queue,
@@ -513,6 +540,7 @@ async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
 #[tokio::test]
 async fn accounts_faucet_registers_missing_account_before_transfer() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         queue,
@@ -666,6 +694,7 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
 #[tokio::test]
 async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         queue,
@@ -718,6 +747,7 @@ async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
 #[tokio::test]
 async fn accounts_faucet_allows_repeated_claims_for_same_account() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         queue,
@@ -774,6 +804,7 @@ async fn accounts_faucet_allows_repeated_claims_for_same_account() {
 #[tokio::test]
 async fn accounts_faucet_accepts_alias_selector_config() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         queue,
@@ -1019,6 +1050,10 @@ async fn accounts_faucet_policy_exposes_exact_public_configuration() {
             Request::builder()
                 .method("GET")
                 .uri("/v1/accounts/faucet/policy")
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    40000,
+                ))))
                 .body(axum::body::Body::empty())
                 .expect("public policy request"),
         )
@@ -1035,10 +1070,10 @@ async fn accounts_faucet_policy_exposes_exact_public_configuration() {
     assert_eq!(
         payload,
         json_object(vec![
-            json_entry("schema", "iroha.accounts.faucet.policy.v1"),
+            json_entry("schema_version", 1_u16),
             json_entry("network_id", *context.state.network_id_ref()),
             json_entry(
-                "chain_discriminant",
+                "network_prefix",
                 iroha_data_model::account::address::chain_discriminant(),
             ),
             json_entry("authority", context.authority_id.to_string()),
@@ -1068,6 +1103,10 @@ async fn accounts_faucet_policy_resolves_configured_asset_alias() {
             Request::builder()
                 .method("GET")
                 .uri("/v1/accounts/faucet/policy")
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    40000,
+                ))))
                 .body(axum::body::Body::empty())
                 .expect("policy alias request"),
         )
@@ -1091,9 +1130,22 @@ async fn accounts_faucet_policy_resolves_configured_asset_alias() {
 }
 
 #[tokio::test]
-async fn accounts_faucet_policy_preserves_disabled_forbidden_response() {
+async fn accounts_faucet_discovery_reports_disabled_service() {
     let context = build_faucet_test_context_with_enabled(false, None, true, false);
-    for path in ["/v1/accounts/faucet/policy", "/v1/accounts/faucet/puzzle"] {
+    for (path, status, code, message) in [
+        (
+            "/v1/accounts/faucet/policy",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "account_faucet_disabled",
+            "This network does not provide a testnet faucet.",
+        ),
+        (
+            "/v1/accounts/faucet/puzzle",
+            StatusCode::FORBIDDEN,
+            "query_validation_failed",
+            "Account faucet disabled",
+        ),
+    ] {
         let resp = context
             .app
             .clone()
@@ -1101,27 +1153,31 @@ async fn accounts_faucet_policy_preserves_disabled_forbidden_response() {
                 Request::builder()
                     .method("GET")
                     .uri(path)
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        40000,
+                    ))))
                     .header(http::header::ACCEPT, "application/json")
                     .body(axum::body::Body::empty())
                     .expect("disabled faucet request"),
             )
             .await
             .expect("disabled faucet response");
-        let resp = expect_status(resp, StatusCode::FORBIDDEN).await;
+        let resp = expect_status(resp, status).await;
         let body = to_bytes(resp.into_body(), 4096)
             .await
             .expect("disabled body");
         let payload: norito::json::Value = norito::json::from_slice(&body).expect("disabled JSON");
         assert_eq!(
             payload.get("code").and_then(norito::json::Value::as_str),
-            Some("query_validation_failed")
+            Some(code)
         );
         assert!(
             payload
                 .get("message")
                 .and_then(norito::json::Value::as_str)
                 .expect("disabled message")
-                .contains("Account faucet disabled")
+                .contains(message)
         );
     }
     assert_eq!(context.queue.active_len(), 0);
@@ -1131,6 +1187,7 @@ async fn accounts_faucet_policy_preserves_disabled_forbidden_response() {
 #[tokio::test]
 async fn accounts_faucet_puzzle_exposes_current_anchor() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         pow_difficulty_bits,
@@ -1217,6 +1274,7 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
 #[tokio::test]
 async fn accounts_faucet_rejects_missing_pow_when_required() {
     let FaucetTestContext {
+        _data_dir,
         app,
         user_id,
         queue,
@@ -1272,6 +1330,7 @@ async fn accounts_faucet_rejects_missing_pow_when_required() {
 #[tokio::test]
 async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         queue,

@@ -6379,7 +6379,7 @@ pub mod tests {
         let mut world = World::with([domain], [deployer_account], []);
         let contract_code_hash = iroha_crypto::Hash::new(b"contract-code");
         let lifecycle_permission: Permission =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                 .into();
         world
             .account_permissions
@@ -11812,7 +11812,7 @@ pub mod tests {
         let chain: ChainId = "lane-native-upload-protected-ns".parse().unwrap();
         let (mut world, authority, keypair) = world_with_authority("wonderland");
         let lifecycle_permission: Permission =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                 .into();
         world
             .account_permissions
@@ -12028,7 +12028,7 @@ pub mod tests {
         let (mut world, authority, keypair) = world_with_authority("wonderland");
         let (second_validator, _) = gen_account_in("wonderland");
         let lifecycle_permission: Permission =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                 .into();
         world
             .account_permissions

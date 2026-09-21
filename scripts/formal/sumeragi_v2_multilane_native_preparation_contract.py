@@ -536,15 +536,18 @@ PREPARATION_OWNER_BINDINGS = (
         "owner.publish_pending_index()?",
     )),
 )
-# Private terminal publication consumes original nonretiring geometry and
-# lifecycle owners. Queue retirement and participant artifacts remain closed;
-# this does not activate production Validate/Apply or fund pre-vote resources.
+# Private terminal publication consumes the original geometry and lifecycle.
+# Retirement additionally retains the original service Queue proof through visibility;
+# independent Kura and participant authority remain mandatory. This does not
+# activate production Validate/Apply or establish aggregate resource admission.
 PHYSICAL_CARRIER = "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs"
 TERMINAL_CARRIER = "crates/iroha_core/src/state/carrier_preparation/publication.rs"
 ARCHIVE_CARRIER = "crates/iroha_core/src/state/carrier_preparation/archive_publication.rs"
 GEOMETRY_CARRIER = "crates/iroha_core/src/state/carrier_geometry_preparation.rs"
 WITNESS_CARRIER = "crates/iroha_core/src/state/carrier_preparation/execution_witness_publication.rs"
 WITNESS_LEASE = "crates/iroha_core/src/kura/publication_lease.rs"
+QUEUE_SOURCE = "crates/iroha_core/src/sumeragi/v2_apply/carrier_queue_retirement.rs"
+QUEUE_RETIREMENT = "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs"
 TERMINAL_OWNER_BINDINGS = (
     (WITNESS_CARRIER, "fn", "publish_execution_witness", (
         "&mut self", "try_publication_lease()", "&self.checkpoint", "self.finality.artifact()",
@@ -637,7 +640,7 @@ TERMINAL_OWNER_BINDINGS = (
     (GEOMETRY_CARRIER, "method", "PreparedCarrierGeometry::complete_under", (
         "target: &State", "header: BlockHeader",
         "lease: &'geometry crate::kura::KuraPublicationLease<'kura>",
-        "if !self.matches_publication_target(target, header)", "if self.requires_queue_custody()",
+        "if !self.matches_publication_target(target, header)", "if !self.has_queue_custody(target, header, queue)",
         "return Err(LaneLifecycleError::Storage(", "self.resume_under(backend, lease)?;",
         "if let Some(raw) = &mut self.raw", "raw.phase() != crate::kura::RawGeometryPhase::CatalogPublished",
         "raw.publish_catalog_under(lease, None)", "raw.reauthenticate_catalog_under(lease)",
@@ -658,18 +661,22 @@ TERMINAL_OWNER_BINDINGS = (
         "self\n            .target\n            .tiered_backend\n            .try_lock_or_wait()",
         '.map_err(|wait| crate::state::LaneLifecycleError::PublicationBusy {\n                field: "tiered_backend",\n                wait,\n            })?;',
         "journals\n            .geometry\n            .prepare_under(&backend, &journals.components._fences._kura)?;",
-        "journals.geometry.complete_under(\n            self.target,\n            journals.effects.header,\n            &mut backend,\n            &journals.components._fences._kura,\n        )?",
+        'journals.geometry.complete_under(\n            self.target,\n            journals.effects.header,\n            &mut backend,\n            &journals.components._fences._kura,\n            journals.components._fences._queue.as_ref(),\n        )?',
         "Ok(completed.updated_da_mapping().is_some())",
     )),
     (PHYSICAL_CARRIER, "method", "CarrierFences::release_for_completion", (
-        "drop(write)", "drop(lifecycle)", "drop(kura)", "commit",
+        "drop(write)", "drop(lifecycle)", "drop(queue)", "drop(kura)", "commit",
     )),
     (TERMINAL_CARRIER, "method", "PhysicallyPreparedCarrier::publish", (
         "journals.effects.replay_prevalidation", "journals\n            .source_prefix\n            .retains_carrier(journals.valid.as_ref(), &journals.context)",
         "journals.effects.header != journals.valid.as_ref().header()", "journals.staged_legacy_source()",
         "journals\n            .geometry\n            .matches_publication_target(self.target, journals.effects.header)",
         "journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()",
-        "journals.geometry.requires_queue_custody()", "Some(CarrierPublicationError::QueueRetirementRequired)",
+        'journals.geometry.has_queue_custody(\n            self.target,\n            journals.effects.header,\n            journals.components._fences._queue.as_ref(),\n        )',
+        "Some(CarrierPublicationError::QueueRetirementRequired)",
+        'journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())',
+        'self\n            .decision\n            .journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())',
+        "CarrierPublicationError::QueueRetirement(error)",
         "journals.native_amx_manifest.entries().is_empty()", "return Err((self.abort(), error))",
         "let update_da_mapping = match self.try_complete_geometry()",
         "return Err((\n                    self.abort(),\n                    CarrierPublicationError::GeometryStorage(error),\n                ))",
@@ -696,9 +703,9 @@ QUEUE_OWNER = "crates/iroha_core/src/queue.rs"
 PUBLICATION_MUTEX = "crates/iroha_core/src/publication_lock.rs"
 GEOMETRY_OWNER = "crates/iroha_core/src/kura/lane_geometry.rs"
 RAW_GEOMETRY = "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs"
-# These existing Queue/Kura owners remain distinct from State publication
-# permission. Binding their actual guard transfer does not authorize an arbitrary
-# Queue, nor open the terminal publisher's retirement/replacement refusal.
+# Queue custody observes local readiness only. Original service identity and the
+# retained exact route proof join this owner to publication; Kura and lifecycle
+# authority independently authorize retirement, never local Queue emptiness.
 QUEUE_GEOMETRY_OWNER_BINDINGS = (
     (QUEUE_OWNER, "struct", "Queue", (
         "lane_reservation_transition_lock: PublicationMutex,",
@@ -982,10 +989,22 @@ RETAINED_CARRIER_BINDINGS = (
     (VALIDATION_CUSTODY, "struct", "RetainedBodyValidationService", (
         "validator: P", "identity: V2BodyStoreInstanceIdentity",
         "candidates: Vec<Candidate<P::Owner>>", "markers: Vec<Marker>", "limit: usize",
+        "_descriptor_admission: [AllocationCharge; 2]",
+    )),
+    (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::descriptor_layouts", (
+        'Layout::array::<Candidate<P::Owner>>(limit)\n                .map_err(|_| AllocationRefusal::DemandOverflow)?',
+        "Layout::array::<Marker>(limit).map_err(|_| AllocationRefusal::DemandOverflow)?",
+    )),
+    (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::descriptor_bytes", (
+        "Self::descriptor_layouts(limit)?", ".try_fold(0, |total: usize, layout|",
+        'total\n                    .checked_add(layout.size())\n                    .ok_or(AllocationRefusal::DemandOverflow)',
     )),
     (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::new", (
-        "candidates.try_reserve_exact(limit)?", "markers.try_reserve_exact(limit)?",
-        "Ok(Self {\n            validator,\n            identity,\n            candidates,\n            markers,\n            limit,\n        })",
+        "budget: &AllocationBudget", "let layouts = Self::descriptor_layouts(limit)?",
+        "let mut reservation = budget.try_reserve_layouts(layouts)?",
+        'let descriptor_admission = [\n            reservation.try_split(layouts[0])?,\n            reservation.try_split(layouts[1])?,\n        ]',
+        "drop(reservation)", "candidates.try_reserve_exact(limit)?", "markers.try_reserve_exact(limit)?",
+        'Ok(Self {\n            validator,\n            identity,\n            candidates,\n            markers,\n            limit,\n            _descriptor_admission: descriptor_admission,\n        })',
     )),
     (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::prepare_marker", (
         "if marker.is_none() && self.markers.len() == self.limit",
@@ -1023,8 +1042,14 @@ RETAINED_CARRIER_BINDINGS = (
         "debug_assert!(self.service.candidates[self.index].owner.is_none())",
         "self.service.candidates[self.index].owner = Some(owner)",
     )),
+    (RETAINED_VALIDATION, "method", "V2BodyStore::retained_validation_descriptor_bytes", (
+        "RetainedBodyValidationService::<P>::descriptor_bytes(self.capacity.max_body_entries)",
+        ".map_err(super::super::v2_apply::validation_custody::CarrierCustodyError::from)",
+        ".map_err(V2BodyStoreError::from)",
+    )),
     (RETAINED_VALIDATION, "method", "V2BodyStore::retained_validation_service", (
-        "RetainedBodyValidationService::new(", "self.instance_identity()", "self.capacity.max_body_entries",
+        "budget: &mv::allocation::AllocationBudget",
+        'RetainedBodyValidationService::new(\n            validator,\n            self.instance_identity(),\n            self.capacity.max_body_entries,\n            budget,\n        )',
     )),
     (RETAINED_VALIDATION, "method", "V2BodyStore::execute_retained_durable_validation", (
         "if !service.matches_store(&self.instance_identity())", "service.prepare_marker(",
@@ -1037,8 +1062,123 @@ RETAINED_CARRIER_BINDINGS = (
 )
 PREPARATION_OWNER_BINDINGS += RETAINED_CARRIER_BINDINGS
 
+# The capability is minted only by the immutable Apply service, and readiness
+# remains a move-only original Queue cut, never a cached bool or new empty Queue.
+QUEUE_RETIREMENT_BINDINGS = (
+    (APPLY, "method", "V2ApplyService::carrier_queue_source", (
+        "carrier_queue_retirement::OriginalCarrierQueue::new(&self.state, &self.queue)",
+    )),
+    (QUEUE_SOURCE, "struct", "OriginalCarrierQueue", (
+        "state: &'service State", "queue: &'service Queue",
+    )),
+    (QUEUE_SOURCE, "method", "OriginalCarrierQueue::new", (
+        "pub(super) fn new(state: &'service State, queue: &'service Queue) -> Self",
+        "Self { state, queue }",
+    )),
+    (QUEUE_SOURCE, "method", "OriginalCarrierQueue::belongs_to", (
+        "core::ptr::eq(self.state, state)",
+    )),
+    (QUEUE_SOURCE, "method", "OriginalCarrierQueue::owns_cut", ("cut.belongs_to(self.queue)",)),
+    (QUEUE_SOURCE, "method", "OriginalCarrierQueue::try_observe", (
+        "Result<QueueLaneRetirementObserver<'service>, mv::ReleaseWait>",
+        "self.queue.try_lock_lane_retirement_observer()",
+    )),
+    (QUEUE_OWNER, "method", "QueueLaneRetirementCut::belongs_to", (
+        "core::ptr::eq(self.observer.queue, queue)",
+    )),
+    (QUEUE_OWNER, "method", "QueueLaneRetirementCut::durability_faulted", (
+        "self.observer.durability_faulted()",
+    )),
+    (QUEUE_OWNER, "method", "QueueLaneRetirementObserver::durability_faulted", (
+        "self.queue.transaction_selection_durability_faulted()",
+    )),
+    (QUEUE_OWNER, "method", "QueueLaneRetirementCut::lane_pending_work_release", (
+        'self.observer.queue.lane_pending_work_release_locked(\n            &self.reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        )',
+    )),
+    (QUEUE_OWNER, "method", "QueueLaneRetirementObserver::lane_pending_work_release", (
+        "let _mutation = self.queue.push_remove_lock.lock()",
+        "let reservations = self.queue.lane_reservations.lock()",
+        'self.queue.lane_pending_work_release_locked(\n            &reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        )',
+    )),
+    (QUEUE_OWNER, "method", "Queue::lane_pending_work_release_locked", (
+        "if hash_is_zero(lane_incarnation)",
+        "return Err(QueueLaneRetirementUnavailable::InvalidIncarnation)",
+        "let scope = (lane_id, dataspace_id, lane_incarnation)",
+        'self\n            .lane_retirement_releases\n            .lock()\n            .entry(scope)\n            .or_default()\n            .observe()',
+        "if self.transaction_selection_durability_faulted()",
+        "Err(QueueLaneRetirementUnavailable::DurabilityFault)",
+        'Self::lane_retirement_reservation_snapshot(\n            reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        )',
+        ".is_none_or(|owned| self.lane_has_pending_route_work(&owned, lane_id, dataspace_id))",
+        "Ok(Some(wait))", "Ok(None)",
+        "if !matches!(&result, Ok(Some(_)))", "self.lane_retirement_releases.lock().remove(&scope)",
+        "drop(source.guard(scope))", "result",
+    )),
+    (QUEUE_RETIREMENT, "struct", "CarrierQueueRetirement", (
+        "state_owner: Arc<BlockHashOwner>", "header: BlockHeader",
+        "routes: Vec<(LaneId, DataSpaceId, Hash)>", "_cut: QueueLaneRetirementCut<'queue>",
+    )),
+    (QUEUE_RETIREMENT, "enum", "CarrierQueueRetirementError", (
+        "Missing", "ForeignState", "ForeignQueue",
+        "Busy {\n        field: &'static str,\n        wait: mv::ReleaseWait,\n    }",
+        'Pending {\n        lane: LaneId,\n        dataspace: DataSpaceId,\n        incarnation: Hash,\n        wait: mv::ReleaseWait,\n    }',
+        "Unavailable(QueueLaneRetirementUnavailable)", "Geometry(LaneLifecycleError)",
+    )),
+    (QUEUE_RETIREMENT, "method", "CarrierQueueRetirement::try_new", (
+        "if !source.belongs_to(target) || !geometry.matches_publication_target(target, header)",
+        "return Err(CarrierQueueRetirementError::ForeignState)",
+        "if !source.owns_cut(&cut)", "return Err(CarrierQueueRetirementError::ForeignQueue)",
+        'geometry\n            .for_each_retirement_route(|lane, dataspace, incarnation| {\n                routes.push((lane, dataspace, incarnation));\n                Ok(())\n            })',
+        ".map_err(CarrierQueueRetirementError::Geometry)?",
+        "for &(lane, dataspace, incarnation) in &routes",
+        "match cut.lane_pending_work_release(lane, dataspace, incarnation)",
+        "Ok(None) => {}",
+        'Ok(Some(wait)) => {\n                    return Err(CarrierQueueRetirementError::Pending {\n                        lane,\n                        dataspace,\n                        incarnation,\n                        wait,\n                    });\n                }',
+        "Err(error) => return Err(CarrierQueueRetirementError::Unavailable(error))",
+        "state_owner: Arc::clone(&target.block_hashes.owner)", 'header,\n            routes,\n            _cut: cut',
+    )),
+    (QUEUE_RETIREMENT, "method", "CarrierQueueRetirement::ensure_available", (
+        "if self._cut.durability_faulted()",
+        'Err(CarrierQueueRetirementError::Unavailable(\n                QueueLaneRetirementUnavailable::DurabilityFault,\n            ))',
+        'else {\n            Ok(())\n        }',
+    )),
+    (QUEUE_RETIREMENT, "method", "CarrierQueueRetirement::authenticates", (
+        'if self.ensure_available().is_err()\n            || !Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)\n            || self.header != header\n            || !geometry.matches_publication_target(target, header)',
+        "return false", "let mut index = 0",
+        "let result = geometry.for_each_retirement_route(|lane, dataspace, incarnation|",
+        "if self.routes.get(index) != Some(&(lane, dataspace, incarnation))",
+        "return Err(LaneLifecycleError::Storage(", "index += 1", "Ok(())",
+        "result.is_ok() && index == self.routes.len()",
+    )),
+    (GEOMETRY_CARRIER, "method", "PreparedCarrierGeometry::for_each_retirement_route", (
+        'let Some(pending) = &self._pending else {\n            return Ok(());\n        }',
+        "let update = &pending.catalog_update",
+        'pending.plan.retire.iter().chain(\n            update\n                .replaced_lane_ids\n                .iter()\n                .filter(|lane| !pending.plan.retire.contains(lane)),\n        )',
+        'update\n                .previous_catalog\n                .lanes()\n                .iter()\n                .find(|entry| entry.id == *lane)\n                .ok_or_else(||',
+        'update\n                .previous_lane_incarnations\n                .get(lane)\n                .copied()\n                .filter(|incarnation| !lane_incarnation_is_zero(*incarnation))\n                .ok_or_else(||',
+        "visit(*lane, previous.dataspace_id, incarnation)?",
+    )),
+    (GEOMETRY_CARRIER, "method", "PreparedCarrierGeometry::has_queue_custody", (
+        '!self.requires_queue_custody()\n            || queue.is_some_and(|queue| queue.authenticates(target, self, header))',
+    )),
+    (PHYSICAL_CARRIER, "struct", "CarrierFences", (
+        "_state: StateFences<'target>", "_queue: Option<CarrierQueueRetirement<'target>>",
+        "_kura: KuraPublicationLease<'target>",
+    )),
+    (PHYSICAL_CARRIER, "struct", "AcquiredCarrierComponents", (
+        "_fences: CarrierFences<'target>",
+    )),
+    (PHYSICAL_CARRIER, "method", "StateFences::try_acquire", (
+        "lock.try_lock_or_wait()", "CarrierPhysicalPreparationError::Fence { field, wait }",
+        'let commit = acquire("state_commit_lock", &target.state_commit_lock)?',
+        'let lifecycle = acquire("lane_lifecycle_lock", &target.lane_lifecycle_lock)?',
+        'let write = acquire("state_write_lock", &target.state_write_lock)?',
+        '_write: write,\n            _lifecycle: lifecycle,\n            _commit: commit',
+    )),
+)
+PREPARATION_OWNER_BINDINGS += QUEUE_RETIREMENT_BINDINGS
+
 NATIVE_PREPARATION_SOURCE_RELATIVES = tuple(Path(p) for p in (
-    QUEUE_OWNER, PUBLICATION_MUTEX, GEOMETRY_OWNER, RAW_GEOMETRY,
+    QUEUE_OWNER, QUEUE_SOURCE, QUEUE_RETIREMENT, PUBLICATION_MUTEX, GEOMETRY_OWNER, RAW_GEOMETRY,
     PHYSICAL_CARRIER, TERMINAL_CARRIER, ARCHIVE_CARRIER, GEOMETRY_CARRIER, WITNESS_CARRIER, WITNESS_LEASE,
     APPLY, BLOCK, PREPARED, PREFIX, JOURNALS, WORLD_COMMIT, DECISION_CARRIER, VALIDATION_CUSTODY, RETAINED_VALIDATION,
     OUTPUT, SEAL, TAIL, NATIVE_METADATA, NATIVE_STAGE,
@@ -1112,6 +1252,7 @@ def validate_native_preparation_contract(
         "RetainedBodyValidationService": """{
             validator: P, identity: V2BodyStoreInstanceIdentity,
             candidates: Vec<Candidate<P::Owner>>, markers: Vec<Marker>, limit: usize,
+            _descriptor_admission: [AllocationCharge; 2],
         }""",
         "SelectedValidationCarrier": """{
             service: &'a mut RetainedBodyValidationService<P>, index: usize, owner: Option<P::Owner>,
@@ -1170,7 +1311,17 @@ def validate_native_preparation_contract(
         if symbol in items and items[symbol].partition("{")[2] != _code(body)[1:]:
             errors.append(f"Native preparation retained carrier {symbol} replaces or duplicates original custody")
     ordered("RetainedBodyValidationService::new",
-            "candidates.try_reserve_exact(limit)?", "markers.try_reserve_exact(limit)?", "Ok(Self {")
+            "let layouts = Self::descriptor_layouts(limit)?", "budget.try_reserve_layouts(layouts)?",
+            "reservation.try_split(layouts[0])?", "reservation.try_split(layouts[1])?",
+            "drop(reservation)", "candidates.try_reserve_exact(limit)?", "markers.try_reserve_exact(limit)?",
+            "Ok(Self {", "_descriptor_admission: descriptor_admission")
+    descriptor_new = items.get("RetainedBodyValidationService::new", "")
+    for operation in ("budget.try_reserve_layouts(layouts)?", "candidates.try_reserve_exact(limit)?", "markers.try_reserve_exact(limit)?"):
+        if descriptor_new and descriptor_new.count(_code(operation)) != 1:
+            errors.append(f"Native preparation descriptor admission repeats or omits executable relation {operation}")
+    for forbidden in ("drop(descriptor_admission)", "mem::forget", "ManuallyDrop", "AllocationBudget::"):
+        if _code(forbidden) in descriptor_new:
+            errors.append(f"Native preparation descriptor admission loses executable relation: {forbidden}")
     ordered("RetainedBodyValidationService::prepare_marker",
             "if marker.is_none() && self.markers.len() == self.limit", "return Err(CarrierCustodyError::Capacity)",
             "if requires_existing_owner", "return Err(CarrierCustodyError::MissingOwner)",
@@ -1251,6 +1402,71 @@ def validate_native_preparation_contract(
             if any(m[1] == "TrackedOwner" and not fixture_start < m.start() < fixture_end
                    for m in implementations):
                 errors.append("Native preparation retained carrier fixture implementation escapes its test gate")
+
+    # Close the production constructor surface, including the real fixture's gate.
+    # Private fields alone do not prevent an added public constructor in this module.
+    _, queue_source = _read_reviewed_rust_source(root, QUEUE_SOURCE, "Native preparation", errors)
+    if queue_source is not None:
+        masked = _mask_rust_comments(queue_source)
+        methods = re.findall(r"\bfn\s+(\w+)\s*(?:<[^{}]*>)?\s*\(", masked)
+        if sorted(methods) != sorted(("new", "belongs_to", "try_observe", "owns_cut", "for_test")):
+            errors.append("Native preparation original Queue source changes closed constructor executable relation")
+        fixture_constructor = _code("""#[cfg(test)]
+            pub(crate) fn for_test(state: &'service State, queue: &'service Queue) -> Self {
+                Self::new(state, queue)
+            }""")
+        if fixture_constructor not in _code(queue_source):
+            errors.append("Native preparation original Queue fixture constructor escapes its test-gated executable relation")
+
+    # The service capability and move-only proof cannot expose a public arbitrary
+    # Queue constructor, retain only a scalar observation, or reorder release.
+    for symbol, body in {
+        "OriginalCarrierQueue": "{ state: &'service State, queue: &'service Queue, }",
+        "OriginalCarrierQueue::new": "{ Self { state, queue } }",
+        "OriginalCarrierQueue::belongs_to": "{ core::ptr::eq(self.state, state) }",
+        "OriginalCarrierQueue::owns_cut": "{ cut.belongs_to(self.queue) }",
+        "OriginalCarrierQueue::try_observe": "{ self.queue.try_lock_lane_retirement_observer() }",
+        "V2ApplyService::carrier_queue_source": "{ carrier_queue_retirement::OriginalCarrierQueue::new(&self.state, &self.queue) }",
+        "QueueLaneRetirementCut::belongs_to": "{ core::ptr::eq(self.observer.queue, queue) }",
+        "QueueLaneRetirementCut::durability_faulted": "{ self.observer.durability_faulted() }",
+        "QueueLaneRetirementObserver::durability_faulted": "{ self.queue.transaction_selection_durability_faulted() }",
+        "QueueLaneRetirementCut::lane_pending_work_release": "{ self.observer.queue.lane_pending_work_release_locked(&self.reservations, lane_id, dataspace_id, lane_incarnation,) }",
+        "PreparedCarrierGeometry::has_queue_custody": "{ !self.requires_queue_custody() || queue.is_some_and(|queue| queue.authenticates(target, self, header)) }",
+        "CarrierQueueRetirement": "{ state_owner: Arc<BlockHashOwner>, header: BlockHeader, routes: Vec<(LaneId, DataSpaceId, Hash)>, _cut: QueueLaneRetirementCut<'queue>, }",
+        "CarrierFences": "{ _state: StateFences<'target>, _queue: Option<CarrierQueueRetirement<'target>>, _kura: KuraPublicationLease<'target>, }",
+    }.items():
+        if symbol in items and items[symbol].partition("{")[2] != _code(body)[1:]:
+            errors.append(f"Native preparation retained Queue {symbol} changes exact executable relation")
+    ordered("AcquiredCarrierComponents", "world:", "runtime:", "transactions:", "block_hashes:", "_fences:")
+    ordered("CarrierFences::release_for_completion", "drop(write)", "drop(lifecycle)",
+            "drop(queue)", "drop(kura)", "commit")
+    ordered("StateFences::try_acquire", "lock.try_lock_or_wait()",
+            'acquire("state_commit_lock", &target.state_commit_lock)?',
+            'acquire("lane_lifecycle_lock", &target.lane_lifecycle_lock)?',
+            'acquire("state_write_lock", &target.state_write_lock)?', "Ok(Self {")
+    ordered("CarrierQueueRetirement::try_new", "if !source.belongs_to(target)",
+            "return Err(CarrierQueueRetirementError::ForeignState)",
+            "if !source.owns_cut(&cut)", "return Err(CarrierQueueRetirementError::ForeignQueue)",
+            "geometry.for_each_retirement_route(", "for &(lane, dataspace, incarnation) in &routes",
+            "cut.lane_pending_work_release(lane, dataspace, incarnation)",
+            "return Err(CarrierQueueRetirementError::Pending {", "Ok(Self {")
+    ordered("Queue::lane_pending_work_release_locked", "if hash_is_zero(lane_incarnation)",
+            "let scope = (lane_id, dataspace_id, lane_incarnation)",
+            "self.lane_retirement_releases.lock().entry(scope).or_default().observe()",
+            "self.transaction_selection_durability_faulted()", "Self::lane_retirement_reservation_snapshot(",
+            "self.lane_has_pending_route_work(", "Ok(Some(wait))", "Ok(None)")
+    ordered("QueueLaneRetirementObserver::lane_pending_work_release",
+            "self.queue.push_remove_lock.lock()", "self.queue.lane_reservations.lock()",
+            "self.queue.lane_pending_work_release_locked(")
+    for symbol in ("CarrierQueueRetirement::try_new", "CarrierQueueRetirement::authenticates",
+                   "CarrierQueueRetirement::ensure_available", "OriginalCarrierQueue::try_observe",
+                   "QueueLaneRetirementCut::lane_pending_work_release", "StateFences::try_acquire",
+                   "try_prepare_physical"):
+        body = items.get(symbol, "")
+        for forbidden in (".await", ".lock()", "mem::forget", "ManuallyDrop", "block_on(",
+                          "Queue::new", "State::new"):
+            if _code(forbidden) in body:
+                errors.append(f"Native preparation retained Queue {symbol} blocks or replaces its executable relation: {forbidden}")
 
     ordered("PublicationMutex::try_lock_or_wait",
             "let wait = self.released.observe();", "self.try_lock().ok_or(wait)")
@@ -1406,21 +1622,34 @@ def validate_native_preparation_contract(
             "admit(&original, target)", "target.matches_kura_instance(&original.journals.kura)",
             "if !original.journals.geometry.matches_publication_target(target, original.block().header())",
             "drop(installation);", "return Err((original, CarrierPhysicalPreparationError::ForeignTarget));",
+            "if original.journals.geometry.requires_queue_custody()",
+            "None => Some(CarrierQueueRetirementError::Missing)",
+            "Some(source) if !source.belongs_to(target)",
+            "Some(CarrierQueueRetirementError::ForeignState)",
+            "return Err((original, CarrierPhysicalPreparationError::Queue(error)))",
             "target.kura.try_publication_lease()", "SourceAuthenticatedCarrier::try_new(original, kura)",
             "original.publish_execution_witness()", "original.publish_archives()", "target.kura.try_publication_lease()",
             "SourceAuthenticatedCarrier::try_new(original, kura)",
             "reauthenticate_execution_witness(authenticated.decision.finality.artifact())",
-            "StateFences::try_acquire(target)", "journals.try_map_components(")
+            "let queue_observer = if authenticated.decision.journals.geometry.requires_queue_custody()",
+            "source.try_observe()", "StateFences::try_acquire(target)",
+            "observer.try_into_cut()", "CarrierQueueRetirement::try_new(target, &authenticated.decision.journals.geometry, authenticated.decision.block().header(), source, cut,)",
+            "let fences = CarrierFences { _state: state, _queue: queue, _kura: kura, }",
+            "journals.try_map_components(")
+    physical = items.get("try_prepare_physical", "")
+    for operation in ("source.try_observe()", "StateFences::try_acquire(target)", "observer.try_into_cut()", "journals.try_map_components("):
+        if physical and physical.count(_code(operation)) != 1:
+            errors.append(f"Native preparation Queue acquisition repeats or omits executable relation {operation}")
     ordered("PreparedCarrierGeometry::complete_under",
             "if !self.matches_publication_target(target, header)", "return Err(LaneLifecycleError::Storage(",
-            "if self.requires_queue_custody()", "return Err(LaneLifecycleError::Storage(",
+            "if !self.has_queue_custody(target, header, queue)", "return Err(LaneLifecycleError::Storage(",
             "self.resume_under(backend, lease)?;", "raw.publish_catalog_under(lease, None)",
             "raw.reauthenticate_catalog_under(lease)", "Ok(CompletedCarrierGeometry {")
     ordered("PhysicallyPreparedCarrier::try_complete_geometry",
             "if !journals.geometry.requires_storage_transition()", "return Ok(false);",
             "self.target.tiered_backend.try_lock_or_wait()",
             "journals.geometry.prepare_under(&backend, &journals.components._fences._kura)?;",
-            "journals.geometry.complete_under(self.target, journals.effects.header, &mut backend, &journals.components._fences._kura,)?",
+            "journals.geometry.complete_under(self.target, journals.effects.header, &mut backend, &journals.components._fences._kura, journals.components._fences._queue.as_ref(),)?",
             "Ok(completed.updated_da_mapping().is_some())")
     for symbol in ("PreparedCarrierGeometry::complete_under", "PhysicallyPreparedCarrier::try_complete_geometry"):
         item = items.get(symbol, "")
@@ -1429,13 +1658,17 @@ def validate_native_preparation_contract(
             if _code(forbidden) in item:
                 errors.append(f"Native preparation geometry completion {symbol} reacquires or reconstructs ownership: {forbidden}")
     ordered("PhysicallyPreparedCarrier::publish",
+            "journals.components._fences._queue.as_ref().and_then(|queue| queue.ensure_available().err())",
             "journals.effects.replay_prevalidation",
             "journals.geometry.matches_publication_target(self.target, journals.effects.header)",
             "journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()",
-            "journals.geometry.requires_queue_custody()", "Some(CarrierPublicationError::QueueRetirementRequired)",
+            "journals.geometry.has_queue_custody(self.target, journals.effects.header, journals.components._fences._queue.as_ref(),)",
+            "Some(CarrierPublicationError::QueueRetirementRequired)",
             "journals.native_amx_manifest.entries().is_empty()", "return Err((self.abort(), error))",
             "let update_da_mapping = match self.try_complete_geometry()",
             "return Err((self.abort(), CarrierPublicationError::GeometryStorage(error)))",
+            "self.decision.journals.components._fences._queue.as_ref().and_then(|queue| queue.ensure_available().err())",
+            "return Err((self.abort(), CarrierPublicationError::QueueRetirement(error)))",
             "target.begin_state_view_write()", "transactions.publish()", "runtime.publish()",
             "if update_da_mapping { target.da_shard_cursors.write().sync_mapping(&effects.nexus.lane_config); }",
             "let lifecycle_post_publication = effects.lifecycle.take().map(|effects| effects.publish(target, &generation, true));",
@@ -1448,6 +1681,8 @@ def validate_native_preparation_contract(
             "tiered_snapshot.publish(target, false)", "drop(commit)", "Ok(PublishedCarrier {")
     terminal = items.get("PhysicallyPreparedCarrier::publish", "")
     if terminal:
+        if terminal.count(_code("queue.ensure_available().err()")) != 2:
+            errors.append("Native preparation terminal lifecycle must recheck sticky Queue fault before storage and visibility")
         for operation in ("target.begin_state_view_write()", "transactions.publish()", "runtime.publish()",
                           "world.publish()", "block_hashes.publish()", "drop(generation)",
                           "self.try_complete_geometry()", "effects.lifecycle.take()",

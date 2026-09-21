@@ -1427,7 +1427,7 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     );
 }
 #[test]
-fn fee_enabled_transfer_then_failing_instruction_does_not_leak_transfer() {
+fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
@@ -1557,6 +1557,11 @@ fn fee_enabled_transfer_then_failing_instruction_does_not_leak_transfer() {
             .detached_fallback_unsupported_instruction_total,
         0,
         "multi-instruction transfer transactions share one canonical execution owner"
+    );
+    assert_eq!(
+        valid_block.as_ref().output_results().count(),
+        1,
+        "the canonical execution owner must retain exactly one transaction result"
     );
     let (_, rejection) = valid_block
         .as_ref()

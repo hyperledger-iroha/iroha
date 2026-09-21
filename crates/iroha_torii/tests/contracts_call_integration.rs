@@ -59,7 +59,7 @@ fn commit_contract_operator_genesis(
     use iroha_executor_data_model::permission::{
         account::{AccountAliasPermissionScope, CanManageAccountAlias},
         governance::CanEnactGovernance,
-        smart_contract::CanRegisterSmartContractCode,
+        smart_contract::CanManageSmartContractCode,
     };
 
     fixtures::commit_genesis_fixture(
@@ -67,7 +67,7 @@ fn commit_contract_operator_genesis(
         authority,
         signer,
         vec![
-            Grant::account_permission(CanRegisterSmartContractCode, authority.clone()).into(),
+            Grant::account_permission(CanManageSmartContractCode, authority.clone()).into(),
             Grant::account_permission(CanEnactGovernance, authority.clone()).into(),
             Grant::account_permission(
                 CanManageAccountAlias {

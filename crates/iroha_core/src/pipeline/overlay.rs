@@ -5817,7 +5817,7 @@ seiyaku GuardedOverlayRebound {
             }
             let mut child_contract_permissions = Permissions::new();
             assert!(child_contract_permissions.insert(Permission::from(
-                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode,
+                iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode,
             )));
             world
                 .account_permissions_mut_for_testing()

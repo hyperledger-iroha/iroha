@@ -92,6 +92,9 @@ fn block_and_revert_rewinds_da_indexes() {
         hashes.push(signed_second.hash());
         hashes.commit_for_tests();
     }
+    // Initial hydration derives pins from authoritative World state. Register
+    // the owner and apply the canonical pin projection, including all indexes,
+    // before exercising replacement-block rewind.
     {
         let mut world = state.world.block();
         world.accounts.insert(
@@ -101,7 +104,9 @@ fn block_and_revert_rewinds_da_indexes() {
         world.commit();
     }
     commit_pin_intent_world_projection_for_test(
-        &state, signed_second.header().height().get(), vec![pin_intent.clone()],
+        &state,
+        signed_second.header().height().get(),
+        vec![pin_intent],
     );
     state
         .ensure_da_indexes_hydrated()

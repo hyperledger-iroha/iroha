@@ -41934,6 +41934,7 @@ state_test! { sync transaction_failure_rolls_back_asset_world_and_trigger_change
 state_test! { sync execute_called_trigger_failure_rolls_back_state
     let state = blank_state();
     let trigger_id: TriggerId = "rollback_trigger".parse().unwrap();
+    let missing_domain = DomainId::try_new("dummy", "universal").unwrap();
     let_row! { asset_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").unwrap(), "xor".parse().unwrap(), ) };
     // Commit initial domain, account, and the by-call trigger.
     let_row! { block = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(1).unwrap()); }) };
@@ -41949,7 +41950,7 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let_row! { create_asset = Register::asset_definition(AssetDefinition::numeric( asset_definition_id.clone(), "xor", iroha_data_model::asset::AssetBalancePolicy::Global, Some(DomainId::try_new("wonderland", "universal").unwrap()), )) };
-        let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
+        let fail_isi = Unregister::domain(missing_domain.clone());
         let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
         let_row! { trigger = Trigger::new( trigger_id.clone(), Action::new( instructions, Repeats::Indefinitely, ALICE_ID.clone(), ExecuteTriggerEventFilter::new() .for_trigger(trigger_id.clone()) .under_authority(ALICE_ID.clone()), ) .expect("trigger action fixture satisfies validation invariants"), ) };
         Register::trigger(trigger)
@@ -41962,18 +41963,36 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
     let_row! { block = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(2).unwrap()); }) };
     {
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction_for_callback_testing();
-        let_row! { event = ExecuteTriggerEvent { trigger_id: trigger_id.clone(), authority: ALICE_ID.clone(), args: Json::default(), } };
-        let_row! { err = stx .execute_called_trigger(&trigger_id, &event) .expect_err("trigger should fail to execute") };
-        match err {
-            TransactionRejectionReason::Validation(
-                ValidationFail::InstructionFailed(InstructionExecutionError::Find(
-                    FindError::Domain(_),
-                ))
-                | ValidationFail::NotPermitted(_),
-            ) => {}
-            other => panic!("unexpected rejection: {other:?}"),
-        }
+        // Exercise atomic rollback through the signed executor, which owns the
+        // callback journal and discards the failed transaction overlay.
+        let mut builder = TransactionBuilder::new(
+            state.network_id,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(vec![], None),
+        );
+        builder.set_creation_time(block.as_ref().header().creation_time());
+        let signed = builder
+            .with_instructions([ExecuteTrigger::new(trigger_id.clone())])
+            .sign(ALICE_KEYPAIR.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(signed));
+        let mut cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let (_, result) = state_block.validate_transaction(accepted, &mut cache);
+        let err = result.expect_err("trigger should fail to execute");
+        assert!(
+            matches!(
+                &err,
+                TransactionRejectionReason::Validation(
+                    ValidationFail::InstructionFailed(InstructionExecutionError::Find(
+                        FindError::Domain(domain),
+                    ))
+                ) if domain == &missing_domain
+            ),
+            "the callback must reach its failing domain instruction: {err:?}"
+        );
+        assert!(
+            state_block.world.asset_definition(&asset_definition_id).is_err(),
+            "failed callback effects must be absent from the still-live parent block"
+        );
     }
     let view = state.view();
     assert!(
@@ -42705,7 +42724,7 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
             contract_address.clone(),
             ALICE_ID.clone(),
         );
-        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode .into() };
+        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode .into() };
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant contract deployment permission");
@@ -43178,7 +43197,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
             contract_address.clone(),
             ALICE_ID.clone(),
         );
-        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode .into() };
+        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode .into() };
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant contract deployment permission");
@@ -43472,7 +43491,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
             contract_address.clone(),
             ALICE_ID.clone(),
         );
-        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode .into() };
+        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode .into() };
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant alias-transfer callback deployment permission");

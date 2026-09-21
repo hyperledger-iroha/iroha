@@ -4,9 +4,8 @@ use iroha::data_model::{
     alias_setup::{AccountAliasName, ResolvedAccountAliasV1},
     permission::Permission,
 };
-use iroha_executor_data_model::permission::{
-    account::{AccountAliasPermissionScope, CanManageAccountAlias},
-    smart_contract::CanRegisterSmartContractCode,
+use iroha_executor_data_model::permission::account::{
+    AccountAliasPermissionScope, CanManageAccountAlias,
 };
 use std::collections::BTreeSet;
 
@@ -16,15 +15,13 @@ use std::collections::BTreeSet;
 pub struct DeploymentAuthorization {
     /// The exact configured account was returned by the authenticated account read.
     pub account_exists: bool,
-    /// Effective native registrar token, including its canonical unit payload.
-    pub register_code_permission: Permission,
     /// Effective alias mutation token for this exact alias or its applicable parent scope.
     pub manage_alias_permission: Permission,
 }
 
 pub(super) fn verify_account(client: &Client, authority: &AccountId) -> Result<()> {
     let account = client.client().get_account_read(authority)
-        .wrap_err("deployment authority must already be registered; onboarding and fee funding do not grant deployment permissions")?;
+        .wrap_err("deployment authority must already be registered and funded; acquire or use an owned alias namespace before deployment")?;
     if account.account_id != *authority {
         return Err(eyre!(
             "account read returned a different deployment authority"
@@ -129,12 +126,6 @@ fn match_permissions(
     alias: &ContractAlias,
     dataspace_id: DataSpaceId,
 ) -> Result<DeploymentAuthorization> {
-    let register: Permission = CanRegisterSmartContractCode.into();
-    if !permissions.contains(&register) {
-        return Err(eyre!(
-            "deployment authority lacks CanRegisterSmartContractCode; fee funding or account onboarding cannot replace an authorized registrar grant"
-        ));
-    }
     let name = AccountAliasName::try_new(
         alias.name_segment(),
         alias.domain_segment(),
@@ -170,7 +161,6 @@ fn match_permissions(
     };
     Ok(DeploymentAuthorization {
         account_exists: true,
-        register_code_permission: register,
         manage_alias_permission: manage,
     })
 }
@@ -186,10 +176,7 @@ pub(super) fn validate_authorization(
         ));
     }
     match_permissions(
-        &BTreeSet::from([
-            evidence.register_code_permission.clone(),
-            evidence.manage_alias_permission.clone(),
-        ]),
+        &BTreeSet::from([evidence.manage_alias_permission.clone()]),
         alias,
         dataspace_id,
     )?;
@@ -200,9 +187,8 @@ pub(super) fn validate_authorization(
 mod tests {
     use super::*;
     #[test]
-    fn registrar_and_alias_permissions_are_exact_and_independent() -> Result<()> {
+    fn public_creation_needs_only_exact_owned_alias_scope() -> Result<()> {
         let alias: ContractAlias = "coffee::merchant.universal".parse()?;
-        let register: Permission = CanRegisterSmartContractCode.into();
         let dataspace: Permission = CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
         }
@@ -214,26 +200,12 @@ mod tests {
         }
         .into();
         assert!(
-            match_permissions(
-                &BTreeSet::from([register.clone(), dataspace]),
-                &alias,
-                DataSpaceId::UNIVERSAL
-            )
-            .is_err()
+            match_permissions(&BTreeSet::from([dataspace]), &alias, DataSpaceId::UNIVERSAL)
+                .is_err()
         );
-        assert!(
-            match_permissions(
-                &BTreeSet::from([domain.clone()]),
-                &alias,
-                DataSpaceId::UNIVERSAL
-            )
-            .is_err()
-        );
-        let evidence = match_permissions(
-            &BTreeSet::from([register, domain]),
-            &alias,
-            DataSpaceId::UNIVERSAL,
-        )?;
+        assert!(match_permissions(&BTreeSet::new(), &alias, DataSpaceId::UNIVERSAL).is_err());
+        let evidence =
+            match_permissions(&BTreeSet::from([domain]), &alias, DataSpaceId::UNIVERSAL)?;
         validate_authorization(&evidence, &alias, DataSpaceId::UNIVERSAL)?;
         assert!(
             validate_authorization(
@@ -255,7 +227,7 @@ mod tests {
             )),
         }
         .into();
-        let permissions = BTreeSet::from([CanRegisterSmartContractCode.into(), exact]);
+        let permissions = BTreeSet::from([exact]);
         match_permissions(&permissions, &alias, DataSpaceId::UNIVERSAL)?;
         assert!(
             match_permissions(

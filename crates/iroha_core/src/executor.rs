@@ -991,7 +991,7 @@ pub(crate) fn execute_instruction_detached(
     };
     if mutates_contract_deployment_permission(instruction) {
         return Err(ValidationFail::InternalError(
-            "detached: CanRegisterSmartContractCode permission mutation requires the sequential consensus gate"
+            "detached: CanManageSmartContractCode permission mutation requires the sequential consensus gate"
                 .to_owned(),
         ));
     }
@@ -1474,18 +1474,18 @@ fn mutates_contract_deployment_permission(instruction: &InstructionBox) -> bool 
         Some(
             PermissionOrRoleMutation::AccountPermission { permission, .. }
                 | PermissionOrRoleMutation::RolePermission { permission, .. }
-        ) if matches!(permission.name().as_ref(), "CanRegisterSmartContractCode" | "CanManageSmartContractCodeRegistrars")
+        ) if matches!(permission.name().as_ref(), "CanManageSmartContractCode" | "CanGrantSmartContractCodeManagement")
     )
 }
-fn ensure_contract_registrar_permission_lifecycle(
+fn ensure_contract_code_management_permission_lifecycle(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     permission: &Permission,
 ) -> Result<(), ValidationFail> {
     let is_genesis = is_initial_genesis_context(state_transaction);
     match permission.name().as_ref() {
-        "CanManageSmartContractCodeRegistrars" => {
-            executor_permission::smart_contract::CanManageSmartContractCodeRegistrars::try_from(
+        "CanGrantSmartContractCodeManagement" => {
+            executor_permission::smart_contract::CanGrantSmartContractCodeManagement::try_from(
                 permission,
             )
             .map_err(|error| invalid_initial_permission_payload(permission, error))?;
@@ -1493,23 +1493,23 @@ fn ensure_contract_registrar_permission_lifecycle(
                 Ok(())
             } else {
                 Err(ValidationFail::NotPermitted(
-                    "CanManageSmartContractCodeRegistrars is only granted or revoked in genesis"
+                    "CanGrantSmartContractCodeManagement is only granted or revoked in genesis"
                         .to_owned(),
                 ))
             }
         }
-        "CanRegisterSmartContractCode" => {
-            executor_permission::smart_contract::CanRegisterSmartContractCode::try_from(permission)
+        "CanManageSmartContractCode" => {
+            executor_permission::smart_contract::CanManageSmartContractCode::try_from(permission)
                 .map_err(|error| invalid_initial_permission_payload(permission, error))?;
             let manager: Permission =
-                executor_permission::smart_contract::CanManageSmartContractCodeRegistrars.into();
+                executor_permission::smart_contract::CanGrantSmartContractCodeManagement.into();
             if is_genesis
                 || authority_has_permission(&state_transaction.world, authority, &manager)?
             {
                 Ok(())
             } else {
                 Err(ValidationFail::NotPermitted(
-                    "granting or revoking CanRegisterSmartContractCode requires CanManageSmartContractCodeRegistrars".to_owned(),
+                    "granting or revoking CanManageSmartContractCode requires CanGrantSmartContractCodeManagement".to_owned(),
                 ))
             }
         }
@@ -1522,7 +1522,11 @@ fn ensure_contract_deployment_permission_mutation_allowed(
     instruction: &InstructionBox,
 ) -> Result<(), ValidationFail> {
     let validate = |permission: &Permission| {
-        ensure_contract_registrar_permission_lifecycle(state_transaction, authority, permission)
+        ensure_contract_code_management_permission_lifecycle(
+            state_transaction,
+            authority,
+            permission,
+        )
     };
     if let Some(register) = extract_register_role(instruction) {
         for permission in register.object().inner().permissions() {
@@ -8261,7 +8265,7 @@ const INITIAL_GENESIS_ONLY_PERMISSION_NAMES: &[&str] = &[
     "CanRegisterDomain",
     "CanManageRoles",
     "CanUpgradeExecutor",
-    "CanManageSmartContractCodeRegistrars",
+    "CanGrantSmartContractCodeManagement",
     "CanReadAllLedgerData",
     "CanReadRestrictedDataspace",
     "CanManageFxCorridors",
@@ -10777,7 +10781,7 @@ mod tests {
         );
         let trigger_id: TriggerId = "grant_policy_trigger".parse().expect("trigger id");
         // The address deliberately embeds the attacker as its subject. Contract subjects are
-        // not registrar authorities and therefore cannot mint invocation permissions.
+        // not code-management authorities and therefore cannot mint invocation permissions.
         let contract = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -10839,7 +10843,7 @@ mod tests {
         world.account_permissions.insert(
             legitimate_root.clone(),
             BTreeSet::from([
-                executor_permission::smart_contract::CanRegisterSmartContractCode.into(),
+                executor_permission::smart_contract::CanManageSmartContractCode.into(),
                 executor_permission::settlement::CanManageFxCorridors.into(),
                 manifest_root,
                 executor_permission::sccp::CanManageSccpGovernance.into(),
@@ -15114,7 +15118,7 @@ mod tests {
         let error = execute_instruction_detached(&authority, &instruction, &mut delta)
             .expect_err("deployment permission mutation must fall back to the consensus gate");
         assert!(matches!(error, ValidationFail::InternalError(message) if
-            message.contains("CanRegisterSmartContractCode")
+            message.contains("CanManageSmartContractCode")
                 && message.contains("sequential consensus gate")));
     }
     #[test]

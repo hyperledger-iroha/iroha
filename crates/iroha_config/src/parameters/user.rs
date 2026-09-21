@@ -18554,7 +18554,7 @@ impl AccountOnboarding {
             "CanProposeSccpRouteGovernance",
             "CanManageRoles",
             "CanUpgradeExecutor",
-            "CanRegisterSmartContractCode",
+            "CanManageSmartContractCode",
             "CanManageFxCorridors",
             "CanEnactGovernance",
             "CanManageParliament",

@@ -88,8 +88,8 @@ macro_rules! schema_types {
             iroha_executor_data_model::permission::trigger::CanModifyTrigger,
             iroha_executor_data_model::permission::trigger::CanModifyTriggerMetadata,
             iroha_executor_data_model::permission::executor::CanUpgradeExecutor,
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode,
-            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCodeRegistrars,
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode,
+            iroha_executor_data_model::permission::smart_contract::CanGrantSmartContractCodeManagement,
             // Native bounded smart-contract artifact upload protocol
             iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk,
             iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
