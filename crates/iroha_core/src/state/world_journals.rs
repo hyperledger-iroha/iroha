@@ -12,9 +12,12 @@ use super::{
     Cell, CellBlock, Storage, StorageBlock, TriggerSet, TriggerSetBlock, World, WorldBlock,
     WorldBlockFields,
 };
-use crate::smartcontracts::isi::triggers::set::{DetachError, DetachedSet};
+use crate::smartcontracts::isi::triggers::set::{DetachError, DetachedSet, SetBlockCapture};
 use iroha_data_model::{events::EventBox, nexus::DataSpaceCatalog};
-use mv::{BlockCapture, BlockMode, Key, Value};
+use mv::{
+    BlockCapture, BlockMode, Key, Value, cell::BlockCaptureSlot as CellCaptureSlot,
+    storage::BlockCaptureSlot as StorageCaptureSlot,
+};
 
 #[path = "world_publication.rs"]
 pub(in crate::state) mod publication;
@@ -225,7 +228,7 @@ impl<K: Key, V: Value> RetainedWorldField for RetainedStorage<K, V> {
 impl<'a, K: Key, V: Value> CaptureWorldField for StorageBlock<'a, K, V> {
     type Target = Storage<K, V>;
     type Retained = RetainedStorage<K, V>;
-    type Capture = mv::storage::BlockCaptureSlot<'a, K, V, ()>;
+    type Capture = StorageCaptureSlot<'a, K, V, ()>;
     fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>> {
         Ok(self.mode())
     }
@@ -234,7 +237,7 @@ impl<'a, K: Key, V: Value> CaptureWorldField for StorageBlock<'a, K, V> {
     }
 }
 
-impl<K: Key, V: Value> WorldCaptureSlot for mv::storage::BlockCaptureSlot<'_, K, V, ()> {
+impl<K: Key, V: Value> WorldCaptureSlot for StorageCaptureSlot<'_, K, V, ()> {
     type Target = Storage<K, V>;
     type Retained = RetainedStorage<K, V>;
     fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {
@@ -297,7 +300,7 @@ impl<V: Value> RetainedWorldField for RetainedCell<V> {
 impl<'a, V: Value> CaptureWorldField for CellBlock<'a, V> {
     type Target = Cell<V>;
     type Retained = RetainedCell<V>;
-    type Capture = mv::cell::BlockCaptureSlot<'a, V, ()>;
+    type Capture = CellCaptureSlot<'a, V, ()>;
     fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>> {
         Ok(self.mode())
     }
@@ -306,7 +309,7 @@ impl<'a, V: Value> CaptureWorldField for CellBlock<'a, V> {
     }
 }
 
-impl<V: Value> WorldCaptureSlot for mv::cell::BlockCaptureSlot<'_, V, ()> {
+impl<V: Value> WorldCaptureSlot for CellCaptureSlot<'_, V, ()> {
     type Target = Cell<V>;
     type Retained = RetainedCell<V>;
     fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {
@@ -384,7 +387,7 @@ impl RetainedWorldField for RetainedTriggers {
 impl<'a> CaptureWorldField for TriggerSetBlock<'a> {
     type Target = TriggerSet;
     type Retained = RetainedTriggers;
-    type Capture = crate::smartcontracts::isi::triggers::set::SetBlockCapture<'a, ()>;
+    type Capture = SetBlockCapture<'a, ()>;
     fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>> {
         TriggerSetBlock::capture_mode(self).map_err(trigger_error)
     }
@@ -393,7 +396,7 @@ impl<'a> CaptureWorldField for TriggerSetBlock<'a> {
     }
 }
 
-impl WorldCaptureSlot for crate::smartcontracts::isi::triggers::set::SetBlockCapture<'_, ()> {
+impl WorldCaptureSlot for SetBlockCapture<'_, ()> {
     type Target = TriggerSet;
     type Retained = RetainedTriggers;
     fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {

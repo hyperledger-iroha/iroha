@@ -523,6 +523,21 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 next_guard.assert_not_called()
             release.write_text(original)
             owner = copied / "crates/mv/src/lib.rs"
+            original_owner = owner.read_text()
+            capture_edge = "#[cfg(test)]\nmod capture_tests;"
+            self.assertEqual(original_owner.count(capture_edge), 1)
+            for replacement in (
+                '#[path = "foreign.rs"]\n' + capture_edge,
+                '#[cfg(test)]\n#[path = "foreign.rs"]\nmod capture_tests;',
+                "/* " + capture_edge + " */",
+                'const FAKE: &str = r"' + capture_edge + '";',
+                capture_edge + "\n" + capture_edge,
+            ):
+                with self.subTest(capture_edge=replacement):
+                    owner.write_text(original_owner.replace(capture_edge, replacement))
+                    with self.assertRaisesRegex(gate.CheckError, "module edge differs"):
+                        gate.validate_mv_test_registration(copied)
+            owner.write_text(original_owner)
             owner.write_text(owner.read_text().replace('path = "release_tests.rs"', 'path = "foreign_tests.rs"'))
             with self.assertRaisesRegex(gate.CheckError, "module edge differs"):
                 gate.validate_mv_test_registration(copied)

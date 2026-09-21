@@ -15541,7 +15541,7 @@
           "kind": "struct",
           "symbol": "CellWriters",
           "required_tokens": [
-            "pub(super) struct CellWriters<'a, V: Value, C: Send + Sync + 'static> {\n    state: Option<CellWriterState<'a, V, C>>,\n    target: &'a Cell<V, C>,\n}"
+            "pub(super) struct CellWriters<'a, V: Value, C: Send + Sync + 'static> {\n    state: Option<CellWriterState<'a, V, C>>,\n}"
           ]
         },
         {
@@ -15685,7 +15685,7 @@
           "kind": "method",
           "symbol": "BlockAcquisitionSlot::initialize_writers",
           "required_tokens": [
-            "    fn initialize_writers(&mut self) {\n        assert!(!self.started, \"original cell acquisition is one-shot\");\n        self.started = true;\n        let target = self.target;\n        let AcquisitionPhase::Pending(pending) = &mut self.phase else {\n            panic!(\"original pending acquisition\");\n        };\n        pending.revert = Some(\n            target\n                .revert_released\n                .poisoning_guard(target.revert.acquire_writer()),\n        );\n        assert!(\n            !pending\n                .revert\n                .as_ref()\n                .expect(\"original undo\")\n                .is_poisoned(),\n            \"original undo writer is poisoned\",\n        );\n        pending.blocks = Some(\n            target\n                .blocks_released\n                .poisoning_guard(target.blocks.acquire_writer()),\n        );\n        assert!(\n            !pending\n                .blocks\n                .as_ref()\n                .expect(\"original current\")\n                .is_poisoned(),\n            \"original current writer is poisoned\",\n        );\n        // The original slot owns both guards and both charges before either clone.\n        let undo = pending.revert.take().expect(\"original undo\");\n        let undo_value = &mut pending.undo_value;\n        let undo_charge = &mut pending.undo_charge;\n        let result = undo\n            .try_map_preserving_release_into(\n                &mut self.undo_release,\n                |undo| match undo.try_clone_charged(|_, _| {\n                    Ok::<_, std::convert::Infallible>(\n                        undo_charge.take().expect(\"original undo charge\"),\n                    )\n                }) {\n                    Ok((undo, value)) => {\n                        *undo_value = Some(value);\n                        Ok(undo)\n                    }\n                    Err((undo, error)) => Err((undo, error)),\n                },\n                || target.revert.is_poisoned(),\n            )\n            .unwrap_or_else(|_| unreachable!(\"original undo release source\"));\n        match result {\n            Ok(undo) => pending.revert = Some(undo),\n            Err((undo, error)) => {\n                pending.revert = Some(undo);\n                match error {\n                    EbrCellWriterAdmissionError::Poisoned => {\n                        panic!(\"original undo writer is poisoned\")\n                    }\n                    EbrCellWriterAdmissionError::Refused(never) => match never {},\n                }\n            }\n        }\n        let current = pending.blocks.take().expect(\"original current\");\n        let current_value = &mut pending.current_value;\n        let current_charge = &mut pending.current_charge;\n        let result = current\n            .try_map_preserving_release_into(\n                &mut self.current_release,\n                |current| match current.try_clone_charged(|_, _| {\n                    Ok::<_, std::convert::Infallible>(\n                        current_charge.take().expect(\"original current charge\"),\n                    )\n                }) {\n                    Ok((current, value)) => {\n                        *current_value = Some(value);\n                        Ok(current)\n                    }\n                    Err((current, error)) => Err((current, error)),\n                },\n                || target.blocks.is_poisoned(),\n            )\n            .unwrap_or_else(|_| unreachable!(\"original current release source\"));\n        match result {\n            Ok(current) => pending.blocks = Some(current),\n            Err((current, error)) => {\n                pending.blocks = Some(current);\n                match error {\n                    EbrCellWriterAdmissionError::Poisoned => {\n                        panic!(\"original current writer is poisoned\")\n                    }\n                    EbrCellWriterAdmissionError::Refused(never) => match never {},\n                }\n            }\n        }\n        // No new lock or user operation occurs during either attachment. Keep the\n        // original values in the caller slot if the native attachment refuses.\n        let undo = pending.revert.take().expect(\"original undo\");\n        let undo_value = &mut pending.undo_value;\n        let undo = match undo\n            .try_map_preserving_release_into(\n                &mut self.undo_release,\n                |undo| match undo.try_write_owned(undo_value.take().expect(\"original undo value\")) {\n                    Ok(writer) => Ok(writer),\n                    Err((undo, value)) => {\n                        *undo_value = Some(value);\n                        Err((undo, ()))\n                    }\n                },\n                || target.revert.is_poisoned(),\n            )\n            .unwrap_or_else(|_| unreachable!(\"original undo release source\"))\n        {\n            Ok(writer) => writer,\n            Err((undo, ())) => {\n                pending.revert = Some(undo);\n                panic!(\"original healthy undo stays acquired\");\n            }\n        };\n        // Attachment cannot panic or refuse after the same exclusive healthy\n        // acquisitions above; no payload code runs between these two transfers.\n        let current = pending.blocks.take().expect(\"original current\");\n        let current_value = pending\n            .current_value\n            .take()\n            .expect(\"original current value\");\n        let current = current.map_preserving_release(|current| {\n            match current.try_write_owned(current_value) {\n                Ok(writer) => writer,\n                Err(_) => unreachable!(\"original healthy current stays acquired\"),\n            }\n        });\n        self.phase = AcquisitionPhase::Writers(CellWriters::new(target, undo, current));\n    }"
+            "    fn initialize_writers(&mut self) {\n        assert!(!self.started, \"original cell acquisition is one-shot\");\n        self.started = true;\n        let target = self.target;\n        let AcquisitionPhase::Pending(pending) = &mut self.phase else {\n            panic!(\"original pending acquisition\");\n        };\n        pending.revert = Some(\n            target\n                .revert_released\n                .poisoning_guard(target.revert.acquire_writer()),\n        );\n        assert!(\n            !pending\n                .revert\n                .as_ref()\n                .expect(\"original undo\")\n                .is_poisoned(),\n            \"original undo writer is poisoned\",\n        );\n        pending.blocks = Some(\n            target\n                .blocks_released\n                .poisoning_guard(target.blocks.acquire_writer()),\n        );\n        assert!(\n            !pending\n                .blocks\n                .as_ref()\n                .expect(\"original current\")\n                .is_poisoned(),\n            \"original current writer is poisoned\",\n        );\n        // The original slot owns both guards and both charges before either clone.\n        let undo = pending.revert.take().expect(\"original undo\");\n        let undo_value = &mut pending.undo_value;\n        let undo_charge = &mut pending.undo_charge;\n        let result = undo\n            .try_map_preserving_release_into(\n                &mut self.undo_release,\n                |undo| match undo.try_clone_charged(|_, _| {\n                    Ok::<_, std::convert::Infallible>(\n                        undo_charge.take().expect(\"original undo charge\"),\n                    )\n                }) {\n                    Ok((undo, value)) => {\n                        *undo_value = Some(value);\n                        Ok(undo)\n                    }\n                    Err((undo, error)) => Err((undo, error)),\n                },\n                || target.revert.is_poisoned(),\n            )\n            .unwrap_or_else(|_| unreachable!(\"original undo release source\"));\n        match result {\n            Ok(undo) => pending.revert = Some(undo),\n            Err((undo, error)) => {\n                pending.revert = Some(undo);\n                match error {\n                    EbrCellWriterAdmissionError::Poisoned => {\n                        panic!(\"original undo writer is poisoned\")\n                    }\n                    EbrCellWriterAdmissionError::Refused(never) => match never {},\n                }\n            }\n        }\n        let current = pending.blocks.take().expect(\"original current\");\n        let current_value = &mut pending.current_value;\n        let current_charge = &mut pending.current_charge;\n        let result = current\n            .try_map_preserving_release_into(\n                &mut self.current_release,\n                |current| match current.try_clone_charged(|_, _| {\n                    Ok::<_, std::convert::Infallible>(\n                        current_charge.take().expect(\"original current charge\"),\n                    )\n                }) {\n                    Ok((current, value)) => {\n                        *current_value = Some(value);\n                        Ok(current)\n                    }\n                    Err((current, error)) => Err((current, error)),\n                },\n                || target.blocks.is_poisoned(),\n            )\n            .unwrap_or_else(|_| unreachable!(\"original current release source\"));\n        match result {\n            Ok(current) => pending.blocks = Some(current),\n            Err((current, error)) => {\n                pending.blocks = Some(current);\n                match error {\n                    EbrCellWriterAdmissionError::Poisoned => {\n                        panic!(\"original current writer is poisoned\")\n                    }\n                    EbrCellWriterAdmissionError::Refused(never) => match never {},\n                }\n            }\n        }\n        // No new lock or user operation occurs during either attachment. Keep the\n        // original values in the caller slot if the native attachment refuses.\n        let undo = pending.revert.take().expect(\"original undo\");\n        let undo_value = &mut pending.undo_value;\n        let undo = match undo\n            .try_map_preserving_release_into(\n                &mut self.undo_release,\n                |undo| match undo.try_write_owned(undo_value.take().expect(\"original undo value\")) {\n                    Ok(writer) => Ok(writer),\n                    Err((undo, value)) => {\n                        *undo_value = Some(value);\n                        Err((undo, ()))\n                    }\n                },\n                || target.revert.is_poisoned(),\n            )\n            .unwrap_or_else(|_| unreachable!(\"original undo release source\"))\n        {\n            Ok(writer) => writer,\n            Err((undo, ())) => {\n                pending.revert = Some(undo);\n                panic!(\"original healthy undo stays acquired\");\n            }\n        };\n        // Attachment cannot panic or refuse after the same exclusive healthy\n        // acquisitions above; no payload code runs between these two transfers.\n        let current = pending.blocks.take().expect(\"original current\");\n        let current_value = pending\n            .current_value\n            .take()\n            .expect(\"original current value\");\n        let current = current.map_preserving_release(|current| {\n            match current.try_write_owned(current_value) {\n                Ok(writer) => writer,\n                Err(_) => unreachable!(\"original healthy current stays acquired\"),\n            }\n        });\n        self.phase = AcquisitionPhase::Writers(CellWriters::new(undo, current));\n    }"
           ]
         },
         {
@@ -15861,7 +15861,7 @@
           "kind": "method",
           "symbol": "CellWriters::new",
           "required_tokens": [
-            "    fn new(\n        target: &'a Cell<V, C>,\n        revert: CellWriter<'a, Option<V>, C>,\n        blocks: CellWriter<'a, V, C>,\n    ) -> Self {\n        Self {\n            state: Some(CellWriterState::Attached(OriginalCellWriters {\n                revert,\n                blocks,\n            })),\n            target,\n        }\n    }"
+            "    fn new(revert: CellWriter<'a, Option<V>, C>, blocks: CellWriter<'a, V, C>) -> Self {\n        Self {\n            state: Some(CellWriterState::Attached(OriginalCellWriters {\n                revert,\n                blocks,\n            })),\n        }\n    }"
           ]
         },
         {
@@ -16037,7 +16037,7 @@
           "kind": "method",
           "symbol": "WorldBlock::into_fields",
           "required_tokens": [
-            "    pub(super) fn into_fields(mut self) -> WorldBlockFields<'world> {\n        // TODO: retain joint retirement through the existing consuming capture\n        // and commit transitions too; this extraction transfers their custody.\n        self.fields.take().expect(\"original World block fields\")\n    }"
+            "    pub(super) fn into_fields(mut self) -> WorldBlockFields<'world> {\n        // TODO: retain joint retirement through consuming commit. Capture now\n        // installs caller-owned slots before invoking any native operation.\n        self.fields.take().expect(\"original World block fields\")\n    }"
           ]
         },
         {
@@ -16085,7 +16085,7 @@
           "kind": "method",
           "symbol": "SetBlock::into_fields",
           "required_tokens": [
-            "    pub(super) fn into_fields(mut self) -> SetBlockFields<'set> {\n        // TODO: carry aggregate retirement through consuming capture/commit;\n        // their existing fieldwise transitions take ownership from this point.\n        self.fields.take().expect(\"original trigger block fields\")\n    }"
+            "    pub(super) fn into_fields(mut self) -> SetBlockFields<'set> {\n        // Capture only performs inert moves before its caller owns every slot.\n        // TODO: retain aggregate retirement through consuming commit too.\n        self.fields.take().expect(\"original trigger block fields\")\n    }"
           ]
         },
         {
@@ -16310,6 +16310,238 @@
           "symbol": "Block::try_detach",
           "required_tokens": [
             "        pub fn try_detach<Admission, E>(\n            self,\n            admit: impl FnOnce(&Self) -> Result<Admission, E>,\n        ) -> Result<Detached<K, V, Admission>, E> {\n            let mut slot = self.capture_slot();\n            crate::BlockCapture::try_capture(&mut slot, admit)?;\n            let (journal, cleanup) = crate::BlockCapture::into_detached(slot);\n            drop(cleanup);\n            Ok(journal)\n        }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "StorageBlock::into_capture",
+          "required_tokens": [
+            "    fn into_capture(self) -> Self::Capture {\n        self.capture_slot()\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "CellBlock::into_capture",
+          "required_tokens": [
+            "    fn into_capture(self) -> Self::Capture {\n        self.capture_slot()\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "TriggerSetBlock::into_capture",
+          "required_tokens": [
+            "    fn into_capture(self) -> Self::Capture {\n        self.capture_slot()\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "StorageCaptureSlot::capture",
+          "required_tokens": [
+            "    fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {\n        match self.try_capture(|_| Ok::<(), Infallible>(())) {\n            Ok(()) => Ok(()),\n            Err(impossible) => match impossible {},\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "StorageCaptureSlot::release",
+          "required_tokens": [
+            "    fn release(&mut self) {\n        BlockCapture::release(self);\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "StorageCaptureSlot::retain",
+          "required_tokens": [
+            "    fn retain(self, name: &'static str, target: fn(&World) -> &Self::Target) -> Self::Retained {\n        let (journal, cleanup) = self.into_detached();\n        let retained = RetainedStorage {\n            name,\n            journal: Some(journal),\n            target,\n        };\n        drop(cleanup);\n        retained\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "CellCaptureSlot::capture",
+          "required_tokens": [
+            "    fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {\n        match self.try_capture(|_| Ok::<(), Infallible>(())) {\n            Ok(()) => Ok(()),\n            Err(impossible) => match impossible {},\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "CellCaptureSlot::release",
+          "required_tokens": [
+            "    fn release(&mut self) {\n        BlockCapture::release(self);\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "CellCaptureSlot::retain",
+          "required_tokens": [
+            "    fn retain(self, name: &'static str, target: fn(&World) -> &Self::Target) -> Self::Retained {\n        let (journal, cleanup) = self.into_detached();\n        let retained = RetainedCell {\n            name,\n            journal: Some(journal),\n            target,\n        };\n        drop(cleanup);\n        retained\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "SetBlockCapture::capture",
+          "required_tokens": [
+            "    fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {\n        self.try_capture(|_| Ok::<(), Infallible>(()))\n            .map_err(trigger_error)\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "SetBlockCapture::release",
+          "required_tokens": [
+            "    fn release(&mut self) {\n        Self::release(self);\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "SetBlockCapture::retain",
+          "required_tokens": [
+            "    fn retain(self, name: &'static str, target: fn(&World) -> &Self::Target) -> Self::Retained {\n        let (journal, cleanup) = self.into_detached();\n        let retained = RetainedTriggers {\n            name,\n            journal: Some(journal),\n            target,\n        };\n        drop(cleanup);\n        retained\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "macro",
+          "symbol": "declare_world_capture",
+          "required_tokens": [
+            "macro_rules! declare_world_capture {\n    (; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {\n        #[allow(non_camel_case_types)]\n        struct WorldCapture<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*> {\n            $($prefix: Option<$prefix>,)* $($privacy: Option<$privacy>,)* $($suffix: Option<$suffix>,)*\n        }\n        #[allow(non_camel_case_types)]\n        impl<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*>\n            WorldCapture<$($prefix,)* $($privacy,)* $($suffix,)*>\n        {\n            fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {\n                $(self.$prefix.as_mut().expect(\"original World capture slot\").capture()?;)*\n                $(self.$privacy.as_mut().expect(\"original World capture slot\").capture()?;)*\n                $(self.$suffix.as_mut().expect(\"original World capture slot\").capture()?;)*\n                Ok(())\n            }\n        }\n        #[allow(non_camel_case_types)]\n        impl<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*>\n            Drop for WorldCapture<$($prefix,)* $($privacy,)* $($suffix,)*>\n        {\n            fn drop(&mut self) {\n                $(if let Some(field) = self.$prefix.as_mut() { field.release(); })*\n                $(if let Some(field) = self.$privacy.as_mut() { field.release(); })*\n                $(if let Some(field) = self.$suffix.as_mut() { field.release(); })*\n            }\n        }\n    };\n}"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "macro",
+          "symbol": "capture_world_fields",
+          "required_tokens": [
+            "macro_rules! capture_world_fields {\n    ($original:ident, $admit:ident;\n        [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {{\n        let mode = $original.parameters.mode();\n        $(check_mode!($original, mode, $prefix);)*\n        $(check_mode!($original, mode, $privacy);)*\n        $(check_mode!($original, mode, $suffix);)*\n        // No wrapper/vector/delta allocation or value copy precedes this call.\n        let admission = $admit(&$original).map_err(CaptureError::Admission)?;\n        // These payloads and their admission outlive the capture aggregate on\n        // unwind: release every original writer before either can be destroyed.\n        let mut extras = None;\n        let mut pending = WorldCapture {\n            $($prefix: None,)* $($privacy: None,)* $($suffix: None,)*\n        };\n        fill_world_capture(|| {\n            // Inert moves only after extraction. The closure borrows both\n            // original owners; its transfer temporaries leave before capture.\n            let WorldBlockFields {\n                dataspace_catalog,\n                $($prefix,)* $($privacy,)* $($suffix,)*\n                external_event_buf,\n            } = $original.fields.take().expect(\"original World block fields\");\n            $(pending.$prefix = Some($prefix.into_capture());)*\n            $(pending.$privacy = Some($privacy.into_capture());)*\n            $(pending.$suffix = Some($suffix.into_capture());)*\n            extras = Some((dataspace_catalog, external_event_buf));\n        });\n        pending.capture().map_err(widen_error)?;\n        // All sibling writers are now free. Original notifications can be\n        // retired while materializing the admitted journal wrappers.\n        const FIELD_COUNT: usize = [\n            $(stringify!($prefix),)* $(stringify!($privacy),)* $(stringify!($suffix),)*\n        ].len();\n        let fields = finish_world_capture(|| {\n            let mut fields: Vec<Box<dyn RetainedWorldField>> = Vec::with_capacity(FIELD_COUNT);\n            $(retain_field!(fields, pending, $prefix);)*\n            $(retain_field!(fields, pending, $privacy);)*\n            $(retain_field!(fields, pending, $suffix);)*\n            fields\n        });\n        let (dataspace_catalog, external_event_buf) = extras.take().expect(\"original World extras\");\n        Ok(DetachedWorld { mode, fields, dataspace_catalog, external_event_buf, admission })\n    }};\n}"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "macro",
+          "symbol": "retain_field",
+          "required_tokens": [
+            "macro_rules! retain_field {\n    ($fields:ident, $pending:ident, $field:ident) => {\n        $fields.push(Box::new(\n            $pending\n                .$field\n                .take()\n                .expect(\"original World capture slot\")\n                .retain(stringify!($field), |target: &World| &target.$field),\n        ));\n    };\n}"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "fn",
+          "symbol": "fill_world_capture",
+          "required_tokens": [
+            "fn fill_world_capture(fill: impl FnOnce()) {\n    fill()\n}"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "fn",
+          "symbol": "finish_world_capture",
+          "required_tokens": [
+            "fn finish_world_capture<R>(finish: impl FnOnce() -> R) -> R {\n    finish()\n}"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_journals.rs",
+          "kind": "method",
+          "symbol": "WorldBlock::try_detach_journals",
+          "required_tokens": [
+            "    pub(in crate::state) fn try_detach_journals<Admission, E>(\n        mut self,\n        admit: impl FnOnce(&Self) -> Result<Admission, E>,\n    ) -> Result<DetachedWorld<Admission>, CaptureError<E>> {\n        with_world_overlay_fields!(capture_world_fields, self, admit)\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_capture.rs",
+          "kind": "struct",
+          "symbol": "SetBlockCapture",
+          "required_tokens": [
+            "pub(crate) struct SetBlockCapture<'set, Admission> {\n    phase: CapturePhase<'set, Admission>,\n    started: bool,\n    // Last: retained payloads precede the original release notifications.\n    cleanup: SetCaptureCleanup,\n}"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_capture.rs",
+          "kind": "method",
+          "symbol": "SetCaptureCleanup::default",
+          "required_tokens": [
+            "    fn default() -> Self {\n        Self(std::array::from_fn(|_| None))\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_capture.rs",
+          "kind": "method",
+          "symbol": "SetCaptureCleanup::drop",
+          "required_tokens": [
+            "    fn drop(&mut self) {\n        for cleanup in &mut self.0 {\n            drop(cleanup.take());\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_capture.rs",
+          "kind": "enum",
+          "symbol": "CapturePhase",
+          "required_tokens": [
+            "enum CapturePhase<'set, Admission> {\n    Empty,\n    Attached(SetBlock<'set>),\n    Capturing(CapturingSet<'set, Admission>),\n    Captured(DetachedSet<Admission>),\n}"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_capture.rs",
+          "kind": "macro",
+          "symbol": "capture_fields",
+          "required_tokens": [
+            "macro_rules! capture_fields {\n    ($($field:ident: ($key:ty, $value:ty)),+ $(,)?) => {\n        struct CapturingSet<'set, Admission> {\n            $($field: Option<mv::storage::BlockCaptureSlot<'set, $key, $value, ()>>,)+\n            admission: Option<Admission>,\n        }\n\n        impl<'set, Admission> CapturingSet<'set, Admission> {\n            fn new(original: SetBlock<'set>, admission: Admission) -> Self {\n                // Only infallible, inert owner moves occur across this extraction.\n                let SetBlockFields { $($field,)+ } = original.into_fields();\n                Self { $($field: Some($field.capture_slot()),)+ admission: Some(admission) }\n            }\n\n            fn capture(&mut self) {\n                $(match self.$field.as_mut().expect(\"original trigger capture slot\")\n                    .try_capture(|_| Ok::<(), core::convert::Infallible>(() )) {\n                    Ok(()) => {},\n                    Err(impossible) => match impossible {},\n                })+\n            }\n\n            fn release(&mut self) {\n                $(if let Some(field) = self.$field.as_mut() { field.release(); })+\n            }\n\n            fn finish(mut self, mode: mv::BlockMode) -> (DetachedSet<Admission>, SetCaptureCleanup) {\n                // All native capture calls completed before any journal transfer.\n                $(let $field = self.$field.take().expect(\"original trigger capture slot\").into_detached();)+\n                let cleanup = SetCaptureCleanup([$(Some($field.1),)+]);\n                let journal = DetachedSet {\n                    mode,\n                    $($field: $field.0,)+\n                    admission: self.admission.take().expect(\"original trigger admission\"),\n                };\n                (journal, cleanup)\n            }\n        }\n\n        impl<Admission> Drop for CapturingSet<'_, Admission> {\n            fn drop(&mut self) { self.release(); }\n        }\n    };\n}"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_capture.rs",
+          "kind": "method",
+          "symbol": "SetBlock::capture_slot",
+          "required_tokens": [
+            "    pub(crate) fn capture_slot<Admission>(self) -> SetBlockCapture<'set, Admission> {\n        SetBlockCapture {\n            phase: CapturePhase::Attached(self),\n            started: false,\n            cleanup: SetCaptureCleanup::default(),\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_capture.rs",
+          "kind": "method",
+          "symbol": "SetBlockCapture::try_capture",
+          "required_tokens": [
+            "    pub(crate) fn try_capture<E>(\n        &mut self,\n        admit: impl FnOnce(&SetBlock<'set>) -> Result<Admission, E>,\n    ) -> Result<(), DetachError<E>> {\n        assert!(!self.started, \"original trigger capture is one-shot\");\n        self.started = true;\n        let CapturePhase::Attached(original) = &self.phase else {\n            panic!(\"original attached trigger capture\");\n        };\n        let mode = original.capture_mode().map_err(|error| match error {\n            DetachError::InconsistentMode {\n                field,\n                expected,\n                actual,\n            } => DetachError::InconsistentMode {\n                field,\n                expected,\n                actual,\n            },\n            DetachError::Admission(impossible) => match impossible {},\n        })?;\n        let admission = admit(original).map_err(DetachError::Admission)?;\n        let CapturePhase::Attached(original) =\n            std::mem::replace(&mut self.phase, CapturePhase::Empty)\n        else {\n            unreachable!(\"original checked trigger block\");\n        };\n        self.phase = CapturePhase::Capturing(CapturingSet::new(original, admission));\n        let CapturePhase::Capturing(pending) = &mut self.phase else {\n            unreachable!()\n        };\n        pending.capture();\n        let CapturePhase::Capturing(pending) =\n            std::mem::replace(&mut self.phase, CapturePhase::Empty)\n        else {\n            unreachable!(\"original completed trigger capture\");\n        };\n        let (journal, cleanup) = pending.finish(mode);\n        self.phase = CapturePhase::Captured(journal);\n        self.cleanup = cleanup;\n        Ok(())\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_capture.rs",
+          "kind": "method",
+          "symbol": "SetBlockCapture::release",
+          "required_tokens": [
+            "    pub(crate) fn release(&mut self) {\n        self.started = true;\n        match &mut self.phase {\n            CapturePhase::Attached(original) => original.release_writers(),\n            CapturePhase::Capturing(pending) => pending.release(),\n            CapturePhase::Captured(_) | CapturePhase::Empty => {}\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_capture.rs",
+          "kind": "method",
+          "symbol": "SetBlockCapture::into_detached",
+          "required_tokens": [
+            "    pub(crate) fn into_detached(mut self) -> (DetachedSet<Admission>, SetCaptureCleanup) {\n        match std::mem::replace(&mut self.phase, CapturePhase::Empty) {\n            CapturePhase::Captured(journal) => (journal, std::mem::take(&mut self.cleanup)),\n            original => {\n                self.phase = original;\n                panic!(\"original trigger capture did not complete\");\n            }\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_capture.rs",
+          "kind": "method",
+          "symbol": "SetBlockCapture::drop",
+          "required_tokens": [
+            "    fn drop(&mut self) {\n        self.release();\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_detachment.rs",
+          "kind": "method",
+          "symbol": "SetBlock::try_detach",
+          "required_tokens": [
+            "    pub(crate) fn try_detach<Admission, E>(\n        self,\n        admit: impl FnOnce(&Self) -> Result<Admission, E>,\n    ) -> Result<DetachedSet<Admission>, DetachError<E>> {\n        let mut pending = self.capture_slot();\n        pending.try_capture(admit)?;\n        let (journal, cleanup) = pending.into_detached();\n        drop(cleanup);\n        Ok(journal)\n    }"
           ]
         }
       ]

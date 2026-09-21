@@ -3895,7 +3895,17 @@ def validate_mv_test_registration(root: Path) -> None:
             pattern = r'^#\[path = "' + re.escape(child) + r'"\]\s*\nmod ' + re.escape(name) + r';'
             matches = [match for match in re.finditer(pattern, text, re.MULTILINE)
                        if masked[match.start():match.start() + 2] == "#["]
-            if len(matches) != 1:
+            declarations = list(re.finditer(r'^mod ' + re.escape(name) + r';$', masked, re.MULTILINE))
+            if not matches and child == name + ".rs":
+                # Rust's default sibling path is exact too. Inspect the complete
+                # attribute prefix so a foreign #[path] cannot masquerade as it.
+                for declaration in declarations:
+                    prefix = masked[:declaration.start()]
+                    boundary = max(prefix.rfind(";"), prefix.rfind("}")) + 1
+                    if (prefix.count("{") == prefix.count("}")
+                            and prefix[boundary:].strip() == "#[cfg(test)]"):
+                        matches.append(declaration)
+            if len(matches) != 1 or len(declarations) != 1:
                 raise ValueError(f"registered MV module edge differs: {parent} -> {child}")
         lib = source("lib.rs")[1]
         for module in ("allocation", "cell", "storage", "publication"):
