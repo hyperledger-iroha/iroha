@@ -16,6 +16,9 @@ use std::{
 #[path = "set_publication_tests.rs"]
 mod publication_tests;
 
+#[path = "set_acquisition_tests.rs"]
+mod acquisition_tests;
+
 fn id(value: &str) -> TriggerId {
     value.parse().unwrap()
 }

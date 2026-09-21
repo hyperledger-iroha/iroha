@@ -785,3 +785,111 @@ fn release_batch_records_actual_physical_poison_without_later_cleanup_poison() {
         assert!(poll(&mut wait, &wake).is_ready());
     }
 }
+
+#[test]
+fn retained_phase_transfer_and_refusal_keep_original_source_without_early_wake() {
+    let source = ReleaseNotification::default();
+    let foreign = ReleaseNotification::default();
+    let lock = Mutex::new(17);
+    let mut batch = source.deferred_batch();
+    let mut foreign_batch = foreign.deferred_batch();
+    let wake = Arc::new(WakeCount::default());
+    let mut wait = source.observe().wait_for_release();
+    assert!(poll(&mut wait, &wake).is_pending());
+    let guard = source.poisoning_guard(lock.lock().unwrap());
+    let guard = guard
+        .try_map_preserving_release_into(
+            &mut foreign_batch,
+            |_| -> Result<(), (_, ())> { panic!("foreign source must not invoke conversion") },
+            || lock.is_poisoned(),
+        )
+        .err()
+        .expect("return the same foreign-batch guard");
+    let (guard, error) = guard
+        .try_map_preserving_release_into(
+            &mut batch,
+            |guard| Err::<(), _>((guard, "refused")),
+            || lock.is_poisoned(),
+        )
+        .unwrap_or_else(|_| panic!("original source"))
+        .err()
+        .expect("normal refusal retains actual guard");
+    assert_eq!(error, "refused");
+    assert!(lock.try_lock().is_err());
+    assert_eq!(wake.0.load(Ordering::SeqCst), 0);
+    let guard = guard
+        .try_map_preserving_release_into(
+            &mut batch,
+            |guard| Ok::<_, (_, ())>((guard, 41)),
+            || lock.is_poisoned(),
+        )
+        .unwrap_or_else(|_| panic!("original source"))
+        .unwrap_or_else(|_| panic!("successful phase transfer"));
+    assert_eq!(*guard.0, 17);
+    assert_eq!(guard.1, 41);
+    guard
+        .try_release_into_observed(&mut batch, drop, || lock.is_poisoned())
+        .unwrap_or_else(|_| panic!("original release source"));
+    assert!(lock.try_lock().is_ok());
+    assert!(poll(&mut wait, &wake).is_pending());
+    drop(foreign_batch);
+    assert_eq!(wake.0.load(Ordering::SeqCst), 0);
+    drop(batch);
+    assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+    assert!(poll(&mut wait, &wake).is_ready());
+}
+
+#[test]
+fn retained_phase_unwind_records_actual_release_without_running_waiter() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let source = ReleaseNotification::default();
+    let lock = Mutex::new(());
+    let mut batch = source.deferred_batch();
+    let observation = source.observe();
+    let wake = Arc::new(WakeCount::default());
+    let mut wait = observation.clone().wait_for_release();
+    assert!(poll(&mut wait, &wake).is_pending());
+    let guard = source.poisoning_guard(lock.lock().unwrap());
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let _result = guard.try_map_preserving_release_into(
+            &mut batch,
+            |guard| -> Result<(), (_, ())> {
+                let _original = guard;
+                panic!("constructor panic")
+            },
+            || lock.is_poisoned(),
+        );
+    }));
+    assert!(result.is_err());
+    assert!(matches!(
+        lock.try_lock(),
+        Err(std::sync::TryLockError::Poisoned(_))
+    ));
+    assert_eq!(wake.0.load(Ordering::SeqCst), 0);
+    assert!(poll(&mut wait, &wake).is_pending());
+    drop(batch);
+    assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+    assert!(observation.is_poisoned());
+    assert!(poll(&mut wait, &wake).is_ready());
+}
+
+#[test]
+fn retained_observed_release_preserves_poison_predating_normal_cleanup() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let source = ReleaseNotification::default();
+    let lock = Mutex::new(());
+    assert!(catch_unwind(AssertUnwindSafe(|| {
+        let _guard = lock.lock().unwrap();
+        panic!("preexisting native poison");
+    }))
+    .is_err());
+    let mut batch = source.deferred_batch();
+    let observation = source.observe();
+    let guard = source.poisoning_guard(lock.lock().unwrap_or_else(|p| p.into_inner()));
+    guard
+        .try_release_into_observed(&mut batch, drop, || lock.is_poisoned())
+        .unwrap_or_else(|_| panic!("original source"));
+    assert!(!observation.is_poisoned());
+    drop(batch);
+    assert!(observation.is_poisoned());
+}

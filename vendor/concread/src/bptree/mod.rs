@@ -475,6 +475,31 @@ where
             inner: self.inner.detach(),
         }
     }
+
+    /// Unlock an abandoned cursor while retaining its exact allocation cleanup.
+    ///
+    /// This accepts a cursor whose edit unwound. Unlike detachment, the returned
+    /// opaque owner has no read, mutation, attachment or publication capability.
+    /// Keep it until every enclosing writer has released, then drop to reclaim
+    /// the original private nodes, cursor, shells and charges.
+    pub fn abort_retaining(self) -> BptreeMapAbandonment<K, V, M> {
+        BptreeMapAbandonment {
+            _inner: self.inner.detach(),
+        }
+    }
+}
+
+/// Cleanup-only custody of an abandoned original private map generation.
+/// It contains no physical writer and grants no way to reuse a failed cursor.
+#[must_use = "retain cleanup until every enclosing physical writer has released"]
+pub struct BptreeMapAbandonment<K, V, M = Untracked>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    _inner:
+        LinCowCellOwned<SuperBlock<K, V, M>, CursorRead<K, V, M>, CursorWrite<K, V, M>, M::Charge>,
 }
 
 /// An original map successor checked under both physical publication locks.
@@ -1528,3 +1553,6 @@ mod tests {
 
 #[cfg(test)]
 mod acquisition_tests;
+
+#[cfg(test)]
+mod abandonment_tests;

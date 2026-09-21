@@ -27,6 +27,30 @@ pub enum BlockMode {
     /// First undo the published tip, then stage a replacement at that cut.
     Replace,
 }
+/// Caller-owned construction of one original block's physical owners.
+///
+/// An aggregate creates every slot before initialization. On success or unwind
+/// it releases every slot before allowing any slot's payload or notification to
+/// drop. Initialization is one-shot; a caught panic permits abandonment only.
+pub trait BlockAcquisition: Sized {
+    /// Fully initialized block using the same original physical owners.
+    type Block: BlockRetirement;
+    /// Acquire and initialize this slot, retaining partial custody on unwind.
+    fn initialize(&mut self, mode: BlockMode);
+    /// Unlock all physical owners in place, retaining cleanup until slot drop.
+    fn release(&mut self);
+    /// Transfer a successfully initialized slot without cloning or allocation.
+    fn into_block(self) -> Self::Block;
+}
+
+/// Terminal abandonment of a completed original block inside an aggregate.
+pub trait BlockRetirement {
+    /// Unlock in place, retaining every original private owner and notification.
+    /// This is idempotent. The block cannot be read, edited, committed or detached
+    /// afterward; only its eventual destruction is permitted.
+    fn release_writers(&mut self);
+}
+
 /// MVCC cell primitives (versioned slots and helpers).
 pub mod cell;
 /// Norito JSON helpers for MV types.

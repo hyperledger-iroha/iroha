@@ -123,7 +123,7 @@ impl SetBlock<'_> {
             DetachError::Admission(impossible) => match impossible {},
         })?;
         let admission = admit(&self).map_err(DetachError::Admission)?;
-        let Self {
+        let SetBlockFields {
             data_triggers,
             pipeline_triggers,
             time_triggers,
@@ -134,7 +134,7 @@ impl SetBlock<'_> {
             active_time_trigger_ids,
             active_by_call_trigger_ids,
             contracts,
-        } = self;
+        } = self.into_fields();
         // The outer admission already covers every store. No new semantic
         // admission or fallible decision is made between individual captures.
         Ok(DetachedSet {

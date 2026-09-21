@@ -30,8 +30,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1455 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1633 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1471 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1649 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -495,6 +495,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                  "crates/mv/src/cell.rs", "crates/mv/src/cell/charged_allocation_tests.rs",
                  "crates/mv/src/cell/publication_tests.rs",
                  "crates/mv/src/cell/fresh_pair_acquisition_tests.rs",
+                 "crates/mv/src/cell/aggregate_acquisition_tests.rs",
+                 "crates/mv/src/storage/aggregate_acquisition_tests.rs",
                  "crates/mv/src/storage.rs", "crates/mv/src/storage/publication_tests.rs",
                  "crates/mv/src/storage/detached_tests.rs", "crates/mv/src/storage/touches.rs",
                  "crates/mv/src/storage/touches_tests.rs", "crates/mv/src/storage/admitted_tests.rs",
@@ -532,6 +534,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "storage::publication_tests::": 15,
             "cell::publication_tests::": 1,
             "cell::fresh_pair_acquisition_tests::": 9,
+            "cell::aggregate_acquisition_tests::": 3,
+            "storage::aggregate_acquisition_tests::": 2,
             "storage::detached_tests::": 10,
             "storage::admitted_tests::": 18,
             "storage::touches::tests::": 6,
@@ -545,10 +549,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 82)
+                self.assertEqual(len(library), 87)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 82), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 71), ("concread", 147)):
+                for harness, count in (("mv", 87), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 71), ("concread", 151)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -640,7 +644,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "mv-admitted-map": [*admitted, *("storage_custody::" + name for name in storage),
                                 *("storage_custody::capture::" + name for name in capture)],
             "mv-map": mapped,
-            "concread": [*("bptree::acquisition_tests::" + name for name in names((root / "vendor/concread/src/bptree/acquisition_tests.rs").read_text())),
+            "concread": [*("ebrcell::acquisition_tests::" + name for name in names((root / "vendor/concread/src/ebrcell/acquisition_tests.rs").read_text())),
+                         *("bptree::acquisition_tests::" + name for name in names((root / "vendor/concread/src/bptree/acquisition_tests.rs").read_text())),
                          *("release::tests::" + name for name in names((root / "vendor/concread/src/release_tests.rs").read_text())),
                          *("internals::lincowcell::identity_preparation_tests::" + name for name in names((root / "vendor/concread/src/internals/lincowcell/mod.rs").read_text()) if name.startswith("reader_")),
                          *("bptree::admission::tests::" + name for name in names(ordinary)),
@@ -654,6 +659,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                          *("bptree::admission::pair_admission::tests::deletion::" + name for name in deletion),
                          *("bptree::admission::pair_admission::tests::deletion::payload::" + name for name in deletion_payload)],
         }
+        self.assertIn('#[path = "acquisition_tests.rs"]\nmod acquisition_tests;',
+                      (root / "vendor/concread/src/ebrcell/mod.rs").read_text())
         self.assertEqual((len(admitted), len(storage), len(mapped), len(names(ordinary)), len(names(writer)), len(checkpoint), len(paired), len(borrowed), len(clear)), (36, 30, 24, 45, 6, 9, 9, 7, 7))
         self.assertIn('#[path = "admitted_map_custody/storage.rs"]\nmod storage_custody;',
                       (root / "crates/mv/tests/admitted_map_custody.rs").read_text())
@@ -2116,7 +2123,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             requested = tuple(harness + "=" + test for harness in gate.MV_OWNERSHIP_HARNESSES
                               for _, tests in selected[harness] for test in tests)
-            self.assertEqual(len(requested), 329)
+            self.assertEqual(len(requested), 338)
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
             with self.subTest(scope=scope), \
@@ -2140,7 +2147,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
-            self.assertIn("329 focused regressions", output.getvalue())
+            self.assertIn("338 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 

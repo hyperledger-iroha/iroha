@@ -8,8 +8,11 @@
 #[path = "invocation_identity.rs"]
 pub(crate) mod invocation_identity;
 
+#[path = "set_acquisition.rs"]
+mod acquisition;
 #[path = "set_detachment.rs"]
 mod detachment;
+pub(crate) use acquisition::SetBlockAcquisition;
 pub(crate) use detachment::{
     AbortedSet, DetachError, DetachedSet, PreparedSet, PublishedSet, SetPublicationError,
 };
@@ -933,8 +936,26 @@ impl FastJsonWrite for Set {
         out.push('}');
     }
 }
-/// Trigger set for block's aggregated changes
+/// Original trigger journals with one aggregate writer-release boundary.
 pub struct SetBlock<'set> {
+    fields: Option<SetBlockFields<'set>>,
+}
+
+impl<'set> std::ops::Deref for SetBlock<'set> {
+    type Target = SetBlockFields<'set>;
+    fn deref(&self) -> &Self::Target {
+        self.fields.as_ref().expect("original trigger block fields")
+    }
+}
+
+impl std::ops::DerefMut for SetBlock<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.fields.as_mut().expect("original trigger block fields")
+    }
+}
+
+/// Original typed trigger fields retained until aggregate writer release.
+pub struct SetBlockFields<'set> {
     /// Triggers using [`DataEventFilter`]
     data_triggers: StorageBlock<'set, TriggerId, LoadedAction<DataEventFilter>>,
     /// Triggers using [`PipelineEventFilterBox`]
@@ -1163,7 +1184,7 @@ mod merge_write_set_tests {
     fn encoder_mentions_every_trigger_block_store() {
         let source = include_str!("set.rs");
         let struct_start = source
-            .find("pub struct SetBlock<'set> {")
+            .find("pub struct SetBlockFields<'set> {")
             .expect("SetBlock declaration must remain discoverable");
         let struct_tail = &source[struct_start..];
         let struct_end = struct_tail
@@ -1944,35 +1965,23 @@ impl_set_ro! {
     SetBlock<'_>, SetTransaction<'_>, SetView<'_>
 }
 impl Set {
-    /// Create struct to apply block's changes
-    pub fn block(&self) -> SetBlock<'_> {
-        SetBlock {
-            data_triggers: self.data_triggers.block(),
-            pipeline_triggers: self.pipeline_triggers.block(),
-            time_triggers: self.time_triggers.block(),
-            by_call_triggers: self.by_call_triggers.block(),
-            ids: self.ids.block(),
-            active_data_trigger_ids: self.active_data_trigger_ids.block(),
-            active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.block(),
-            active_time_trigger_ids: self.active_time_trigger_ids.block(),
-            active_by_call_trigger_ids: self.active_by_call_trigger_ids.block(),
-            contracts: self.contracts.block(),
-        }
+    /// Retain inert original slots before acquiring any trigger writer.
+    pub(crate) fn block_acquisition(&self) -> SetBlockAcquisition<'_> {
+        SetBlockAcquisition::new(self)
     }
-    /// Create struct to apply block's changes while reverting changes made in the latest block
+    /// Create struct to apply block's changes.
+    pub fn block(&self) -> SetBlock<'_> {
+        use mv::BlockAcquisition as _;
+        let mut pending = self.block_acquisition();
+        pending.initialize(mv::BlockMode::Ordinary);
+        pending.into_block()
+    }
+    /// Stage a replacement after undoing the latest trigger changes.
     pub fn block_and_revert(&self) -> SetBlock<'_> {
-        SetBlock {
-            data_triggers: self.data_triggers.block_and_revert(),
-            pipeline_triggers: self.pipeline_triggers.block_and_revert(),
-            time_triggers: self.time_triggers.block_and_revert(),
-            by_call_triggers: self.by_call_triggers.block_and_revert(),
-            ids: self.ids.block_and_revert(),
-            active_data_trigger_ids: self.active_data_trigger_ids.block_and_revert(),
-            active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.block_and_revert(),
-            active_time_trigger_ids: self.active_time_trigger_ids.block_and_revert(),
-            active_by_call_trigger_ids: self.active_by_call_trigger_ids.block_and_revert(),
-            contracts: self.contracts.block_and_revert(),
-        }
+        use mv::BlockAcquisition as _;
+        let mut pending = self.block_acquisition();
+        pending.initialize(mv::BlockMode::Replace);
+        pending.into_block()
     }
     /// Create point in time view of the [`Set`]
     pub fn view(&self) -> SetView<'_> {
@@ -2004,36 +2013,38 @@ impl SetBlock<'_> {
     /// Create struct to apply transaction's changes
     pub fn transaction(&mut self) -> SetTransaction<'_> {
         let data_trigger_index = DataTriggerIndex::from_triggers(&self.data_triggers);
+        let fields = self.fields.as_mut().expect("original trigger block fields");
         SetTransaction {
             next_registration_generation: 0,
             registration_generations: BTreeMap::new(),
             data_trigger_eligibility_generations: BTreeMap::new(),
             data_trigger_index,
-            data_triggers: self.data_triggers.transaction(),
-            pipeline_triggers: self.pipeline_triggers.transaction(),
-            time_triggers: self.time_triggers.transaction(),
-            by_call_triggers: self.by_call_triggers.transaction(),
-            ids: self.ids.transaction(),
-            active_data_trigger_ids: self.active_data_trigger_ids.transaction(),
-            active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.transaction(),
-            active_time_trigger_ids: self.active_time_trigger_ids.transaction(),
-            active_by_call_trigger_ids: self.active_by_call_trigger_ids.transaction(),
-            contracts: self.contracts.transaction(),
+            data_triggers: fields.data_triggers.transaction(),
+            pipeline_triggers: fields.pipeline_triggers.transaction(),
+            time_triggers: fields.time_triggers.transaction(),
+            by_call_triggers: fields.by_call_triggers.transaction(),
+            ids: fields.ids.transaction(),
+            active_data_trigger_ids: fields.active_data_trigger_ids.transaction(),
+            active_pipeline_trigger_ids: fields.active_pipeline_trigger_ids.transaction(),
+            active_time_trigger_ids: fields.active_time_trigger_ids.transaction(),
+            active_by_call_trigger_ids: fields.active_by_call_trigger_ids.transaction(),
+            contracts: fields.contracts.transaction(),
         }
     }
     /// Commit block's changes
     pub fn commit(self) {
+        let fields = self.into_fields();
         // NOTE: commit in reverse order
-        self.contracts.commit();
-        self.active_by_call_trigger_ids.commit();
-        self.active_time_trigger_ids.commit();
-        self.active_pipeline_trigger_ids.commit();
-        self.active_data_trigger_ids.commit();
-        self.ids.commit();
-        self.by_call_triggers.commit();
-        self.time_triggers.commit();
-        self.pipeline_triggers.commit();
-        self.data_triggers.commit();
+        fields.contracts.commit();
+        fields.active_by_call_trigger_ids.commit();
+        fields.active_time_trigger_ids.commit();
+        fields.active_pipeline_trigger_ids.commit();
+        fields.active_data_trigger_ids.commit();
+        fields.ids.commit();
+        fields.by_call_triggers.commit();
+        fields.time_triggers.commit();
+        fields.pipeline_triggers.commit();
+        fields.data_triggers.commit();
     }
     /// Returns a bounded iterator of trigger ids matching a given time event.
     pub fn match_time_event(

@@ -13,6 +13,7 @@ mod physical;
 use physical::PreparedCellWriters;
 #[path = "cell/acquisition.rs"]
 mod acquisition;
+pub use acquisition::BlockAcquisitionSlot;
 use acquisition::{CellWriters, OriginalCellWriters};
 pub use physical::PublishedPublication;
 /// Multi-version storage for a single value.
@@ -76,6 +77,11 @@ impl<V: Value> Cell<V> {
     /// Acquire before enclosing publication fences that another block can need.
     pub fn current_replacement(&self) -> CurrentReplacement<'_, V> {
         self.current_replacement_charged(CellAllocationCharges::untracked())
+    }
+
+    /// Create an inert acquisition slot without taking a lock or cloning payloads.
+    pub fn block_acquisition(&self) -> BlockAcquisitionSlot<'_, V> {
+        self.block_acquisition_charged(CellAllocationCharges::untracked())
     }
 
     /// Create an untracked block to aggregate updates.
@@ -160,40 +166,30 @@ impl<V: Value, Charge: Send + Sync + 'static> Cell<V, Charge> {
         }
     }
 
-    /// Create a block using a prepaid current/undo pair before either clone.
-    /// Preimage copies and later payload growth require separate admission.
-    pub fn block_charged(&self, charges: CellAllocationCharges<Charge>) -> Block<'_, V, Charge> {
-        let mut writers = self.acquire_charged_writers(charges);
-        let predecessor = self.publication.capture();
-        *writers.as_mut().revert.get_mut() = None;
-        Block::new(
-            writers,
-            false,
-            &self.publication,
-            predecessor,
-            BlockMode::Ordinary,
-        )
+    /// Retain both original charges in an inert caller-owned acquisition slot.
+    /// No mutex, payload clone or generation allocation occurs until initialize.
+    pub fn block_acquisition_charged(
+        &self,
+        charges: CellAllocationCharges<Charge>,
+    ) -> BlockAcquisitionSlot<'_, V, Charge> {
+        BlockAcquisitionSlot::new(self, charges)
     }
 
-    /// Undo the published tip before staging a replacement with prepaid owners.
-    /// The original undo/current semantics and writer order remain unchanged.
+    /// Create a block using the same caller-owned acquisition kernel.
+    pub fn block_charged(&self, charges: CellAllocationCharges<Charge>) -> Block<'_, V, Charge> {
+        let mut slot = self.block_acquisition_charged(charges);
+        crate::BlockAcquisition::initialize(&mut slot, BlockMode::Ordinary);
+        crate::BlockAcquisition::into_block(slot)
+    }
+
+    /// Undo the published tip using the same original acquisition kernel.
     pub fn block_and_revert_charged(
         &self,
         charges: CellAllocationCharges<Charge>,
     ) -> Block<'_, V, Charge> {
-        let mut writers = self.acquire_charged_writers(charges);
-        let predecessor = self.publication.capture();
-        let OriginalCellWriters { revert, blocks } = writers.as_mut();
-        if let Some(revert) = core::mem::take(revert.get_mut()) {
-            *blocks.get_mut() = revert;
-        }
-        Block::new(
-            writers,
-            true,
-            &self.publication,
-            predecessor,
-            BlockMode::Replace,
-        )
+        let mut slot = self.block_acquisition_charged(charges);
+        crate::BlockAcquisition::initialize(&mut slot, BlockMode::Replace);
+        crate::BlockAcquisition::into_block(slot)
     }
 
     fn acquire_charged_writers(
@@ -563,7 +559,7 @@ mod block {
     use std::ops::{Deref, DerefMut};
     /// Batched update to the storage that can be reverted later
     pub struct Block<'storage, V: Value, Charge: Send + Sync + 'static = Untracked> {
-        writers: CellWriters<'storage, V, Charge>,
+        pub(super) writers: CellWriters<'storage, V, Charge>,
         pub(super) dirty: bool,
         pub(super) publication: &'storage Publication,
         pub(super) predecessor: CapturedPublication,
@@ -978,3 +974,13 @@ mod charged_allocation_tests;
 #[cfg(test)]
 #[path = "cell/fresh_pair_acquisition_tests.rs"]
 mod fresh_pair_acquisition_tests;
+
+impl<V: Value, Charge: Send + Sync + 'static> crate::BlockRetirement for Block<'_, V, Charge> {
+    fn release_writers(&mut self) {
+        self.writers.release();
+    }
+}
+
+#[cfg(test)]
+#[path = "cell/aggregate_acquisition_tests.rs"]
+mod aggregate_acquisition_tests;

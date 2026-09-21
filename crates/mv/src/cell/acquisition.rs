@@ -1,23 +1,245 @@
-//! Original EBR pair custody from raw acquisition through block abandonment.
+//! Caller-owned EBR acquisition and exact retirement through enclosing aggregates.
 
 use super::*;
-use concread::ebrcell::{EbrCellWriterAcquisition, EbrCellWriterAdmissionError};
+use concread::{
+    ebrcell::{EbrCellWriterAcquisition, EbrCellWriterAdmissionError},
+    release::{DeferredRelease, DeferredReleaseBatch},
+};
 
-struct AcquiringWriters<'a, V: Value, C: Send + Sync + 'static> {
-    revert: Option<EbrCellWriterAcquisition<'a, Option<V>, C>>,
-    blocks: Option<EbrCellWriterAcquisition<'a, V, C>>,
+/// Inert original cell slot, initialized only after its aggregate owns every slot.
+/// A caught initialization panic allows only release and destruction, not retry.
+#[must_use = "initialize or abandon the original acquisition slot"]
+pub struct BlockAcquisitionSlot<'a, V: Value, C: Send + Sync + 'static = Untracked> {
+    target: &'a Cell<V, C>,
+    revert: Option<ReleaseGuard<'a, EbrCellWriterAcquisition<'a, Option<V>, C>>>,
+    blocks: Option<ReleaseGuard<'a, EbrCellWriterAcquisition<'a, V, C>>>,
     undo_value: Option<EbrCellOwned<Option<V>, C>>,
     current_value: Option<EbrCellOwned<V, C>>,
     undo_charge: Option<C>,
     current_charge: Option<C>,
+    writers: Option<CellWriters<'a, V, C>>,
+    block: Option<Block<'a, V, C>>,
+    started: bool,
+    complete: bool,
+    // Last: original payload/charge cleanup precedes original notification.
+    undo_release: DeferredReleaseBatch,
+    current_release: DeferredReleaseBatch,
 }
 
-impl<V: Value, C: Send + Sync + 'static> Drop for AcquiringWriters<'_, V, C> {
+impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
+    pub(super) fn new(target: &'a Cell<V, C>, charges: CellAllocationCharges<C>) -> Self {
+        let CellAllocationCharges { current, undo } = charges;
+        Self {
+            target,
+            revert: None,
+            blocks: None,
+            undo_value: None,
+            current_value: None,
+            undo_charge: Some(undo),
+            current_charge: Some(current),
+            writers: None,
+            block: None,
+            started: false,
+            complete: false,
+            undo_release: target.revert_released.deferred_batch(),
+            current_release: target.blocks_released.deferred_batch(),
+        }
+    }
+
+    fn initialize_writers(&mut self) {
+        assert!(!self.started, "original cell acquisition is one-shot");
+        self.started = true;
+        let target = self.target;
+        self.revert = Some(
+            target
+                .revert_released
+                .poisoning_guard(target.revert.acquire_writer()),
+        );
+        assert!(
+            !self.revert.as_ref().expect("original undo").is_poisoned(),
+            "original undo writer is poisoned",
+        );
+        self.blocks = Some(
+            target
+                .blocks_released
+                .poisoning_guard(target.blocks.acquire_writer()),
+        );
+        assert!(
+            !self
+                .blocks
+                .as_ref()
+                .expect("original current")
+                .is_poisoned(),
+            "original current writer is poisoned",
+        );
+        // The original slot owns both guards and both charges before either clone.
+        let undo = self.revert.take().expect("original undo");
+        let undo_value = &mut self.undo_value;
+        let undo_charge = &mut self.undo_charge;
+        let result = undo
+            .try_map_preserving_release_into(
+                &mut self.undo_release,
+                |undo| match undo.try_clone_charged(|_, _| {
+                    Ok::<_, std::convert::Infallible>(
+                        undo_charge.take().expect("original undo charge"),
+                    )
+                }) {
+                    Ok((undo, value)) => {
+                        *undo_value = Some(value);
+                        Ok(undo)
+                    }
+                    Err((undo, error)) => Err((undo, error)),
+                },
+                || target.revert.is_poisoned(),
+            )
+            .unwrap_or_else(|_| unreachable!("original undo release source"));
+        match result {
+            Ok(undo) => self.revert = Some(undo),
+            Err((undo, error)) => {
+                self.revert = Some(undo);
+                match error {
+                    EbrCellWriterAdmissionError::Poisoned => {
+                        panic!("original undo writer is poisoned")
+                    }
+                    EbrCellWriterAdmissionError::Refused(never) => match never {},
+                }
+            }
+        }
+        let current = self.blocks.take().expect("original current");
+        let current_value = &mut self.current_value;
+        let current_charge = &mut self.current_charge;
+        let result = current
+            .try_map_preserving_release_into(
+                &mut self.current_release,
+                |current| match current.try_clone_charged(|_, _| {
+                    Ok::<_, std::convert::Infallible>(
+                        current_charge.take().expect("original current charge"),
+                    )
+                }) {
+                    Ok((current, value)) => {
+                        *current_value = Some(value);
+                        Ok(current)
+                    }
+                    Err((current, error)) => Err((current, error)),
+                },
+                || target.blocks.is_poisoned(),
+            )
+            .unwrap_or_else(|_| unreachable!("original current release source"));
+        match result {
+            Ok(current) => self.blocks = Some(current),
+            Err((current, error)) => {
+                self.blocks = Some(current);
+                match error {
+                    EbrCellWriterAdmissionError::Poisoned => {
+                        panic!("original current writer is poisoned")
+                    }
+                    EbrCellWriterAdmissionError::Refused(never) => match never {},
+                }
+            }
+        }
+        // No new lock or user operation occurs during either attachment. Keep the
+        // original values in the caller slot if the native attachment refuses.
+        let undo = self.revert.take().expect("original undo");
+        let undo_value = &mut self.undo_value;
+        let undo = match undo
+            .try_map_preserving_release_into(
+                &mut self.undo_release,
+                |undo| match undo.try_write_owned(undo_value.take().expect("original undo value")) {
+                    Ok(writer) => Ok(writer),
+                    Err((undo, value)) => {
+                        *undo_value = Some(value);
+                        Err((undo, ()))
+                    }
+                },
+                || target.revert.is_poisoned(),
+            )
+            .unwrap_or_else(|_| unreachable!("original undo release source"))
+        {
+            Ok(writer) => writer,
+            Err((undo, ())) => {
+                self.revert = Some(undo);
+                panic!("original healthy undo stays acquired");
+            }
+        };
+        // Attachment cannot panic or refuse after the same exclusive healthy
+        // acquisitions above; no payload code runs between these two transfers.
+        let current = self.blocks.take().expect("original current");
+        let current_value = self.current_value.take().expect("original current value");
+        let current = current.map_preserving_release(|current| {
+            match current.try_write_owned(current_value) {
+                Ok(writer) => writer,
+                Err(_) => unreachable!("original healthy current stays acquired"),
+            }
+        });
+        self.writers = Some(CellWriters::new(target, undo, current));
+    }
+}
+
+impl<'a, V: Value, C: Send + Sync + 'static> crate::BlockAcquisition
+    for BlockAcquisitionSlot<'a, V, C>
+{
+    type Block = Block<'a, V, C>;
+
+    fn initialize(&mut self, mode: BlockMode) {
+        self.initialize_writers();
+        let predecessor = self.target.publication.capture();
+        self.block = Some(Block::new(
+            self.writers.take().expect("original initialized writers"),
+            mode == BlockMode::Replace,
+            &self.target.publication,
+            predecessor,
+            mode,
+        ));
+        let block = self.block.as_mut().expect("original block");
+        let OriginalCellWriters { revert, blocks } = block.writers.as_mut();
+        match mode {
+            BlockMode::Ordinary => *revert.get_mut() = None,
+            BlockMode::Replace => {
+                if let Some(value) = core::mem::take(revert.get_mut()) {
+                    *blocks.get_mut() = value;
+                }
+            }
+        }
+        self.complete = true;
+    }
+
+    fn release(&mut self) {
+        self.complete = false;
+        self.started = true;
+        if let Some(block) = &mut self.block {
+            crate::BlockRetirement::release_writers(block);
+        }
+        if let Some(writers) = &mut self.writers {
+            writers.release();
+        }
+        let target = self.target;
+        if let Some(current) = self.blocks.take() {
+            current
+                .try_release_into_observed(&mut self.current_release, drop, || {
+                    target.blocks.is_poisoned()
+                })
+                .unwrap_or_else(|_| unreachable!("original current release source"));
+        }
+        if let Some(undo) = self.revert.take() {
+            undo.try_release_into_observed(&mut self.undo_release, drop, || {
+                target.revert.is_poisoned()
+            })
+            .unwrap_or_else(|_| unreachable!("original undo release source"));
+        }
+    }
+
+    fn into_block(mut self) -> Self::Block {
+        assert!(
+            self.complete,
+            "original cell initialization did not complete"
+        );
+        self.block.take().expect("original completed cell block")
+    }
+}
+
+impl<V: Value, C: Send + Sync + 'static> Drop for BlockAcquisitionSlot<'_, V, C> {
     fn drop(&mut self) {
-        // Completed generations and unused reservations remain in this owner
-        // until both original physical locks have released, including unwind.
-        drop(self.blocks.take());
-        drop(self.revert.take());
+        crate::BlockAcquisition::release(self);
     }
 }
 
@@ -26,156 +248,99 @@ pub(super) struct OriginalCellWriters<'a, V: Value, C: Send + Sync + 'static> {
     pub(super) blocks: CellWriter<'a, V, C>,
 }
 
+enum CellWriterState<'a, V: Value, C: Send + Sync + 'static> {
+    Attached(OriginalCellWriters<'a, V, C>),
+    Released {
+        _undo: EbrCellOwned<Option<V>, C>,
+        _current: EbrCellOwned<V, C>,
+        _undo_release: DeferredRelease,
+        _current_release: DeferredRelease,
+    },
+}
+
 pub(super) struct CellWriters<'a, V: Value, C: Send + Sync + 'static> {
-    original: Option<OriginalCellWriters<'a, V, C>>,
+    state: Option<CellWriterState<'a, V, C>>,
     target: &'a Cell<V, C>,
 }
 
 impl<'a, V: Value, C: Send + Sync + 'static> CellWriters<'a, V, C> {
-    pub(super) fn acquire(target: &'a Cell<V, C>, charges: CellAllocationCharges<C>) -> Self {
-        let revert = target
-            .revert_released
-            .poisoning_guard(target.revert.acquire_writer());
-        // A terminal undo failure must not wait for an unrelated current lock.
-        // The two unused original charges remain outside the raw guard's drop.
-        if revert.is_poisoned() {
-            revert.release_with_observed_poison(drop, || target.revert.is_poisoned());
-            panic!("original undo writer is poisoned");
-        }
-        let blocks = target
-            .blocks_released
-            .poisoning_guard(target.blocks.acquire_writer());
-        let (revert, blocks) = revert
-            .try_map_pair_preserving_release(
-                blocks,
-                |revert, blocks| {
-                    let CellAllocationCharges { current, undo } = charges;
-                    let mut pending = AcquiringWriters {
-                        revert: Some(revert),
-                        blocks: Some(blocks),
-                        undo_value: None,
-                        current_value: None,
-                        undo_charge: Some(undo),
-                        current_charge: Some(current),
-                    };
-                    assert!(
-                        !pending
-                            .blocks
-                            .as_ref()
-                            .expect("original current")
-                            .is_poisoned(),
-                        "original current writer is poisoned",
-                    );
-                    let undo = pending.revert.take().expect("original undo");
-                    let (undo, value) = match undo.try_clone_charged(|_, _| {
-                        Ok::<_, std::convert::Infallible>(
-                            pending.undo_charge.take().expect("original undo charge"),
-                        )
-                    }) {
-                        Ok(owners) => owners,
-                        Err((original, EbrCellWriterAdmissionError::Poisoned)) => {
-                            pending.revert = Some(original);
-                            panic!("original undo writer is poisoned");
-                        }
-                        Err((_, EbrCellWriterAdmissionError::Refused(never))) => match never {},
-                    };
-                    pending.revert = Some(undo);
-                    pending.undo_value = Some(value);
-                    let current = pending.blocks.take().expect("original current");
-                    let (current, value) = match current.try_clone_charged(|_, _| {
-                        Ok::<_, std::convert::Infallible>(
-                            pending
-                                .current_charge
-                                .take()
-                                .expect("original current charge"),
-                        )
-                    }) {
-                        Ok(owners) => owners,
-                        Err((original, EbrCellWriterAdmissionError::Poisoned)) => {
-                            pending.blocks = Some(original);
-                            panic!("original current writer is poisoned");
-                        }
-                        Err((_, EbrCellWriterAdmissionError::Refused(never))) => match never {},
-                    };
-                    pending.blocks = Some(current);
-                    pending.current_value = Some(value);
-                    // These same guards excluded every intervening writer, so
-                    // attachment cannot newly fail after successful cloning.
-                    let undo = pending.revert.take().expect("original undo");
-                    let undo_value = pending.undo_value.take().expect("original undo value");
-                    let undo = match undo.try_write_owned(undo_value) {
-                        Ok(writer) => writer,
-                        Err(_) => unreachable!("original healthy undo stays acquired"),
-                    };
-                    let current = pending.blocks.take().expect("original current");
-                    let current_value = pending
-                        .current_value
-                        .take()
-                        .expect("original current value");
-                    let current = match current.try_write_owned(current_value) {
-                        Ok(writer) => writer,
-                        Err(_) => unreachable!("original healthy current stays acquired"),
-                    };
-                    Ok::<_, std::convert::Infallible>((undo, current))
-                },
-                || (target.revert.is_poisoned(), target.blocks.is_poisoned()),
-            )
-            .unwrap_or_else(|never| match never {});
+    fn new(
+        target: &'a Cell<V, C>,
+        revert: CellWriter<'a, Option<V>, C>,
+        blocks: CellWriter<'a, V, C>,
+    ) -> Self {
         Self {
-            original: Some(OriginalCellWriters { revert, blocks }),
+            state: Some(CellWriterState::Attached(OriginalCellWriters {
+                revert,
+                blocks,
+            })),
             target,
         }
     }
 
+    pub(super) fn acquire(target: &'a Cell<V, C>, charges: CellAllocationCharges<C>) -> Self {
+        let mut slot = BlockAcquisitionSlot::new(target, charges);
+        slot.initialize_writers();
+        slot.writers.take().expect("original initialized pair")
+    }
+
     pub(super) fn as_ref(&self) -> &OriginalCellWriters<'a, V, C> {
-        self.original.as_ref().expect("original cell pair")
+        match self.state.as_ref() {
+            Some(CellWriterState::Attached(original)) => original,
+            _ => panic!("original cell pair was released"),
+        }
     }
 
     pub(super) fn as_mut(&mut self) -> &mut OriginalCellWriters<'a, V, C> {
-        self.original.as_mut().expect("original cell pair")
+        match self.state.as_mut() {
+            Some(CellWriterState::Attached(original)) => original,
+            _ => panic!("original cell pair was released"),
+        }
     }
 
     pub(super) fn into_original(mut self) -> OriginalCellWriters<'a, V, C> {
-        self.original.take().expect("original cell pair")
+        match self.state.take() {
+            Some(CellWriterState::Attached(original)) => original,
+            other => {
+                self.state = other;
+                panic!("original cell pair was released")
+            }
+        }
     }
 
-    pub(super) fn detach(mut self) -> (EbrCellOwned<Option<V>, C>, EbrCellOwned<V, C>) {
-        let OriginalCellWriters { revert, blocks } =
-            self.original.take().expect("original cell pair");
+    pub(super) fn release(&mut self) {
+        let Some(CellWriterState::Attached(original)) = self.state.as_ref() else {
+            return;
+        };
+        let _ = original;
+        let Some(CellWriterState::Attached(OriginalCellWriters { revert, blocks })) =
+            self.state.take()
+        else {
+            unreachable!()
+        };
+        let (undo, undo_release) = revert.release_deferred(|writer| writer.detach());
+        let (current, current_release) = blocks.release_deferred(|writer| writer.detach());
+        self.state = Some(CellWriterState::Released {
+            _undo: undo,
+            _current: current,
+            _undo_release: undo_release,
+            _current_release: current_release,
+        });
+    }
+
+    pub(super) fn detach(self) -> (EbrCellOwned<Option<V>, C>, EbrCellOwned<V, C>) {
+        let target = self.target;
+        let OriginalCellWriters { revert, blocks } = self.into_original();
         revert.release_pair_with(
             blocks,
-            |revert, blocks| {
-                let revert = revert.detach();
-                let blocks = blocks.detach();
-                (revert, blocks)
-            },
-            || {
-                (
-                    self.target.revert.is_poisoned(),
-                    self.target.blocks.is_poisoned(),
-                )
-            },
+            |revert, blocks| (revert.detach(), blocks.detach()),
+            || (target.revert.is_poisoned(), target.blocks.is_poisoned()),
         )
     }
 }
 
 impl<V: Value, C: Send + Sync + 'static> Drop for CellWriters<'_, V, C> {
     fn drop(&mut self) {
-        if let Some(OriginalCellWriters { revert, blocks }) = self.original.take() {
-            revert.release_pair_with(
-                blocks,
-                |revert, blocks| {
-                    let revert = revert.detach();
-                    let blocks = blocks.detach();
-                    drop((revert, blocks));
-                },
-                || {
-                    (
-                        self.target.revert.is_poisoned(),
-                        self.target.blocks.is_poisoned(),
-                    )
-                },
-            );
-        }
+        self.release();
     }
 }

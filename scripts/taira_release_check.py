@@ -1911,6 +1911,18 @@ CORE_EXECUTION_PUBLICATION_STAGES = (("actual execution fixture finality and pub
 )),)
 CORE_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
 CORE_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
+
+CORE_WORLD_ACQUISITION_STAGES = (("original World and trigger aggregate acquisition and abandonment", (
+    'state::tests::world_complete_drop_tests::ordinary_world_drop_unlocks_peers_before_parameters_notification',
+    'state::tests::world_complete_drop_tests::replacement_world_drop_unlocks_peers_before_parameters_notification',
+    'state::tests::world_complete_drop_tests::ordinary_world_explicit_retirement_defers_original_notifications',
+    'state::tests::world_complete_drop_tests::replacement_world_explicit_retirement_defers_original_notifications',
+    'state::tests::world_complete_drop_tests::world_block_owner_preserves_canonical_json_and_checked_writer',
+    'smartcontracts::isi::triggers::set::detachment::tests::acquisition_tests::ordinary_trigger_drop_unlocks_active_index_before_ids_notification',
+    'smartcontracts::isi::triggers::set::detachment::tests::acquisition_tests::replacement_trigger_drop_unlocks_active_index_before_ids_notification',
+)), )
+CORE_STAGES += CORE_WORLD_ACQUISITION_STAGES
+CORE_STARTUP_STAGES += CORE_WORLD_ACQUISITION_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
 
 
@@ -1918,6 +1930,13 @@ CORE_ADMISSION_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
 MV_OWNERSHIP_HARNESSES = ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
 
 MV_OWNERSHIP_STAGES = (
+    ("caller-owned aggregate acquisition and terminal retirement", (
+        'cell::aggregate_acquisition_tests::caller_owned_cell_slots_release_all_before_later_clone_unwind_cleanup',
+        'cell::aggregate_acquisition_tests::caller_owned_cell_slots_retain_known_poison_until_earlier_slot_unlocks',
+        'cell::aggregate_acquisition_tests::completed_cell_slots_transfer_without_wake_and_release_without_retirement',
+        'storage::aggregate_acquisition_tests::caller_owned_storage_slots_retain_replacement_prefix_until_all_writers_release',
+        'storage::aggregate_acquisition_tests::completed_storage_slots_release_physical_writers_before_retirement_and_refuse_reuse',
+    )),
     ('original Cell pair acquisition and abandonment', (
         'cell::fresh_pair_acquisition_tests::cell_second_clone_panic_releases_both_before_native_notifications',
         'cell::fresh_pair_acquisition_tests::cell_second_clone_panic_reclaims_completed_undo_only_after_pair_unlock',
@@ -2286,6 +2305,12 @@ MV_ADMITTED_MAP_STAGES = (
 )
 
 CONCREAD_STAGES = (
+    ("original native phase and failed cursor retirement", (
+        'release::tests::retained_phase_transfer_and_refusal_keep_original_source_without_early_wake',
+        'release::tests::retained_phase_unwind_records_actual_release_without_running_waiter',
+        'release::tests::retained_observed_release_preserves_poison_predating_normal_cleanup',
+        'bptree::abandonment_tests::failed_cursor_abandonment_unlocks_without_reopening_publication_authority',
+    )),
     ('original EBR acquisition and unlocked reclamation', (
         'ebrcell::acquisition_tests::raw_acquisition_and_refusal_retain_the_exact_writer_without_cloning',
         'ebrcell::acquisition_tests::acquired_clone_and_attachment_keep_the_original_allocation',
@@ -3810,7 +3835,7 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
 def validate_mv_test_registration(root: Path) -> None:
     """Reject stale registered MV names before Cargo; native listing stays authoritative.
 
-    This is a bounded lexical guard for eleven explicit, flat test modules, not a
+    This is a bounded lexical guard for thirteen explicit, flat test modules, not a
     Rust parser or a claim that the selected subset exhausts each module.
     The existing pure lexer runs from the same captured source as this gate.
     """
@@ -3820,8 +3845,10 @@ def validate_mv_test_registration(root: Path) -> None:
         ("release_tests::", "lib.rs", "release_tests.rs", "release_tests"),
         ("cell::charged_allocation_tests::", "cell.rs", "cell/charged_allocation_tests.rs", "charged_allocation_tests"),
         ("cell::publication_tests::", "cell.rs", "cell/publication_tests.rs", "publication_tests"),
+        ("cell::aggregate_acquisition_tests::", "cell.rs", "cell/aggregate_acquisition_tests.rs", "aggregate_acquisition_tests"),
         ("cell::fresh_pair_acquisition_tests::", "cell.rs", "cell/fresh_pair_acquisition_tests.rs", "fresh_pair_acquisition_tests"),
         ("storage::publication_tests::", "storage.rs", "storage/publication_tests.rs", "publication_tests"),
+        ("storage::aggregate_acquisition_tests::", "storage.rs", "storage/aggregate_acquisition_tests.rs", "aggregate_acquisition_tests"),
         ("storage::detached_tests::", "storage.rs", "storage/detached_tests.rs", "detached_tests"),
         ("storage::admitted_tests::", "storage.rs", "storage/admitted_tests.rs", "admitted_tests"),
         ("storage::admitted_tests::fresh_pair_acquisition::", "storage/admitted_tests.rs", "storage/fresh_pair_acquisition_tests.rs", "fresh_pair_acquisition"),

@@ -10,6 +10,7 @@ use core::convert::Infallible;
 
 use super::{
     Cell, CellBlock, Storage, StorageBlock, TriggerSet, TriggerSetBlock, World, WorldBlock,
+    WorldBlockFields,
 };
 use crate::smartcontracts::isi::triggers::set::{DetachError, DetachedSet};
 use iroha_data_model::{events::EventBox, nexus::DataSpaceCatalog};
@@ -378,11 +379,11 @@ macro_rules! capture_world_fields {
         $(check_mode!($original, mode, $suffix);)*
         // No wrapper/vector/delta allocation or value copy precedes this call.
         let admission = $admit(&$original).map_err(CaptureError::Admission)?;
-        let WorldBlock {
+        let WorldBlockFields {
             dataspace_catalog,
             $($prefix,)* $($privacy,)* $($suffix,)*
             external_event_buf,
-        } = $original;
+        } = $original.into_fields();
         const FIELD_COUNT: usize = [
             $(stringify!($prefix),)* $(stringify!($privacy),)* $(stringify!($suffix),)*
         ].len();

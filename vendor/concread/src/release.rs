@@ -373,6 +373,97 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
         (retained, notification)
     }
 
+    /// Release this actual guard into its original batch with an exact poison verdict.
+    /// A foreign batch returns the unchanged guard without invoking either callback.
+    /// `release` must unlock on success and unwind; `observe_poison` must inspect
+    /// only the corresponding native mutex and cannot invoke user code.
+    pub fn try_release_into_observed<R>(
+        mut self,
+        batch: &mut DeferredReleaseBatch,
+        release: impl FnOnce(T) -> R,
+        observe_poison: impl Fn() -> bool,
+    ) -> Result<R, Self> {
+        if !Arc::ptr_eq(&self.notification.state, &batch.notification.state) {
+            return Err(self);
+        }
+        struct Record<'a, F: Fn() -> bool> {
+            batch: &'a mut DeferredReleaseBatch,
+            observe_poison: F,
+        }
+        impl<F: Fn() -> bool> Drop for Record<'_, F> {
+            fn drop(&mut self) {
+                self.batch.released = true;
+                self.batch.poisoned |= (self.observe_poison)();
+            }
+        }
+        let record = Record {
+            batch,
+            observe_poison,
+        };
+        let inner = self.inner.take().expect("original physical guard");
+        let _transferred = std::mem::ManuallyDrop::new(self);
+        let result = release(inner);
+        drop(record);
+        Ok(result)
+    }
+
+    /// Change ownership phase while the caller retains original unwind notification.
+    ///
+    /// The outer error returns a foreign-batch guard untouched. The inner result
+    /// transfers the original notification with either the new or refused guard.
+    /// Only a callee unwind records a release in `batch`, after `consume` has
+    /// destroyed its physical guard. Completed payloads and unused charges must
+    /// already belong to the caller's acquisition slot before another conversion.
+    /// `observe_poison` inspects only this original native mutex and cannot panic.
+    pub fn try_map_preserving_release_into<R, E>(
+        mut self,
+        batch: &mut DeferredReleaseBatch,
+        consume: impl FnOnce(T) -> Result<R, (T, E)>,
+        observe_poison: impl Fn() -> bool,
+    ) -> Result<Result<ReleaseGuard<'owner, R>, (Self, E)>, Self> {
+        if !Arc::ptr_eq(&self.notification.state, &batch.notification.state) {
+            return Err(self);
+        }
+        struct Record<'a, F: Fn() -> bool> {
+            batch: &'a mut DeferredReleaseBatch,
+            observe_poison: F,
+            armed: bool,
+        }
+        impl<F: Fn() -> bool> Drop for Record<'_, F> {
+            fn drop(&mut self) {
+                if self.armed {
+                    self.batch.released = true;
+                    self.batch.poisoned |= (self.observe_poison)();
+                }
+            }
+        }
+        let mut record = Record {
+            batch,
+            observe_poison,
+            armed: true,
+        };
+        let inner = self.inner.take().expect("original physical guard");
+        let transferred = std::mem::ManuallyDrop::new(self);
+        let result = consume(inner);
+        record.armed = false;
+        drop(record);
+        Ok(match result {
+            Ok(inner) => Ok(ReleaseGuard {
+                inner: Some(inner),
+                notification: transferred.notification,
+                poison_on_unwind: transferred.poison_on_unwind,
+            }),
+            Err((inner, error)) => Err((
+                Self {
+                    inner: Some(inner),
+                    notification: transferred.notification,
+                    poison_on_unwind: transferred.poison_on_unwind,
+                },
+                error,
+            )),
+        })
+    }
+
     /// Attempt a phase change while retaining the original guard on refusal.
     /// Neither success nor refusal emits a release; the returned owner remains
     /// responsible for the same physical lock. Unwind releases before signaling.

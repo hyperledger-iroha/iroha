@@ -4,14 +4,18 @@ use crate::{
     publication::{CapturedPublication, NextPublication, Publication},
 };
 use concread::bptree::{
-    BptreeMap, BptreeMapCheckpoint, BptreeMapOwned, BptreeMapReadSnapshot, BptreeMapReadTxn,
-    BptreeMapWriteTxn, Iter, MapMode, NodeCloning, OwnedWriteError, RangeIter, Untracked,
+    BptreeMap, BptreeMapAbandonment, BptreeMapCheckpoint, BptreeMapOwned, BptreeMapReadSnapshot,
+    BptreeMapReadTxn, BptreeMapWriteTxn, Iter, MapMode, NodeCloning, OwnedWriteError, RangeIter,
+    Untracked,
 };
 use std::{borrow::Borrow, collections::BTreeSet, ops::RangeBounds};
 
 #[path = "storage/physical.rs"]
 mod physical;
 use physical::PreparedStorageWriters;
+#[path = "storage/acquisition.rs"]
+mod acquisition;
+pub use acquisition::BlockAcquisitionSlot;
 pub use physical::PublicationRetirement;
 
 /// Published map cleanup and its original capture/installation reservations.
@@ -82,35 +86,16 @@ impl<K: Key, V: Value> Storage<K, V> {
             blocks: BptreeMap::new(),
         }
     }
-    /// Create block to aggregate updates
-    pub fn block(&self) -> Block<'_, K, V> {
-        let mut writers = self.open_writers();
-        let predecessor = self.publication.capture();
-        // Clear revert
-        writers.as_mut().revert.clear();
-        Block::new(writers, false, predecessor, BlockMode::Ordinary)
+    /// Create an inert caller-owned slot before locking or constructing a cursor.
+    pub fn block_acquisition(&self) -> BlockAcquisitionSlot<'_, K, V> {
+        BlockAcquisitionSlot::new(self)
     }
-    // Reject known undo poison before waiting for current. Both actual mutexes
-    // and their original notifications belong to the pair before construction.
-    fn open_writers(&self) -> StorageWriters<'_, K, V, Untracked> {
-        let revert = self
-            .revert_released
-            .poisoning_guard(self.revert.acquire_writer());
-        assert!(!revert.is_poisoned(), "original undo writer is poisoned");
-        let blocks = self
-            .blocks_released
-            .poisoning_guard(self.blocks.acquire_writer());
-        let (revert, blocks) = revert
-            .try_map_pair_preserving_release(
-                blocks,
-                |revert, blocks| {
-                    assert!(!blocks.is_poisoned(), "original storage writer is poisoned");
-                    Ok::<_, std::convert::Infallible>((revert.write(), blocks.write()))
-                },
-                || (self.revert.is_poisoned(), self.blocks.is_poisoned()),
-            )
-            .unwrap_or_else(|never| match never {});
-        StorageWriters::new(self, revert, blocks)
+
+    /// Create a block through the same aggregate-capable acquisition kernel.
+    pub fn block(&self) -> Block<'_, K, V> {
+        let mut slot = self.block_acquisition();
+        crate::BlockAcquisition::initialize(&mut slot, BlockMode::Ordinary);
+        crate::BlockAcquisition::into_block(slot)
     }
 
     /// Insert a value directly into the latest committed state.
@@ -132,22 +117,11 @@ impl<K: Key, V: Value> Storage<K, V> {
         drop(retirement);
         prev_value
     }
-    /// Create block to aggregate updates and revert changes created in the latest block
+    /// Revert the published tip through the same caller-owned acquisition kernel.
     pub fn block_and_revert(&self) -> Block<'_, K, V> {
-        let mut writers = self.open_writers();
-        let predecessor = self.publication.capture();
-        // The committed undo tree may still be retained by snapshots. Copy its
-        // preimages into the new current generation before clearing this writer;
-        // never move values from nodes shared with an original reader.
-        let OriginalWriters { revert, blocks } = writers.as_mut();
-        for (key, value) in revert.iter() {
-            match value {
-                None => blocks.remove(key),
-                Some(value) => blocks.insert(key.clone(), value.clone()),
-            };
-        }
-        revert.clear();
-        Block::new(writers, true, predecessor, BlockMode::Replace)
+        let mut slot = self.block_acquisition();
+        crate::BlockAcquisition::initialize(&mut slot, BlockMode::Replace);
+        crate::BlockAcquisition::into_block(slot)
     }
 }
 impl<K: Key, V: Value, M: StorageMode<K, V>> Storage<K, V, M> {
@@ -564,10 +538,19 @@ struct OriginalWriters<'target, K: Key, V: Value, M: StorageMode<K, V>> {
     blocks: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, V, M>>,
 }
 
-// A single owner gives abandonment the same two-writer release boundary as
-// explicit abort. The original pair is present until a consuming transition.
+enum StorageWriterState<'a, K: Key, V: Value, M: StorageMode<K, V>> {
+    Attached(OriginalWriters<'a, K, V, M>),
+    Released {
+        _blocks: BptreeMapAbandonment<K, V, M>,
+        _revert: BptreeMapAbandonment<K, Option<V>, M>,
+        _blocks_release: concread::release::DeferredRelease,
+        _revert_release: concread::release::DeferredRelease,
+    },
+}
+
+// The same owner retains terminal cleanup through every enclosing aggregate.
 struct StorageWriters<'target, K: Key, V: Value, M: StorageMode<K, V>> {
-    original: Option<OriginalWriters<'target, K, V, M>>,
+    state: Option<StorageWriterState<'target, K, V, M>>,
     target: &'target Storage<K, V, M>,
 }
 
@@ -578,38 +561,63 @@ impl<'target, K: Key, V: Value, M: StorageMode<K, V>> StorageWriters<'target, K,
         blocks: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, V, M>>,
     ) -> Self {
         Self {
-            original: Some(OriginalWriters { revert, blocks }),
+            state: Some(StorageWriterState::Attached(OriginalWriters {
+                revert,
+                blocks,
+            })),
             target,
         }
     }
 
     fn as_ref(&self) -> &OriginalWriters<'target, K, V, M> {
-        self.original.as_ref().expect("original storage pair")
+        match self.state.as_ref() {
+            Some(StorageWriterState::Attached(original)) => original,
+            _ => panic!("original storage pair was released"),
+        }
     }
 
     fn as_mut(&mut self) -> &mut OriginalWriters<'target, K, V, M> {
-        self.original.as_mut().expect("original storage pair")
+        match self.state.as_mut() {
+            Some(StorageWriterState::Attached(original)) => original,
+            _ => panic!("original storage pair was released"),
+        }
     }
 
     fn into_original(mut self) -> OriginalWriters<'target, K, V, M> {
-        self.original.take().expect("original storage pair")
+        match self.state.take() {
+            Some(StorageWriterState::Attached(original)) => original,
+            other => {
+                self.state = other;
+                panic!("original storage pair was released")
+            }
+        }
+    }
+
+    fn release(&mut self) {
+        if !matches!(&self.state, Some(StorageWriterState::Attached(_))) {
+            return;
+        }
+        let Some(StorageWriterState::Attached(OriginalWriters { revert, blocks })) =
+            self.state.take()
+        else {
+            unreachable!()
+        };
+        // Unlike detach, cleanup-only native retirement also accepts an edit-failed
+        // private cursor. It grants no read or publication authority afterward.
+        let (blocks, blocks_release) = blocks.release_deferred(|writer| writer.abort_retaining());
+        let (revert, revert_release) = revert.release_deferred(|writer| writer.abort_retaining());
+        self.state = Some(StorageWriterState::Released {
+            _blocks: blocks,
+            _revert: revert,
+            _blocks_release: blocks_release,
+            _revert_release: revert_release,
+        });
     }
 }
 
 impl<K: Key, V: Value, M: StorageMode<K, V>> Drop for StorageWriters<'_, K, V, M> {
     fn drop(&mut self) {
-        if let Some(OriginalWriters { revert, blocks }) = self.original.take() {
-            revert.release_pair_with(
-                blocks,
-                |revert, blocks| drop((revert, blocks)),
-                || {
-                    (
-                        self.target.revert.is_poisoned(),
-                        self.target.blocks.is_poisoned(),
-                    )
-                },
-            );
-        }
+        self.release();
     }
 }
 
@@ -1809,3 +1817,13 @@ mod overlay_preimage_tests;
 #[cfg(test)]
 #[path = "storage/detached_tests.rs"]
 mod detached_tests;
+
+impl<K: Key, V: Value, M: StorageMode<K, V>> crate::BlockRetirement for Block<'_, K, V, M> {
+    fn release_writers(&mut self) {
+        self.writers.release();
+    }
+}
+
+#[cfg(test)]
+#[path = "storage/aggregate_acquisition_tests.rs"]
+mod aggregate_acquisition_tests;
