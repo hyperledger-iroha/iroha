@@ -1,8 +1,9 @@
 //! Finite insertion and removal in the original MV current/undo pair.
 //!
-//! This admits original node, cursor, reader, tracking and copied payload owners.
+//! This admits original node, cursor, reader, tracking, publication identity and
+//! copied payload owners.
 //! Borrowed iteration retains its traversal state inline without allocating.
-//! Publication/release control objects remain separately funded.
+//! Native mutex and release notification storage remain separately funded.
 //! Transactions additionally admit their ordered local touch owners.
 //! Replacement and snapshot restoration admit each edit and its incoming copies.
 //! Capture/detachment and mutable access remain unavailable until funded.
@@ -140,6 +141,40 @@ fn reserve_pair(
     Ok((current, original))
 }
 
+// Identity storage belongs to the same admission as both map owners. A failed
+// complete reservation allocates nothing and invokes no policy or user callback.
+fn reserve_owners(
+    budget: &AllocationBudget,
+    current: AllocationDemand,
+    undo: AllocationDemand,
+    identity: AllocationDemand,
+) -> Result<
+    (
+        AllocationReservation,
+        AllocationReservation,
+        AllocationReservation,
+    ),
+    AdmittedStorageError,
+> {
+    let mut total = current;
+    total
+        .add_demand(undo)
+        .map_err(AdmittedStorageError::Planning)?;
+    total
+        .add_demand(identity)
+        .map_err(AdmittedStorageError::Planning)?;
+    let mut original = budget
+        .try_reserve_bytes(total.bytes())
+        .map_err(AdmittedStorageError::Allocation)?;
+    let current = original
+        .try_partition_bytes(current.bytes())
+        .expect("part of the same checked complete demand");
+    let undo = original
+        .try_partition_bytes(undo.bytes())
+        .expect("part of the same checked complete demand");
+    Ok((current, undo, original))
+}
+
 fn writer_error(
     error: MapAdmissionError<AdmittedStorageError>,
     role: StorageRole,
@@ -183,6 +218,7 @@ where
 {
     revert: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, Option<V>, Prepaid<P>>>,
     blocks: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, Prepaid<P>>>,
+    next: NextPublication,
 }
 
 fn edit_error(error: MapAdmissionError<AdmittedStorageError>) -> AdmittedStorageError {
@@ -236,26 +272,48 @@ where
     V: Value,
     P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
+    /// Initial current/undo map allocations and their shared publication identities.
+    /// Native mutex and release notification storage require separate funding.
+    pub fn initial_allocation_demand() -> Result<AllocationDemand, PlanningError> {
+        let mut demand = BptreeMap::<K, V, Prepaid<P>>::node_custody_allocation_demand()?;
+        demand
+            .add_demand(BptreeMap::<K, Option<V>, Prepaid<P>>::node_custody_allocation_demand()?)?;
+        demand.add_demand(Publication::allocation_demand()?)?;
+        Ok(demand)
+    }
+
+    /// Both original writer shells and the next shared publication identity.
+    /// Undo reset, replacement copies and subsequent edits require additional admission.
+    pub fn writer_start_allocation_demand() -> Result<AllocationDemand, PlanningError> {
+        let mut demand = BptreeMap::<K, V, Prepaid<P>>::writer_start_allocation_demand()?;
+        demand
+            .add_demand(BptreeMap::<K, Option<V>, Prepaid<P>>::writer_start_allocation_demand()?)?;
+        demand.add_demand(NextPublication::allocation_demand()?)?;
+        Ok(demand)
+    }
+
     /// Construct the same MV storage with one original finite allocation pool.
     ///
     /// A single checked admission covers both maps' real initial node/root/reader
-    /// layouts. No empty-map substitute or untracked node path is used. Native
-    /// mutex, release notification and publication identity control allocations
-    /// are explicit remaining scope, not charged by this node-custody admission.
+    /// layouts and original publication identities. No empty-map substitute or
+    /// untracked node path is used. Native mutex and release notification storage
+    /// are explicit remaining scope, not charged by this admission.
     pub fn try_new_admitted(budget: AllocationBudget) -> Result<Self, AdmittedStorageError> {
         budget.with_deferred_refund_notifications(|| {
             let current = BptreeMap::<K, V, Prepaid<P>>::node_custody_allocation_demand()
                 .map_err(AdmittedStorageError::Planning)?;
             let undo = BptreeMap::<K, Option<V>, Prepaid<P>>::node_custody_allocation_demand()
                 .map_err(AdmittedStorageError::Planning)?;
-            let (current, undo) = reserve_pair(&budget, current, undo)?;
+            let identity =
+                Publication::allocation_demand().map_err(AdmittedStorageError::Planning)?;
+            let (current, undo, identity) = reserve_owners(&budget, current, undo, identity)?;
             let revert =
                 BptreeMap::try_new_with_node_custody(|demand| policy::<P>(&budget, undo, demand))?;
             let blocks = BptreeMap::try_new_with_node_custody(|demand| {
                 policy::<P>(&budget, current, demand)
             })?;
             Ok(Self {
-                publication: Publication::new(),
+                publication: Publication::from_admission(identity),
                 revert_released: ReleaseNotification::default(),
                 blocks_released: ReleaseNotification::default(),
                 revert,
@@ -267,7 +325,7 @@ where
 
     /// Run one ordinary block under the original two writers and finite pool.
     ///
-    /// Both writer shells are admitted together, then the retained undo map is
+    /// Both writer shells and the next identity are admitted together, then the retained undo map is
     /// cleared through genuine admitted reset. Any opening refusal abandons the
     /// private cursors without changing either published map. `Ok` publishes the
     /// actual current/undo pair; `Err` abandons it. The higher-ranked callback
@@ -320,6 +378,7 @@ where
             let AdmittedWriters {
                 mut revert,
                 mut blocks,
+                next,
             } = restored.open_admitted_writers()?;
             for (key, value) in snapshot.current().iter() {
                 insert_copy(&mut blocks, key, value, &budget)?;
@@ -327,13 +386,7 @@ where
             for (key, value) in snapshot.revert_map().iter() {
                 insert_copy(&mut revert, key, value, &budget)?;
             }
-            publish_pair(
-                blocks,
-                revert,
-                &restored.publication,
-                NextPublication::new(),
-                true,
-            );
+            publish_pair(blocks, revert, &restored.publication, next, true);
             Ok(restored)
         })
     }
@@ -358,9 +411,10 @@ where
                 blocks,
                 dirty,
                 publication,
+                next,
                 ..
             } = block;
-            publish_pair(blocks, revert, publication, NextPublication::new(), dirty);
+            publish_pair(blocks, revert, publication, next, dirty);
             Ok(output)
         })
     }
@@ -376,7 +430,9 @@ where
             .map_err(AdmittedStorageError::Planning)?;
         let undo = BptreeMap::<K, Option<V>, Prepaid<P>>::writer_start_allocation_demand()
             .map_err(AdmittedStorageError::Planning)?;
-        let (current, undo) = reserve_pair(budget, current, undo)?;
+        let identity =
+            NextPublication::allocation_demand().map_err(AdmittedStorageError::Planning)?;
+        let (current, undo, identity) = reserve_owners(budget, current, undo, identity)?;
         let wait = self.revert_released.observe();
         let revert = acquire_writer(&self.revert_released, || {
             self.revert
@@ -389,7 +445,15 @@ where
                 .try_write_admitted(|demand| policy::<P>(budget, current, demand))
         })
         .map_err(|error| writer_error(error, StorageRole::Current, wait))?;
-        Ok(AdmittedWriters { revert, blocks })
+        // Refused/poisoned acquisition must not allocate an unused identity.
+        // Its original reservation already exists; both writers now belong to
+        // this opening, before reset, replacement copying or user execution.
+        let next = NextPublication::from_admission(identity);
+        Ok(AdmittedWriters {
+            revert,
+            blocks,
+            next,
+        })
     }
 
     fn open_admitted_block(
@@ -403,6 +467,7 @@ where
         let AdmittedWriters {
             mut revert,
             mut blocks,
+            next,
         } = self.open_admitted_writers()?;
         let predecessor = self.publication.capture();
         if mode == BlockMode::Replace {
@@ -428,6 +493,7 @@ where
             allocation: Some(budget),
             publication: &self.publication,
             predecessor,
+            next,
             mode,
         })
     }

@@ -606,6 +606,7 @@ mod block {
         pub(super) allocation: Option<&'store crate::allocation::AllocationBudget>,
         pub(super) publication: &'store Publication,
         pub(super) predecessor: CapturedPublication,
+        pub(super) next: NextPublication,
         pub(super) mode: BlockMode,
     }
     impl<'store, K: Key, V: Value, M: StorageMode<K, V>> Block<'store, K, V, M> {
@@ -695,6 +696,7 @@ mod block {
                 allocation: None,
                 publication,
                 predecessor,
+                next: NextPublication::new(),
                 mode,
             }
         }
@@ -729,14 +731,15 @@ mod block {
                 allocation: _,
                 publication,
                 predecessor: _,
+                next,
                 mode: _,
             } = self;
-            publish_pair(blocks, revert, publication, NextPublication::new(), dirty);
+            publish_pair(blocks, revert, publication, next, dirty);
         }
 
         /// Admit capture metadata, then retain the exact original successors.
         ///
-        /// The callback runs before next-identity allocation. No key/value clone
+        /// The next identity is retained from block opening. No key/value clone
         /// or delta vector is needed: current and undo move with their original
         /// allocation owners. The map retains its original root/base generation
         /// to protect untouched shared nodes after releasing the physical writer.
@@ -749,7 +752,6 @@ mod block {
         ) -> Result<Detached<K, V, Admission>, E> {
             self.assert_operable();
             let admission = admit(&self)?;
-            let next = NextPublication::new();
             let Self {
                 revert,
                 blocks,
@@ -757,6 +759,7 @@ mod block {
                 failed: _,
                 allocation: _,
                 predecessor,
+                next,
                 mode,
                 publication: _,
             } = self;

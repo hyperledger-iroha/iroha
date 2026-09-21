@@ -30,8 +30,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1362 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1540 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1368 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1546 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -474,6 +474,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         gate.validate_mv_test_registration(root)
         paths = ("scripts/formal/sumeragi_v2_rust_text.py", "crates/mv/src/lib.rs",
                  "crates/mv/src/allocation.rs", "crates/mv/src/allocation_tests.rs",
+                 "crates/mv/src/publication.rs", "crates/mv/src/publication_nonblocking_tests.rs",
                  "crates/mv/src/release.rs", "crates/mv/src/release_tests.rs",
                  "crates/mv/src/cell.rs", "crates/mv/src/cell/charged_allocation_tests.rs",
                  "crates/mv/src/storage.rs", "crates/mv/src/storage/publication_tests.rs",
@@ -505,6 +506,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             with self.assertRaisesRegex(gate.CheckError, "module edge differs"):
                 gate.validate_mv_test_registration(copied)
         library_groups = {
+            "publication::nonblocking_tests::": 1,
             "allocation::tests::": 7,
             "release::tests::": 11,
             "cell::charged_allocation_tests::": 7,
@@ -522,10 +524,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 58)
+                self.assertEqual(len(library), 59)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 58), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 54), ("concread", 109)):
+                for harness, count in (("mv", 59), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 59), ("concread", 109)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -582,6 +584,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             (root / "crates/mv/src/storage/admitted_tests.rs").read_text()
         ) if name.startswith("admitted_replacement_")]
         self.assertEqual(len(replacement), 7)
+        restoration = [name for name in names(
+            (root / "crates/mv/src/storage/admitted_tests.rs").read_text()
+        ) if name.startswith("admitted_snapshot_")]
+        self.assertEqual(len(restoration), 2)
         self.assertIn('#[path = "storage/admitted_tests.rs"]\nmod admitted_tests;',
                       (root / "crates/mv/src/storage.rs").read_text())
         paired = names((root / "vendor/concread/src/bptree/pair_admission_tests.rs").read_text())
@@ -610,7 +616,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                          *("bptree::admission::pair_admission::tests::deletion::" + name for name in deletion),
                          *("bptree::admission::pair_admission::tests::deletion::payload::" + name for name in deletion_payload)],
         }
-        self.assertEqual((len(admitted), len(storage), len(mapped), len(names(ordinary)), len(names(writer)), len(checkpoint), len(paired), len(borrowed), len(clear)), (29, 25, 24, 35, 6, 9, 9, 7, 7))
+        self.assertEqual((len(admitted), len(storage), len(mapped), len(names(ordinary)), len(names(writer)), len(checkpoint), len(paired), len(borrowed), len(clear)), (29, 30, 24, 35, 6, 9, 9, 7, 7))
         self.assertIn('#[path = "admitted_map_custody/storage.rs"]\nmod storage_custody;',
                       (root / "crates/mv/tests/admitted_map_custody.rs").read_text())
         self.assertIn('#[path = "clear_admission_tests.rs"]\nmod clear;',
@@ -664,6 +670,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                     if name.startswith(prefix)]
             self.assertEqual(selected_replacement,
                              ["storage::admitted_tests::" + name for name in replacement])
+            self.assertEqual([name for _, names in selected["mv"] for name in names
+                              if name.startswith("storage::admitted_tests::admitted_snapshot_")],
+                             ["storage::admitted_tests::" + name for name in restoration])
         self.assertEqual(gate.HARNESS_TARGETS["mv-admitted-map"][3], ["-p", "mv", "--test", "admitted_map_custody"])
         self.assertEqual(gate.HARNESS_TARGETS["concread"][3], ["-p", "concread", "--lib"])
 
@@ -2066,7 +2075,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             requested = tuple(harness + "=" + test for harness in gate.MV_OWNERSHIP_HARNESSES
                               for _, tests in selected[harness] for test in tests)
-            self.assertEqual(len(requested), 250)
+            self.assertEqual(len(requested), 256)
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
             with self.subTest(scope=scope), \
@@ -2090,7 +2099,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
-            self.assertIn("250 focused regressions", output.getvalue())
+            self.assertIn("256 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 

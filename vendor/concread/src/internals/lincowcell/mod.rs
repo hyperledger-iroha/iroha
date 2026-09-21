@@ -61,8 +61,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
 
-mod shared_allocation;
-use shared_allocation::{Reserved, Shared};
+use crate::shared::{Reserved, Shared};
 
 /// Explicitly unaccounted shell ownership; this provides no admission policy.
 #[derive(Debug)]

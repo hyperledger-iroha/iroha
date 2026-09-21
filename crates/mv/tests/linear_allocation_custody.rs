@@ -1165,3 +1165,40 @@ fn root_payload_unwind_frees_original_block_without_refunding_unfinished_payload
     refunded(0, 0);
     assert_eq!(budget.reserved_bytes(), layouts.root.size());
 }
+
+#[test]
+fn shared_identity_allocation_is_freed_before_original_charge_refund() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    for panic_payload in [false, true] {
+        reset();
+        type Shared = concread::shared::Shared<Reader, Charge>;
+        let layout = Shared::layout();
+        let budget = AllocationBudget::new(layout.size());
+        let mut reservation = budget.try_reserve_layouts([layout]).unwrap();
+        let charge = Charge {
+            id: 0,
+            credit: reservation.try_split(layout).unwrap(),
+        };
+        EXPECTED.with(|pending| pending.set([Some(Expected { id: 0, layout }), None]));
+        let owner = Shared::new(Reader { id: 0, value: 91 }, charge);
+        assert!(EXPECTED.with(|pending| pending.get().iter().all(Option::is_none)));
+        let copy = without_allocations(|| owner.clone());
+        assert!(Shared::ptr_eq(&owner, &copy));
+        assert_eq!(copy.value, 91);
+        without_allocations(|| drop(owner));
+        assert!(!RECORDS[0].freed.load(SeqCst));
+        assert_eq!(budget.reserved_bytes(), layout.size());
+        if panic_payload {
+            PANIC_PAYLOAD.store(0, SeqCst);
+            assert!(catch_unwind(AssertUnwindSafe(|| drop(copy))).is_err());
+            assert_eq!(RECORDS[0].charge_drops.load(SeqCst), 0);
+            assert_eq!(budget.reserved_bytes(), layout.size());
+        } else {
+            without_allocations(|| drop(copy));
+            assert_eq!(RECORDS[0].charge_drops.load(SeqCst), 1);
+            assert_eq!(budget.reserved_bytes(), 0);
+        }
+        assert!(RECORDS[0].freed.load(SeqCst));
+        assert_eq!(RECORDS[0].payload_drops.load(SeqCst), 1);
+    }
+}

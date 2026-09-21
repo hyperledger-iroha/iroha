@@ -16,6 +16,11 @@ thread_local! {
     static REPLACEMENT_POOL: RefCell<Option<AllocationBudget>> = const { RefCell::new(None) };
     static REPLACEMENT_HELD: RefCell<Option<AllocationReservation>> = const { RefCell::new(None) };
     static FOREIGN_POOL: RefCell<Option<AllocationBudget>> = const { RefCell::new(None) };
+    static RESTORE_FAULT: Cell<u8> = const { Cell::new(0) };
+    static RESTORE_COPIES: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+    static RESTORE_TRIGGERED: Cell<bool> = const { Cell::new(false) };
+    static RESTORE_POOL: RefCell<Option<AllocationBudget>> = const { RefCell::new(None) };
+    static RESTORE_HELD: RefCell<Option<AllocationReservation>> = const { RefCell::new(None) };
 }
 
 struct PolicyContext;
@@ -35,6 +40,9 @@ impl Drop for PolicyContext {
         REPLACEMENT_COPY_FAILURE.with(|fail| fail.set(false));
         REPLACEMENT_HELD.with(|slot| drop(slot.take()));
         REPLACEMENT_POOL.with(|slot| drop(slot.take()));
+        RESTORE_FAULT.with(|mode| mode.set(0));
+        RESTORE_HELD.with(|slot| drop(slot.take()));
+        RESTORE_POOL.with(|slot| drop(slot.take()));
     }
 }
 
@@ -53,6 +61,10 @@ impl NodeCloning<Payload, Payload> for NativeStoragePolicy {
         <Policy as NodeCloning<Payload, Payload>>::clone_key(&mut self.0, key)
     }
     fn clone_value(&mut self, value: &Payload) -> Payload {
+        RESTORE_COPIES.with(|count| {
+            let (current, undo) = count.get();
+            count.set((current + 1, undo));
+        });
         <Policy as NodeCloning<Payload, Payload>>::clone_value(&mut self.0, value)
     }
 }
@@ -61,6 +73,10 @@ impl NodeCloning<Payload, Option<Payload>> for NativeStoragePolicy {
         <Policy as NodeCloning<Payload, Option<Payload>>>::clone_key(&mut self.0, key)
     }
     fn clone_value(&mut self, value: &Option<Payload>) -> Option<Payload> {
+        RESTORE_COPIES.with(|count| {
+            let (current, undo) = count.get();
+            count.set((current, undo + usize::from(value.is_some())));
+        });
         <Policy as NodeCloning<Payload, Option<Payload>>>::clone_value(&mut self.0, value)
     }
 }
@@ -83,6 +99,34 @@ impl ClonePlanning<Payload, Option<Payload>> for NativeStoragePolicy {
         value: &Option<Payload>,
         demand: &mut AllocationDemand,
     ) -> Result<(), PlanningError> {
+        // Key 4 exists only in the source undo image. Its first incoming copy
+        // follows all 64 current entries and undo entries 0..4. Fail in this
+        // phase, not during construction or the first current-map edit.
+        if value.as_ref().is_some_and(|value| value.order == 4) {
+            let fault = RESTORE_FAULT.with(|mode| mode.replace(0));
+            if fault != 0 {
+                RESTORE_TRIGGERED.with(|triggered| assert!(!triggered.replace(true)));
+                let (current, undo) = RESTORE_COPIES.with(Cell::get);
+                assert!(
+                    current >= 64 && undo >= 4,
+                    "restore must have a real private prefix"
+                );
+                match fault {
+                    1 => return Err(PlanningError::UnsupportedPayload),
+                    2 => RESTORE_POOL.with(|slot| {
+                        let pool = slot.borrow();
+                        let budget = pool.as_ref().unwrap();
+                        let held = budget
+                            .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+                            .unwrap();
+                        RESTORE_HELD.with(|slot| assert!(slot.replace(Some(held)).is_none()));
+                    }),
+                    3 => FACTORY_FAULT.with(|mode| mode.set(3)),
+                    4 => FACTORY_FAULT.with(|mode| mode.set(5)),
+                    _ => unreachable!("closed snapshot fault"),
+                }
+            }
+        }
         <Policy as ClonePlanning<Payload, Option<Payload>>>::plan_value(value, demand)
     }
 }
@@ -112,6 +156,7 @@ impl AdmittedStoragePolicy for NativeStoragePolicy {
             }
             3 => panic!("injected actual Storage policy factory panic"),
             4 => Some(1),
+            5 => Some(2),
             _ => unreachable!("closed test fault"),
         };
         let counters = STORAGE_COUNTERS.with(|slot| {
@@ -550,12 +595,14 @@ fn actual_storage_summed_startup_and_reset_refusal_preserve_both_committed_image
     let _context = PolicyContext::new(&counters);
     type Current = BptreeMap<Payload, Payload, Prepaid<NativeStoragePolicy>>;
     type Undo = BptreeMap<Payload, Option<Payload>, Prepaid<NativeStoragePolicy>>;
-    let initial = Current::node_custody_allocation_demand()
+    let maps = Current::node_custody_allocation_demand()
         .unwrap()
         .bytes()
         .checked_add(Undo::node_custody_allocation_demand().unwrap().bytes())
         .unwrap();
-    assert!(initial > 0);
+    let initial = NativeStorage::initial_allocation_demand().unwrap().bytes();
+    let identity = concread::shared::Shared::<(), Option<AllocationCharge>>::layout().size();
+    assert_eq!(initial, maps + 2 * identity);
     let insufficient = AllocationBudget::new(initial - 1);
     let error = without_allocations(|| NativeStorage::try_new_admitted(insufficient.clone()))
         .err()
@@ -595,11 +642,9 @@ fn actual_storage_summed_startup_and_reset_refusal_preserve_both_committed_image
             history.get_before_block(&7).unwrap().pointer(),
         )
     };
-    let shells = Current::writer_start_allocation_demand()
+    let shells = NativeStorage::writer_start_allocation_demand()
         .unwrap()
-        .bytes()
-        .checked_add(Undo::writer_start_allocation_demand().unwrap().bytes())
-        .unwrap();
+        .bytes();
     let occupied = budget.reserved_bytes();
     let blocker = budget
         .try_reserve_bytes(budget.limit_bytes() - occupied - shells)
@@ -2250,6 +2295,417 @@ fn actual_storage_replacement_copy_panic_aborts_original_pair_and_poisons_retry(
     assert_eq!(counters.admissions.load(SeqCst), admissions);
     drop(retained);
     drop(storage);
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+type NativeSnapshot<'a> = mv::storage::Snapshot<'a, Payload, Payload, Prepaid<NativeStoragePolicy>>;
+
+fn snapshot_source(budget: &AllocationBudget) -> NativeStorage {
+    let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    storage
+        .try_with_admitted_block(|block| {
+            for order in 0..64 {
+                drop(put(block, budget, order, order as u8));
+            }
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    storage
+        .try_with_admitted_block(|block| {
+            for order in 0..16 {
+                drop(
+                    block
+                        .try_remove_admitted(removal_key(budget, order))
+                        .unwrap(),
+                );
+            }
+            for order in 16..32 {
+                drop(put(block, budget, order, 0xa5));
+            }
+            for order in 64..80 {
+                drop(put(block, budget, order, 0xb6));
+            }
+            assert!(
+                block
+                    .try_remove_admitted(removal_key(budget, 99))
+                    .unwrap()
+                    .is_none()
+            );
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    storage
+}
+
+fn assert_snapshot_image(snapshot: &NativeSnapshot<'_>) {
+    assert_eq!(snapshot.current().len(), 64);
+    for ((key, value), order) in snapshot.current().iter().zip(16..80) {
+        assert_eq!((key.order, value.order), (order, order));
+        let expected = if order < 32 {
+            0xa5
+        } else if order >= 64 {
+            0xb6
+        } else {
+            order as u8
+        };
+        marker(Some(value), expected);
+    }
+    assert_eq!(snapshot.revert_map().len(), 49);
+    for ((key, value), order) in snapshot
+        .revert_map()
+        .iter()
+        .zip((0..32).chain(64..80).chain([99]))
+    {
+        assert_eq!(key.order, order);
+        if order < 32 {
+            assert_eq!(value.as_ref().unwrap().order, order);
+            marker(value.as_ref(), order as u8);
+        } else {
+            assert!(value.is_none());
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SnapshotPointers {
+    current: Vec<(usize, usize, usize)>,
+    undo: Vec<(usize, usize, Option<usize>)>,
+}
+
+fn snapshot_pointers(snapshot: &NativeSnapshot<'_>) -> SnapshotPointers {
+    SnapshotPointers {
+        current: snapshot
+            .current()
+            .iter()
+            .map(|(key, value)| (key.order, key.pointer(), value.pointer()))
+            .collect(),
+        undo: snapshot
+            .revert_map()
+            .iter()
+            .map(|(key, value)| {
+                (
+                    key.order,
+                    key.pointer(),
+                    value.as_ref().map(Payload::pointer),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn arm_restore_fault(mode: u8, budget: &AllocationBudget) {
+    RESTORE_COPIES.with(|count| count.set((0, 0)));
+    RESTORE_TRIGGERED.with(|triggered| triggered.set(false));
+    RESTORE_FAULT.with(|fault| fault.set(mode));
+    RESTORE_POOL.with(|slot| assert!(slot.replace(Some(budget.clone())).is_none()));
+}
+
+fn release_restore_fault(budget: &AllocationBudget) {
+    assert!(RESTORE_TRIGGERED.with(Cell::get));
+    assert_eq!(RESTORE_FAULT.with(Cell::get), 0);
+    RESTORE_HELD.with(|slot| {
+        assert_eq!(
+            budget.reserved_bytes(),
+            slot.borrow()
+                .as_ref()
+                .map_or(0, AllocationReservation::remaining_bytes)
+        );
+        drop(slot.take());
+    });
+    RESTORE_POOL.with(|slot| drop(slot.take()));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn storage_snapshot_restore_preserves_nested_custody_and_allocation_free_history() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let source_budget = AllocationBudget::new(1 << 24);
+    let destination_budget = AllocationBudget::new(1 << 24);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let source = snapshot_source(&source_budget);
+    let source_records = NEXT_RECORD.load(SeqCst);
+    let snapshot = source.snapshot();
+    let pointers = snapshot_pointers(&snapshot);
+    let source_credit = source_budget.reserved_bytes();
+    let mut restored =
+        NativeStorage::try_from_snapshot_admitted(&snapshot, destination_budget.clone()).unwrap();
+    {
+        let destination = restored.snapshot();
+        assert_snapshot_image(&snapshot);
+        assert_snapshot_image(&destination);
+        for ((left_key, left_value), (right_key, right_value)) in
+            snapshot.current().iter().zip(destination.current().iter())
+        {
+            assert_eq!(&**left_key.bytes, &**right_key.bytes);
+            assert_eq!(&**left_value.bytes, &**right_value.bytes);
+            assert_ne!(left_key.pointer(), right_key.pointer());
+            assert_ne!(left_value.pointer(), right_value.pointer());
+        }
+        for ((left_key, left_value), (right_key, right_value)) in snapshot
+            .revert_map()
+            .iter()
+            .zip(destination.revert_map().iter())
+        {
+            assert_eq!(&**left_key.bytes, &**right_key.bytes);
+            assert_ne!(left_key.pointer(), right_key.pointer());
+            if let (Some(left), Some(right)) = (left_value, right_value) {
+                assert_eq!(&**left.bytes, &**right.bytes);
+                assert_ne!(left.pointer(), right.pointer());
+            }
+        }
+    }
+    assert_eq!(snapshot_pointers(&source.snapshot()), pointers);
+    assert_eq!(source_budget.reserved_bytes(), source_credit);
+    drop(snapshot);
+    without_allocations(|| drop(source));
+    assert_eq!(source_budget.reserved_bytes(), 0);
+    for record in &RECORDS[..source_records] {
+        assert!(record.freed.load(SeqCst) && record.refunded.load(SeqCst));
+    }
+    assert!(destination_budget.reserved_bytes() > 0);
+    let held = destination_budget
+        .try_reserve_bytes(destination_budget.limit_bytes() - destination_budget.reserved_bytes())
+        .unwrap();
+    let copies = (counters.keys.load(SeqCst), counters.values.load(SeqCst));
+    without_allocations(|| {
+        assert_snapshot_image(&restored.snapshot());
+        let history = restored.history();
+        assert!(history.revert_map().get(&99).unwrap().is_none());
+        assert_eq!(history.iter_before_block().count(), 64);
+        for ((key, value), order) in history.iter_before_block().zip(0..64) {
+            assert_eq!((key.order, value.order), (order, order));
+            marker(Some(value), order as u8);
+            assert_eq!(
+                history.get_before_block(&order).unwrap().pointer(),
+                value.pointer()
+            );
+        }
+    });
+    assert_eq!(
+        (counters.keys.load(SeqCst), counters.values.load(SeqCst)),
+        copies
+    );
+    drop(held);
+    restored
+        .try_with_admitted_replacement(|block| {
+            assert_eq!(block.len(), 64);
+            for order in 0..64 {
+                marker(block.get(&order), order as u8);
+            }
+            assert!(block.get(&64).is_none());
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    without_allocations(|| drop(restored));
+    reclaimed_since(0);
+    assert_eq!(destination_budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn storage_snapshot_undo_prefix_refusal_preserves_source_for_exact_retry() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let source_budget = AllocationBudget::new(1 << 24);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let source = snapshot_source(&source_budget);
+    let snapshot = source.snapshot();
+    let pointers = snapshot_pointers(&snapshot);
+    let source_credit = source_budget.reserved_bytes();
+    for mode in [1, 2] {
+        let budget = AllocationBudget::new(1 << 24);
+        let first = NEXT_RECORD.load(SeqCst);
+        arm_restore_fault(mode, &budget);
+        let error = NativeStorage::try_from_snapshot_admitted(&snapshot, budget.clone())
+            .err()
+            .expect("undo prefix must refuse");
+        match mode {
+            1 => assert!(matches!(
+                error,
+                AdmittedStorageError::Planning(PlanningError::UnsupportedPayload)
+            )),
+            2 => assert!(matches!(
+                error,
+                AdmittedStorageError::Allocation(AllocationRefusal::Capacity { .. })
+            )),
+            _ => unreachable!(),
+        }
+        reclaimed_since(first);
+        release_restore_fault(&budget);
+        assert_eq!(snapshot_pointers(&source.snapshot()), pointers);
+        assert_eq!(source_budget.reserved_bytes(), source_credit);
+        assert_snapshot_image(&snapshot);
+        let restored =
+            NativeStorage::try_from_snapshot_admitted(&snapshot, budget.clone()).unwrap();
+        assert_snapshot_image(&restored.snapshot());
+        without_allocations(|| drop(restored));
+        reclaimed_since(first);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+    drop(snapshot);
+    drop(source);
+    reclaimed_since(0);
+    assert_eq!(source_budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn storage_snapshot_undo_copy_and_factory_unwind_leave_source_healthy() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let source_budget = AllocationBudget::new(1 << 24);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let source = snapshot_source(&source_budget);
+    let snapshot = source.snapshot();
+    let pointers = snapshot_pointers(&snapshot);
+    let source_credit = source_budget.reserved_bytes();
+    for mode in [3, 4] {
+        let budget = AllocationBudget::new(1 << 24);
+        let first = NEXT_RECORD.load(SeqCst);
+        arm_restore_fault(mode, &budget);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _ = NativeStorage::try_from_snapshot_admitted(&snapshot, budget.clone());
+        }));
+        assert!(result.is_err());
+        assert_eq!(FACTORY_FAULT.with(Cell::get), 0);
+        reclaimed_since(first);
+        release_restore_fault(&budget);
+        assert_eq!(snapshot_pointers(&source.snapshot()), pointers);
+        assert_eq!(source_budget.reserved_bytes(), source_credit);
+        assert_snapshot_image(&snapshot);
+        let result = source.try_with_admitted_block(|_| Err::<(), _>("source remains writable"));
+        assert!(matches!(
+            result,
+            Err(AdmittedBlockError::Callback("source remains writable"))
+        ));
+        assert_eq!(snapshot_pointers(&source.snapshot()), pointers);
+        assert_eq!(source_budget.reserved_bytes(), source_credit);
+        let restored =
+            NativeStorage::try_from_snapshot_admitted(&snapshot, budget.clone()).unwrap();
+        assert_snapshot_image(&restored.snapshot());
+        without_allocations(|| drop(restored));
+        reclaimed_since(first);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+    drop(snapshot);
+    drop(source);
+    reclaimed_since(0);
+    assert_eq!(source_budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn storage_publication_identity_is_prepaid_and_retained_after_storage_drop() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let budget = AllocationBudget::new(8 << 20);
+    let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    struct CountWindow;
+    impl Drop for CountWindow {
+        fn drop(&mut self) {
+            ALLOCATIONS.with(|count| count.set(None));
+        }
+    }
+    let window = CountWindow;
+    let (first, same, held) = storage
+        .try_with_admitted_block(|block| {
+            assert!(put(block, &budget, 7, 0x72).is_none());
+            let first = block.publication_identity();
+            let same = block.publication_identity();
+            assert_eq!(first, same);
+            let held = budget
+                .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+                .unwrap();
+            assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+            ALLOCATIONS.with(|count| assert!(count.replace(Some(0)).is_none()));
+            Ok::<_, ()>((first, same, held))
+        })
+        .unwrap();
+    let allocations = ALLOCATIONS.with(|count| count.get().unwrap());
+    drop(window);
+    assert_eq!(
+        allocations, 0,
+        "successful publication must retain its preallocated identity"
+    );
+    drop(held);
+    marker(storage.view().get(&7), 0x72);
+    let successor = storage
+        .try_with_admitted_block(|block| {
+            let successor = block.publication_identity();
+            assert_ne!(successor, first);
+            Ok::<_, ()>(successor)
+        })
+        .unwrap();
+    without_allocations(|| drop(storage));
+    reclaimed_since(0);
+    // Only one owner and two distinct versions survive; duplicate observations
+    // retain the original allocation rather than acquiring another charge.
+    let identity = concread::shared::Shared::<(), Option<AllocationCharge>>::layout().size();
+    assert_eq!(budget.reserved_bytes(), 3 * identity);
+    without_allocations(|| drop(same));
+    assert_eq!(budget.reserved_bytes(), 3 * identity);
+    without_allocations(|| drop(first));
+    assert_eq!(budget.reserved_bytes(), 2 * identity);
+    without_allocations(|| drop(successor));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn storage_writer_identity_refusal_precedes_policies_and_preserves_retry() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let budget = AllocationBudget::new(8 << 20);
+    let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    let mut original = None;
+    let aborted = storage.try_with_admitted_block(|block| {
+        original = Some(block.publication_identity());
+        Err::<(), _>(())
+    });
+    assert!(matches!(aborted, Err(AdmittedBlockError::Callback(()))));
+    let original = original.unwrap();
+    let requested = NativeStorage::writer_start_allocation_demand()
+        .unwrap()
+        .bytes();
+    let occupied = budget.reserved_bytes();
+    let held = budget
+        .try_reserve_bytes(budget.limit_bytes() - occupied - requested + 1)
+        .unwrap();
+    let calls = counters.admissions.load(SeqCst);
+    for replacement in [false, true] {
+        let result = without_allocations(|| {
+            if replacement {
+                storage.try_with_admitted_replacement(|_| -> Result<(), ()> {
+                    panic!("admission must precede execution")
+                })
+            } else {
+                storage.try_with_admitted_block(|_| -> Result<(), ()> {
+                    panic!("admission must precede execution")
+                })
+            }
+        });
+        assert!(matches!(result, Err(AdmittedBlockError::Admission(
+            AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes, .. })
+        )) if requested_bytes == requested));
+        assert_eq!(counters.admissions.load(SeqCst), calls);
+        assert_eq!(budget.reserved_bytes(), occupied + held.remaining_bytes());
+    }
+    drop(held);
+    storage
+        .try_with_admitted_block(|block| {
+            assert_eq!(block.publication_identity(), original);
+            assert!(put(block, &budget, 7, 0x73).is_none());
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    marker(storage.view().get(&7), 0x73);
+    drop(original);
+    without_allocations(|| drop(storage));
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }

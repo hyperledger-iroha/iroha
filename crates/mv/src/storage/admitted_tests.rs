@@ -744,6 +744,11 @@ fn admitted_replacement_retains_mode_and_restored_preimages_through_callback_abo
     assert_eq!(undo.get(&1), Some(&Some(10)));
     drop((current, undo));
     drop(storage);
+    assert_eq!(
+        budget.reserved_bytes(),
+        Publication::allocation_demand().unwrap().bytes()
+    );
+    drop(predecessor);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -846,6 +851,11 @@ fn admitted_replacement_of_empty_undo_still_records_replace_mode() {
         Err(PublicationPreparationError::Changed)
     );
     drop(storage);
+    assert_eq!(
+        budget.reserved_bytes(),
+        Publication::allocation_demand().unwrap().bytes()
+    );
+    drop(predecessor);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -884,6 +894,11 @@ fn admitted_replacement_final_undo_clear_refusal_preserves_original_pair() {
         .try_with_admitted_replacement(|_| Ok::<_, ()>(()))
         .unwrap();
     drop(storage);
+    assert_eq!(
+        budget.reserved_bytes(),
+        Publication::allocation_demand().unwrap().bytes()
+    );
+    drop(predecessor);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -928,6 +943,11 @@ fn admitted_replacement_callback_cleanup_cannot_publish_a_partial_owner() {
         ))
     ));
     drop(storage);
+    assert_eq!(
+        budget.reserved_bytes(),
+        Publication::allocation_demand().unwrap().bytes()
+    );
+    drop(predecessor);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -969,6 +989,11 @@ fn admitted_replacement_second_plan_refusal_returns_a_healthy_original_pair() {
         });
         assert!(matches!(result, Err(AdmittedBlockError::Callback(()))));
         drop(storage);
+        assert_eq!(
+            budget.reserved_bytes(),
+            Publication::allocation_demand().unwrap().bytes()
+        );
+        drop(predecessor);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
@@ -1014,6 +1039,11 @@ fn admitted_replacement_planning_refusal_discards_the_restored_private_prefix() 
     assert!(matches!(result, Err(AdmittedBlockError::Callback(()))));
     drop((current, undo));
     drop(storage);
+    assert_eq!(
+        budget.reserved_bytes(),
+        Publication::allocation_demand().unwrap().bytes()
+    );
+    drop(predecessor);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

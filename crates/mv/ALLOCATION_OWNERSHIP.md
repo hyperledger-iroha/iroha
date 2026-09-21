@@ -146,8 +146,14 @@ prepares both owners before transfer, publishes both roots and pair identity,
 unlocks all participants, then destroys retirement and issues notifications.
 Original readers retain their nodes until physical reclamation.
 
+Publication identities use the same charge-owning shared allocation as Concread
+linear cells. Initial admission includes the owner and first version; writer
+admission includes the successor version. Construction uses the exact declared
+layouts. Captured identities retain original charges, and final identity refunds
+follow physical writer and publication-lock release, including unwind.
+
 World currently instantiates Untracked Storage. Native mutex/runtime and
-publication/release control storage remain outside constructor admission. Real
+release notification storage remain outside constructor admission. Real
 model payload policies, detached capture, mutable access, State generation-refusal
 propagation and aggregate execution/restore work admission remain unfinished.
 Sorted touched-key insertion shifts its suffix and still needs a bounded work policy. Borrowed map iterators and ranges retain bounded traversal

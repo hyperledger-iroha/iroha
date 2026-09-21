@@ -1918,6 +1918,9 @@ CORE_ADMISSION_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
 MV_OWNERSHIP_HARNESSES = ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
 
 MV_OWNERSHIP_STAGES = (
+    ('funded publication identity release', (
+        'publication::nonblocking_tests::funded_identity_refund_observes_unlocked_publication_even_on_release_unwind',
+    )),
     ('finite resident allocation pool', (
         'allocation::tests::charge_keeps_original_pool_alive_after_budget_handle_is_dropped',
         'allocation::tests::concurrent_reservations_cannot_oversubscribe_the_same_finite_pool',
@@ -2205,6 +2208,15 @@ MV_ADMITTED_MAP_STAGES = (
         'storage_custody::actual_storage_replacement_funds_copies_and_preserves_original_readers',
         'storage_custody::actual_storage_replacement_capacity_refusal_restores_roots_after_partial_work',
         'storage_custody::actual_storage_replacement_copy_panic_aborts_original_pair_and_poisons_retry',
+    )),
+    ('funded snapshot restoration preserves original source and complete undo custody', (
+        'storage_custody::storage_snapshot_restore_preserves_nested_custody_and_allocation_free_history',
+        'storage_custody::storage_snapshot_undo_prefix_refusal_preserves_source_for_exact_retry',
+        'storage_custody::storage_snapshot_undo_copy_and_factory_unwind_leave_source_healthy',
+    )),
+    ('funded Storage publication identities', (
+        'storage_custody::storage_publication_identity_is_prepaid_and_retained_after_storage_drop',
+        'storage_custody::storage_writer_identity_refusal_precedes_policies_and_preserves_retry',
     )),
 )
 
@@ -3685,11 +3697,12 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
 def validate_mv_test_registration(root: Path) -> None:
     """Reject stale registered MV names before Cargo; native listing stays authoritative.
 
-    This is a bounded lexical guard for seven explicit, flat test modules, not a
+    This is a bounded lexical guard for eight explicit, flat test modules, not a
     Rust parser or a claim that the selected subset exhausts each module.
     The existing pure lexer runs from the same captured source as this gate.
     """
     owners = (
+        ("publication::nonblocking_tests::", "publication.rs", "publication_nonblocking_tests.rs", "nonblocking_tests"),
         ("allocation::tests::", "allocation.rs", "allocation_tests.rs", "tests"),
         ("release::tests::", "release.rs", "release_tests.rs", "tests"),
         ("cell::charged_allocation_tests::", "cell.rs", "cell/charged_allocation_tests.rs", "charged_allocation_tests"),
@@ -3718,7 +3731,7 @@ def validate_mv_test_registration(root: Path) -> None:
             if len(matches) != 1:
                 raise ValueError(f"registered MV module edge differs: {parent} -> {child}")
         lib = source("lib.rs")[1]
-        for module in ("allocation", "release", "cell", "storage"):
+        for module in ("allocation", "release", "cell", "storage", "publication"):
             if len(re.findall(r'^(?:pub )?mod ' + module + r';$', lib, re.MULTILINE)) != 1:
                 raise ValueError(f"registered MV crate module differs: {module}")
         edge("storage.rs", "storage/touches.rs", "touches")

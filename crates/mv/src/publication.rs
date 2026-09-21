@@ -1,7 +1,16 @@
 //! Opaque local identity for one storage owner's published current/undo pair.
 
-use crate::{BlockMode, ReleaseGuard, ReleaseNotification, ReleaseWait};
-use std::sync::{Arc, Mutex, TryLockError};
+use crate::{
+    BlockMode, ReleaseGuard, ReleaseNotification, ReleaseWait,
+    allocation::{AllocationCharge, AllocationReservation},
+};
+use concread::{
+    bptree::{AllocationDemand, PlanningError},
+    shared::Shared,
+};
+use std::sync::{Mutex, TryLockError};
+
+type Identity<T> = Shared<T, Option<AllocationCharge>>;
 
 struct Owner;
 struct Version;
@@ -40,24 +49,38 @@ impl<E> PublicationPreparationError<E> {
     }
 }
 
-pub(crate) struct NextPublication(Arc<Version>);
+pub(crate) struct NextPublication(Identity<Version>);
 
 impl NextPublication {
     /// Allocate the next identity before the first visible component is changed.
     pub(crate) fn new() -> Self {
-        Self(Arc::new(Version))
+        Self(Shared::new(Version, None))
+    }
+
+    pub(crate) fn allocation_demand() -> Result<AllocationDemand, PlanningError> {
+        let mut demand = AllocationDemand::new();
+        demand.add_layout(Identity::<Version>::layout())?;
+        Ok(demand)
+    }
+
+    pub(crate) fn from_admission(mut reservation: AllocationReservation) -> Self {
+        let charge = reservation
+            .try_split(Identity::<Version>::layout())
+            .expect("original successor identity admission");
+        debug_assert_eq!(reservation.remaining_bytes(), 0);
+        Self(Shared::new(Version, Some(charge)))
     }
 }
 
 pub(crate) struct Publication {
-    owner: Arc<Owner>,
-    version: Mutex<Arc<Version>>,
+    owner: Identity<Owner>,
+    version: Mutex<Identity<Version>>,
     released: ReleaseNotification,
 }
 
 pub(crate) struct CapturedPublication {
-    owner: Arc<Owner>,
-    version: Arc<Version>,
+    owner: Identity<Owner>,
+    version: Identity<Version>,
 }
 
 /// Opaque local equality of a block's original owner, predecessor and mode.
@@ -75,8 +98,8 @@ impl BlockPublicationIdentity {
     pub(crate) fn capture(predecessor: &CapturedPublication, mode: BlockMode) -> Self {
         Self {
             predecessor: CapturedPublication {
-                owner: Arc::clone(&predecessor.owner),
-                version: Arc::clone(&predecessor.version),
+                owner: predecessor.owner.clone(),
+                version: predecessor.version.clone(),
             },
             mode,
         }
@@ -103,13 +126,31 @@ impl Eq for BlockPublicationIdentity {}
 impl Publication {
     pub(crate) fn new() -> Self {
         Self {
-            owner: Arc::new(Owner),
-            version: Mutex::new(Arc::new(Version)),
+            owner: Shared::new(Owner, None),
+            version: Mutex::new(Shared::new(Version, None)),
             released: ReleaseNotification::default(),
         }
     }
 
-    fn lock_version(&self) -> ReleaseGuard<'_, std::sync::MutexGuard<'_, Arc<Version>>> {
+    pub(crate) fn allocation_demand() -> Result<AllocationDemand, PlanningError> {
+        let mut demand = NextPublication::allocation_demand()?;
+        demand.add_layout(Identity::<Owner>::layout())?;
+        Ok(demand)
+    }
+
+    pub(crate) fn from_admission(mut reservation: AllocationReservation) -> Self {
+        let owner_charge = reservation
+            .try_split(Identity::<Owner>::layout())
+            .expect("original storage identity admission");
+        let next = NextPublication::from_admission(reservation);
+        Self {
+            owner: Shared::new(Owner, Some(owner_charge)),
+            version: Mutex::new(next.0),
+            released: ReleaseNotification::default(),
+        }
+    }
+
+    fn lock_version(&self) -> ReleaseGuard<'_, std::sync::MutexGuard<'_, Identity<Version>>> {
         self.released
             .poisoning_guard(self.version.lock().expect("MV publication lock poisoned"))
     }
@@ -118,8 +159,8 @@ impl Publication {
     // published pair cannot change while those writers remain owned.
     pub(crate) fn capture(&self) -> CapturedPublication {
         CapturedPublication {
-            owner: Arc::clone(&self.owner),
-            version: Arc::clone(&self.lock_version()),
+            owner: self.owner.clone(),
+            version: (*self.lock_version()).clone(),
         }
     }
 
@@ -137,11 +178,15 @@ impl Publication {
         publish: impl FnOnce() -> Published,
         release: impl FnOnce(Published) -> Retirement,
     ) -> Retirement {
+        // Declare retirement first so unwind also releases the visibility lock
+        // before the old identity can refund its original allocation credits.
+        let retired_version;
         let mut version = self.lock_version();
         let published = publish();
-        **version = next.0;
+        retired_version = std::mem::replace(&mut **version, next.0);
         let retirement = release(published);
         drop(version);
+        drop(retired_version);
         retirement
     }
 }
@@ -149,7 +194,7 @@ impl Publication {
 impl CapturedPublication {
     /// Compare only the original owner without acquiring its publication lock.
     pub(crate) fn belongs_to(&self, publication: &Publication) -> bool {
-        Arc::ptr_eq(&self.owner, &publication.owner)
+        Shared::ptr_eq(&self.owner, &publication.owner)
     }
 
     /// Check the original owner and version without waiting on a publication cut.
@@ -157,7 +202,7 @@ impl CapturedPublication {
         &self,
         publication: &Publication,
     ) -> Result<(), PublicationPreparationError<E>> {
-        if !Arc::ptr_eq(&self.owner, &publication.owner) {
+        if !Shared::ptr_eq(&self.owner, &publication.owner) {
             return Err(PublicationPreparationError::Changed);
         }
         let wait = publication.released.observe();
@@ -166,7 +211,7 @@ impl CapturedPublication {
             .try_lock()
             .map(|guard| publication.released.poisoning_guard(guard))
         {
-            Ok(version) if Arc::ptr_eq(&self.version, &version) => Ok(()),
+            Ok(version) if Shared::ptr_eq(&self.version, &version) => Ok(()),
             Ok(_) => Err(PublicationPreparationError::Changed),
             Err(TryLockError::WouldBlock) => Err(PublicationPreparationError::Busy(wait)),
             Err(TryLockError::Poisoned(_)) => Err(PublicationPreparationError::Poisoned),
@@ -174,12 +219,12 @@ impl CapturedPublication {
     }
 
     pub(crate) fn matches(&self, publication: &Publication) -> bool {
-        Arc::ptr_eq(&self.owner, &publication.owner)
-            && Arc::ptr_eq(&self.version, &publication.lock_version())
+        Shared::ptr_eq(&self.owner, &publication.owner)
+            && Shared::ptr_eq(&self.version, &publication.lock_version())
     }
 
     pub(crate) fn same_as(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.owner, &other.owner) && Arc::ptr_eq(&self.version, &other.version)
+        Shared::ptr_eq(&self.owner, &other.owner) && Shared::ptr_eq(&self.version, &other.version)
     }
 }
 

@@ -48,7 +48,8 @@ later publication cannot recreate an earlier identity.
 writer around the original current and undo owners. Acquisition does not clone
 values or allocate successor generations. It acquires both original writers
 without waiting and checks the exact captured identity under those writers;
-the next publication identity was already allocated during capture.
+Storage retains its next publication identity from block opening; Cell allocates
+its next identity during capture.
 A refusal returns the unchanged journal. A prepared publication can be aborted
 back to that journal without changing visible state. Publishing consumes the
 prepared pair and returns both capture and installation reservations to the
@@ -108,8 +109,14 @@ Both retained checkpoint successors transfer before either retired allocation is
 destroyed; cleanup stays under the original parent failure guard.
 `Storage<K, V, Prepaid<P>>::try_new_admitted` constructs this same storage family
 with one original finite pool. Construction and writer startup each reserve one
-checked sum for both maps and partition that reservation without reacquiring
-credits. `try_with_admitted_block` holds both original writers inside the pool's
+checked sum for both maps and their original shared publication identities, then
+partition that reservation without reacquiring credits. The canonical
+`initial_allocation_demand` and `writer_start_allocation_demand` include the actual
+identity layouts. Writer opening owns the successor identity before execution;
+publication needs no new identity allocation. Captured predecessors retain the
+original identity charges until their last reference releases them, even after
+the storage is gone. Identity retirement releases credits after the visibility
+lock and physical writers have unlocked. `try_with_admitted_block` holds both original writers inside the pool's
 refund scope, clears the actual undo tree through admitted reset, and lends a
 private block to a synchronous callback. Its `try_insert_admitted` and
 `try_remove_admitted` fund current and missing first-preimage edits together.
@@ -143,7 +150,7 @@ Applying first destroys its touch keys under both rollback guards, then keeps
 both private successors before retiring displaced checkpoint storage. Cleanup
 panic also makes the original block unusable.
 
-World storage remains Untracked pending native lock/runtime and publication
+World storage remains Untracked pending native lock/runtime and release
 control storage, mutable access, detached capture, concrete model payload policies
 and configured aggregate integration. Replacement and snapshot restoration admit
 each edit; they do not bound aggregate restoration work or complete State admission.

@@ -2,8 +2,8 @@
 //!
 //! Current values, block undo preimages and retained readers share the original
 //! Concread generations. Explicit prepaid storage admits node, writer and copied
-//! payload custody through a finite allocation pool. This is not complete World
-//! admission: publication/release control storage and the remaining mutation
+//! payload and publication identity custody through a finite allocation pool. This
+//! is not complete World admission: native mutex/release storage and the remaining mutation
 //! families require their own allocation owners. Borrowed ordered scans retain
 //! traversal state inline without allocating.
 use core::fmt::Debug;

@@ -273,3 +273,14 @@ but still record the first `None` in undo. One original provider covers both tre
 the pair remains failed through owned query, provider and checkpoint cleanup.
 Touched-key storage is admitted by the enclosing Storage owner. This primitive
 does not activate funded State or admit a complete carrier.
+
+### Shared allocation custody
+
+`shared::Shared` exposes the same strong-only allocation owner used by linear
+cells. Its layout is the actual control block, including the retained charge;
+callers admit that layout before construction. Cloning retains the original
+allocation without acquiring credits. The last reference frees the control block,
+destroys its moved payload, then drops its charge. Payload unwind conservatively
+retains the charge. There is no weak-reference or raw-ownership API. MV uses this
+owner for funded publication identities instead of guessing a standard-library
+`Arc` layout. The internal reserved-shell and reclamation operations remain private.
