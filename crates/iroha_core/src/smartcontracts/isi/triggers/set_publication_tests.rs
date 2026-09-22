@@ -392,3 +392,6 @@ fn trigger_abandonment_releases_every_component_before_callbacks_and_capacity() 
         }
     }
 }
+
+#[path = "set_publication_slot_tests.rs"]
+mod slot_tests;

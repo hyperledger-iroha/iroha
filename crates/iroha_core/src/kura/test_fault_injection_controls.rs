@@ -72,6 +72,11 @@ fn fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index: usize, failures
 }
 
 #[cfg(test)]
+fn fail_after_next_native_amx_evidence_temp_prefix_for_tests(bytes: usize) {
+    FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_PREFIX.with(|flag| flag.set(Some(bytes)));
+}
+
+#[cfg(test)]
 fn fail_after_next_native_amx_evidence_temp_sync_for_tests() {
     FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_SYNC.with(|flag| flag.set(true));
 }

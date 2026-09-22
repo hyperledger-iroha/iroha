@@ -28,7 +28,7 @@ REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_proof_ledger_source_inventory.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
-    "d7ddd8772be27672d2b090a1611f8f44f414504aaa435b187882054b400911fd"
+    "f57934be96d0b82f046c23874e4b1e1d360a506f908b41c62f5f54b6080dad15"
 )
 REVIEWED_RUST_TEXT_HELPER_RELATIVE = Path("scripts/formal/sumeragi_v2_rust_text.py")
 _RUST_TEXT_MODULE_NAME = "_iroha_sumeragi_v2_rust_text"

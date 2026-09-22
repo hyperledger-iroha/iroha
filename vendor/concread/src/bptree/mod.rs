@@ -14,8 +14,8 @@ use crate::utils::MapCollector;
 
 pub use crate::internals::lincowcell::OwnedWriteError;
 use crate::internals::lincowcell::{
-    LinCowCell, LinCowCellCommitRetirement, LinCowCellFamily, LinCowCellOwned,
-    LinCowCellOwnedAcquisition, LinCowCellPredecessor, LinCowCellPreparedCommit,
+    LinCowCell, LinCowCellCommitRetirement, LinCowCellCommitSlot, LinCowCellFamily,
+    LinCowCellOwned, LinCowCellOwnedAcquisition, LinCowCellPredecessor, LinCowCellPreparedCommit,
     LinCowCellPublished, LinCowCellReadTxn, LinCowCellRetainedPredecessor, LinCowCellWriteTxn,
     LinCowCellWriterAcquisition,
 };
@@ -287,6 +287,16 @@ where
         self.inner.try_matches_current(&target.inner)
     }
 
+    /// Observe the original predecessor without waiting, retaining the actual
+    /// reader release until the caller has unlocked its enclosing aggregate.
+    /// A true result is advisory and must be reauthenticated by writer acquisition.
+    pub fn try_matches_current_retaining(
+        &self,
+        target: &BptreeMap<K, V, M>,
+    ) -> Result<(bool, Option<crate::release::DeferredRelease>), OwnedWriteError> {
+        self.inner.try_matches_current_retaining(&target.inner)
+    }
+
     /// Borrow a value from the original unpublished successor.
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
@@ -519,6 +529,67 @@ where
     >,
 }
 
+/// The original map writer retained by its caller during physical preparation.
+/// No cursor, node, identity or charge is copied or allocated by this phase.
+#[must_use = "retain original preparation until aggregate release or publication"]
+pub struct BptreeMapCommitSlot<'a, K, V, M = Untracked>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    inner: LinCowCellCommitSlot<
+        'a,
+        SuperBlock<K, V, M>,
+        CursorRead<K, V, M>,
+        CursorWrite<K, V, M>,
+        M::Charge,
+    >,
+}
+
+impl<'a, K, V, M> BptreeMapCommitSlot<'a, K, V, M>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Prepare under caller custody, retaining physical ownership on unwind.
+    pub fn prepare(&mut self) {
+        self.inner.as_ref().assert_operable();
+        self.inner.prepare();
+    }
+
+    /// Try preparation without releasing the original writer on local refusal.
+    pub fn try_prepare(&mut self) -> Result<(), OwnedWriteError> {
+        self.inner.as_ref().assert_operable();
+        self.inner.try_prepare()
+    }
+
+    /// Whether all original physical owners and cursor invariants are checked.
+    pub fn is_prepared(&self) -> bool {
+        self.inner.is_prepared()
+    }
+
+    /// Transfer checked ownership without another lock, clone or allocation.
+    pub fn into_prepared(self) -> BptreeMapPreparedCommit<'a, K, V, M> {
+        BptreeMapPreparedCommit {
+            inner: self.inner.into_prepared(),
+        }
+    }
+
+    /// Release any acquired reader while retaining its original notification.
+    /// The original writer is returned even when cursor validation unwound.
+    pub fn abort_retaining(
+        self,
+    ) -> (
+        BptreeMapWriteTxn<'a, K, V, M>,
+        Option<crate::release::DeferredRelease>,
+    ) {
+        let (inner, release) = self.inner.abort_retaining();
+        (BptreeMapWriteTxn { inner }, release)
+    }
+}
+
 /// Published original map owners retaining physical locks and cleanup custody.
 /// Aggregate owners release every participating map before dropping cleanup.
 pub struct BptreeMapPublished<'a, K, V, M = Untracked>
@@ -554,16 +625,26 @@ where
     V: Clone + Send + Sync + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
+    /// Install the original writer in a caller-owned slot without validating yet.
+    /// This inert move lets aggregate cleanup remain armed across preparation.
+    pub fn commit_slot(self) -> BptreeMapCommitSlot<'a, K, V, M> {
+        BptreeMapCommitSlot {
+            inner: self.inner.commit_slot(),
+        }
+    }
+
     /// Prepare without waiting for the map's short active-reader lock.
     /// Busy or poison returns the exact original writer with its lock still held.
     pub fn try_prepare_commit(
         self,
     ) -> Result<BptreeMapPreparedCommit<'a, K, V, M>, (Self, OwnedWriteError)> {
-        self.inner.as_ref().assert_operable();
-        self.inner
-            .try_prepare_commit()
-            .map(|inner| BptreeMapPreparedCommit { inner })
-            .map_err(|(inner, error)| (Self { inner }, error))
+        let mut slot = self.commit_slot();
+        if let Err(error) = slot.try_prepare() {
+            let (writer, release) = slot.abort_retaining();
+            debug_assert!(release.is_none(), "failed acquisition owned no reader");
+            return Err((writer, error));
+        }
+        Ok(slot.into_prepared())
     }
 
     /// Acquire and check all physical owners before any aggregate publication.
@@ -571,10 +652,9 @@ where
     /// logical state, poison or inconsistent original ownership panics before
     /// transferring any nodes; aggregate owners prepare every map first.
     pub fn prepare_commit(self) -> BptreeMapPreparedCommit<'a, K, V, M> {
-        self.inner.as_ref().assert_operable();
-        BptreeMapPreparedCommit {
-            inner: self.inner.prepare_commit(),
-        }
+        let mut slot = self.commit_slot();
+        slot.prepare();
+        slot.into_prepared()
     }
 }
 

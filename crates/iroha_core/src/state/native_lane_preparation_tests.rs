@@ -653,7 +653,10 @@ state_test! { sync native_preparation_rejects_stale_source_without_execution_or_
         else { panic!("original source"); };
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
-    drop(state.begin_state_view_write());
+    {
+        let mut publication_notice = state.state_view_publication();
+        drop(publication_notice.begin());
+    }
     let (_, clock) = iroha_primitives::time::TimeSource::new_mock(carrier.header().creation_time());
     assert!(source.prepare_candidate(
         fixture.applying, &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,

@@ -52,7 +52,7 @@ def validate(root):
 
 @pytest.fixture
 def physical_source(tmp_path):
-    for relative in (KURA, DATA, CAPACITY):
+    for relative in (KURA, DATA, CAPACITY, contract.INDEX, contract.PREFIX):
         target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, target)
@@ -210,3 +210,225 @@ def test_replica_registry_uses_accounted_owner_and_preserves_configuration(physi
     changed = actual_item(physical_source, *row[:3], "changed registry", errors)
     assert changed is not None and before not in changed
     assert before in row[3] and any(t not in changed for t in row[3])
+
+
+# Each control mutates the actual reviewed owner; selector labels remain stable.
+REPAIR_PREFIX_MUTATIONS = (('strict-inventory-never-adopts-prefix',
+  'crates/iroha_core/src/kura.rs',
+  'fn',
+  'inventory_native_amx_evidence_files_locked',
+  'None,',
+  'Some(candidate),'),
+ ('only-real-path',
+  'crates/iroha_core/src/kura.rs',
+  'fn',
+  'inventory_native_amx_evidence_with_repair_prefix_locked',
+  'candidate.path == path',
+  'candidate.path != path'),
+ ('only-manifest',
+  'crates/iroha_core/src/kura.rs',
+  'fn',
+  'inventory_native_amx_evidence_with_repair_prefix_locked',
+  'kind == NativeAmxEvidenceKind::Manifest',
+  'kind == NativeAmxEvidenceKind::Receipt'),
+ ('exact-height',
+  'crates/iroha_core/src/kura.rs',
+  'fn',
+  'inventory_native_amx_evidence_with_repair_prefix_locked',
+  'candidate.participant_height == participant_height',
+  'true'),
+ ('exact-file-metadata',
+  'crates/iroha_core/src/kura.rs',
+  'fn',
+  'inventory_native_amx_evidence_with_repair_prefix_locked',
+  'Self::stable_sidecar_metadata_unchanged(&candidate.metadata, &metadata)',
+  'true'),
+ ('strict-empty-default',
+  'crates/iroha_core/src/kura.rs',
+  'fn',
+  'inventory_native_amx_evidence_with_repair_prefix_locked',
+  'len == 0 && !owned_prefix',
+  'false'),
+ ('physical-prefix-byte-bound',
+  'crates/iroha_core/src/kura.rs',
+  'fn',
+  'inventory_native_amx_evidence_with_repair_prefix_locked',
+  'len > self.native_amx_participant_evidence_file_bytes()',
+  'false'),
+ ('prefix-counts-in-aggregate',
+  'crates/iroha_core/src/kura.rs',
+  'fn',
+  'inventory_native_amx_evidence_with_repair_prefix_locked',
+  'bytes > aggregate_limit',
+  'false'),
+ ('retained-count-bound',
+  'crates/iroha_core/src/kura.rs',
+  'fn',
+  'inventory_native_amx_evidence_with_repair_prefix_locked',
+  'count > stable_entry_limit',
+  'false'),
+ ('completed-origin',
+  'crates/iroha_core/src/kura/native_amx_publication_index.rs',
+  'method',
+  'Kura::native_amx_completed_repair_artifacts_under_prune_and_canonical_guards',
+  'record.origin != NativeAmxPublicationIndexOriginV1::CompletedRepair',
+  'false'),
+ ('original-wire-record',
+  'crates/iroha_core/src/kura/native_amx_publication_index.rs',
+  'method',
+  'Kura::native_amx_completed_repair_artifacts_under_prune_and_canonical_guards',
+  'record.carrier != carrier',
+  'false'),
+ ('original-merge-record',
+  'crates/iroha_core/src/kura/native_amx_publication_index.rs',
+  'method',
+  'Kura::native_amx_completed_repair_artifacts_under_prune_and_canonical_guards',
+  'record.merge_entry_hash != merge.map(MergeLedgerEntry::canonical_hash)',
+  'false'),
+ ('selected-full-wire',
+  'crates/iroha_core/src/kura/native_amx_publication_index.rs',
+  'method',
+  'Kura::native_amx_completed_repair_artifacts_under_prune_and_canonical_guards',
+  'Self::native_amx_publication_carrier(&selected)? != carrier',
+  'false'),
+ ('reconstruct-from-full-carrier',
+  'crates/iroha_core/src/kura/native_amx_publication_index.rs',
+  'method',
+  'Kura::native_amx_completed_repair_artifacts_under_prune_and_canonical_guards',
+  'from_result_bearing_block_and_merge_entry(block, merge)',
+  'from_result_bearing_block_and_merge_entry(block, None)'),
+ ('original-stable-receipt',
+  'crates/iroha_core/src/kura/native_amx_publication_index.rs',
+  'method',
+  'Kura::require_native_amx_completed_repair_receipt_with_inventory_locked',
+  'self.decode_native_amx_receipt_file_locked(entry, &namespace, file)? != *receipt',
+  'false'),
+ ('original-stable-latest',
+  'crates/iroha_core/src/kura/native_amx_publication_index.rs',
+  'method',
+  'Kura::require_native_amx_completed_repair_receipt_with_inventory_locked',
+  'NativeAmxParticipantReceiptLatestIndexV2::from_receipt(\n                receipt,\n            )',
+  'NativeAmxParticipantReceiptLatestIndexV2::from_receipt(other)'),
+ ('full-temp-remains-exact',
+  'crates/iroha_core/src/kura/native_amx_publication_index.rs',
+  'method',
+  'Kura::require_native_amx_completed_repair_receipt_with_inventory_locked',
+  '!= expected',
+  '== expected'),
+ ('only-existing-completed-owner',
+  'crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards',
+  'record.origin == NativeAmxPublicationIndexOriginV1::CompletedRepair',
+  'record.origin == NativeAmxPublicationIndexOriginV1::CanonicalWrite'),
+ ('all-carrier-routes',
+  'crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards',
+  'for (manifest, receipt) in artifacts {',
+  'for (manifest, receipt) in artifacts.into_iter().take(1) {'),
+ ('wsv-authority-before-cleanup',
+  'crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards',
+  '!self.native_amx_publication_wsv_join_is_complete_locked(&manifest, &receipt)?',
+  'false'),
+ ('physical-target-joins-receipt',
+  'crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards',
+  'self.native_amx_reservation_physical_target_from_journal(\n'
+  '                    &receipt.participant_proposal.descriptor,\n'
+  '                )?',
+  'self.native_amx_reservation_physical_target_from_journal(\n'
+  '                    &other.participant_proposal.descriptor,\n'
+  '                )?'),
+ ('exact-inventory-candidate',
+  'crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards',
+  'file.path == temporary.path',
+  'true'),
+ ('later-frontier-refuses-prefix',
+  'crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards',
+  '} else if prefix.is_some() {',
+  '} else if false {'),
+ ('proper-prefix-only',
+  'crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::open_native_amx_completed_repair_prefix_locked',
+  'len >= expected.len()',
+  'len > expected.len()'),
+ ('exact-canonical-prefix',
+  'crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::open_native_amx_completed_repair_prefix_locked',
+  '!expected.starts_with(&prefix)',
+  '!expected.ends_with(&prefix)'),
+ ('same-open-descriptor',
+  'crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::open_native_amx_completed_repair_prefix_locked',
+  'Self::open_bound_progress_file(namespace, &path, &metadata)?',
+  'Self::open_bound_progress_file(namespace, &other_path, &metadata)?'),
+ ('retained-original-file',
+  'crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::open_native_amx_completed_repair_prefix_locked',
+  '&mut opened,',
+  '&mut other_opened,'),
+ ('retain-observed-length',
+  'crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::open_native_amx_completed_repair_prefix_locked',
+  'prefix.resize(len, 0);',
+  'prefix.resize(0, 0);'),
+ ('before-route-preflight-persist_native_amx_participant_application_evidence_under_publication_guard',
+  'crates/iroha_core/src/kura.rs',
+  'fn',
+  'persist_native_amx_participant_application_evidence_under_publication_guard',
+  'self.recover_native_amx_completed_repair_prefixes_under_publication_guard(block)?;',
+  'let _ = block;'),
+ ('before-route-preflight-persist_native_amx_participant_application_repair_targets_under_publication_guard',
+  'crates/iroha_core/src/kura.rs',
+  'fn',
+  'persist_native_amx_participant_application_repair_targets_under_publication_guard',
+  'self.recover_native_amx_completed_repair_prefixes_under_publication_guard(block)?;',
+  'let _ = block;'))
+
+@pytest.mark.parametrize("label,path,kind,symbol,old,new", REPAIR_PREFIX_MUTATIONS,
+                         ids=[row[0] for row in REPAIR_PREFIX_MUTATIONS])
+def test_completed_repair_prefix_rejects_owner_drift(physical_source, label, path, kind, symbol, old, new):
+    mutate(physical_source, path, kind, symbol, old, new)
+    errors = validate(physical_source)
+    assert any("repair-prefix " in error and f"owner {symbol} " in error
+               for error in errors), errors
+    assert not any("digest" in error or "has 0 owners" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("first,second", [
+    ("self.verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(",
+     "Self::remove_bound_progress_file_if_matches("),
+    ("Self::remove_bound_progress_file_if_matches(",
+     "self.sync_native_amx_evidence_namespace("),
+])
+def test_completed_repair_prefix_rejects_unlink_order_drift(physical_source, first, second):
+    symbol = "Kura::recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards"
+    errors = []
+    item = actual_item(physical_source, contract.PREFIX, "method", symbol, "prefix order", errors)
+    assert errors == [] and item is not None
+    # Both complete fallible statements remain syntactically present. Reverse
+    # only the descriptor-check/unlink or unlink/directory-sync order.
+    def statement(anchor):
+        begin = item.index(anchor)
+        end = item.index("?;", begin) + 2
+        return begin, end, item[begin:end]
+    a, a_end, a_text = statement(first)
+    b, b_end, b_text = statement(second)
+    assert a_end <= b
+    mutate(physical_source, contract.PREFIX, "method", symbol,
+           item[a:b_end], b_text + item[a_end:b] + a_text)
+    assert any(f"repair-prefix executable owner {symbol} " in error
+               for error in validate(physical_source))

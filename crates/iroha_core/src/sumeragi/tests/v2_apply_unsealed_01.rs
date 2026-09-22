@@ -974,7 +974,7 @@ v2_apply_test!(committed_merge_reservation_rejects_bare_norito, {
     let autonomous_carrier = body_with_exact_merge_execution_header(&entry);
     assert_eq!(
         CheckedCarrierApplications::for_block(&autonomous_carrier)
-            .consume_for_state_commit(autonomous_carrier.hash(), Some(&entry)),
+            .validate_for_state_commit(autonomous_carrier.hash(), Some(&entry)),
         Err("checked ApplyCarrier batch identity or cardinality changed before State commit"),
         "an empty checked-transition collection must not authorize an autonomous carrier",
     );
@@ -1227,7 +1227,7 @@ v2_apply_test!(
             .expect("retain exact checked ApplyCarrier transition");
         let exact: Box<dyn StateBlockCommitAuthorization> = Box::new(exact);
         assert_eq!(
-            exact.consume_for_state_commit(carrier.hash(), Some(&entry)),
+            exact.validate_for_state_commit(carrier.hash(), Some(&entry)),
             Ok(()),
             "the real trait object must consume its move-only token against the exact State entry"
         );
@@ -1240,7 +1240,7 @@ v2_apply_test!(
             .push(checked, projection)
             .expect("retain one checked transition for mismatch test");
         assert_eq!(
-            wrong_cardinality.consume_for_state_commit(carrier.hash(), Some(&entry)),
+            wrong_cardinality.validate_for_state_commit(carrier.hash(), Some(&entry)),
             Err("checked ApplyCarrier batch identity or cardinality changed before State commit")
         );
         let mut wrong_entry = CheckedCarrierApplications::for_block(&carrier);
@@ -1254,7 +1254,7 @@ v2_apply_test!(
         let mut changed_entry = entry.clone();
         changed_entry.epoch_id = changed_entry.epoch_id.saturating_add(1);
         assert_eq!(
-            wrong_entry.consume_for_state_commit(carrier.hash(), Some(&changed_entry)),
+            wrong_entry.validate_for_state_commit(carrier.hash(), Some(&changed_entry)),
             Err("checked ApplyCarrier batch identity or cardinality changed before State commit")
         );
         let mut wrong_block = CheckedCarrierApplications::for_block(&carrier);
@@ -1269,7 +1269,7 @@ v2_apply_test!(
             b"unrelated checked ApplyCarrier State block",
         ));
         assert_eq!(
-            wrong_block.consume_for_state_commit(other_block_hash, Some(&entry)),
+            wrong_block.validate_for_state_commit(other_block_hash, Some(&entry)),
             Err("checked ApplyCarrier block identity changed before State commit")
         );
         let mut changed_projection = CheckedCarrierApplications::for_block(&carrier);
@@ -1286,7 +1286,7 @@ v2_apply_test!(
             .decision
             .applied_by = 0;
         assert_eq!(
-            changed_projection.consume_for_state_commit(carrier.hash(), Some(&entry)),
+            changed_projection.validate_for_state_commit(carrier.hash(), Some(&entry)),
             Err("checked ApplyCarrier projection changed before State commit")
         );
         let network_id = fixture.context.network_id;

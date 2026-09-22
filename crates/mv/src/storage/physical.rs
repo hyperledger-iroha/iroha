@@ -3,11 +3,12 @@
 use super::*;
 use crate::publication::{IdentityRetirement, PreparedIdentity};
 use concread::{
-    bptree::{BptreeMapCommitRetirement, BptreeMapPreparedCommit},
+    bptree::{BptreeMapCommitRetirement, BptreeMapCommitSlot},
     release::DeferredRelease,
 };
 
 /// Join notifications only to an actually acquired original physical writer.
+#[cfg(test)]
 pub(super) fn acquire_owned_writer<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>>(
     map: &'a BptreeMap<K, V, M>,
     released: &'a ReleaseNotification,
@@ -33,8 +34,11 @@ pub(super) fn acquire_owned_writer<'a, K: Key, V: Value, M: MapMode + NodeClonin
 }
 
 enum MapStage<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> {
-    Writer(ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>),
-    Prepared(ReleaseGuard<'a, BptreeMapPreparedCommit<'a, K, V, M>>),
+    Held(ReleaseGuard<'a, BptreeMapCommitSlot<'a, K, V, M>>),
+    Released {
+        _owner: BptreeMapAbandonment<K, V, M>,
+        _releases: MapReleases,
+    },
 }
 
 pub(super) struct MapReleases {
@@ -43,24 +47,40 @@ pub(super) struct MapReleases {
 }
 
 impl<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> MapStage<'a, K, V, M> {
-    fn prepare(self) -> Result<Self, (Self, OwnedWriteError)> {
-        let Self::Writer(writer) = self else {
-            unreachable!("original writer prepares only once")
+    fn new(writer: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>) -> Self {
+        Self::Held(writer.map_preserving_release(|writer| writer.commit_slot()))
+    }
+
+    fn prepare(&mut self) -> Result<(), OwnedWriteError> {
+        let Self::Held(slot) = self else {
+            panic!("original map was released")
         };
-        writer
-            .try_map_preserving_release(|writer| writer.try_prepare_commit())
-            .map(Self::Prepared)
-            .map_err(|(writer, error)| (Self::Writer(writer), error))
+        slot.try_prepare()
+    }
+
+    fn prepare_blocking(&mut self) {
+        let Self::Held(slot) = self else {
+            panic!("original map was released")
+        };
+        slot.prepare();
+    }
+
+    fn is_prepared(&self) -> bool {
+        matches!(self, Self::Held(slot) if slot.is_prepared())
+    }
+
+    fn into_held(self) -> ReleaseGuard<'a, BptreeMapCommitSlot<'a, K, V, M>> {
+        match self {
+            Self::Held(slot) => slot,
+            Self::Released { .. } => panic!("terminal release grants no publication"),
+        }
     }
 
     fn abort(self) -> (BptreeMapOwned<K, V, M>, MapReleases) {
-        let ((owner, reader), writer) = match self {
-            Self::Writer(writer) => writer.release_deferred(|writer| (writer.detach(), None)),
-            Self::Prepared(prepared) => prepared.release_deferred(|prepared| {
-                let (writer, reader) = prepared.abort_retaining();
-                (writer.detach(), Some(reader))
-            }),
-        };
+        let ((owner, reader), writer) = self.into_held().release_deferred(|slot| {
+            let (writer, reader) = slot.abort_retaining();
+            (writer.detach(), reader)
+        });
         (
             owner,
             MapReleases {
@@ -68,6 +88,28 @@ impl<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> MapStage<'a, K, V, M>
                 _writer: writer,
             },
         )
+    }
+
+    fn release(phase: &mut Option<Self>) {
+        if !matches!(phase, Some(Self::Held(_))) {
+            return;
+        }
+        let ((owner, reader), writer) = phase
+            .take()
+            .expect("original held map")
+            .into_held()
+            .release_deferred(|slot| {
+                let (writer, reader) = slot.abort_retaining();
+                // A failed private cursor is cleanup custody, never a journal.
+                (writer.abort_retaining(), reader)
+            });
+        *phase = Some(Self::Released {
+            _owner: owner,
+            _releases: MapReleases {
+                _reader: reader,
+                _writer: writer,
+            },
+        });
     }
 }
 
@@ -91,6 +133,9 @@ pub(super) struct PreparedStorageWriters<'a, K: Key, V: Value, M: StorageMode<K,
     probe: Option<IdentityRetirement>,
     refused_identity: Option<IdentityRetirement>,
     target: &'a Storage<K, V, M>,
+    complete: bool,
+    started: bool,
+    released: bool,
 }
 
 impl<'a, K: Key, V: Value, M: StorageMode<K, V>> PreparedStorageWriters<'a, K, V, M> {
@@ -99,13 +144,24 @@ impl<'a, K: Key, V: Value, M: StorageMode<K, V>> PreparedStorageWriters<'a, K, V
         probe: Option<IdentityRetirement>,
     ) -> Self {
         let target = writers.target;
-        let OriginalWriters { revert, blocks } = writers.into_original();
+        Self::from_original(target, writers.into_original(), probe)
+    }
+
+    pub(super) fn from_original(
+        target: &'a Storage<K, V, M>,
+        original: OriginalWriters<'a, K, V, M>,
+        probe: Option<IdentityRetirement>,
+    ) -> Self {
+        let OriginalWriters { revert, blocks } = original;
         Self {
-            revert: Some(MapStage::Writer(revert)),
-            blocks: Some(MapStage::Writer(blocks)),
+            revert: Some(MapStage::new(revert)),
+            blocks: Some(MapStage::new(blocks)),
             identity: None,
             probe,
             refused_identity: None,
+            complete: false,
+            started: false,
+            released: false,
             target,
         }
     }
@@ -127,25 +183,24 @@ impl<'a, K: Key, V: Value, M: StorageMode<K, V>> PreparedStorageWriters<'a, K, V
                 OwnedWriteError::Changed => PublicationPreparationError::Changed,
             }
         }
+        assert!(
+            !self.started && !self.released,
+            "original pair prepares once"
+        );
+        self.started = true;
         let wait = self.target.revert.observe_reader_release();
-        self.revert = Some(match self.revert.take().expect("original undo").prepare() {
-            Ok(prepared) => prepared,
-            Err((writer, error)) => {
-                self.revert = Some(writer);
-                return Err(refusal(error, wait));
-            }
-        });
+        self.revert
+            .as_mut()
+            .expect("original undo")
+            .prepare()
+            .map_err(|error| refusal(error, wait))?;
         if dirty {
             let wait = self.target.blocks.observe_reader_release();
-            self.blocks = Some(
-                match self.blocks.take().expect("original current").prepare() {
-                    Ok(prepared) => prepared,
-                    Err((writer, error)) => {
-                        self.blocks = Some(writer);
-                        return Err(refusal(error, wait));
-                    }
-                },
-            );
+            self.blocks
+                .as_mut()
+                .expect("original current")
+                .prepare()
+                .map_err(|error| refusal(error, wait))?;
         }
         match predecessor.try_prepare_current(&self.target.publication) {
             Ok(identity) => self.identity = Some(identity),
@@ -154,7 +209,50 @@ impl<'a, K: Key, V: Value, M: StorageMode<K, V>> PreparedStorageWriters<'a, K, V
                 return Err(error);
             }
         }
+        self.complete = true;
         Ok(())
+    }
+
+    /// Block without releasing caller custody; ordinary commit preserves its
+    /// original lock policy and performs no new writer acquisition or allocation.
+    pub(super) fn prepare_attached(&mut self, predecessor: &CapturedPublication, dirty: bool) {
+        assert!(
+            !self.started && !self.released,
+            "original pair prepares once"
+        );
+        self.started = true;
+        self.revert
+            .as_mut()
+            .expect("original undo")
+            .prepare_blocking();
+        if dirty {
+            self.blocks
+                .as_mut()
+                .expect("original current")
+                .prepare_blocking();
+        }
+        predecessor.prepare_current_in(&self.target.publication, &mut self.identity);
+        self.complete = true;
+    }
+
+    pub(super) fn is_prepared(&self) -> bool {
+        self.complete && !self.released
+    }
+
+    /// Terminally release physical owners while retaining exact cleanup in place.
+    /// Failed cursors use abandonment and cannot become readable detached journals.
+    pub(super) fn release(&mut self) {
+        if self.released {
+            return;
+        }
+        MapStage::release(&mut self.blocks);
+        MapStage::release(&mut self.revert);
+        if let Some(identity) = self.identity.take() {
+            debug_assert!(self.refused_identity.is_none());
+            self.refused_identity = Some(identity.abort());
+        }
+        self.complete = false;
+        self.released = true;
     }
 
     pub(super) fn abort<I>(
@@ -165,6 +263,7 @@ impl<'a, K: Key, V: Value, M: StorageMode<K, V>> PreparedStorageWriters<'a, K, V
         BptreeMapOwned<K, Option<V>, M>,
         PublicationCleanup<I>,
     ) {
+        assert!(!self.released, "terminal release grants no journal");
         let (blocks, block_releases) = self.blocks.take().expect("original current").abort();
         let (revert, revert_releases) = self.revert.take().expect("original undo").abort();
         let identity = self
@@ -179,7 +278,8 @@ impl<'a, K: Key, V: Value, M: StorageMode<K, V>> PreparedStorageWriters<'a, K, V
             revert,
             PublicationCleanup {
                 _readers: [block_releases._reader, revert_releases._reader],
-                writers: [Some(block_releases._writer), Some(revert_releases._writer)],
+                _writers: [Some(block_releases._writer), Some(revert_releases._writer)],
+                writer_batches: [None, None],
                 identities: [self.probe.take(), identity],
                 installation: Some(installation),
             },
@@ -187,22 +287,36 @@ impl<'a, K: Key, V: Value, M: StorageMode<K, V>> PreparedStorageWriters<'a, K, V
     }
 
     pub(super) fn publish(mut self, next: NextPublication) -> PublicationRetirement<K, V, M> {
-        let blocks = self.blocks.take().expect("original current");
-        let MapStage::Prepared(revert) = self.revert.take().expect("original undo") else {
-            unreachable!("undo preparation precedes publication")
-        };
+        assert!(
+            self.complete && !self.released,
+            "original pair preparation must complete"
+        );
+        let blocks_prepared = self
+            .blocks
+            .as_ref()
+            .expect("original current")
+            .is_prepared();
+        assert!(self.revert.as_ref().expect("original undo").is_prepared());
+        let blocks = self.blocks.take().expect("original current").into_held();
+        let revert = self.revert.take().expect("original undo").into_held();
         let identity = self.identity.take().expect("original prepared identity");
         let ((blocks, revert, unchanged, blocks_release, revert_release), identity) = identity
             .publish_retaining(
                 next,
                 || {
-                    let (blocks, unchanged) = match blocks {
-                        MapStage::Prepared(blocks) => {
-                            (Some(blocks.map_preserving_release(|p| p.publish())), None)
-                        }
-                        MapStage::Writer(blocks) => (None, Some(blocks)),
+                    let (blocks, unchanged) = if blocks_prepared {
+                        (
+                            Some(
+                                blocks
+                                    .map_preserving_release(|slot| slot.into_prepared().publish()),
+                            ),
+                            None,
+                        )
+                    } else {
+                        (None, Some(blocks))
                     };
-                    let revert = revert.map_preserving_release(|p| p.publish());
+                    let revert =
+                        revert.map_preserving_release(|slot| slot.into_prepared().publish());
                     (blocks, revert, unchanged)
                 },
                 |(blocks, revert, unchanged)| {
@@ -212,7 +326,14 @@ impl<'a, K: Key, V: Value, M: StorageMode<K, V>> PreparedStorageWriters<'a, K, V
                             (Some(retirement), None, release)
                         }
                         (None, Some(unchanged)) => {
-                            let (owner, release) = unchanged.release_deferred(|w| w.detach());
+                            let (owner, release) = unchanged.release_deferred(|slot| {
+                                let (writer, reader) = slot.abort_retaining();
+                                debug_assert!(
+                                    reader.is_none(),
+                                    "unchanged writer was not prepared"
+                                );
+                                writer.detach()
+                            });
                             (None, Some(owner), release)
                         }
                         _ => unreachable!("one original current owner"),
@@ -235,15 +356,6 @@ impl<'a, K: Key, V: Value, M: StorageMode<K, V>> PreparedStorageWriters<'a, K, V
 
 impl<K: Key, V: Value, M: StorageMode<K, V>> Drop for PreparedStorageWriters<'_, K, V, M> {
     fn drop(&mut self) {
-        // Keep private payloads until every physical lock is gone. Struct-field
-        // drop would otherwise notify the first reader while the second is held.
-        let blocks = self.blocks.take().map(MapStage::abort);
-        let revert = self.revert.take().map(MapStage::abort);
-        let identity = self
-            .identity
-            .take()
-            .map(PreparedIdentity::abort)
-            .or(self.refused_identity.take());
-        drop((blocks, revert, identity, self.probe.take()));
+        self.release();
     }
 }

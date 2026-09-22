@@ -270,7 +270,10 @@ state_test! { sync native_recorded_controls_reject_foreign_pristine_state_and_st
     let controls = crate::block::ValidBlock::prepare_native_execution_controls(&carrier, state, applying).unwrap();
     // A publication generation change invalidates captured control authority,
     // even when the carrier hash and committed economic bytes remain equal.
-    drop(state.begin_state_view_write());
+    {
+        let mut publication_notice = state.state_view_publication();
+        drop(publication_notice.begin());
+    }
     let error = state.block_with_pristine_stage(carrier.header(), |overlay| {
         let _recorder = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
         controls.apply(overlay).map(|_| ())

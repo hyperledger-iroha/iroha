@@ -84,9 +84,10 @@ fn ahead_disposable_reset_journal_cannot_suppress_original_visibility() {
         prepared.identity_visible
     );
     let post = {
+        let mut generation_notice = state.state_view_publication();
         let _writer = state.state_write_lock.lock();
-        let generation = state.begin_state_view_write();
-        prepared.publish(&state, &generation, false)
+        let generation = generation_notice.begin();
+        publish(prepared, &state, &generation, false)
     };
     assert!(
         post.lane_config.is_none(),
@@ -142,9 +143,10 @@ fn retired_lane_keeps_original_bundle_position_and_reserved_identity() {
     assert_eq!(prepared.active, vec![active.clone()]);
     let original = prepared.pending.bundle.commitments.clone();
     {
+        let mut generation_notice = state.state_view_publication();
         let _writer = state.state_write_lock.lock();
-        let generation = state.begin_state_view_write();
-        let post = prepared.publish(&state, &generation, true);
+        let generation = generation_notice.begin();
+        let post = publish(prepared, &state, &generation, true);
         assert!(post.lane_config.is_some());
     }
     let commitments = state.da_commitments.read();
@@ -214,9 +216,10 @@ fn confidential_receipt_and_cursor_use_original_position_policy_and_shard() {
     // Neither publishing component may re-read the live catalog for this input.
     assert!(state.nexus_snapshot().lane_config.entry(lane).is_none());
     let post = {
+        let mut generation_notice = state.state_view_publication();
         let _writer = state.state_write_lock.lock();
-        let generation = state.begin_state_view_write();
-        prepared.publish(&state, &generation, true)
+        let generation = generation_notice.begin();
+        publish(prepared, &state, &generation, true)
     };
     assert_eq!(post.lane_config.as_ref().unwrap().shard_id(lane), 7);
     assert!(state.da_shard_cursors.read().get(7, lane).is_some());
@@ -231,4 +234,75 @@ fn confidential_receipt_and_cursor_use_original_position_policy_and_shard() {
         receipt.receipt.allowed_audiences,
         BTreeSet::from(["retained-audience".to_owned()])
     );
+}
+
+#[test]
+fn post_persistence_uses_captured_cursor_without_new_reader_release() {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+
+    let state = state();
+    let prepared = prepare(&state, 1, vec![record(LaneId::SINGLE, 9)]);
+    assert!(!state.da_shard_cursor_journal_path().as_os_str().is_empty());
+    let mut indexes = effect_publication::StateEffectLocks::new(&state);
+    let mut notice = state.state_view_publication();
+    let commit = state.state_commit_lock.lock();
+    let write = state.state_write_lock.lock();
+    indexes.try_prepare().expect("original effect writers");
+    let generation = notice.begin();
+    let mut post = prepared.publish(&state, &mut indexes, &generation, true);
+    indexes
+        .da_shard_cursors
+        .as_mut()
+        .unwrap()
+        .mark_lanes_canonically_reset(&BTreeSet::from([LaneId::SINGLE]), 7);
+    post.capture_snapshot(&state, indexes.da_shard_cursors.as_ref().unwrap());
+    assert_eq!(
+        post.snapshot
+            .as_ref()
+            .unwrap()
+            .canonical_reset_height_for_lane(LaneId::SINGLE),
+        Some(7)
+    );
+    let wait = state
+        .da_shard_cursors
+        .try_write_or_wait()
+        .expect_err("original writer held");
+    let mut pending = std::pin::pin!(wait.wait_for_release());
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(pending.as_mut().poll(&mut context).is_pending());
+    drop(generation);
+    indexes.release_writers();
+    post.publish(&state);
+    assert!(
+        pending.as_mut().poll(&mut context).is_pending(),
+        "post work must not emit a fresh reader release under State fences"
+    );
+    drop(write);
+    drop(commit);
+    drop(indexes);
+    assert_eq!(pending.as_mut().poll(&mut context), Poll::Ready(()));
+}
+
+// Component tests use the same real index preparation kernel as both publishers.
+fn publish(
+    prepared: PreparedDaCommitmentEffects,
+    state: &State,
+    generation: &StateViewGenerationWriteGuard<'_>,
+    process: bool,
+) -> DaCommitmentPostPublication {
+    let mut indexes = effect_publication::StateEffectLocks::new(state);
+    indexes.try_prepare().expect("uncontended original indexes");
+    let mut post = prepared.publish(state, &mut indexes, generation, process);
+    post.capture_snapshot(
+        state,
+        indexes
+            .da_shard_cursors
+            .as_ref()
+            .expect("original cursor writer"),
+    );
+    indexes.release_writers();
+    post
 }

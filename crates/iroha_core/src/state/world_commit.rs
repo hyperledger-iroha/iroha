@@ -16,8 +16,10 @@ use super::*;
 
 /// One finalized World overlay and its derived DA cache publication records.
 pub(in crate::state) struct PreparedWorldCommit<'state> {
+    #[cfg(test)]
     state: &'state State,
     world: WorldBlock<'state>,
+    #[cfg(test)]
     effects: PreparedWorldEffects,
 }
 
@@ -37,13 +39,14 @@ impl PreparedWorldEffects {
 
     /// Consume the exact deferred cache records after their World is published.
     /// The enclosing State publisher retains all authorization and writer gates.
-    pub(in crate::state) fn publish(self, state: &State) {
-        state.publish_prepared_da_pins(self.da_pins);
+    pub(in crate::state) fn publish(self, state: &State, cache: &mut DaPinStore) {
+        state.publish_prepared_da_pins(self.da_pins, cache);
     }
 }
 
 impl<'state> PreparedWorldCommit<'state> {
     /// Finish late deterministic writes before any live World/cache publication.
+    #[cfg(test)]
     pub(in crate::state) fn prepare(
         state: &'state State,
         mut world: WorldBlock<'state>,
@@ -109,6 +112,7 @@ impl<'state> PreparedWorldCommit<'state> {
     }
 
     /// Read the completed overlay; no subsequent caller mutation is possible.
+    #[cfg(test)]
     pub(in crate::state) fn world(&self) -> &WorldBlock<'state> {
         &self.world
     }
@@ -130,9 +134,11 @@ impl<'state> PreparedWorldCommit<'state> {
     }
 
     /// Consume the same prepared World after State's publication gates succeed.
+    #[cfg(test)]
     pub(in crate::state) fn commit(self) {
         self.world.commit();
-        self.effects.publish(self.state);
+        self.effects
+            .publish(self.state, &mut self.state.da_pin_intents.write());
     }
 
     fn prepare_pins(
@@ -355,11 +361,14 @@ impl State {
 
     /// Materialize a derived cache only after its authoritative World is visible.
     /// A cache collision triggers reconstruction; it can never veto a World write.
-    fn publish_prepared_da_pins(&self, records: Vec<DaPinIntentWithLocation>) {
+    fn publish_prepared_da_pins(
+        &self,
+        records: Vec<DaPinIntentWithLocation>,
+        cache: &mut DaPinStore,
+    ) {
         if records.is_empty() {
             return;
         }
-        let mut cache = self.da_pin_intents.write();
         for record in records {
             if !cache.insert_with_location(record) {
                 // Recovery from a stale/ahead cache is deliberately a cold path.

@@ -28,8 +28,8 @@ macro_rules! trigger_acquisition {
             }
 
             fn into_block(mut self) -> Self::Block {
-                SetBlock { fields: Some(SetBlockFields {
-                    $($field: self.$field.take().expect("original trigger slot").into_block(),)+
+                SetBlock { publication: AggregatePublication::Executing, fields: Some(SetBlockFields {
+                    $($field: BlockField::new(self.$field.take().expect("original trigger slot").into_block()),)+
                 }) }
             }
         }
@@ -40,8 +40,24 @@ macro_rules! trigger_acquisition {
             }
         }
 
+        impl SetBlock<'_> {
+            pub(crate) fn prepare_publication(&mut self) {
+                self.publication.begin_preparation();
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.prepare_publication();)+
+                self.publication.finish_preparation();
+            }
+            pub(crate) fn publish_prepared(&mut self) {
+                self.publication.begin_publication();
+                let fields = self.fields.as_mut().expect("original trigger block fields");
+                $(fields.$field.publish_prepared();)+
+                self.publication.finish_publication();
+            }
+        }
+
         impl BlockRetirement for SetBlock<'_> {
             fn release_writers(&mut self) {
+                self.publication.release();
                 if let Some(fields) = self.fields.as_mut() {
                     $(fields.$field.release_writers();)+
                 }
@@ -65,8 +81,7 @@ trigger_acquisition! {
 
 impl<'set> SetBlock<'set> {
     pub(super) fn into_fields(mut self) -> SetBlockFields<'set> {
-        // Capture only performs inert moves before its caller owns every slot.
-        // TODO: retain aggregate retirement through consuming commit too.
+        self.publication.assert_executing();
         self.fields.take().expect("original trigger block fields")
     }
 }

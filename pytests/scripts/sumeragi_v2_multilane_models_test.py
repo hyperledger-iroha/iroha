@@ -1298,30 +1298,12 @@ def test_native_prepublication_contract_rejects_apply_order_drift(
 @pytest.mark.parametrize(
     ("earlier", "later"),
     (
-        (
-            "let _state_commit_lock = state_ref.state_commit_lock.lock();",
-            "let autoscale_lifecycle_guard",
-        ),
-        (
-            "let autoscale_lifecycle_guard",
-            "autoscale_retirement_queue_veto.as_mut()",
-        ),
-        (
-            "autoscale_retirement_queue_veto.as_mut()",
-            "state_commit_authorization.take()",
-        ),
-        (
-            "state_commit_authorization.take()",
-            ".consume_for_state_commit(",
-        ),
-        (
-            ".consume_for_state_commit(",
-            "state_ref.apply_committed_autoscale_lane_geometry(",
-        ),
-        (
-            "state_ref.apply_committed_autoscale_lane_geometry(",
-            "transactions.publish()",
-        ),
+        pytest.param('let _state_commit_lock = commit_fence.lock();', 'let autoscale_lifecycle_guard', id='let _state_commit_lock = state_ref.state_commit_lock.lock();-let autoscale_lifecycle_guard'),
+        pytest.param('let autoscale_lifecycle_guard', 'autoscale_retirement_queue_veto.as_mut()', id='let autoscale_lifecycle_guard-autoscale_retirement_queue_veto.as_mut()'),
+        pytest.param('autoscale_retirement_queue_veto.as_mut()', 'state_commit_authorization.as_ref()', id='autoscale_retirement_queue_veto.as_mut()-state_commit_authorization.take()'),
+        pytest.param('state_commit_authorization.as_ref()', '.validate_for_state_commit(', id='state_commit_authorization.take()-.consume_for_state_commit('),
+        pytest.param('.validate_for_state_commit(', 'state_ref.apply_committed_autoscale_lane_geometry(', id='.consume_for_state_commit(-state_ref.apply_committed_autoscale_lane_geometry('),
+        pytest.param('state_ref.apply_committed_autoscale_lane_geometry(', 'transactions.publish_prepared()', id='state_ref.apply_committed_autoscale_lane_geometry(-transactions.publish()'),
     ),
 )
 def test_native_prepublication_contract_rejects_state_commit_order_drift(
@@ -3641,3 +3623,64 @@ def test_rust_method_owner_qualified_trait_is_exact(header, accepted):
     source = header + " {\n    fn drop(&mut self) { original_guard(); }\n}"
     items = checker._extract_rust_binding_items(source, "method", "Drop for Owner::drop")
     assert len(items) == int(accepted)
+
+
+def test_native_prepublication_formatted_call_sites_match_raw_ledger():
+    """The canonical raw ledger must accept both exact Rustfmt call sites."""
+    module = load_checker()
+    native = next(model for model in canonical_models()
+                  if model["module"] == module.NATIVE_PREPUBLICATION_MODULE)
+    errors = []
+    with module._reviewed_rust_source_cache():
+        module._validate_model(ROOT_DIR, ROOT_DIR / "formal/sumeragi_v2", native, errors)
+    assert errors == []
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    pytest.param("State::block_and_revert_with_pristine_stage", "acquired\n                .rewind_da_indexes_to_height(target_height)", "self.rewind_da_indexes_to_height(target_height)", id="rewind-original-acquired-receiver"),
+    pytest.param("State::block_and_revert_with_pristine_stage", ".rewind_da_indexes_to_height(target_height)", ".rewind_da_indexes_to_height(current_height)", id="rewind-original-target-height"),
+    pytest.param("State::install_lane_manifests", "            manifests,", "            other_manifests,", id="manifest-original-registry"),
+    pytest.param("State::install_lane_manifests", "            privacy,", "            other_privacy,", id="manifest-original-privacy"),
+    pytest.param("State::install_lane_manifests", "            &publication,", "            &other_publication,", id="manifest-original-generation"),
+    pytest.param("State::install_lane_manifests", "            &mut releases,", "            &mut LaneLifecycleReleases::new(self),", id="manifest-original-release-owner"),
+])
+def test_native_prepublication_formatted_call_sites_reject_owner_substitution(
+    tmp_path: Path, symbol: str, old: str, new: str,
+) -> None:
+    """Formatting alignment must preserve exact receiver, generation and inputs."""
+    module = load_checker()
+    models = canonical_models()
+    native = next(model for model in models
+                  if model["module"] == module.NATIVE_PREPUBLICATION_MODULE)
+    relatives = {Path(row["path"]) for row in native["production_symbols"]}
+    relatives.update(Path(row[0]) for row in module.NATIVE_PREPUBLICATION_BINDINGS)
+    relatives.update(relative for relative, _, _ in module.native_merge_manifest.NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS)
+    relatives.update(Path(row[0]) for row in (
+        *module.native_merge_manifest.NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS,
+        *module.native_merge_manifest.NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS,
+    ))
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
+    errors = []
+    with module._reviewed_rust_source_cache():
+        module._validate_native_prepublication_contract(tmp_path, models, errors)
+        module._validate_model(tmp_path, ROOT_DIR / "formal/sumeragi_v2", native, errors)
+    assert errors == []
+    path = tmp_path / "crates/iroha_core/src/state.rs"
+    source = path.read_text()
+    (item,) = module._extract_rust_binding_items(source, "method", symbol)
+    assert item.count(old) == 1
+    owner, _ = symbol.split("::", 1)
+    scopes = [scope for scope in module._rust_impl_items(source, owner) if scope.count(item) == 1]
+    assert len(scopes) == 1 and source.count(scopes[0]) == 1
+    replacement = item.replace(old, new, 1)
+    assert module.native_preparation_contract._code(item) != module.native_preparation_contract._code(replacement)
+    changed = source.replace(scopes[0], scopes[0].replace(item, replacement, 1), 1)
+    assert module._extract_rust_binding_items(changed, "method", symbol) == (replacement,)
+    path.write_text(changed)
+    errors = []
+    with module._reviewed_rust_source_cache():
+        module._validate_native_prepublication_contract(tmp_path, models, errors)
+        module._validate_model(tmp_path, ROOT_DIR / "formal/sumeragi_v2", native, errors)
+    assert any(f"Native prepublication item {symbol} is missing source-bound token " in error for error in errors), errors
+    assert any(f"production item {symbol} is missing source-binding token " in error for error in errors), errors
+    assert all(f"item {symbol} is missing source" in error for error in errors), errors

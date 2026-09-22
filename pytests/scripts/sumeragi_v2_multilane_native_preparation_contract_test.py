@@ -116,8 +116,8 @@ def test_retained_carrier_rejects_owner_or_refusal_substitution(fixture, owner, 
     ("JOURNALS", "struct CarrierJournalInputs", "retained_effects_layout: std::alloc::Layout", "retained_effects_layout: usize"),
     ("JOURNALS", "let admission = match admit_journals", "std::alloc::Layout::new::<RetainedCarrierEffects>()", "std::alloc::Layout::new::<Box<RetainedCarrierEffects>>()"),
     ("JOURNALS", "let admission = match admit_journals", "std::alloc::Layout::new::<RetainedCarrierEffects>()", "std::alloc::Layout::new::<()>()"),
-    ("JOURNALS", "fn prepare_journals", "        } = &self;", "            ..\n        } = &self;"),
-    ("JOURNALS", "fn prepare_journals", "} = &self;", "} = &other;"),
+    pytest.param('JOURNALS', 'fn prepare_journals', '        } = &*self;', '            ..\n        } = &*self;', id='JOURNALS-fn prepare_journals-        } = &self;-            ..\n        } = &self;'),
+    pytest.param('JOURNALS', 'fn prepare_journals', '} = &*self;', '} = &*other;', id='JOURNALS-fn prepare_journals-} = &self;-} = &other;'),
     ("JOURNALS", "let admission = match admit_journals", "            valid,", "            valid: other_valid,"),
     ("JOURNALS", "let admission = match admit_journals", "            state,", "            state: other_state,"),
     ("JOURNALS", "let admission = match admit_journals", "            context,", "            context: other_context,"),
@@ -143,7 +143,7 @@ def test_retained_carrier_admission_requires_complete_original_inputs(fixture, o
     "PreparedTieredSnapshot::prepare(&self.state.world, &self.state.state_ref.tiered_snapshot_worker);",
     "state.prepare_carrier_geometry();",
     "owner.capture_original(state.as_ref());",
-    "world.try_detach_journals(|_| Ok(()));",
+    pytest.param("world.capture_slot();", id="world.try_detach_journals(|_| Ok(()));"),
     "Box::new(RetainedCarrierEffects {});",
 ])
 def test_retained_carrier_admission_precedes_original_projection(fixture, projection):
@@ -446,6 +446,9 @@ def test_native_preparation_rejects_each_owner_ledger_mutation(fixture, mutation
 ])
 def test_native_preparation_rejects_semantic_mutation(fixture, owner, symbol, old, new):
     root, helper, checker, _ = fixture
+    # Preserve the original selectors while mutating the same defining capacity engine.
+    if owner == "CAPACITY" and symbol == "native_amx_route_publication_capacity_at_target_locked":
+        symbol = "native_amx_route_publication_capacity_with_inventory_locked"
     path = root / getattr(checker.native_preparation_contract, owner)
     helper.replace_once_after(path, f"fn {symbol}", old, new)
     errors = validate(fixture)
@@ -620,9 +623,9 @@ def test_native_control_recording_refuses_capture_before_final_contexts(fixture)
     ("GEOMETRY_CARRIER", "is_identity_transition", "self._previous_runtime_catalog == self._accepted_runtime_catalog", "true"),
     ("TERMINAL_CARRIER", "publish", "journals.effects.replay_prevalidation", "false"),
     ("TERMINAL_CARRIER", "publish", "journals.native_amx_manifest.entries().is_empty()", "true"),
-    ("TERMINAL_CARRIER", "publish", "return Err((self.abort(), error));", "return Err((other.abort(), error));"),
+    ("TERMINAL_CARRIER", "publish", "return Err((this.abort(), error));", "return Err((other.abort(), error));"),
     ("TERMINAL_CARRIER", "publish", "runtime.publish();", "// runtime.publish();"),
-    ("TERMINAL_CARRIER", "publish", "world_effects.publish(target);", "// world_effects.publish(target);"),
+    pytest.param("TERMINAL_CARRIER", "publish", 'world_effects.publish(\n            target,\n            effect_locks\n                .da_pin_intents\n                .as_mut()\n                .expect("prepared pin cache"),\n        );', "// original World effects omitted", id="TERMINAL_CARRIER-publish-world_effects.publish(target);-// world_effects.publish(target);"),
     ("TERMINAL_CARRIER", "publish", "source: source_prefix,", "source: other_prefix,"),
 ])
 def test_terminal_carrier_rejects_owner_mutation(fixture, owner, symbol, old, new):
@@ -651,7 +654,7 @@ def test_terminal_carrier_rejects_owner_mutation(fixture, owner, symbol, old, ne
     pytest.param("PHYSICAL_CARRIER", "try_complete_geometry", "let journals = &mut self.decision.journals;", "let journals = &mut self.decision.journals; let _fresh = self.target.kura.try_publication_lease()?;", id="no-fresh-kura-lease"),
     pytest.param("PHYSICAL_CARRIER", "try_complete_geometry", ".try_lock_or_wait()", ".lock()", id="no-blocking-backend-lock"),
     pytest.param("TERMINAL_CARRIER", "publish", "journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()", "false", id="exact-lifecycle-effects"),
-    pytest.param("TERMINAL_CARRIER", "publish", "!journals.geometry.has_queue_custody(\n            self.target,\n            journals.effects.header,\n            journals.components._fences._queue.as_ref(),\n        )", "false", id="publisher-queue-refusal"),
+    pytest.param("TERMINAL_CARRIER", "publish", "!journals.geometry.has_queue_custody(\n            this.target,\n            journals.effects.header,\n            journals.components._fences._queue.as_ref(),\n        )", "false", id="publisher-queue-refusal"),
     pytest.param("TERMINAL_CARRIER", "publish", "journals.components._fences._queue.as_ref(),", "None,", id="publisher-original-queue-proof"),
     pytest.param("TERMINAL_CARRIER", "publish", ".sync_mapping(&effects.nexus.lane_config)", ".sync_mapping(&other_mapping)", id="accepted-mapping"),
     pytest.param("TERMINAL_CARRIER", "publish", ".lifecycle\n            .take()", ".lifecycle\n            .clone()", id="consume-lifecycle"),
@@ -680,8 +683,8 @@ def test_terminal_geometry_rejects_effects_before_their_guards(fixture, mutation
     elif mutation == "completion-before-source":
         # Retaining the correct later completion must not hide an earlier effect.
         helper.replace_once_after(root / contract.TERMINAL_CARRIER, "fn publish(",
-                                  "let journals = &self.decision.journals;",
-                                  "self.try_complete_geometry()?; let journals = &self.decision.journals;")
+                                  "let journals = &this.decision.journals;",
+                                  "this.try_complete_geometry()?; let journals = &this.decision.journals;")
     else:
         path = root / contract.TERMINAL_CARRIER
         statement = "let commit = fences.release_for_completion();"
@@ -698,7 +701,7 @@ def test_terminal_geometry_rejects_effects_before_their_guards(fixture, mutation
     ("transactions.publish();", "transactions.publish(); return Err(other);"),
     ("transactions.publish();", "transactions.publish(); fallible_effect()?;"),
     ("transactions.publish();", "transactions.publish(); transactions.publish();"),
-    ("drop(generation);", "drop(generation); target.begin_state_view_write();"),
+    ("drop(generation);", "drop(generation); publication_notice.begin();"),
 ])
 def test_terminal_carrier_rejects_post_write_retry_and_repeated_visibility(fixture, old, new):
     root, helper, checker, _ = fixture
@@ -1006,15 +1009,15 @@ def test_native_preparation_ledger_tokens_match_exact_reviewed_items(fixture):
     pytest.param("STATE", "fn matches_block_predecessor", ".same_predecessor(&block.work.predecessor())", ".same_predecessor(&self.work.predecessor())", id="exact-predecessor-not-self"),
     pytest.param("HASH_SURFACE", "fn capture", "!std::ptr::eq(block.inner, expected)", "false", id="sealed-original-journal"),
     pytest.param("HASH_SURFACE", "fn capture", "block.work.predecessor().retain()", "other.work.predecessor().retain()", id="seal-retains-original-predecessor"),
-    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "self.observe_current(target)", "Ok(true)", id="pre-admission-predecessor"),
+    pytest.param('RETAINED_HASH_SLOT', 'fn try_prepare', 'self.original().work.try_matches_current_retaining(map)', 'Ok((true, None))', id='pre-admission-predecessor'),
     pytest.param("STATE", "fn observe_current", "self.work.try_matches_current(map)", "Ok(true)", id="original-advisory-predecessor"),
     pytest.param("STATE", "fn observe_current", "self.work.try_matches_current(map)", "drop(target.released.guard(())); self.work.try_matches_current(map)", id="advisory-release-not-busy-self-wake"),
-    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "let wait = map.observe_reader_release();\n        match self.observe_current(target)", "let wait = target.released.observe();\n        match self.observe_current(target)", id="advisory-waits-for-actual-reader"),
-    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "let wait = map.observe_reader_release();\n        let prepared = match writer.try_map_preserving_release(|writer| writer.try_prepare_commit())", "let wait = target.released.observe();\n        let prepared = match writer.try_map_preserving_release(|writer| writer.try_prepare_commit())", id="commit-preparation-cannot-wake-itself"),
-    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "map.try_acquire_owned(work)", "other.try_acquire_owned(work)", id="original-final-reacquisition"),
-    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "cleanup._release = Some(released);", "cleanup._release = None;", id="changed-release-notification"),
-    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "writer.try_prepare_commit()", "Ok(writer.prepare_commit())", id="nonblocking-reader-acquisition"),
-    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "owner: NativeLaneStateOwner(map.family())", "owner: NativeLaneStateOwner(other.family())", id="original-published-family"),
+    pytest.param('RETAINED_HASH_SLOT', 'fn try_prepare', 'let reader_wait = map.observe_reader_release();', 'let reader_wait = target.released.observe();', id='advisory-waits-for-actual-reader'),
+    pytest.param('RETAINED_HASH_SLOT', 'fn try_prepare', 'let wait = map.observe_reader_release();', 'let wait = target.released.observe();', id='commit-preparation-cannot-wake-itself'),
+    pytest.param('RETAINED_HASH_SLOT', 'fn try_prepare', 'map.try_acquire_owned(original.work)', 'other.try_acquire_owned(original.work)', id='original-final-reacquisition'),
+    pytest.param('RETAINED_HASH_SLOT', 'fn recover_original', 'self.writer_release = Some(release);', 'self.writer_release = None;', id='changed-release-notification'),
+    pytest.param('RETAINED_HASH_SLOT', 'fn try_prepare', 'slot.try_prepare()', '{ slot.prepare(); Ok(()) }', id='nonblocking-reader-acquisition'),
+    pytest.param('RETAINED_HASH_SLOT', 'fn take_prepared', 'NativeLaneStateOwner(self.target.map().expect("original map").family())', 'NativeLaneStateOwner(other.map().expect("original map").family())', id='original-published-family'),
     pytest.param("HASH_PUBLICATION", "fn state_owner", "self.owner.clone()", "other.owner.clone()", id="publication-family-handoff"),
     pytest.param("HASH_PUBLICATION", "fn abort", "prepared.abort_retaining()", "other.abort_retaining()", id="abort-original-work"),
     pytest.param("HASH_PUBLICATION", "fn publish", "committed_height.store(height, Ordering::Release)", "committed_height.store(0, Ordering::Release)", id="exact-published-height"),
@@ -1105,7 +1108,7 @@ def test_shared_history_cleanup_and_publication_order(fixture, owner, anchor, fi
     pytest.param("STATE", "macro_rules! work_hash_read", "self.work.len() - usize::from(self.reserved_tip.is_some())", "self.work.len()", id="hidden-tip-excluded-from-height"),
     pytest.param("STATE", "macro_rules! work_hash_read", "index < self.hash_count()", "true", id="hidden-tip-cannot-be-looked-up"),
     pytest.param("STATE", "macro_rules! work_hash_read", "end <= self.len()", "true", id="hidden-tip-cannot-escape-range"),
-    pytest.param("HASH_PUBLICATION", "fn try_prepare_publication", "self.reserved_tip.is_some()", "false", id="unfinished-tip-not-publishable"),
+    pytest.param('RETAINED_HASH_SLOT', 'fn try_prepare', 'self.reserved_tip.is_some()', 'false', id='unfinished-tip-not-publishable'),
     pytest.param("APPLY", "fn classify_validation_failure", "=> Some(release)", "=> None", id="capacity-refund-schedules-retry"),
     pytest.param("APPLY", "fn classify_validation_failure", "self.queue.sumeragi_waker()", "other.sumeragi_waker()", id="original-service-retry-waker"),
     pytest.param("CONTROLS", "fn map_block_err_to_reason", "| BlockValidationError::BlockHashAdmission(_) => return None", "=> return None", id="local-refusal-no-peer-rejection"),
@@ -1128,10 +1131,10 @@ def test_prepaid_history_order_refuses_before_authority_or_new_allocation(fixtur
         helper.replace_once_after(path, "fn admit_successor", "self.admit(additional)", "admitted")
         helper.replace_once_after(path, "fn admit_successor", "let required =", "let admitted = self.admit(additional);\n        let required =")
     elif move == "publish-before-tip-check":
-        path = root / c.HASH_PUBLICATION
-        guard = "if self.reserved_tip.is_some() {\n            return Err((self, mv::PublicationPreparationError::Changed, cleanup));\n        }"
-        helper.replace_once_after(path, "fn try_prepare_publication", guard, "")
-        helper.replace_once_after(path, "fn try_prepare_publication", "let height = self.len();", guard + "\n        let height = self.len();")
+        path = root / c.RETAINED_HASH_SLOT
+        guard = "if self.reserved_tip.is_some() {\n            return self.refuse(mv::PublicationPreparationError::Changed);\n        }"
+        helper.replace_once_after(path, "fn try_prepare", guard, "")
+        helper.replace_once_after(path, "fn try_prepare", "self.height = self.original().len();", guard + "\n        self.height = self.original().len();")
     else:
         path = root / c.HASH_ADMISSION
         # Move the complete retained cut/drop statements after admission; this
@@ -1211,11 +1214,11 @@ def test_carrier_retirement_rejects_guard_and_sticky_fault_reordering(fixture, m
     elif mutation == "fault-before-storage":
         path = root / c.TERMINAL_CARRIER
         text = path.read_text()
-        start = text.index("        if let Some(error) = self\n", text.index("fn publish("))
+        start = text.index("        if let Some(error) = this\n", text.index("fn publish("))
         end = text.index("\n        // Reservations", start)
         block = text[start:end]
         text = text[:start] + text[end:]
-        target = text.index("        let update_da_mapping = match self.try_complete_geometry()")
+        target = text.index("        let update_da_mapping = match this.try_complete_geometry()")
         path.write_text(text[:target] + block + "\n" + text[target:])
     else:
         path = root / c.PHYSICAL_CARRIER
@@ -1302,19 +1305,18 @@ def test_carrier_abandonment_keeps_joint_original_release(fixture, anchor, old, 
 @pytest.mark.parametrize("cut", ["runtime", "world"])
 def test_partial_carrier_refusal_keeps_cleanup_after_original_fences(fixture, cut):
     root, helper, checker, _ = fixture
-    path = root / checker.native_preparation_contract.PHYSICAL_CARRIER
-    anchor = f"Err(({cut}, error, {cut}_retirement)) =>"
-    helper.replace_once_after(path, anchor,
-                              "drop(fences.release_for_completion());",
-                              f"drop({cut}_retirement); drop(fences.release_for_completion());")
+    path = root / checker.native_preparation_contract.PARTICIPANT_PREPARATION
+    helper.replace_once_after(path, "fn recover_original",
+                              "self.release_fences();",
+                              f"drop(self.{cut}.take()); self.release_fences();")
     errors = validate(fixture)
     assert any("executable relation" in e for e in errors), errors
 
 
 def test_world_refusal_preserves_original_cleanup_shells(fixture):
     root, helper, _, _ = fixture
-    path = root / "crates/iroha_core/src/state/world_publication.rs"
-    helper.replace_once_after(path, "fn try_prepare_publication", "_fields: prepared,",
+    path = root / "crates/iroha_core/src/state/world_preparation.rs"
+    helper.replace_once_after(path, "fn into_cleanup", "_fields: fields,",
                               "_fields: PreparedWorldFields(Vec::new()),")
     errors = validate(fixture)
     assert any("executable relation" in e for e in errors), errors
@@ -1393,10 +1395,10 @@ def test_kura_joint_release_requires_original_physical_ownership(fixture, path, 
     pytest.param('vendor/concread/src/bptree/mod.rs', 'fn try_acquire_owned', 'try_acquire_owned(owned.inner)', 'try_acquire_owned(other.inner)', id='original-map-root'),
     pytest.param('crates/mv/src/storage/physical.rs', 'fn acquire_owned_writer', '(owned, error, None)', '(owned, error, Some(released.guard(()).release_deferred(drop).1))', id='no-phantom-release'),
     pytest.param('crates/mv/src/storage/physical.rs', 'fn acquire_owned_writer', '.poisoning_guard(acquired)', '.poisoning_guard(())', id='bind-actual-acquisition'),
-    pytest.param('crates/iroha_core/src/state/block_hashes_publication.rs', 'fn try_prepare_publication', 'cleanup._installation = Some(installation);', 'drop(installation);', id='hash-cleanup-retains-installation'),
-    pytest.param('crates/iroha_core/src/state/block_hashes_publication.rs', 'fn try_prepare_publication', 'cleanup._release = Some(released);', 'drop(released);', id='hash-refusal-keeps-signal'),
-    pytest.param('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'Err((block_hashes, cause, hash_retirement))', 'drop(fences.release_for_completion());', 'drop(hash_retirement); drop(fences.release_for_completion());', id='aggregate-fences-before-hash-cleanup'),
-    pytest.param('crates/iroha_core/src/state.rs', 'fn commit_inner(', 'hash_refusal_cleanup = Some(cleanup);', 'drop(cleanup);', id='ordinary-state-keeps-cleanup'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'fn try_prepare', 'self.installation = Some(installation);', 'drop(installation);', id='hash-cleanup-retains-installation'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'fn recover_original', 'self.writer_release = Some(release);', 'drop(release);', id='hash-refusal-keeps-signal'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'fn recover_original', 'self.release_fences();', 'drop(std::mem::replace(&mut self.block_hashes, other)); self.release_fences();', id='aggregate-fences-before-hash-cleanup'),
+    pytest.param('crates/iroha_core/src/state.rs', 'fn commit_inner(', '} = this.fields.as_mut().expect("original executing State");', '} = this.into_fields();', id='ordinary-state-keeps-cleanup'),
 ])
 def test_acquired_writer_retains_actual_guard_and_cleanup(fixture, path, anchor, old, new):
     root, helper, _, _ = fixture
@@ -1531,7 +1533,7 @@ def test_fresh_pair_acquisition_requires_original_joint_custody(fixture, symbol,
     pytest.param('BlockAcquisitionSlot::initialize', 'self.initialize_writers();\n        let predecessor = self.target.publication.capture();', 'let predecessor = self.target.publication.capture();\n        self.initialize_writers();', id='block_and_revert_charged-captures-after-pair'),
     pytest.param('Cell::current_replacement_charged', 'writers: self.acquire_charged_writers(charges),', 'writers: { drop(charges); panic!("lost same-cut pair") },', id='replacement-keeps-original-current-undo-pair'),
     pytest.param('CurrentReplacement::publish', 'publish_pair(writers, publication, NextPublication::new(), true, false);', 'publish_pair(writers, publication, NextPublication::new(), true, true);', id='current-replacement-preserves-undo-publication'),
-    pytest.param('Block::commit', 'publish_pair(writers, publication, NextPublication::new(), dirty, true);', 'publish_pair(writers, publication, NextPublication::new(), dirty, false);', id='untouched-block-still-publishes-clear-undo'),
+    pytest.param('PreparedCellWriters::prepare_attached', 'self.revert.as_mut().expect("original undo").prepare();', 'if dirty { self.revert.as_mut().expect("original undo").prepare(); }', id='untouched-block-still-publishes-clear-undo'),
     pytest.param('Block::try_detach', 'crate::BlockCapture::try_capture(&mut slot, admit)?;', 'crate::BlockCapture::try_capture(&mut slot, admit).unwrap_or_else(|_| panic!("lost refusal"));', id='detach-admission-errors-propagate'),
     pytest.param('Block::try_detach', 'let (journal, cleanup) = crate::BlockCapture::into_detached(slot);', 'drop(slot);\n            let (journal, cleanup) = panic!("lost detached generations");', id='detach-does-not-destroy-originals'),
     pytest.param('publish_pair', "fn publish_pair<'a, V: Value, Charge: Send + Sync + 'static>(\n    writers: CellWriters<'a, V, Charge>,\n    publication: &Publication,\n    next: NextPublication,\n    publish_current: bool,\n    publish_undo: bool,\n) {\n    let retirement = publication.publish_retaining(\n        next,\n        || {\n            // Retain the complete joint owner until the fallible identity-lock\n            // acquisition above succeeds. Native preparation and publication\n            // below neither allocate nor execute payload or collector callbacks.\n            let OriginalCellWriters { revert, blocks } = writers.into_original();\n            let (blocks, unchanged_blocks) = if publish_current {\n                (\n                    Some(blocks.map_preserving_release(|writer| writer.prepare_commit())),\n                    None,\n                )\n            } else {\n                (None, Some(blocks))\n            };\n            let (revert, unchanged_revert) = if publish_undo {\n                (\n                    Some(revert.map_preserving_release(|writer| writer.prepare_commit())),\n                    None,\n                )\n            } else {\n                (None, Some(revert))\n            };\n            let blocks =\n                blocks.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));\n            let revert =\n                revert.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));\n            (blocks, revert, unchanged_blocks, unchanged_revert)\n        },\n        |(blocks, revert, unchanged_blocks, unchanged_revert)| {\n            let blocks =\n                blocks.map(|writer| writer.release_retaining(|published| published.release()));\n            let revert =\n                revert.map(|writer| writer.release_retaining(|published| published.release()));\n            let unchanged_blocks =\n                unchanged_blocks.map(|writer| writer.release_retaining(|writer| writer.detach()));\n            let unchanged_revert =\n                unchanged_revert.map(|writer| writer.release_retaining(|writer| writer.detach()));\n            (blocks, revert, unchanged_blocks, unchanged_revert)\n        },\n    );\n    drop(retirement);\n}", "fn publish_pair<'a, V: Value, Charge: Send + Sync + 'static>(\n    writers: CellWriters<'a, V, Charge>,\n    publication: &Publication,\n    next: NextPublication,\n    publish_current: bool,\n    publish_undo: bool,\n) {\n    let OriginalCellWriters { revert, blocks } = writers.into_original();\n    let retirement = publication.publish_retaining(\n        next,\n        || {\n            // Retain the complete joint owner until the fallible identity-lock\n            // acquisition above succeeds. Native preparation and publication\n            // below neither allocate nor execute payload or collector callbacks.\n            \n            let (blocks, unchanged_blocks) = if publish_current {\n                (\n                    Some(blocks.map_preserving_release(|writer| writer.prepare_commit())),\n                    None,\n                )\n            } else {\n                (None, Some(blocks))\n            };\n            let (revert, unchanged_revert) = if publish_undo {\n                (\n                    Some(revert.map_preserving_release(|writer| writer.prepare_commit())),\n                    None,\n                )\n            } else {\n                (None, Some(revert))\n            };\n            let blocks =\n                blocks.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));\n            let revert =\n                revert.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));\n            (blocks, revert, unchanged_blocks, unchanged_revert)\n        },\n        |(blocks, revert, unchanged_blocks, unchanged_revert)| {\n            let blocks =\n                blocks.map(|writer| writer.release_retaining(|published| published.release()));\n            let revert =\n                revert.map(|writer| writer.release_retaining(|published| published.release()));\n            let unchanged_blocks =\n                unchanged_blocks.map(|writer| writer.release_retaining(|writer| writer.detach()));\n            let unchanged_revert =\n                unchanged_revert.map(|writer| writer.release_retaining(|writer| writer.detach()));\n            (blocks, revert, unchanged_blocks, unchanged_revert)\n        },\n    );\n    drop(retirement);\n}", id='identity-lock-before-pair-extraction'),
@@ -1540,7 +1542,8 @@ def test_fresh_pair_acquisition_requires_original_joint_custody(fixture, symbol,
 ])
 def test_ebr_fresh_pair_acquisition_requires_original_joint_custody(fixture, symbol, old, new):
     root, _, checker, _ = fixture
-    rows = [row for row in checker.native_preparation_contract.EBR_PAIR_ACQUISITION_BINDINGS
+    rows = [row for row in (*checker.native_preparation_contract.EBR_PAIR_ACQUISITION_BINDINGS,
+                            *checker.native_preparation_contract.ATTACHED_PUBLICATION_BINDINGS)
             if row[2] == symbol]
     assert len(rows) == 1
     path, kind, _, _ = rows[0]
@@ -1682,3 +1685,741 @@ def test_capture_slots_require_original_caller_custody(fixture, path, kind, symb
     errors = validate(fixture)
     assert any(f"{symbol} missing executable relation" in error for error in errors), errors
     assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,symbol,old,new", [
+    pytest.param("STATE_PUBLICATION", "fn begin", "before\n            .checked_add(2)", "before\n            .checked_add(1)", id="notification-generation-no-wrap"),
+    pytest.param("STATE_PUBLICATION", "fn begin", "changed: &mut self.changed", "changed: &mut unrelated", id="notification-original-completion"),
+    pytest.param("STATE_PUBLICATION", "impl Drop for StateViewGenerationWriteGuard", "*self.changed = true;", "*self.changed = false;", id="notification-mark-completed"),
+    pytest.param("STATE_PUBLICATION", "impl Drop for StateViewGenerationWriteGuard", "*self.changed = true;", "*self.changed = true; notification.notify_waiters();", id="notification-no-callback-under-writer"),
+    pytest.param("STATE_PUBLICATION", "impl Drop for StateViewPublication", "if self.changed {", "if true {", id="notification-no-spurious-completion"),
+    pytest.param("STATE", "fn state_view_publication", "&self.publication_notify", "&other.publication_notify", id="notification-original-state"),
+    pytest.param("STATE", "fn install_lane_manifests(", "let _state_write_lock = state_write_release.lock();", "drop(publication_notice); let _state_write_lock = state_write_release.lock();", id="notification-manifest-retains-owner"),
+    pytest.param("STATE", "fn commit_inner(", "let mut this = self;", "let mut this = other;", id="notification-direct-original-state"),
+    pytest.param("TERMINAL_CARRIER", "fn publish(", "let mut this = self;", "let mut this = other;", id="notification-retained-original-state"),
+    pytest.param("TERMINAL_CARRIER", "fn publish(", "drop(generation);", "drop(generation); drop(publication_notice);", id="notification-retained-waits-for-fences"),
+])
+def test_notification_retains_original_owner_until_physical_release(fixture, owner, symbol, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner), symbol, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error or "notification" in error or "generation completion" in error for error in errors), errors
+    assert not any("digest" in error or "must occur exactly once" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,symbol,statement,after", [
+    pytest.param("STATE", "fn install_lane_manifests(", "let mut publication_notice = self.state_view_publication();", "let _state_write_lock = state_write_release.lock();", id="STATE-fn install_lane_manifests(-let mut publication_notice = self.state_view_publication();-let _state_write_lock = self.state_write_lock.lock();"),
+    ("STATE", "fn commit_inner(", "let mut publication_notice = self.state_ref.state_view_publication();", "let mut this = self;"),
+    ("TERMINAL_CARRIER", "fn publish(", "let mut publication_notice = self.target.state_view_publication();", "let mut this = self;"),
+])
+def test_notification_scope_must_precede_original_physical_owner(fixture, owner, symbol, statement, after):
+    root, helper, checker, _ = fixture
+    path = root / getattr(checker.native_preparation_contract, owner)
+    helper.replace_once_after(path, symbol, statement, "")
+    helper.replace_once_after(path, symbol, after, after + " " + statement)
+    errors = validate(fixture)
+    assert any("reorders executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must occur exactly once" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'method', 'LinCowCellWriteTxn::commit_slot', 'LinCowCellCommitPhase::Writer(self)', 'LinCowCellCommitPhase::Writer(other)', id='native-original-writer'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'method', 'LinCowCellCommitSlot::prepare', 'self.install_active(active);\n        self.validate();', 'self.validate();\n        self.install_active(active);', id='native-reader-installed-before-validation'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'method', 'LinCowCellCommitSlot::try_prepare', 'self.install_active(active);\n        self.validate();', 'self.validate();\n        self.install_active(active);', id='native-try-reader-installed-before-validation'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'method', 'LinCowCellCommitSlot::validate', 'assert!(Shared::ptr_eq(&prepared.base, &prepared.guard.current));', 'assert!(true);', id='native-current-predecessor'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'method', 'LinCowCellCommitSlot::validate', 'assert!(Shared::ptr_eq(&prepared.base, &prepared.active));', 'assert!(true);', id='native-reader-predecessor'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'method', 'LinCowCellCommitSlot::validate', 'Shared::get_mut(&mut prepared.work)', 'Shared::get_mut(&mut other.work)', id='native-original-unique-cursor'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'method', 'LinCowCellCommitSlot::into_prepared', 'assert!(self.ready, "original preparation must complete");', 'assert!(true, "original preparation must complete");', id='native-rejects-partial-publication'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'method', 'LinCowCellCommitSlot::abort_retaining', '(writer, Some(release))', '{ drop(release); (writer, None) }', id='native-reader-release-retained'),
+    pytest.param('vendor/concread/src/ebrcell/mod.rs', 'method', 'EbrCellWriteTxn::commit_slot', 'writer: Some(self),', 'writer: Some(other),', id='ebr-original-allocation'),
+    pytest.param('vendor/concread/src/ebrcell/mod.rs', 'method', 'EbrCellCommitSlot::prepare', 'assert!(!self.ready, "original EBR writer prepares once");', 'assert!(true, "original EBR writer prepares once");', id='ebr-prepare-once'),
+    pytest.param('vendor/concread/src/ebrcell/mod.rs', 'method', 'EbrCellCommitSlot::into_prepared', 'assert!(self.ready, "original preparation must complete");', 'assert!(true, "original preparation must complete");', id='ebr-requires-validation'),
+    pytest.param('vendor/concread/src/bptree/mod.rs', 'method', 'BptreeMapCommitSlot::prepare', 'self.inner.as_ref().assert_operable();', '// accept failed cursor', id='map-failed-cursor-rejected'),
+    pytest.param('vendor/concread/src/bptree/mod.rs', 'method', 'BptreeMapCommitSlot::try_prepare', 'self.inner.try_prepare()', 'self.inner.prepare(); Ok(())', id='map-nonblocking-kernel-preserved'),
+    pytest.param('crates/mv/src/publication.rs', 'method', 'CapturedPublication::prepare_current_in', '*slot = Some(PreparedIdentity {', 'let _discarded = Some(PreparedIdentity {', id='identity-guard-installed-in-caller'),
+    pytest.param('crates/mv/src/publication.rs', 'method', 'CapturedPublication::prepare_current_in', 'Shared::ptr_eq(&self.owner, &publication.owner)', 'true', id='identity-original-owner'),
+    pytest.param('crates/mv/src/publication.rs', 'method', 'CapturedPublication::prepare_current_in', 'Shared::ptr_eq(&self.version, &held.version)', 'true', id='identity-original-predecessor'),
+    pytest.param('crates/mv/src/cell/physical.rs', 'method', 'CellStage::new', 'writer.commit_slot()', 'writer.prepare_commit()', id='cell-inert-before-callee-work'),
+    pytest.param('crates/mv/src/cell/physical.rs', 'method', 'PreparedCellWriters::prepare_attached', 'self.started = true;', '// caught preparation can retry', id='cell-attempt-is-one-shot'),
+    pytest.param('crates/mv/src/cell/physical.rs', 'method', 'PreparedCellWriters::prepare_attached', 'self.complete = true;', 'let _unchecked = ();', id='cell-successful-complete-verdict'),
+    pytest.param('crates/mv/src/cell/physical.rs', 'method', 'PreparedCellWriters::release', 'CellStage::release(&mut self.blocks);', '// original current remains held', id='cell-release-every-native-writer'),
+    pytest.param('crates/mv/src/cell/physical.rs', 'method', 'PreparedCellWriters::release', 'self.released = true;', 'self.released = false;', id='cell-release-revokes-publication'),
+    pytest.param('crates/mv/src/cell/physical.rs', 'method', 'PreparedCellWriters::publish', 'self.complete && !self.released', 'true', id='cell-publish-rejects-partial-or-released'),
+    pytest.param('crates/mv/src/cell/physical.rs', 'method', 'PreparedCellWriters::publish', 'let identity = self.identity.take()', 'let _speculative = Vec::<u8>::new();\n        let identity = self.identity.take()', id='cell-publication-no-new-control-owner'),
+    pytest.param('crates/mv/src/storage/physical.rs', 'method', 'MapStage::new', 'writer.commit_slot()', 'writer.prepare_commit()', id='map-inert-before-callee-work'),
+    pytest.param('crates/mv/src/storage/physical.rs', 'method', 'PreparedStorageWriters::prepare_attached', 'self.started = true;', '// caught preparation can retry', id='map-attempt-is-one-shot'),
+    pytest.param('crates/mv/src/storage/physical.rs', 'method', 'PreparedStorageWriters::prepare_attached', 'self.complete = true;', 'let _unchecked = ();', id='map-successful-complete-verdict'),
+    pytest.param('crates/mv/src/storage/physical.rs', 'method', 'PreparedStorageWriters::release', 'MapStage::release(&mut self.blocks);', '// original current remains held', id='map-release-every-native-writer'),
+    pytest.param('crates/mv/src/storage/physical.rs', 'method', 'PreparedStorageWriters::release', 'self.released = true;', 'self.released = false;', id='map-release-revokes-publication'),
+    pytest.param('crates/mv/src/storage/physical.rs', 'method', 'PreparedStorageWriters::publish', 'self.complete && !self.released', 'true', id='map-publish-rejects-partial-or-released'),
+    pytest.param('crates/mv/src/storage/physical.rs', 'method', 'PreparedStorageWriters::publish', 'let identity = self.identity.take()', 'let _speculative = Vec::<u8>::new();\n        let identity = self.identity.take()', id='map-publication-no-new-control-owner'),
+    pytest.param('crates/mv/src/storage/physical.rs', 'method', 'MapStage::release', '(writer.abort_retaining(), reader)', '(writer.detach(), reader)', id='failed-map-retirement-is-not-journal'),
+    pytest.param('crates/mv/src/cell/acquisition.rs', 'method', 'CellWriters::prepare_publication', 'self.as_ref();\n        let next = NextPublication::new();', 'let next = NextPublication::new();\n        self.as_ref();', id='cell-identity-after-original-phase-check'),
+    pytest.param('crates/mv/src/cell/acquisition.rs', 'method', 'CellWriters::publish_prepared', 'if writers.is_prepared()', 'if true', id='cell-readiness-before-taking-owner'),
+    pytest.param('crates/mv/src/storage.rs', 'method', 'StorageWriters::publish_prepared', 'if writers.is_prepared()', 'if true', id='map-readiness-before-taking-owner'),
+    pytest.param('crates/mv/src/storage.rs', 'method', 'StorageWriters::publish_prepared', 'let next = next.take().expect("checked original successor identity");', 'let next = NextPublication::new();', id='map-keeps-original-funded-identity'),
+    pytest.param('crates/mv/src/cell.rs', 'method', 'Block::commit', 'self.prepare_attached_publication();', '// publish without common preparation', id='cell-ordinary-commit-shares-kernel'),
+    pytest.param('crates/mv/src/storage.rs', 'method', 'Block::publish', 'self.prepare_attached_publication();', '// publish without common preparation', id='map-admitted-commit-shares-kernel'),
+    pytest.param('crates/mv/src/cell/publication_slot.rs', 'method', 'Block::publication_slot', 'publication_slot(self)', 'publication_slot(&mut self)', id='cell-consuming-publication-authority'),
+    pytest.param('crates/mv/src/cell/publication_slot.rs', 'struct', 'BlockPublicationSlot', '    block: Block<', '    pub block: Block<', id='cell-original-block-private-after-transfer'),
+    pytest.param('crates/mv/src/cell/publication_slot.rs', 'method', 'BlockPublicationSlot::prepare_publication', 'self.block.prepare_attached_publication();', 'self.block.publish_attached_prepared();', id='cell-slot-prepares-before-publication'),
+    pytest.param('crates/mv/src/cell/publication_slot.rs', 'method', 'BlockPublicationSlot::release_writers', 'crate::BlockRetirement::release_writers(&mut self.block);', '// keep child locks during aggregate cleanup', id='cell-slot-uses-original-terminal-release'),
+    pytest.param('crates/mv/src/storage/publication_slot.rs', 'method', 'Block::publication_slot', 'publication_slot(self)', 'publication_slot(&mut self)', id='map-consuming-publication-authority'),
+    pytest.param('crates/mv/src/storage/publication_slot.rs', 'struct', 'BlockPublicationSlot', '    block: Block<', '    pub block: Block<', id='map-original-block-private-after-transfer'),
+    pytest.param('crates/mv/src/storage/publication_slot.rs', 'method', 'BlockPublicationSlot::prepare_publication', 'self.block.prepare_attached_publication();', 'self.block.publish_attached_prepared();', id='map-slot-prepares-before-publication'),
+    pytest.param('crates/mv/src/storage/publication_slot.rs', 'method', 'BlockPublicationSlot::release_writers', 'crate::BlockRetirement::release_writers(&mut self.block);', '// keep child locks during aggregate cleanup', id='map-slot-uses-original-terminal-release'),
+    pytest.param('crates/mv/src/storage/admitted.rs', 'method', 'Storage::try_from_snapshot_admitted', 'writers.prepare_publication(&predecessor, true);', 'writers.prepare_publication(&predecessor, false);', id='snapshot-publishes-actual-current-image'),
+])
+def test_attached_publication_requires_original_caller_custody(fixture, path, kind, symbol, old, new):
+    root, _, checker, _ = fixture
+    rows = [row for row in checker.native_preparation_contract.PREPARATION_OWNER_BINDINGS
+            if row[:3] == (path, kind, symbol)]
+    assert len(rows) == 1
+    target = root / path
+    source = target.read_text()
+    items = checker._extract_rust_binding_items(source, kind, symbol)
+    assert len(items) == 1
+    item = items[0]
+    assert item.count(old) == 1, (symbol, old)
+    assert checker.native_preparation_contract._code(old) != checker.native_preparation_contract._code(new)
+    if kind == "method":
+        owners = [owner for owner in checker._rust_impl_items(source, symbol.rsplit("::", 1)[0])
+                  if item in owner]
+        assert len(owners) == 1
+        owner = owners[0]
+    else:
+        owner = item
+    assert source.count(owner) == 1
+    target.write_text(source.replace(owner, owner.replace(item, item.replace(old, new, 1), 1), 1))
+    errors = validate(fixture)
+    assert any(f"{symbol} missing executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error or "must occur exactly once" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("path,original,borrowed", [
+    ("crates/mv/src/cell/publication_slot.rs", "BlockPublicationSlot<'_, V, C>", "Block<'_, V, C>"),
+    ("crates/mv/src/storage/publication_slot.rs", "BlockPublicationSlot<'_, K, V, M>", "Block<'_, K, V, M>"),
+], ids=["cell-borrowed-callback-cannot-publish", "map-borrowed-callback-cannot-publish"])
+def test_attached_publication_rejects_borrowed_execution_authority(fixture, path, original, borrowed):
+    root, _, checker, _ = fixture
+    target = root / path
+    source = target.read_text()
+    # Preserve every real slot item; append a second authority-bearing impl on a
+    # borrowed executing owner. The guard must reject the extra public surface.
+    implementations = checker._rust_impl_items(source, "BlockPublicationSlot")
+    selected = [item for item in implementations if "crate::BlockPublication" in item.split("{")[0]]
+    assert len(selected) == 1
+    extra = selected[0].replace("for " + original, "for " + borrowed)
+    assert extra != selected[0]
+    target.write_text(source + "\n" + extra + "\n")
+    errors = validate(fixture)
+    assert any("attached publication widens borrowed execution authority" in error for error in errors), errors
+    assert not any("digest" in error or "must occur exactly once" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::new', 'phase: Some(Phase::Original(original))', 'phase: Some(Phase::Original(other))', id='hash-slot-original-journal'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::original', 'Some(Phase::Original(original)) => original', 'Some(Phase::Original(original)) => other', id='hash-slot-original-admission-input'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::try_prepare', '!self.attempted && !self.released', 'true', id='hash-slot-one-shot-attempt'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::try_prepare', 'self.retryable = false;', 'self.retryable = true;', id='hash-slot-panic-not-retry'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::try_prepare', 'self.preflight_release = release;', 'drop(release);', id='hash-slot-preflight-callback-retained'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::try_prepare', 'self.phase = Some(Phase::Acquired(acquired));\n        let Some(Phase::Acquired(acquired))', 'drop(acquired);\n        let Some(Phase::Acquired(acquired))', id='hash-slot-acquired-before-callee'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::refuse', 'self.retryable = true;', 'self.retryable = false;', id='hash-slot-normal-refusal-keeps-original'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::restore', 'mode: self.mode', 'mode: mv::BlockMode::Ordinary', id='hash-slot-preserves-replacement-mode'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::recover_original', 'self.retryable && !self.released', 'true', id='hash-slot-refuses-unwound-recovery'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::recover_original', 'self.reader_release = reader;', 'drop(reader);', id='hash-slot-recovery-retains-native-event'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::take_prepared', 'self.complete && !self.released', 'true', id='hash-slot-only-complete-transfer'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::take_prepared', 'preflight_release: self.preflight_release.take()', 'preflight_release: None', id='hash-slot-published-preflight-custody'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::release_writers', 'writer.abort_retaining()', 'writer.detach()', id='hash-slot-terminal-abandonment-not-journal'),
+    pytest.param('crates/iroha_core/src/state/retained_hash_slot.rs', 'method', 'RetainedHashSlot::drop', 'self.release_writers();', '// abandon physical writer', id='hash-slot-drop-releases-physical'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::new', 'fences: Some(fences)', 'fences: None', id='hash-fences-installed-before-prepare'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::prepare_inner', '        self.block_hashes\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| CarrierPhysicalPreparationError::Component {\n                field: "block_hashes",\n                cause,\n            })?;\n', '        // hash preparation removed\n', id='hash-fences-require-complete-preparation'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::release_fences', '_state: state.release_deferred()', '_state: { drop(state); unreachable!() }', id='hash-fences-state-event-retained'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::release_fences', 'queue.map(CarrierQueueRetirement::release_deferred)', 'queue.map(|q| { drop(q); unreachable!() })', id='hash-fences-queue-event-retained'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::release_fences', '_kura: kura.release_deferred()', '_kura: { drop(kura); unreachable!() }', id='hash-fences-kura-event-retained'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::into_prepared', 'self.complete && !self.released', 'true', id='hash-fences-complete-handoff'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::drop', 'self.block_hashes.release_writers();', 'drop(std::mem::replace(&mut self.block_hashes, other));', id='hash-fences-native-before-callback'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'method', 'LinCowCellOwned::try_matches_current_retaining', '!Shared::ptr_eq(&self.root, &target.write)', 'false', id='hash-advisory-refuses-foreign-family'),
+    pytest.param('vendor/concread/src/internals/lincowcell/mod.rs', 'method', 'LinCowCellOwned::try_matches_current_retaining', 'active.release_deferred(drop)', '{ drop(active); unreachable!() }', id='hash-advisory-defers-actual-reader-wake'),
+    pytest.param('vendor/concread/src/bptree/mod.rs', 'method', 'BptreeMapOwned::try_matches_current_retaining', 'self.inner.try_matches_current_retaining(&target.inner)', 'self.inner.try_matches_current_retaining(&other.inner)', id='hash-advisory-map-original-target'),
+])
+def test_retained_hash_preparation_requires_original_caller_custody(
+    fixture, path, kind, symbol, old, new,
+):
+    """Partial preparation retains the original native owner and outer fences."""
+    root, _, checker, _ = fixture
+    errors = []
+    item = checker._rust_binding_item(root, path, kind, symbol, "retained hash mutation", errors)
+    assert errors == [] and item is not None and item.count(old) == 1
+    source_path = root / path
+    source = source_path.read_text(encoding="utf-8")
+    assert source.count(item) == 1
+    source_path.write_text(source.replace(item, item.replace(old, new, 1), 1), encoding="utf-8")
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::try_prepare', '!self.attempted && !self.released', 'true', id='cell-one-shot'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::try_prepare', 'self.retryable = false;', 'self.retryable = true;', id='cell-panic-revokes-retry'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::try_prepare', 'let result = self.prepare_inner(admit);', 'self.retryable = true;\n        let result = self.prepare_inner(admit);', id='cell-normal-return-before-retry'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::try_prepare', 'self.complete = result.is_ok();', 'self.complete = true;', id='cell-actual-completion'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::prepare_inner', 'self.cleanup.identities[0] = probe;', 'drop(probe);', id='cell-retain-original-probe'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::prepare_inner', 'checked?;', 'let _ = checked;', id='cell-identity-before-admission'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::prepare_inner', 'self.phase = Phase::Acquiring', 'let _discarded = Phase::Acquiring', id='cell-caller-before-acquisition'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::prepare_inner', 'self.phase = Phase::Prepared', 'let _callee = Phase::Prepared', id='cell-caller-before-native-prepare'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::release_writers', 'self.retryable = false;', 'self.retryable = true;', id='cell-terminal-no-retry'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::release_writers', 'blocks.release(', 'drop(', id='cell-current-physical-release'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::release_writers', 'revert.release(', 'drop(', id='cell-undo-physical-release'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::recover_original', 'self.retryable && !self.released', 'true', id='cell-recovery-authority'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::into_prepared', 'self.complete && !self.released', 'true', id='cell-publication-authority'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'Role::acquire', 'try_map_preserving_release_into(', 'try_map_preserving_release(', id='cell-callee-unwind-original-batch'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::drop', 'self.release_writers();', '// forget physical owners', id='cell-drop-physical-pass'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::try_prepare', '!self.attempted && !self.released', 'true', id='storage-one-shot'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::try_prepare', 'self.retryable = false;', 'self.retryable = true;', id='storage-panic-revokes-retry'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::try_prepare', 'let result = self.prepare_inner(admit);', 'self.retryable = true;\n        let result = self.prepare_inner(admit);', id='storage-normal-return-before-retry'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::try_prepare', 'self.complete = result.is_ok();', 'self.complete = true;', id='storage-actual-completion'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::prepare_inner', 'self.cleanup.identities[0] = probe;', 'drop(probe);', id='storage-retain-original-probe'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::prepare_inner', 'checked?;', 'let _ = checked;', id='storage-identity-before-admission'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::prepare_inner', 'self.phase = Phase::Acquiring', 'let _discarded = Phase::Acquiring', id='storage-caller-before-acquisition'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::prepare_inner', 'self.phase = Phase::Prepared', 'let _callee = Phase::Prepared', id='storage-caller-before-native-prepare'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::release_writers', 'self.retryable = false;', 'self.retryable = true;', id='storage-terminal-no-retry'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::release_writers', 'blocks.release(', 'drop(', id='storage-current-physical-release'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::release_writers', 'revert.release(', 'drop(', id='storage-undo-physical-release'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::recover_original', 'self.retryable && !self.released', 'true', id='storage-recovery-authority'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::into_prepared', 'self.complete && !self.released', 'true', id='storage-publication-authority'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'Role::acquire', 'try_map_preserving_release_into(', 'try_map_preserving_release(', id='storage-callee-unwind-original-batch'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::drop', 'self.release_writers();', '// forget physical owners', id='storage-drop-physical-pass'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'Role::acquire', 'if raw.is_poisoned()', 'if false', id='ebr-native-poison-verdict'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'Role::acquire', '|acquired| acquired.validate()', '|acquired| Ok(acquired)', id='map-native-base-validation'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'Role::release', '|w| w.abort_retaining()', '|w| w.detach()', id='map-failed-abandonment-not-journal'),
+    pytest.param('crates/mv/src/storage/admitted.rs', 'method', 'Detached::try_publication_slot', 'if !scope.belongs_to(', 'if scope.belongs_to(', id='prepaid-original-scope'),
+    pytest.param('crates/mv/src/storage/admitted.rs', 'method', 'AdmittedDetachedPublicationSlot::try_prepare', 'self.inner.try_prepare(|_, _| Ok(()))', 'Ok(())', id='prepaid-defining-kernel'),
+    pytest.param('crates/mv/src/cell.rs', 'method', 'Detached::try_prepare_publication', 'let mut slot = self.publication_slot(target);', 'let mut slot = self.publication_slot(other);', id='ebr-original-target'),
+    pytest.param('crates/mv/src/storage.rs', 'method', 'Detached::prepare_publication', 'let mut slot = DetachedPublicationSlotInner::new(self, target);', 'let mut slot = DetachedPublicationSlotInner::new(self, other);', id='map-original-target'),
+    pytest.param('crates/mv/src/storage.rs', 'method', 'Detached::prepare_publication', '    fn prepare_publication', '    pub fn prepare_publication', id='generic-kernel-does-not-widen-prepaid-authority'),
+])
+def test_detached_pair_preparation_requires_original_caller_custody(fixture, path, kind, symbol, old, new):
+    root, _, checker, _ = fixture
+    rows = [row for row in checker.native_preparation_contract.PREPARATION_OWNER_BINDINGS
+            if row[:3] == (path, kind, symbol)]
+    assert len(rows) == 1
+    target = root / path
+    source = target.read_text()
+    items = checker._extract_rust_binding_items(source, kind, symbol)
+    assert len(items) == 1
+    item = items[0]
+    assert item.count(old) == 1, (symbol, old)
+    assert checker.native_preparation_contract._code(old) != checker.native_preparation_contract._code(new)
+    if kind == "method":
+        owners = [owner for owner in checker._rust_impl_items(source, symbol.rsplit("::", 1)[0])
+                  if item in owner]
+        assert len(owners) == 1
+        owner = owners[0]
+    else:
+        owner = item
+    assert source.count(owner) == 1
+    target.write_text(source.replace(owner, owner.replace(item, item.replace(old, new, 1), 1), 1))
+    errors = validate(fixture)
+    assert any(f"{symbol} missing executable relation" in error or "generic map kernel widens prepaid scope authority" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error or "must occur exactly once" in error for error in errors), errors
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::try_prepare', '!self.attempted && !self.released', 'true', id='runtime-one-shot'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::try_prepare', 'self.retryable = false;', 'self.retryable = true;', id='runtime-panic-revokes-retry'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::try_prepare', 'let result = self.prepare_inner(admit);', 'self.retryable = true;\n        let result = self.prepare_inner(admit);', id='runtime-normal-return-before-retry'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::try_prepare', 'self.complete = result.is_ok();', 'self.complete = true;', id='runtime-actual-completion'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::prepare_inner', 'admit(original, self.target)', 'admit(other, self.target)', id='runtime-original-admission-input'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::prepare_inner', 'self.phase = Some(RuntimePublicationPhase::Components(', 'let _callee = Some(RuntimePublicationPhase::Components(', id='runtime-caller-before-child-prepare'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::release_writers', 'self.released = true;', 'if self.released { return; }\n        self.released = true;', id='runtime-partial-recovery-always-physical-pass'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::release_writers', 'components.release_writers();', 'drop(components);', id='runtime-release-all-children'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::recover_original', 'self.retryable && !self.released', 'true', id='runtime-normal-recovery-only'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::recover_original', 'components.recover_original()', '{ drop(components); unreachable!() }', id='runtime-retains-lower-cleanup'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::into_cleanup', 'self.released && self.recovered', 'true', id='runtime-original-recovery-before-cleanup'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::into_prepared', 'self.complete && !self.released', 'true', id='runtime-all-prepared-before-publication'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimePublicationSlot::drop', 'self.release_writers();', '// skip physical children', id='runtime-drop-physical-pass'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimeJournals::try_prepare_publication', 'let mut slot = self.publication_slot(target);', 'let mut slot = self.publication_slot(other);', id='runtime-standalone-original-kernel'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'method', 'RuntimeJournals::try_prepare_publication', 'Err((original, error, slot.into_cleanup()))', 'Err((original, error, { drop(slot); unreachable!() }))', id='runtime-standalone-retains-cleanup'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'macro', 'define_runtime_publication_components', '$field.publication_slot(&target.$field)', '$field.publication_slot(&other.$field)', id='runtime-all-original-targets'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'macro', 'define_runtime_publication_components', '$field: self.$field.recover_original(),', '$field: { self.$field.release_writers(); self.$field.recover_original() },', id='runtime-no-terminal-promotion'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'macro', 'define_runtime_publication_components', '$(self.$field.release_writers();)+', '$(drop(&mut self.$field);)+', id='runtime-inventory-wide-release'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'macro', 'define_runtime_publication_components', 'admission: Some(admission)', 'admission: None', id='runtime-capture-admission-retained'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs', 'macro', 'define_runtime_publication_components', 'Some(self.$field.into_cleanup())', '{ drop(self.$field); None }', id='runtime-exact-lower-cleanup-transfer'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::try_prepare', '!self.attempted && !self.released', 'true', id='triggers-one-shot'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::try_prepare', 'self.retryable = false;', 'self.retryable = true;', id='triggers-panic-revokes-retry'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::try_prepare', 'let result = self.prepare_inner(admit);', 'self.retryable = true;\n        let result = self.prepare_inner(admit);', id='triggers-normal-return-before-retry'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::try_prepare', 'self.complete = result.is_ok();', 'self.complete = true;', id='triggers-actual-completion'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::prepare_inner', 'admit(original, self.target)', 'admit(other, self.target)', id='triggers-original-admission-input'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::prepare_inner', 'self.phase = Some(SetPublicationPhase::Components(', 'let _callee = Some(SetPublicationPhase::Components(', id='triggers-caller-before-child-prepare'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::release_writers', 'self.released = true;', 'if self.released { return; }\n        self.released = true;', id='triggers-partial-recovery-always-physical-pass'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::release_writers', 'components.release_writers();', 'drop(components);', id='triggers-release-all-children'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::recover_original', 'self.retryable && !self.released', 'true', id='triggers-normal-recovery-only'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::recover_original', 'components.recover_original()', '{ drop(components); unreachable!() }', id='triggers-retains-lower-cleanup'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::into_cleanup', 'self.released && self.recovered', 'true', id='triggers-original-recovery-before-cleanup'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::into_prepared', 'self.complete && !self.released', 'true', id='triggers-all-prepared-before-publication'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSetPublicationSlot::drop', 'self.release_writers();', '// skip physical children', id='triggers-drop-physical-pass'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSet::try_prepare_publication', 'let mut slot = self.publication_slot(target);', 'let mut slot = self.publication_slot(other);', id='triggers-standalone-original-kernel'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'method', 'DetachedSet::try_prepare_publication', 'Err((original, error, slot.into_cleanup()))', 'Err((original, error, { drop(slot); unreachable!() }))', id='triggers-standalone-retains-cleanup'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'macro', 'define_set_publication_components', '$field.publication_slot(&target.$field)', '$field.publication_slot(&other.$field)', id='triggers-all-original-targets'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'macro', 'define_set_publication_components', '$field: self.$field.recover_original(),', '$field: { self.$field.release_writers(); self.$field.recover_original() },', id='triggers-no-terminal-promotion'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'macro', 'define_set_publication_components', '$(self.$field.release_writers();)+', '$(drop(&mut self.$field);)+', id='triggers-inventory-wide-release'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'macro', 'define_set_publication_components', 'admission: Some(admission)', 'admission: None', id='triggers-capture-admission-retained'),
+    pytest.param('crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs', 'macro', 'define_set_publication_components', 'Some(self.$field.into_cleanup())', '{ drop(self.$field); None }', id='triggers-exact-lower-cleanup-transfer'),
+    pytest.param('crates/mv/src/cell/detached_publication.rs', 'method', 'DetachedPublicationSlot::into_cleanup', 'self.retryable && self.released && matches!(self.phase, Phase::Empty)', 'self.released && matches!(self.phase, Phase::Empty)', id='cell-cleanup-rejects-unwound-phase'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlotInner::into_cleanup', 'self.retryable && self.released && matches!(self.phase, Phase::Empty)', 'self.released && matches!(self.phase, Phase::Empty)', id='storage-cleanup-rejects-unwound-phase'),
+    pytest.param('crates/mv/src/storage/detached_publication.rs', 'method', 'DetachedPublicationSlot::into_cleanup', 'self.inner.into_cleanup()', '{ drop(self.inner); unreachable!() }', id='storage-cleanup-original-engine'),
+])
+def test_group_preparation_requires_original_caller_custody(fixture, path, kind, symbol, old, new):
+    root, _, checker, _ = fixture
+    rows = [row for row in checker.native_preparation_contract.PREPARATION_OWNER_BINDINGS
+            if row[:3] == (path, kind, symbol)]
+    assert len(rows) == 1
+    errors = []
+    item = checker._rust_binding_item(root, path, kind, symbol, "group mutation", errors)
+    assert errors == [] and item is not None and item.count(old) == 1
+    source_path = root / path
+    source = source_path.read_text()
+    assert source.count(item) == 1
+    source_path.write_text(source.replace(item, item.replace(old, new, 1), 1))
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error or "must occur exactly once" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("path,old,new", [
+    ("crates/iroha_core/src/state/carrier_preparation/runtime_publication.rs", "lane_consensus_contexts: (LaneConsensusContextsV1),", "lane_consensus_contexts: (Vec<PeerId>),"),
+    ("crates/iroha_core/src/smartcontracts/isi/triggers/set_publication.rs", "contracts: (HashOf<IvmBytecode>, IvmBytecodeEntry),", "contracts: (TriggerId, ()),"),
+], ids=["runtime-exact-four-component-inventory", "trigger-exact-ten-component-inventory"])
+def test_group_preparation_requires_concrete_original_inventory(fixture, path, old, new):
+    root, _, _, _ = fixture
+    source_path = root / path
+    source = source_path.read_text()
+    assert source.count(old) == 1
+    source_path.write_text(source.replace(old, new, 1))
+    errors = validate(fixture)
+    assert any("original component inventory" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::new', 'world: Some(world.publication_slot(', 'world: Some(other.publication_slot(', id='carrier-original-world-slot'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::drop', 'world.release_writers();', 'drop(world);', id='carrier-releases-world-before-fences'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::new', 'runtime: Some(runtime.publication_slot(', 'runtime: Some(other.publication_slot(', id='carrier-original-runtime-slot'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::drop', 'runtime.release_writers();', 'drop(runtime);', id='carrier-releases-runtime-before-fences'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::new', 'transactions: Some(transactions.publication_slot(', 'transactions: Some(other.publication_slot(', id='carrier-original-transactions-slot'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::drop', 'transactions.release_writers();', 'drop(transactions);', id='carrier-releases-transactions-before-fences'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::try_prepare', '!self.attempted && !self.released', 'true', id='carrier-prepares-once'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::try_prepare', 'self.retryable = false;', 'self.retryable = true;', id='carrier-unwind-no-retry'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::try_prepare', 'let result = self.prepare_inner();', 'self.retryable = true; let result = self.prepare_inner();', id='carrier-normal-return-before-retry'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::try_prepare', 'self.complete = result.is_ok();', 'self.complete = true;', id='carrier-complete-verdict'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::recover_original', 'self.retryable && !self.released', 'true', id='carrier-original-recovery-only'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::recover_original', 'self.release_fences();', 'drop(self.runtime.take()); self.release_fences();', id='carrier-recovery-retains-components-through-fences'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::drop', 'self.block_hashes.release_writers();', 'self.release_fences(); self.block_hashes.release_writers();', id='carrier-all-physical-before-fences'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::prepare_inner', '        self.transactions\n            .as_mut()\n            .expect("original membership slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| CarrierPhysicalPreparationError::Component {\n                field: "transactions",\n                cause,\n            })?;', '// actual transactions preparation skipped', id='carrier-requires-transactions-preparation'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::prepare_inner', '        self.runtime\n            .as_mut()\n            .expect("original runtime slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(CarrierPhysicalPreparationError::Runtime)?;', '// actual runtime preparation skipped', id='carrier-requires-runtime-preparation'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::prepare_inner', '        self.world\n            .as_mut()\n            .expect("original World slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(CarrierPhysicalPreparationError::World)?;', '// actual world preparation skipped', id='carrier-requires-world-preparation'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'DetachedWorld::publication_slot', 'phase: Some(Phase::Original(self))', 'phase: Some(Phase::Original(other))', id='world-slot-original-owner'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', '!self.attempted && !self.released', 'true', id='world-slot-once'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'self.retryable = false;', 'self.retryable = true;', id='world-callee-unwind-no-retry'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'admit(self.original(), self.target)', 'admit(other, self.target)', id='world-original-admission'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'self.installation = Some(installation);', 'drop(installation);', id='world-installation-retained'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'self.phase = Some(Phase::Fields(', 'let _callee = Some(Phase::Fields(', id='world-phase-installed-before-fields'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'fields.fields.push(original.publication_slot(self.target));', 'let mut field = original.publication_slot(self.target); field.try_prepare().unwrap(); fields.fields.push(field);', id='world-all-inert-slots-before-callee'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'fields.retry.reverse();', '// reverse omitted', id='world-exact-original-field-order'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'return Err(WorldPublicationError::Field(error));', 'let _ignored = error;', id='world-component-refusal-propagates'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::recover_original', 'self.retryable && !self.released', 'true', id='world-recovery-no-unwound-authority'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::recover_original', 'std::mem::take(&mut fields.retry)', 'Vec::new()', id='world-original-retry-allocation'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::release_writers', 'self.released = true;', 'if self.released { return; } self.released = true;', id='world-partial-recovery-full-physical-pass'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::release_writers', 'fields.fields.release_all();', 'drop(&mut fields.fields);', id='world-releases-all-original-fields'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::into_prepared', 'self.complete && !self.released', 'true', id='world-rejects-partial-publication'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::into_cleanup', 'fields.admission.is_none()', 'true', id='world-recovery-before-cleanup'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::drop', 'self.release_writers();', '// physical release lost', id='world-drop-original-slots'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::try_prepare', 'self.phase = FieldPhase::Prepared(slot.into_prepared());', 'self.phase = FieldPhase::Prepared(other.into_prepared());', id='storage-same-original-prepared-field'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release', 'slot.release_writers();', 'drop(slot);', id='storage-partial-field-physical-pass'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release', 'self.aborted = Some(retirement);', 'drop(retirement);', id='storage-prepared-field-retains-abort-cleanup'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release_for_recovery', 'slot.recover_original()', '{ slot.release_writers(); slot.recover_original() }', id='storage-normal-recovery-before-terminal-release'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::publish', 'self.published = Some(journal.publish());', 'drop(journal.publish());', id='storage-published-original-retirement-retained'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::try_prepare', 'self.phase = FieldPhase::Prepared(slot.into_prepared());', 'self.phase = FieldPhase::Prepared(other.into_prepared());', id='cell-same-original-prepared-field'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::release', 'slot.release_writers();', 'drop(slot);', id='cell-partial-field-physical-pass'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::release', 'self.aborted = Some(retirement);', 'drop(retirement);', id='cell-prepared-field-retains-abort-cleanup'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::release_for_recovery', 'slot.recover_original()', '{ slot.release_writers(); slot.recover_original() }', id='cell-normal-recovery-before-terminal-release'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::publish', 'self.published = Some(journal.publish());', 'drop(journal.publish());', id='cell-published-original-retirement-retained'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::try_prepare', 'self.phase = FieldPhase::Prepared(slot.into_prepared());', 'self.phase = FieldPhase::Prepared(other.into_prepared());', id='triggers-same-original-prepared-field'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::release', 'slot.release_writers();', 'drop(slot);', id='triggers-partial-field-physical-pass'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::release', 'self.aborted = Some(retirement);', 'drop(retirement);', id='triggers-prepared-field-retains-abort-cleanup'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::release_for_recovery', 'slot.recover_original()', '{ slot.release_writers(); slot.recover_original() }', id='triggers-normal-recovery-before-terminal-release'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::publish', 'self.published = Some(journal.publish());', 'drop(journal.publish());', id='triggers-published-original-retirement-retained'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'fn', 'storage_slot', '(original.target)(world)', '(original.target)(other)', id='storage_slot-original-target-accessor'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'fn', 'cell_slot', '(original.target)(world)', '(original.target)(other)', id='cell_slot-original-target-accessor'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'fn', 'triggers_slot', '(original.target)(world)', '(original.target)(other)', id='triggers_slot-original-target-accessor'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedWorldFields::release_all', 'field.release();', 'drop(field);', id='world-field-container-releases-every-child'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedWorldFields::drop', 'self.release_all();', '// no cleanup pass', id='world-field-container-drop-physical-pass'),
+])
+def test_complete_preparation_retains_every_original_through_callee_unwind(fixture, path, kind, symbol, old, new):
+    root, _, checker, _ = fixture
+    errors = []
+    item = checker._rust_binding_item(root, path, kind, symbol, "complete preparation mutation", errors)
+    assert errors == [] and item is not None and item.count(old) == 1
+    source_path = root / path
+    source = source_path.read_text()
+    source_path.write_text(
+        _mutate_complete_preparation_item(checker, source, kind, symbol, item, old, new)
+    )
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error or "must occur exactly once" in error for error in errors), errors
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedWorldFields::recover_all', 'field.release_for_recovery();', 'field.release();', id='recovery-does-not-revoke-retry'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedWorld::abort', 'fields.recover_all();', '// lost normal physical pass', id='prepared-world-all-physical-before-transfer'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::recover_original', 'fields.fields.recover_all();', '// lost normal physical pass', id='partial-world-all-physical-before-transfer'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release_for_recovery', '!self.released', 'true', id='storage-terminal-release-is-not-recovery'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release_for_recovery', 'self.aborted = Some(retirement);', 'drop(retirement);', id='storage-recovery-retains-notification'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release_for_recovery', 'self.normal_recovery = true;', 'self.released = true;', id='storage-normal-recovery-distinct-phase'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::abort', 'self.release_for_recovery();', '// skipped physical recovery', id='storage-abort-delegates-original-recovery'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::release_for_recovery', '!self.released', 'true', id='cell-terminal-release-is-not-recovery'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::release_for_recovery', 'self.aborted = Some(retirement);', 'drop(retirement);', id='cell-recovery-retains-notification'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::release_for_recovery', 'self.normal_recovery = true;', 'self.released = true;', id='cell-normal-recovery-distinct-phase'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::abort', 'self.release_for_recovery();', '// skipped physical recovery', id='cell-abort-delegates-original-recovery'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::release_for_recovery', '!self.released', 'true', id='triggers-terminal-release-is-not-recovery'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::release_for_recovery', 'self.aborted = Some(retirement);', 'drop(retirement);', id='triggers-recovery-retains-notification'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::release_for_recovery', 'self.normal_recovery = true;', 'self.released = true;', id='triggers-normal-recovery-distinct-phase'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::abort', 'self.release_for_recovery();', '// skipped physical recovery', id='triggers-abort-delegates-original-recovery'),
+])
+def test_world_normal_recovery_unlocks_all_before_original_box_transfer(fixture, path, kind, symbol, old, new):
+    root, _, checker, _ = fixture
+    errors = []
+    item = checker._rust_binding_item(root, path, kind, symbol, "normal recovery mutation", errors)
+    assert errors == [] and item is not None and item.count(old) == 1
+    source_path = root / path
+    source = source_path.read_text()
+    source_path.write_text(
+        _mutate_complete_preparation_item(checker, source, kind, symbol, item, old, new)
+    )
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error or "must occur exactly once" in error for error in errors), errors
+
+
+def _mutate_complete_preparation_item(checker, source, kind, symbol, item, old, new):
+    """Mutate one reviewed owner even when sibling methods have identical bodies."""
+    replacement = item.replace(old, new, 1)
+    assert item.count(old) == 1 and replacement != item
+    if kind == "method":
+        owner, _ = symbol.split("::", 1)
+        implementations = [
+            scope for scope in checker._rust_impl_items(source, owner)
+            if scope.count(item) == 1
+        ]
+        assert len(implementations) == 1
+        scope = implementations[0]
+        assert source.count(scope) == 1
+        changed = source.replace(scope, scope.replace(item, replacement, 1), 1)
+    else:
+        assert source.count(item) == 1
+        changed = source.replace(item, replacement, 1)
+    assert checker._extract_rust_binding_items(changed, kind, symbol) == (replacement,)
+    return changed
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLock::read', 'self.released.guard(', 'ReleaseNotification::default().guard(', id='read-uses-original-source'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLock::read', 'self.released.guard(', 'self.released.poisoning_guard(', id='read-preserves-nonpoison-semantics'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLock::write', 'self.released.guard(', 'ReleaseNotification::default().guard(', id='write-uses-original-source'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLock::write', 'self.released.guard(', 'self.released.poisoning_guard(', id='write-preserves-nonpoison-semantics'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLock::try_read', 'self.released.guard(', 'ReleaseNotification::default().guard(', id='try_read-uses-original-source'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLock::try_read', 'self.released.guard(', 'self.released.poisoning_guard(', id='try_read-preserves-nonpoison-semantics'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLock::try_write', 'self.released.guard(', 'ReleaseNotification::default().guard(', id='try_write-uses-original-source'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLock::try_write', 'self.released.guard(', 'self.released.poisoning_guard(', id='try_write-preserves-nonpoison-semantics'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLock::try_write_or_wait', 'let wait = self.released.observe();\n        self.try_write().ok_or(wait)', 'let result = self.try_write();\n        let wait = self.released.observe();\n        result.ok_or(wait)', id='observe-before-actual-probe'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLockReadGuard::release_deferred', 'self.inner.release_deferred(drop).1', '{ drop(self.inner); ReleaseNotification::default().deferred_batch() }', id='read-retains-real-release'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLockReadGuard::try_release_into', '.try_release_into(batch, drop)', '.try_release_into(&mut ReleaseNotification::default().deferred_batch(), drop)', id='read-coalesces-only-original-source'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLockReadGuard::try_release_into', '.map_err(|inner| Self { inner })', '.map_err(|inner| { drop(inner); unreachable!() })', id='read-foreign-batch-keeps-held-guard'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLockWriteGuard::release_deferred', 'self.inner.release_deferred(drop).1', '{ drop(self.inner); ReleaseNotification::default().deferred_batch() }', id='write-retains-real-release'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLockWriteGuard::try_release_into', '.try_release_into(batch, drop)', '.try_release_into(&mut ReleaseNotification::default().deferred_batch(), drop)', id='write-coalesces-only-original-source'),
+    pytest.param('crates/iroha_core/src/publication_rwlock.rs', 'method', 'PublicationRwLockWriteGuard::try_release_into', '.map_err(|inner| Self { inner })', '.map_err(|inner| { drop(inner); unreachable!() })', id='write-foreign-batch-keeps-held-guard'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'effect_indexes', '            latest_block_header: Option<BlockHeader>,\n', '', id='latest_block_header-cannot-disappear-from-physical-inventory'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'effect_indexes', '            merge_admission: MergeAdmissionState,\n', '', id='merge_admission-cannot-disappear-from-physical-inventory'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'effect_indexes', '            da_commitments: DaCommitmentStore,\n', '', id='da_commitments-cannot-disappear-from-physical-inventory'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'effect_indexes', '            da_confidential_compute: ConfidentialComputeStore,\n', '', id='da_confidential_compute-cannot-disappear-from-physical-inventory'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'effect_indexes', '            da_receipt_cursors: DaReceiptCursorIndex,\n', '', id='da_receipt_cursors-cannot-disappear-from-physical-inventory'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'effect_indexes', '            da_shard_cursors: DaShardCursorIndex,\n', '', id='da_shard_cursors-cannot-disappear-from-physical-inventory'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'effect_indexes', '            da_pin_intents: DaPinStore,\n', '', id='da_pin_intents-cannot-disappear-from-physical-inventory'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'effect_indexes', '            lane_relays: LaneRelayStore,\n', '', id='lane_relays-cannot-disappear-from-physical-inventory'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'effect_indexes', '            lane_manifests: LaneManifestRegistryHandle,\n', '', id='lane_manifests-cannot-disappear-from-physical-inventory'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'effect_indexes', '            lane_privacy_registry: LanePrivacyRegistryHandle,\n', '', id='lane_privacy_registry-cannot-disappear-from-physical-inventory'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'effect_indexes', '            da_indexes_hydrated: Option<Result<(), DaIndexHydrationError>>,\n', '', id='da_indexes_hydrated-cannot-disappear-from-physical-inventory'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'define_indexes', 'self.$field = Some(self.target.$field.try_write_or_wait()', 'self.$field = Some(other.$field.try_write_or_wait()', id='actual-original-target'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'define_indexes', '.map_err(|wait| (stringify!($field), wait))?);)*', '.map_err(|_wait| (stringify!($field), other.observe()))?);)*', id='actual-blocker-wait'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'define_indexes', 'self.sccp_registry_cache = Some(self.target.sccp_registry_cache.try_lock_or_wait()', 'self.sccp_registry_cache = Some(other.sccp_registry_cache.try_lock_or_wait()', id='twelfth-original-sccp'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'define_indexes', 'self.complete = true;', 'self.complete = false;', id='actual-complete-verdict'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'define_indexes', 'retired: [$(target.$field.deferred_releases(),)* target.sccp_registry_cache.deferred_releases()]', 'retired: [$(other.$field.deferred_releases(),)* other.sccp_registry_cache.deferred_releases()]', id='all-original-cleanup-batches'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'define_indexes', 'while let Err((field, _wait)) = self.prepare_inner() {\n                    self.release_writers();', 'while let Err((field, _wait)) = self.prepare_inner() {', id='synchronous-wait-releases-whole-prefix'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'define_indexes', 'self.target.$field.write().try_release_into(&mut self.retired[index])', 'self.target.$field.write().try_release_into(&mut self.retired[0])', id='synchronous-exact-blocker-release'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'define_indexes', 'assert!(guard.try_release_into(retired).is_ok(), "original effect release source");', 'drop(guard);', id='physical-release-retains-every-index-event'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'define_indexes', 'assert!(guard.try_release_into(slots.next().expect("SCCP release slot")).is_ok(), "original SCCP release source");', 'drop(guard);', id='physical-release-retains-sccp-event'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'define_indexes', 'guard: Some(self.target.merge_admission.read()),', 'guard: Some(other.merge_admission.read()),', id='short-merge-read-original-target'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'define_indexes', 'releases: &mut self.retired[index],', 'releases: &mut self.retired[0],', id='short-merge-read-original-batch'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'macro', 'define_indexes', 'self.retired_manifests = Some(std::mem::replace(', 'let _discarded = Some(std::mem::replace(', id='retired-registry-through-fences'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'method', 'DeferredIndexRead::drop', 'guard.try_release_into(self.releases)', '{ drop(guard); Ok::<_, ()>(()) }', id='short-read-unwind-deferred'),
+    pytest.param('crates/iroha_core/src/state/effect_publication.rs', 'method', 'EffectLockScope::drop', 'self.0.release_writers();', '// physical pass omitted', id='scope-unwind-before-sibling-cleanup'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::prepare_inner', 'self.effect_locks', 'other.effect_locks', id='carrier-exact-effects-slot'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::prepare_inner', '.map_err(|(field, wait)| CarrierPhysicalPreparationError::Fence { field, wait })?;', '.map_err(|(field, wait)| CarrierPhysicalPreparationError::Fence { field, wait });', id='carrier-propagates-effects-refusal'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::drop', 'indexes.release_writers();', '// lost index physical pass', id='carrier-indexes-before-fences'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::into_prepared', 'effect_locks: self.effect_locks.take().expect("prepared effect locks"),', 'effect_locks: other.effect_locks.take().expect("prepared effect locks"),', id='complete-carrier-retains-original-effects'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'method', 'AcquiredCarrierParticipants::abort', 'let mut effect_cleanup;', '', id='abort-cleanup-declared-before-originals'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'method', 'AcquiredCarrierParticipants::abort', 'let mut effect_locks = effect_cleanup.physical_scope();', 'let mut effect_locks = &mut effect_cleanup;', id='abort-unwind-physical-scope'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'method', 'AcquiredCarrierParticipants::abort', 'effect_locks.release_writers();', '// lost physical pass', id='abort-indexes-before-outer-fences'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/publication.rs', 'method', 'PhysicallyPreparedCarrier::publish', 'let mut effect_cleanup;', '', id='publish-cleanup-declared-before-originals'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/publication.rs', 'method', 'PhysicallyPreparedCarrier::publish', 'let mut effect_locks = effect_cleanup.physical_scope();', 'let mut effect_locks = &mut effect_cleanup;', id='publish-unwind-physical-scope'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/publication.rs', 'method', 'PhysicallyPreparedCarrier::publish', 'effect_locks.release_writers();', '// lost physical pass', id='publish-indexes-before-outer-fences'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'StateBlock::commit_inner', 'let mut effect_locks = effect_cleanup.physical_scope();', 'let mut effect_locks = &mut effect_cleanup;', id='direct-original-state-before-effect-scope'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'StateBlock::commit_inner', 'effect_locks.prepare_blocking();', '// skipped original indexes', id='direct-effects-before-first-visibility'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'StateBlock::commit_inner', 'effect_locks.with_merge_admission(|admission| admission.validate_next(entry))', 'state_ref.merge_admission.read().validate_next(entry)', id='direct-short-read-no-early-wake'),
+    pytest.param('crates/iroha_core/src/state/carrier_da_effects.rs', 'method', 'DaCommitmentPostPublication::capture_snapshot', 'cursors,', '&state.da_shard_cursors.read(),', id='da-snapshot-through-original-writer'),
+    pytest.param('crates/iroha_core/src/state/carrier_da_effects.rs', 'method', 'DaCommitmentPostPublication::capture_snapshot', 'self.captured = true;', 'self.captured = false;', id='da-captured-owner-phase'),
+    pytest.param('crates/iroha_core/src/state/carrier_da_effects.rs', 'method', 'DaCommitmentPostPublication::publish', 'self.snapshot', '{ let _reader = state.da_shard_cursors.read(); self.snapshot }', id='da-post-never-reopens-index'),
+    pytest.param('crates/iroha_core/src/state/carrier_da_effects.rs', 'method', 'DaCommitmentPostPublication::publish', 'state.da_shard_cursor_persistor.schedule(snapshot);', 'snapshot.persist().unwrap();', id='da-preserves-async-scheduling'),
+    pytest.param('crates/iroha_core/src/state/carrier_lifecycle_effects.rs', 'method', 'LaneLifecyclePostPublication::capture_snapshot', 'cursors,', '&state.da_shard_cursors.read(),', id='lifecycle-snapshot-through-original-writer'),
+    pytest.param('crates/iroha_core/src/state/carrier_lifecycle_effects.rs', 'method', 'LaneLifecyclePostPublication::capture_snapshot', 'self.captured = true;', 'self.captured = false;', id='lifecycle-captured-owner-phase'),
+    pytest.param('crates/iroha_core/src/state/carrier_lifecycle_effects.rs', 'method', 'LaneLifecyclePostPublication::publish', 'self.snapshot', '{ let _reader = state.da_shard_cursors.read(); self.snapshot }', id='lifecycle-post-never-reopens-index'),
+    pytest.param('crates/iroha_core/src/state/carrier_lifecycle_effects.rs', 'method', 'LaneLifecyclePostPublication::publish', 'snapshot.persist()', 'state.persist_da_shard_cursor_journal_with_config(&self.lane_config)', id='lifecycle-sync-persist-original-snapshot'),
+])
+def test_effect_publication_retains_original_indexes_until_outer_release(fixture, path, kind, symbol, old, new):
+    root, _, checker, _ = fixture
+    errors = []
+    item = checker._rust_binding_item(root, path, kind, symbol, "effect publication mutation", errors)
+    assert errors == [] and item is not None and item.count(old) == 1
+    source_path = root / path
+    source = source_path.read_text()
+    changed = _mutate_complete_preparation_item(checker, source, kind, symbol, item, old, new)
+    source_path.write_text(changed)
+    errors = validate(fixture)
+    assert any("executable relation" in error or "reopens a published index" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error or "must occur exactly once" in error for error in errors), errors
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('crates/iroha_core/src/publication_rwlock/deferred.rs', 'method', 'PublicationRwLock::defer_notifications', 'lock: self,', 'lock: other,', id='deferred-original-lock'),
+    pytest.param('crates/iroha_core/src/publication_rwlock/deferred.rs', 'method', 'PublicationRwLock::defer_notifications', 'releases: self.deferred_releases(),', 'releases: other.deferred_releases(),', id='deferred-original-notification'),
+    pytest.param('crates/iroha_core/src/publication_rwlock/deferred.rs', 'method', 'DeferredPublicationRwLock::read', 'guard: Some(self.lock.read()),', 'guard: Some(other.lock.read()),', id='read-original-physical-guard'),
+    pytest.param('crates/iroha_core/src/publication_rwlock/deferred.rs', 'method', 'DeferredPublicationRwLock::read', 'releases: &mut self.releases,', 'releases: &mut other.releases,', id='read-original-release-batch'),
+    pytest.param('crates/iroha_core/src/publication_rwlock/deferred.rs', 'method', 'DeferredPublicationRwLock::write', 'guard: Some(self.lock.write()),', 'guard: Some(other.lock.write()),', id='write-original-physical-guard'),
+    pytest.param('crates/iroha_core/src/publication_rwlock/deferred.rs', 'method', 'DeferredPublicationRwLock::write', 'releases: &mut self.releases,', 'releases: &mut other.releases,', id='write-original-release-batch'),
+    pytest.param('crates/iroha_core/src/publication_rwlock/deferred.rs', 'macro', 'deferred_guard', 'guard.try_release_into(self.releases).is_ok()', '{ drop(guard); true }', id='guard-unlock-without-early-notification'),
+    pytest.param('crates/iroha_core/src/publication_rwlock/deferred.rs', 'macro', 'deferred_guard', 'self.guard.take()', 'None', id='guard-takes-actual-original'),
+    pytest.param('crates/iroha_core/src/publication_rwlock/deferred.rs', 'macro', 'deferred_guard', "releases: &'scope mut DeferredReleaseBatch,", 'releases: DeferredReleaseBatch,', id='guard-borrows-enclosing-batch'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'DaHydrationReleases::new', 'commitments: state.da_commitments.defer_notifications(),', 'commitments: other.da_commitments.defer_notifications(),', id='hydration-commitments-original-source'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'DaHydrationReleases::new', 'confidential_compute: state.da_confidential_compute.defer_notifications(),', 'confidential_compute: other.da_confidential_compute.defer_notifications(),', id='hydration-confidential_compute-original-source'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'DaHydrationReleases::new', 'receipt_cursors: state.da_receipt_cursors.defer_notifications(),', 'receipt_cursors: other.da_receipt_cursors.defer_notifications(),', id='hydration-receipt_cursors-original-source'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'DaHydrationReleases::new', 'shard_cursors: state.da_shard_cursors.defer_notifications(),', 'shard_cursors: other.da_shard_cursors.defer_notifications(),', id='hydration-shard_cursors-original-source'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'DaHydrationReleases::new', 'pin_intents: state.da_pin_intents.defer_notifications(),', 'pin_intents: other.da_pin_intents.defer_notifications(),', id='hydration-pin_intents-original-source'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'DaHydrationReleases::new', 'hydrated: state.da_indexes_hydrated.defer_notifications(),', 'hydrated: other.da_indexes_hydrated.defer_notifications(),', id='hydration-hydrated-original-source'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::publish_hydrated_da_indexes', 'let mut published_commitments = releases.commitments.write();', 'let mut published_commitments = self.da_commitments.write();', id='publish-commitments-retains-notification'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::publish_hydrated_da_indexes', 'let mut published_confidential_compute = releases.confidential_compute.write();', 'let mut published_confidential_compute = self.da_confidential_compute.write();', id='publish-confidential_compute-retains-notification'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::publish_hydrated_da_indexes', 'let mut published_receipt_cursors = releases.receipt_cursors.write();', 'let mut published_receipt_cursors = self.da_receipt_cursors.write();', id='publish-receipt_cursors-retains-notification'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::publish_hydrated_da_indexes', 'let mut published_shard_cursors = releases.shard_cursors.write();', 'let mut published_shard_cursors = self.da_shard_cursors.write();', id='publish-shard_cursors-retains-notification'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::publish_hydrated_da_indexes', 'let mut published_pin_intents = releases.pin_intents.write();', 'let mut published_pin_intents = self.da_pin_intents.write();', id='publish-pin_intents-retains-notification'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::publish_hydrated_da_indexes', 'let mut published_pin_intents = releases.pin_intents.write();\n        *published_commitments = commitments;', '*published_commitments = commitments;\n        let mut published_pin_intents = releases.pin_intents.write();', id='acquire-all-five-before-first-mutation'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::persist_hydrated_da_shard_cursor_journal', '&releases.shard_cursors.read()', '&self.da_shard_cursors.read()', id='persist-retains-original-reader-release'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::persist_hydrated_da_shard_cursor_journal', 'snapshot.persist()', 'self.persist_da_shard_cursor_journal_with_config(&lane_config)', id='persist-owned-snapshot-without-reopening-index'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::ensure_da_indexes_hydrated_with_journal_publication', 'let mut releases = DaHydrationReleases::new(self);\n        let mut write_fence = self.state_write_lock.defer_notifications();\n        let _hydration_guard = self.da_index_hydration_fence.lock();', 'let mut write_fence = self.state_write_lock.defer_notifications();\n        let _hydration_guard = self.da_index_hydration_fence.lock();\n        let mut releases = DaHydrationReleases::new(self);', id='ensure-cleanup-before-both-fences'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::ensure_da_indexes_hydrated_with_journal_publication', 'let _state_write_guard = write_fence.lock();', 'let _state_write_guard = self.state_write_lock.lock();', id='ensure-original-state-fence-notice-retained'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::ensure_da_indexes_hydrated_with_journal_publication', 'self.publish_hydrated_da_indexes(hydrated, &mut releases);', 'self.publish_hydrated_da_indexes(hydrated, &mut DaHydrationReleases::new(self));', id='ensure-publish-uses-enclosing-owner'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::ensure_da_indexes_hydrated_with_journal_publication', 'self.persist_hydrated_da_shard_cursor_journal(&mut releases);', 'self.persist_hydrated_da_shard_cursor_journal(&mut DaHydrationReleases::new(self));', id='ensure-persist-uses-enclosing-owner'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::ensure_da_indexes_hydrated_with_journal_publication', '*releases.hydrated.write() = Some(result);', '*self.da_indexes_hydrated.write() = Some(result);', id='ensure-final-status-release-retained'),
+    pytest.param('crates/iroha_core/src/state/canonical_runtime/acquisition.rs', 'method', 'AcquiredRuntimeBlock::rewind_da_indexes_to_height', 'let releases = fields\n            .da_rewind_releases\n            .get_or_insert_with(|| da_hydration::DaRewindReleases::new(self.target));', 'let mut local = da_hydration::DaRewindReleases::new(self.target); let releases = &mut local;', id='rewind-cleanup-before-both-fences'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::rewind_da_indexes_to_height_with_releases', 'let _state_write_guard = write_fence.lock();', 'let _state_write_guard = self.state_write_lock.lock();', id='rewind-original-state-fence-notice-retained'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::rewind_da_indexes_to_height_with_releases', 'self.publish_hydrated_da_indexes(hydrated, releases);', 'self.publish_hydrated_da_indexes(hydrated, &mut DaHydrationReleases::new(self));', id='rewind-publish-uses-enclosing-owner'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::rewind_da_indexes_to_height_with_releases', 'self.persist_hydrated_da_shard_cursor_journal(releases);', 'self.persist_hydrated_da_shard_cursor_journal(&mut DaHydrationReleases::new(self));', id='rewind-persist-uses-enclosing-owner'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::rewind_da_indexes_to_height_with_releases', '*releases.hydrated.write() = Some(result);', '*self.da_indexes_hydrated.write() = Some(result);', id='rewind-final-status-release-retained'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::ensure_da_indexes_hydrated_with_journal_publication', 'if let Some(result) = releases.hydrated.read().as_ref()', 'if let Some(result) = self.da_indexes_hydrated.read().as_ref()', id='second-cache-check-retains-release'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::ensure_da_indexes_hydrated_with_journal_publication', 'if persist_journal {', 'if true {', id='isolated-replay-does-not-persist'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::rewind_da_indexes_to_height_with_releases', '*releases.hydrated.write() = None;', '*self.da_indexes_hydrated.write() = None;', id='rewind-reset-status-release-retained'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::rewind_da_indexes_to_height_with_releases', '.build_da_indexes_from_kura(Some(target_height))', '.build_da_indexes_from_kura(None)', id='rewind-authenticates-exact-prefix'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'LaneRelayStore::next_relays_with_merge_material', 'next.into_values().cloned().collect()', 'next.into_values().collect()', id='relay-snapshot-owns-original-envelope'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'LaneRelayStore::next_relays_with_merge_material', 'if envelope.block_height == expected_height {', 'if envelope.block_height >= expected_height {', id='relay-preserves-contiguous-height'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'LaneRelayStore::next_relays_with_merge_material', 'if !envelope.has_merge_admission_material() {', 'if false {', id='relay-preserves-admission-material'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::merge_entry_candidates_from_lane_relays_with_view', 'let relay_candidates = self\n            .lane_relays\n            .read()\n            .next_relays_with_merge_material(previous_snapshots);', 'let relay_guard = self.lane_relays.read();\n        let relay_candidates = relay_guard.next_relays_with_merge_material(previous_snapshots);', id='relay-reader-drops-before-validation'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::merge_entry_candidates_from_lane_relays_with_view', '.verify_lane_relay_fastpq_record(&latest_admissible)', '.verify_lane_relay_fastpq_record(&other)', id='relay-validates-original-snapshot'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::merge_entry_candidates_from_lane_relays_with_view', 'if !lifecycle.lane_route_and_incarnation_matches(', 'if lifecycle.lane_route_and_incarnation_matches(', id='relay-preserves-route-incarnation-check'),
+
+])
+def test_hydration_relay_retains_original_release_custody(fixture, path, kind, symbol, old, new):
+    root, _, checker, _ = fixture
+    errors = []
+    item = checker._rust_binding_item(root, path, kind, symbol, "hydration/relay mutation", errors)
+    assert errors == [] and item is not None and item.count(old) == 1
+    assert checker.native_preparation_contract._code(old) != checker.native_preparation_contract._code(new)
+    source_path = root / path
+    source_path.write_text(_mutate_complete_preparation_item(
+        checker, source_path.read_text(), kind, symbol, item, old, new,
+    ))
+    errors = validate(fixture)
+    assert any(f"Native preparation {symbol} missing executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error or "must occur exactly once" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("guard,original", [
+    pytest.param("DeferredReadGuard", "PublicationRwLockReadGuard", id="read-shared-kernel"),
+    pytest.param("DeferredWriteGuard", "PublicationRwLockWriteGuard", id="write-shared-kernel"),
+])
+def test_hydration_concrete_guards_use_reviewed_release_kernel(fixture, guard, original):
+    root, _, _, _ = fixture
+    path = root / "crates/iroha_core/src/publication_rwlock/deferred.rs"
+    source = path.read_text()
+    invocation = f"deferred_guard!({guard}, {original});"
+    assert source.count(invocation) == 1
+    path.write_text(source.replace(invocation, f"deferred_guard!({guard}, ForeignGuard);", 1))
+    errors = validate(fixture)
+    assert any("Native hydration shared guard invocation changed: " + invocation == error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error or "must occur exactly once" in error for error in errors), errors
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('crates/iroha_core/src/publication_lock.rs', 'method', 'DeferredPublicationGuard::deref', 'self.guard', 'other.guard', id='deferred-guard-keeps-original-deref'),
+    pytest.param('crates/iroha_core/src/publication_lock.rs', 'method', 'DeferredPublicationGuard::deref_mut', 'self.guard', 'other.guard', id='deferred-guard-keeps-original-deref_mut'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'DaRewindReleases::new', 'DaHydrationReleases::new(state)', 'DaHydrationReleases::new(other)', id='rewind-original-six-index-sources'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'DaRewindReleases::new', 'state.state_write_lock.defer_notifications()', 'other.state_write_lock.defer_notifications()', id='rewind-original-write-fence-source'),
+    pytest.param('crates/iroha_core/src/state/canonical_runtime/acquisition.rs', 'macro', 'runtime_cells', 'target: original.target,', 'target: other,', id='acquired-keeps-original-state-target'),
+    pytest.param('crates/iroha_core/src/state/canonical_runtime/acquisition.rs', 'method', 'AcquiredRuntimeBlock::rewind_da_indexes_to_height', 'DaRewindReleases::new(self.target)', 'DaRewindReleases::new(other)', id='rewind-cannot-select-another-state'),
+    pytest.param('crates/iroha_core/src/state/canonical_runtime/acquisition.rs', 'method', 'AcquiredRuntimeBlock::rewind_da_indexes_to_height', 'self.target\n            .rewind_da_indexes_to_height_with_releases(target_height, releases)', 'other.rewind_da_indexes_to_height_with_releases(target_height, releases)', id='rewind-engine-uses-acquired-state'),
+    pytest.param('crates/iroha_core/src/state/canonical_runtime/acquisition.rs', 'method', 'AcquiredRuntimeBlock::rewind_da_indexes_to_height', 'target_height, releases', 'target_height, &mut da_hydration::DaRewindReleases::new(self.target)', id='rewind-engine-borrows-retained-notices'),
+    pytest.param('crates/iroha_core/src/state/da_hydration.rs', 'method', 'State::rewind_da_indexes_to_height_with_releases', '} = releases;', '} = &mut DaRewindReleases::new(self);', id='rewind-does-not-recreate-local-notices'),
+    pytest.param('crates/iroha_core/src/state/state_block_construction.rs', 'method', 'State::construct_acquired_block', 'state_ref: self,\n                da_rewind_releases,', 'state_ref: self,\n                da_rewind_releases: None,', id='construction-transfers-original-rewind-notices'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/journals.rs', 'method', 'PreparedCarrier::prepare_journals', 'let da_rewind_releases;\n        let mut original = self;', '\n        let mut original = self;let da_rewind_releases;', id='capture-rewind-notices-outlive-original'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/journals.rs', 'method', 'PreparedCarrier::prepare_journals', 'da_rewind_releases = original_da_rewind_releases;', 'da_rewind_releases = None; drop(original_da_rewind_releases);', id='capture-keeps-original-rewind-owner'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/journals.rs', 'method', 'PreparedCarrier::prepare_journals', '        let mut pending = StateJournalCapture::new(\n            world.capture_slot(),\n            runtime_journals::RuntimeCapture::new(\n                canonical_runtime.into_executing(),\n                commit_topology.into_executing(),\n                prev_commit_topology.into_executing(),\n                lane_consensus_contexts.into_executing(),\n            ),\n            transactions.into_capture(),\n            block_hashes.into_executing(),\n        );\n        pending.try_capture().map_err(|error| match error {\n            StateCaptureError::World(error) => CarrierJournalPreparationError::WorldCapture(error),\n            StateCaptureError::Membership(error) => {\n                CarrierJournalPreparationError::Membership(error)\n            }\n        })?;\n        let components = pending.into_components();\n        // Successful capture freed all original State writers; no journal authority\n        // is derived from these completed, same-source notification batches.\n        drop(da_rewind_releases);', '        drop(da_rewind_releases);\n        let mut pending = StateJournalCapture::new(\n            world.capture_slot(),\n            runtime_journals::RuntimeCapture::new(\n                canonical_runtime.into_executing(),\n                commit_topology.into_executing(),\n                prev_commit_topology.into_executing(),\n                lane_consensus_contexts.into_executing(),\n            ),\n            transactions.into_capture(),\n            block_hashes.into_executing(),\n        );\n        pending.try_capture().map_err(|error| match error {\n            StateCaptureError::World(error) => CarrierJournalPreparationError::WorldCapture(error),\n            StateCaptureError::Membership(error) => {\n                CarrierJournalPreparationError::Membership(error)\n            }\n        })?;\n        let components = pending.into_components();\n        // Successful capture freed all original State writers; no journal authority\n        // is derived from these completed, same-source notification batches.\n', id='capture-rewind-notices-survive-partial-slots'),
+    pytest.param('crates/iroha_core/src/state/carrier_preparation/journals.rs', 'method', 'PreparedCarrier::prepare_journals', '        let components = pending.into_components();\n        // Successful capture freed all original State writers; no journal authority\n        // is derived from these completed, same-source notification batches.\n        drop(da_rewind_releases);', '        drop(da_rewind_releases);\n        let components = pending.into_components();\n        // Successful capture freed all original State writers; no journal authority\n        // is derived from these completed, same-source notification batches.\n', id='capture-rewind-notices-retire-after-all-writers'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::block_and_revert_with_pristine_stage', 'acquired\n                .rewind_da_indexes_to_height(target_height)', 'self.rewind_da_indexes_to_height(target_height)', id='replacement-rewind-retains-original-acquisition'),
+    pytest.param('crates/iroha_core/src/state/canonical_runtime.rs', 'method', 'State::acquire_canonical_runtime_block', 'let baseline = self.lane_manifests.read().clone();\n            let mut registry_cache = self.sccp_registry_cache.lock().clone();\n            // All constructors use the same order. Every guard is dropped before\n            // retry; a World-only generation check cannot bind the predecessor.\n            // Hash construction detaches its private tree before waiting for World.\n            let block_hashes = self.block_hashes.try_next_block(replacement)?;\n            // Projection payloads outlive joint physical retirement on refusal\n            // and unwind. Every Cell slot remains in this caller while initializing.\n            let projection_result;\n            let mut projection;\n            let mut sccp_registry;\n            let mut pending = acquisition::RuntimeBlockAcquisition::new(self, block_hashes);\n            pending.initialize(replacement);', '\n            let mut registry_cache = self.sccp_registry_cache.lock().clone();\n            // All constructors use the same order. Every guard is dropped before\n            // retry; a World-only generation check cannot bind the predecessor.\n            // Hash construction detaches its private tree before waiting for World.\n            let block_hashes = self.block_hashes.try_next_block(replacement)?;\n            // Projection payloads outlive joint physical retirement on refusal\n            // and unwind. Every Cell slot remains in this caller while initializing.\n            let projection_result;\n            let mut projection;\n            let mut sccp_registry;\n            let mut pending = acquisition::RuntimeBlockAcquisition::new(self, block_hashes);\n            pending.initialize(replacement);let baseline = self.lane_manifests.read().clone();', id='acquisition-manifest-snapshot-before-writers'),
+    pytest.param('crates/iroha_core/src/state/canonical_runtime.rs', 'method', 'State::acquire_canonical_runtime_block', 'let mut registry_cache = self.sccp_registry_cache.lock().clone();\n            // All constructors use the same order. Every guard is dropped before\n            // retry; a World-only generation check cannot bind the predecessor.\n            // Hash construction detaches its private tree before waiting for World.\n            let block_hashes = self.block_hashes.try_next_block(replacement)?;\n            // Projection payloads outlive joint physical retirement on refusal\n            // and unwind. Every Cell slot remains in this caller while initializing.\n            let projection_result;\n            let mut projection;\n            let mut sccp_registry;\n            let mut pending = acquisition::RuntimeBlockAcquisition::new(self, block_hashes);\n            pending.initialize(replacement);', '\n            // All constructors use the same order. Every guard is dropped before\n            // retry; a World-only generation check cannot bind the predecessor.\n            // Hash construction detaches its private tree before waiting for World.\n            let block_hashes = self.block_hashes.try_next_block(replacement)?;\n            // Projection payloads outlive joint physical retirement on refusal\n            // and unwind. Every Cell slot remains in this caller while initializing.\n            let projection_result;\n            let mut projection;\n            let mut sccp_registry;\n            let mut pending = acquisition::RuntimeBlockAcquisition::new(self, block_hashes);\n            pending.initialize(replacement);let mut registry_cache = self.sccp_registry_cache.lock().clone();', id='acquisition-sccp-snapshot-before-writers'),
+    pytest.param('crates/iroha_core/src/state/canonical_runtime.rs', 'method', 'State::acquire_canonical_runtime_block', '&baseline,', '&self.lane_manifests.read().clone(),', id='acquisition-projection-uses-preacquisition-baseline'),
+    pytest.param('crates/iroha_core/src/state/canonical_runtime.rs', 'method', 'State::acquire_canonical_runtime_block', '&mut registry_cache,', '&mut self.sccp_registry_cache.lock(),', id='acquisition-registry-uses-preacquisition-snapshot'),
+    pytest.param('crates/iroha_core/src/state/canonical_runtime.rs', 'method', 'State::acquire_canonical_runtime_block', 'pending.world().sccp_registry.get(),', 'other_world.sccp_registry.get(),', id='acquisition-registry-validates-actual-world-wire'),
+
+])
+def test_rewind_and_acquisition_keep_original_notification_owners(fixture, path, kind, symbol, old, new):
+    """No replacement, capture, or borrowed projection loses actual release custody."""
+    root, _, checker, _ = fixture
+    errors = []
+    item = checker._rust_binding_item(root, path, kind, symbol, "rewind mutation", errors)
+    assert errors == [] and item is not None and item.count(old) == 1
+    assert checker.native_preparation_contract._code(old) != checker.native_preparation_contract._code(new)
+    source = root / path
+    source.write_text(_mutate_complete_preparation_item(checker, source.read_text(), kind, symbol, item, old, new))
+    errors = validate(fixture)
+    ordered_capture = symbol == "PreparedCarrier::prepare_journals" and (old.lstrip().startswith("let da_rewind_releases;") or "drop(da_rewind_releases);" in old)
+    diagnostic = "missing or reorders executable relation" if ordered_capture else "missing executable relation"
+    assert any(f"Native preparation {symbol} {diagnostic}" in error for error in errors), errors
+    assert all(error.startswith("Native preparation ") and (" missing executable relation " in error or " missing or reorders executable relation " in error) for error in errors), errors
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'header: state.latest_block_header.defer_notifications(),', 'header: other.latest_block_header.defer_notifications(),', id='lifecycle-original-header'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'sccp: state.sccp_registry_cache.defer_notifications(),', 'sccp: other.sccp_registry_cache.defer_notifications(),', id='lifecycle-original-sccp'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'merge_admission: state.merge_admission.defer_notifications(),', 'merge_admission: other.merge_admission.defer_notifications(),', id='lifecycle-original-merge_admission'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'relays: state.lane_relays.defer_notifications(),', 'relays: other.lane_relays.defer_notifications(),', id='lifecycle-original-relays'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'manifests: state.lane_manifests.defer_notifications(),', 'manifests: other.lane_manifests.defer_notifications(),', id='lifecycle-original-manifests'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'privacy: state.lane_privacy_registry.defer_notifications(),', 'privacy: other.lane_privacy_registry.defer_notifications(),', id='lifecycle-original-privacy'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'commitments: state.da_commitments.defer_notifications(),', 'commitments: other.da_commitments.defer_notifications(),', id='lifecycle-original-commitments'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'confidential_compute: state.da_confidential_compute.defer_notifications(),', 'confidential_compute: other.da_confidential_compute.defer_notifications(),', id='lifecycle-original-confidential_compute'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'receipt_cursors: state.da_receipt_cursors.defer_notifications(),', 'receipt_cursors: other.da_receipt_cursors.defer_notifications(),', id='lifecycle-original-receipt_cursors'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'shard_cursors: state.da_shard_cursors.defer_notifications(),', 'shard_cursors: other.da_shard_cursors.defer_notifications(),', id='lifecycle-original-shard_cursors'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'pin_intents: state.da_pin_intents.defer_notifications(),', 'pin_intents: other.da_pin_intents.defer_notifications(),', id='lifecycle-original-pin_intents'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'hydrated: state.da_indexes_hydrated.defer_notifications(),', 'hydrated: other.da_indexes_hydrated.defer_notifications(),', id='lifecycle-original-hydrated'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::reset_lane_scoped_runtime_indexes', 'releases.relays.write()', 'self.lane_relays.write()', id='reset-retains-relays'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::reset_lane_scoped_runtime_indexes', 'releases.commitments.write()', 'self.da_commitments.write()', id='reset-retains-commitments'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::reset_lane_scoped_runtime_indexes', 'releases.receipt_cursors.write()', 'self.da_receipt_cursors.write()', id='reset-retains-receipt_cursors'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::reset_lane_scoped_runtime_indexes', 'releases.shard_cursors.write()', 'self.da_shard_cursors.write()', id='reset-retains-shard_cursors'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::reset_lane_scoped_runtime_indexes', 'releases.pin_intents.write()', 'self.da_pin_intents.write()', id='reset-retains-pin_intents'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::reset_lane_scoped_runtime_indexes', 'releases\n            .confidential_compute\n            .write()', 'self.da_confidential_compute.write()', id='reset-retains-confidential'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::prune_merge_admission_lane_progress', 'releases\n            .merge_admission\n            .write()', 'self.merge_admission.write()', id='reset-retains-admission'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::install_prepared_lane_manifests_in_publication', 'releases.manifests.write()', 'self.lane_manifests.write()', id='manifest-write-caller-release'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::install_prepared_lane_manifests_in_publication', 'releases.privacy.write()', 'self.lane_privacy_registry.write()', id='privacy-write-caller-release'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'State::persist_lane_lifecycle_cursor_journal', '&releases.shard_cursors.read()', '&self.da_shard_cursors.read()', id='persistence-original-cursor-read'),
+    pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'State::persist_lane_lifecycle_cursor_journal', 'snapshot.persist()', 'self.persist_da_shard_cursor_journal()', id='persistence-no-fresh-index-read'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::install_lane_manifests', 'let mut releases = LaneLifecycleReleases::new(self);\n        let mut state_write_release = self.state_write_lock.defer_notifications();\n        let _state_write_lock = state_write_release.lock();', '\n        let mut state_write_release = self.state_write_lock.defer_notifications();\n        let _state_write_lock = state_write_release.lock();let mut releases = LaneLifecycleReleases::new(self);', id='manifest-owner-precedes-fence'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::install_lane_manifests', '&mut releases,', '&mut LaneLifecycleReleases::new(self),', id='manifest-shared-caller-owner'),
+    pytest.param('crates/iroha_core/src/state/runtime_catalog_startup.rs', 'method', 'State::install_lane_manifests_if_consensus_compatible', 'releases.manifests.read()', 'self.lane_manifests.read()', id='compatible-refusal-read-retained'),
+    pytest.param('crates/iroha_core/src/state/runtime_catalog_startup.rs', 'method', 'State::install_lane_manifests_if_consensus_compatible', 'let mut releases = LaneLifecycleReleases::new(self);\n        let mut state_write_release = self.state_write_lock.defer_notifications();\n        let _state_write_lock = state_write_release.lock();', '\n        let mut state_write_release = self.state_write_lock.defer_notifications();\n        let _state_write_lock = state_write_release.lock();let mut releases = LaneLifecycleReleases::new(self);', id='compatible-owner-precedes-fence'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::publish_prevalidated_lane_relay', 'let mut relay_releases = self.lane_relays.defer_notifications();\n        let mut cursor_releases = self.da_shard_cursors.defer_notifications();\n        let lifecycle_guard = self.lane_lifecycle_lock.lock();', '\n        let mut cursor_releases = self.da_shard_cursors.defer_notifications();\n        let lifecycle_guard = self.lane_lifecycle_lock.lock();let mut relay_releases = self.lane_relays.defer_notifications();', id='relay-notice-outlives-lifecycle'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::publish_prevalidated_lane_relay', 'let mut cursor_releases = self.da_shard_cursors.defer_notifications();\n        let lifecycle_guard = self.lane_lifecycle_lock.lock();', '\n        let lifecycle_guard = self.lane_lifecycle_lock.lock();let mut cursor_releases = self.da_shard_cursors.defer_notifications();', id='relay-cursor-notice-outlives-lifecycle'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::publish_prevalidated_lane_relay', 'self.lane_consensus_lifecycle_snapshot_with_cursors(&mut cursor_releases)', 'self.lane_consensus_lifecycle_snapshot()', id='relay-final-snapshot-retains-cursor'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::publish_prevalidated_lane_relay', 'relay_releases.write()', 'self.lane_relays.write()', id='relay-final-write-retained'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::lane_consensus_lifecycle_snapshot', 'self.lane_consensus_lifecycle_snapshot_with_cursors(&mut cursors)', 'self.lane_consensus_lifecycle_snapshot_with_cursors(&mut self.da_shard_cursors.defer_notifications())', id='standalone-snapshot-original-owner'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::lane_consensus_lifecycle_snapshot_with_cursors', 'cursors.read()', 'self.da_shard_cursors.read()', id='snapshot-kernel-original-cursor'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::record_da_lane_reset_watermarks', 'releases.shard_cursors.write()', 'self.da_shard_cursors.write()', id='watermark-write-retained'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::reset_lane_scoped_runtime_state', 'releases.hydrated.read()', 'self.da_indexes_hydrated.read()', id='reset-hydration-read-retained'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::reset_lane_scoped_runtime_state', 'self.persist_lane_lifecycle_cursor_journal(releases)', 'self.persist_da_shard_cursor_journal()', id='original-persistence-reset_lane_scoped_runtime_state'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::record_da_lane_reset_watermarks', 'self.persist_lane_lifecycle_cursor_journal(releases)', 'self.persist_da_shard_cursor_journal()', id='original-persistence-record_da_lane_reset_watermarks'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::apply_lane_geometry_updates', 'releases,', '&mut LaneLifecycleReleases::new(self),', id='geometry-original-apply_lane_geometry_updates'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::apply_lane_geometry_updates_with_certified_drain_frontiers', 'releases,', '&mut LaneLifecycleReleases::new(self),', id='geometry-original-apply_lane_geometry_updates_with_certified_drain_frontiers'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::rollback_lane_geometry_updates', 'releases,', '&mut LaneLifecycleReleases::new(self),', id='geometry-original-rollback_lane_geometry_updates'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::preflight_committed_autoscale_lane_geometry', 'releases,', '&mut LaneLifecycleReleases::new(self),', id='geometry-original-preflight_committed_autoscale_lane_geometry'),
+    pytest.param('crates/iroha_core/src/state/geometry_publication.rs', 'method', 'State::resume_lane_geometry_publication', 'releases.shard_cursors.write()', 'self.da_shard_cursors.write()', id='geometry-retains-cursor-resume_lane_geometry_publication'),
+    pytest.param('crates/iroha_core/src/state/geometry_publication.rs', 'method', 'State::resume_lane_geometry_publication', 'releases.hydrated.read()', 'self.da_indexes_hydrated.read()', id='geometry-retains-status-resume_lane_geometry_publication'),
+    pytest.param('crates/iroha_core/src/state/geometry_publication.rs', 'method', 'State::resume_lane_geometry_publication', 'self.persist_lane_lifecycle_cursor_journal(releases)', 'self.persist_da_shard_cursor_journal()', id='geometry-retains-persistence-resume_lane_geometry_publication'),
+    pytest.param('crates/iroha_core/src/state/geometry_publication.rs', 'method', 'State::rollback_owned_lane_geometry', 'releases.shard_cursors.write()', 'self.da_shard_cursors.write()', id='geometry-retains-cursor-rollback_owned_lane_geometry'),
+    pytest.param('crates/iroha_core/src/state/geometry_publication.rs', 'method', 'State::rollback_owned_lane_geometry', 'releases.hydrated.read()', 'self.da_indexes_hydrated.read()', id='geometry-retains-status-rollback_owned_lane_geometry'),
+    pytest.param('crates/iroha_core/src/state/geometry_publication.rs', 'method', 'State::rollback_owned_lane_geometry', 'self.persist_lane_lifecycle_cursor_journal(releases)', 'self.persist_da_shard_cursor_journal()', id='geometry-retains-persistence-rollback_owned_lane_geometry'),
+    pytest.param('crates/iroha_core/src/state/geometry_publication.rs', 'method', 'State::resume_lane_geometry_publication', 'let publish_cursors = releases.is_some();', 'let publish_cursors = true;', id='replay-none-cannot-publish-indexes'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::validate_committed_autoscale_lane_lifecycle', 'prospective_nexus.dataspace_catalog = runtime_catalog_transition_dataspaces(\n                &nexus,\n                releases.manifests.read().as_ref(),', 'prospective_nexus.dataspace_catalog = runtime_catalog_transition_dataspaces(\n                &nexus,\n                self.lane_manifests.read().as_ref(),', id='committed-validation-original-manifests'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::merge_consensus_snapshot_inner_with_releases', 'releases\n                .shard_cursors\n                .read()', 'self.da_shard_cursors.read()', id='drain-original-shard_cursors'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::merge_consensus_snapshot_inner_with_releases', 'releases.merge_admission.read()', 'self.merge_admission.read()', id='drain-original-merge_admission'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::unmerged_merge_admissible_relay_progress_with_releases', 'releases.relays.read()', 'self.lane_relays.read()', id='drain-original-relays'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::lane_has_drain_blocking_evidence_with_releases', 'self.lane_consensus_lifecycle_snapshot_with_cursors(&mut releases.shard_cursors)', 'self.lane_consensus_lifecycle_snapshot()', id='drain-shared-cursor-snapshot'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::native_amx_participant_application_snapshot_with_lifecycle', 'for lane in lifecycle.nexus.lane_catalog.lanes()', 'for lane in self.lane_consensus_lifecycle_snapshot().nexus.lane_catalog.lanes()', id='defining-kernel-borrows-lifecycle-native_amx_participant_application_snapshot_with_lifecycle'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::native_amx_participant_frontiers_pending_durable_evidence_snapshot_with_lifecycle', '.native_amx_participant_application_snapshot_with_lifecycle(lifecycle)?', '.native_amx_participant_application_snapshot()?', id='defining-kernel-borrows-lifecycle-native_amx_participant_frontiers_pending_durable_evidence_snapshot_with_lifecycle'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::unapplied_native_amx_participant_control_heights_snapshot_with_lifecycle', '.native_amx_participant_application_snapshot_with_lifecycle(lifecycle)?', '.native_amx_participant_application_snapshot()?', id='defining-kernel-borrows-lifecycle-unapplied_native_amx_participant_control_heights_snapshot_with_lifecycle'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::unapplied_lane_block_artifact_heights_snapshot_cached_with_lifecycle', 'Self::lane_block_artifact_routes(&lifecycle.nexus)', 'Self::lane_block_artifact_routes(&self.lane_consensus_lifecycle_snapshot().nexus)', id='defining-kernel-borrows-lifecycle-unapplied_lane_block_artifact_heights_snapshot_cached_with_lifecycle'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::unapplied_certified_lane_block_heights_snapshot_cached_with_lifecycle', 'Self::lane_block_artifact_routes(&lifecycle.nexus)', 'Self::lane_block_artifact_routes(&self.lane_consensus_lifecycle_snapshot().nexus)', id='defining-kernel-borrows-lifecycle-unapplied_certified_lane_block_heights_snapshot_cached_with_lifecycle'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::unapplied_certified_lane_block_height_with_lifecycle', '&& lifecycle.lane_route_and_incarnation_matches(', '&& self.lane_consensus_lifecycle_snapshot().lane_route_and_incarnation_matches(', id='defining-kernel-borrows-lifecycle-unapplied_certified_lane_block_height_with_lifecycle'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::pending_queue_plan_admission_blocks_lane_drain_with_releases', 'self.view_with_index_releases(releases)', 'self.view()', id='drain-pending-view-original-owner'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::try_view_once_with_index_releases', 'header.read()', 'self.latest_block_header.read()', id='view-retains-header'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::try_view_once_with_index_releases', 'manifests.read()', 'self.lane_manifests.read()', id='view-retains-manifests'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::try_view_once_with_index_releases', 'sccp.lock()', 'self.sccp_registry_cache.lock()', id='view-retains-sccp'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::try_view_once_with_index_releases', 'self.project_canonical_runtime_with_manifests(\n                canonical_runtime.get(),\n                &world,\n                &baseline,\n            )', 'self.project_canonical_runtime(canonical_runtime.get(), &world)', id='view-projection-uses-captured-baseline'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::try_view_once_with_index_releases', 'latest_hash, cached_header.as_ref()', 'latest_hash, self.latest_block_header.read().as_ref()', id='view-header-kernel-uses-captured-header'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::view_with_index_releases', '&mut releases.sccp,', '&mut self.sccp_registry_cache.defer_notifications(),', id='view-keeps-original-sccp-source'),
+    pytest.param('crates/iroha_core/src/state/canonical_runtime.rs', 'method', 'State::project_canonical_runtime_with_manifests', 'baseline.baseline_consensus_policy_digest()', 'self.lane_manifests.read().baseline_consensus_policy_digest()', id='projection-borrows-original-baseline'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::sccp_registry_snapshot_from_cache', 'cache.matches(wire)', 'state.sccp_registry_cache.lock().matches(wire)', id='registry-kernel-borrows-original-cache'),
+    pytest.param('crates/iroha_core/src/state.rs', 'fn', 'persist_committed_lane_block_session_lifecycle_bound', '.certified_lane_block_persistence_authority(&session.proposal, &mut cursor_releases)', '.certified_lane_block_persistence_authority(&session.proposal, &mut self.da_shard_cursors.defer_notifications())', id='state-fence-cursor-persist_committed_lane_block_session_lifecycle_bound'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::latest_certified_lane_block_frontier_sessions_snapshot_cached', 'self.lane_consensus_lifecycle_snapshot_with_cursors(&mut cursor_releases)', 'self.lane_consensus_lifecycle_snapshot()', id='state-fence-cursor-latest_certified_lane_block_frontier_sessions_snapshot_cached'),
+    pytest.param('crates/iroha_core/src/state.rs', 'fn', 'lane_application_certified_repair_snapshot_cached', 'self.lane_consensus_lifecycle_snapshot_with_cursors(&mut cursor_releases)', 'self.lane_consensus_lifecycle_snapshot()', id='state-fence-cursor-lane_application_certified_repair_snapshot_cached'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::certified_lane_block_persistence_authority', 'self.lane_consensus_lifecycle_snapshot_with_cursors(cursors)', 'self.lane_consensus_lifecycle_snapshot()', id='certificate-cursor-projection-borrows-original'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::record_globally_committed_merge_entry', 'let mut admission_releases = self.merge_admission.defer_notifications();\n        let mut publication_notice = self.state_view_publication();\n        let _state_write_lock = self.state_write_lock.lock();', '\n        let mut publication_notice = self.state_view_publication();\n        let _state_write_lock = self.state_write_lock.lock();let mut admission_releases = self.merge_admission.defer_notifications();', id='merge-notice-outlives-state-fence'),
+
+])
+def test_lifecycle_index_retains_original_release_custody(fixture, path, kind, symbol, old, new):
+    """Reject a real original-source, projection, or outer-lifetime regression."""
+    root, _, checker, _ = fixture
+    errors = []
+    item = checker._rust_binding_item(root, path, kind, symbol, "lifecycle mutation", errors)
+    assert errors == [] and item is not None and item.count(old) == 1
+    assert checker.native_preparation_contract._code(old) != checker.native_preparation_contract._code(new)
+    source = root / path
+    source.write_text(_mutate_complete_preparation_item(
+        checker, source.read_text(), kind, symbol, item, old, new,
+    ))
+    errors = validate(fixture)
+    diagnostic = "missing or reorders executable relation" if symbol == "State::install_lane_manifests" and old.lstrip().startswith("let mut releases =") else "missing executable relation"
+    assert any(f"Native preparation {symbol} {diagnostic}" in error for error in errors), errors
+    assert all(error.startswith("Native preparation ") and (" missing executable relation " in error or " missing or reorders executable relation " in error) for error in errors), errors
+
+
+@pytest.mark.parametrize("path,kind,symbol,old,new", [
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::validate_committed_autoscale_lane_lifecycle', 'return self.validate_committed_autoscale_drain_metadata_update(\n                &nexus,\n                &lane_incarnations,\n                &lane_incarnation_activation_heights,\n                pending,\n                block_height,\n                releases,\n            );', 'return self.validate_committed_autoscale_drain_metadata_update(\n                &nexus,\n                &lane_incarnations,\n                &lane_incarnation_activation_heights,\n                pending,\n                block_height,\n                &mut LaneLifecycleReleases::new(self),\n            );', id='drain-caller-forwards-original-owner'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::validate_committed_autoscale_drain_metadata_update', 'let update = &pending.catalog_update;', 'let mut releases = LaneLifecycleReleases::new(self);\n        let update = &pending.catalog_update;', id='drain-callee-retains-borrowed-owner'),
+    pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::validate_committed_autoscale_drain_metadata_update', 'releases.manifests.read().as_ref()', 'self.lane_manifests.read().as_ref()', id='drain-manifest-read-uses-original-source'),
+])
+def test_committed_drain_metadata_release_custody(fixture, path, kind, symbol, old, new):
+    """A real drain must retain its borrowed owner through the defining read."""
+    root, _, checker, _ = fixture
+    errors = []
+    item = checker._rust_binding_item(root, path, kind, symbol, "drain custody mutation", errors)
+    assert errors == [] and item is not None and item.count(old) == 1
+    assert checker.native_preparation_contract._code(old) != checker.native_preparation_contract._code(new)
+    source = root / path
+    source.write_text(_mutate_complete_preparation_item(
+        checker, source.read_text(), kind, symbol, item, old, new,
+    ))
+    errors = validate(fixture)
+    assert any(f"Native preparation {symbol} missing executable relation " in error for error in errors), errors
+    assert all(error.startswith("Native preparation ") and (" missing executable relation " in error or " missing or reorders executable relation " in error) for error in errors), errors

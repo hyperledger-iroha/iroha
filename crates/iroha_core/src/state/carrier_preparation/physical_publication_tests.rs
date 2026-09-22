@@ -1670,6 +1670,29 @@ fn hold<'state>(state: &'state State, name: &str) -> Box<dyn Held + 'state> {
         "lane_consensus_contexts" => Box::new(state.lane_consensus_contexts.block()),
         "world.accounts" => Box::new(state.world.accounts.block()),
         "world.triggers" => Box::new(state.world.triggers.block()),
+        "effects.latest_block_header.read" => Box::new(state.latest_block_header.read()),
+        "effects.latest_block_header.write" => Box::new(state.latest_block_header.write()),
+        "effects.merge_admission.read" => Box::new(state.merge_admission.read()),
+        "effects.merge_admission.write" => Box::new(state.merge_admission.write()),
+        "effects.da_commitments.read" => Box::new(state.da_commitments.read()),
+        "effects.da_commitments.write" => Box::new(state.da_commitments.write()),
+        "effects.da_confidential_compute.read" => Box::new(state.da_confidential_compute.read()),
+        "effects.da_confidential_compute.write" => Box::new(state.da_confidential_compute.write()),
+        "effects.da_receipt_cursors.read" => Box::new(state.da_receipt_cursors.read()),
+        "effects.da_receipt_cursors.write" => Box::new(state.da_receipt_cursors.write()),
+        "effects.da_shard_cursors.read" => Box::new(state.da_shard_cursors.read()),
+        "effects.da_shard_cursors.write" => Box::new(state.da_shard_cursors.write()),
+        "effects.da_pin_intents.read" => Box::new(state.da_pin_intents.read()),
+        "effects.da_pin_intents.write" => Box::new(state.da_pin_intents.write()),
+        "effects.lane_relays.read" => Box::new(state.lane_relays.read()),
+        "effects.lane_relays.write" => Box::new(state.lane_relays.write()),
+        "effects.lane_manifests.read" => Box::new(state.lane_manifests.read()),
+        "effects.lane_manifests.write" => Box::new(state.lane_manifests.write()),
+        "effects.lane_privacy_registry.read" => Box::new(state.lane_privacy_registry.read()),
+        "effects.lane_privacy_registry.write" => Box::new(state.lane_privacy_registry.write()),
+        "effects.da_indexes_hydrated.read" => Box::new(state.da_indexes_hydrated.read()),
+        "effects.da_indexes_hydrated.write" => Box::new(state.da_indexes_hydrated.write()),
+        "effects.sccp_registry_cache" => Box::new(state.sccp_registry_cache.lock()),
         _ => panic!("unknown physical fixture owner"),
     }
 }
@@ -1718,6 +1741,29 @@ fn every_busy_carrier_family_releases_earlier_writers_and_retains_exact_retry() 
         "lane_consensus_contexts",
         "world.accounts",
         "world.triggers",
+        "effects.latest_block_header.read",
+        "effects.latest_block_header.write",
+        "effects.merge_admission.read",
+        "effects.merge_admission.write",
+        "effects.da_commitments.read",
+        "effects.da_commitments.write",
+        "effects.da_confidential_compute.read",
+        "effects.da_confidential_compute.write",
+        "effects.da_receipt_cursors.read",
+        "effects.da_receipt_cursors.write",
+        "effects.da_shard_cursors.read",
+        "effects.da_shard_cursors.write",
+        "effects.da_pin_intents.read",
+        "effects.da_pin_intents.write",
+        "effects.lane_relays.read",
+        "effects.lane_relays.write",
+        "effects.lane_manifests.read",
+        "effects.lane_manifests.write",
+        "effects.lane_privacy_registry.read",
+        "effects.lane_privacy_registry.write",
+        "effects.da_indexes_hydrated.read",
+        "effects.da_indexes_hydrated.write",
+        "effects.sccp_registry_cache",
     ] {
         let held = hold(&state, name);
         let (retry, error) =
@@ -1745,13 +1791,16 @@ fn every_busy_carrier_family_releases_earlier_writers_and_retains_exact_retry() 
                 crate::state::storage_transactions::MembershipPredecessorStatus::Current
             ));
         }
-        if name.starts_with("world.") {
-            // World is acquired last: all four preceding runtime writers must
+        if name.starts_with("world.") || name.starts_with("effects.") {
+            // These late probes follow all four runtime writers, which must
             // have been aborted before this refusal is delivered.
             drop(state.canonical_runtime.block());
             drop(state.commit_topology.block());
             drop(state.prev_commit_topology.block());
             drop(state.lane_consensus_contexts.block());
+        }
+        if name.starts_with("effects.") {
+            drop(state.world.block());
         }
         assert_eq!(
             retry
@@ -2744,3 +2793,6 @@ fn carrier_abort_drop_and_unwind_release_all_original_fences_before_component_wa
         }
     }
 }
+
+#[path = "hash_preparation_tests.rs"]
+mod hash_preparation_tests;

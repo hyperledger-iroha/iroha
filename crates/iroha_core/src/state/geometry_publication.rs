@@ -39,8 +39,9 @@ impl State {
         replaced: &BTreeSet<LaneId>,
         certified: &BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
         mut startup: Option<&mut crate::kura::StartupReplayGeometryTransition>,
-        publish_cursors: bool,
+        mut releases: Option<&mut LaneLifecycleReleases<'_>>,
     ) -> Result<(), LaneLifecycleError> {
+        let publish_cursors = releases.is_some();
         let mut slot = self.geometry_publication.lock();
         if let Some(original) = slot.as_ref() {
             let startup_matches = match (&original.startup_owner, startup.as_deref()) {
@@ -165,13 +166,16 @@ impl State {
                 LaneLifecycleError::Storage(format!("retained tiered geometry: {error:#}"))
             })?;
         if !original.cursors_updated {
-            let should_persist = publish_cursors && {
-                self.da_shard_cursors.write().sync_mapping(request.updated);
-                self.da_indexes_hydrated.read().is_some()
-            };
-            original.cursors_updated = true;
-            if should_persist {
-                self.persist_da_shard_cursor_journal();
+            if let Some(releases) = releases.as_mut() {
+                releases.shard_cursors.write().sync_mapping(request.updated);
+                let should_persist = releases.hydrated.read().is_some();
+                original.cursors_updated = true;
+                if should_persist {
+                    self.persist_lane_lifecycle_cursor_journal(releases);
+                }
+            } else {
+                // Replay geometry has no authority to publish live cursor indexes.
+                original.cursors_updated = true;
             }
         }
         Ok(())
@@ -247,6 +251,7 @@ impl State {
         lineage_root: Hash,
         replaced: &BTreeSet<LaneId>,
         transition_height: u64,
+        releases: &mut LaneLifecycleReleases<'_>,
     ) -> Result<(), LaneLifecycleError> {
         let mut slot = self.geometry_publication.lock();
         let original = slot.as_mut().ok_or_else(|| {
@@ -296,11 +301,11 @@ impl State {
                 .map_err(LaneLifecycleError::GeometryStorage)?;
         }
         if original.publish_cursors {
-            self.da_shard_cursors.write().sync_mapping(previous);
+            releases.shard_cursors.write().sync_mapping(previous);
         }
         *slot = None;
-        if self.da_indexes_hydrated.read().is_some() {
-            self.persist_da_shard_cursor_journal();
+        if releases.hydrated.read().is_some() {
+            self.persist_lane_lifecycle_cursor_journal(releases);
         }
         Ok(())
     }

@@ -4221,9 +4221,10 @@ def test_production_trace_certificate_rejects_direct_release_stutter_drift(
             "execution_input_persistence",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
         ),
-        (
+        pytest.param(
             "durable_autonomous_bundle",
-            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC",
+            id="durable_autonomous_bundle-IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
         ),
         (
             "ready_qc_persistence",
@@ -4474,7 +4475,7 @@ def test_production_trace_certificate_rejects_disconnected_apply_carrier_consume
     consumer = binding["checked_transition_consumer"]
     source_path = ROOT_DIR / consumer["path"]
     source = source_path.read_text(encoding="utf-8")
-    required = "checked.into_projection()"
+    required = "checked.accepted_projection()"
     assert required in source
     mutated_path = tmp_path / "apply-carrier-consumer-disconnected.rs"
     mutated_path.write_text(
@@ -4489,7 +4490,7 @@ def test_production_trace_certificate_rejects_disconnected_apply_carrier_consume
 
     message = str(failure.value)
     assert "missing move-only consumer canonical_wsv_commit_authorization" in message
-    assert "checked.into_projection()" in message
+    assert "checked.accepted_projection()" in message
 
 
 @pytest.mark.parametrize(
@@ -4563,7 +4564,7 @@ def test_production_trace_certificate_rejects_disconnected_apply_carrier_adapter
     adapter = binding["checked_transition_adapter"]
     source_path = ROOT_DIR / adapter["path"]
     source = source_path.read_text(encoding="utf-8")
-    required = "CheckedCarrierApplications::consume_for_state_commit"
+    required = "CheckedCarrierApplications::validate_for_state_commit"
     assert required in source
     mutated_path = tmp_path / "apply-carrier-adapter-disconnected.rs"
     mutated_path.write_text(
@@ -4636,7 +4637,7 @@ def test_production_trace_certificate_rejects_disconnected_state_commit_sink(
     sink = binding["commit_sink"]
     source_path = ROOT_DIR / sink["path"]
     source = source_path.read_text(encoding="utf-8")
-    required = ".consume_for_state_commit(block_header_hash, staged_merge_entry.as_ref())"
+    required = ".validate_for_state_commit(block_header_hash, staged_merge_entry.as_ref())"
     assert required in source
     mutated_path = tmp_path / "state-commit-sink-disconnected.rs"
     mutated_path.write_text(
@@ -4654,7 +4655,7 @@ def test_production_trace_certificate_rejects_disconnected_state_commit_sink(
 
     message = str(failure.value)
     assert "missing canonical commit sink tokens" in message
-    assert "authorization.consume_for_state_commit" in message
+    assert "authorization.validate_for_state_commit" in message
 
 
 def test_production_trace_certificate_rejects_apply_carrier_after_state_commit(
@@ -4675,17 +4676,17 @@ def test_production_trace_certificate_rejects_apply_carrier_after_state_commit(
     source_path = ROOT_DIR / sink["path"]
     source = source_path.read_text(encoding="utf-8")
     authorization_start = source.index(
-        "        if tx_validate_accepted && !replay_prevalidation {\n"
-        "            match state_commit_authorization.take()"
+        "        if !*replay_prevalidation {\n"
+        "            match state_commit_authorization.as_ref()"
     )
     authorization_end = source.index(
-        "        let autoscale_storage_hold", authorization_start
+        "        da_effects = pending_da_commitments.take()", authorization_start
     )
     authorization_block = source[authorization_start:authorization_end]
     without_authorization = (
         source[:authorization_start] + source[authorization_end:]
     )
-    transaction_commit = "            let tx_commit_result = transactions.commit();"
+    transaction_commit = "            transactions.publish_prepared();"
     insertion = without_authorization.index(transaction_commit) + len(transaction_commit)
     mutated = (
         without_authorization[:insertion]
@@ -5168,3 +5169,167 @@ def test_production_trace_certificate_rejects_every_top_level_field_drift(
             artifacts=paths,
         )
         assert errors and "canonical current theorem certificate" in errors[0], field
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "required", "replacement", "diagnostic"),
+    (
+        pytest.param(
+            "checked_transition_consumer",
+            "fn validate_for_state_commit(\n        &self,",
+            "fn validate_for_state_commit(\n        self,",
+            "missing move-only consumer canonical_wsv_commit_authorization",
+            id="retained-proof-borrow",
+        ),
+        pytest.param(
+            "checked_transition_adapter",
+            "fn validate_for_state_commit(\n        &self,",
+            "fn validate_for_state_commit(\n        self: Box<Self>,",
+            "missing move-only State commit adapter",
+            id="retained-adapter-borrow",
+        ),
+        pytest.param(
+            "commit_sink",
+            "let state_commit_authorization = state_commit_authorization;",
+            "drop(state_commit_authorization);",
+            "missing canonical commit sink tokens",
+            id="original-proof-owner-retained",
+        ),
+        pytest.param(
+            "commit_sink",
+            'this.fields.as_mut().expect("original executing State")',
+            'this.fields.take().expect("original executing State")',
+            "missing canonical commit sink tokens",
+            id="original-State-owner-retained",
+        ),
+    ),
+)
+def test_production_trace_retained_apply_keeps_original_authorization_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    required: str,
+    replacement: str,
+    diagnostic: str,
+) -> None:
+    module = load_checker()
+    bindings = copy.deepcopy(module.PRODUCTION_TRACE_EXTRACTION_BINDINGS)
+    binding = next(
+        value for value in bindings
+        if value["id"] == "canonical_wsv_commit_authorization"
+    )
+    target = binding[endpoint]
+    source = (ROOT_DIR / target["path"]).read_text(encoding="utf-8")
+    assert required in source
+    path = tmp_path / "retained-authorization-owner.rs"
+    path.write_text(source.replace(required, replacement), encoding="utf-8")
+    target["path"] = str(path.resolve())
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", bindings)
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+    assert diagnostic in str(failure.value)
+    assert "missing exact code tokens" in str(failure.value)
+
+
+def test_production_trace_retained_apply_does_not_relax_other_consumers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_checker()
+    bindings = copy.deepcopy(module.PRODUCTION_TRACE_EXTRACTION_BINDINGS)
+    binding = next(
+        value for value in bindings
+        if value["id"] == "retired_nonproducer_replica_direct_release"
+    )
+    consumer = binding["checked_transition_consumer"]
+    source = (ROOT_DIR / consumer["path"]).read_text(encoding="utf-8")
+    required = "checked.into_projection()"
+    assert required in source
+    path = tmp_path / "non-State-consumer-borrows.rs"
+    path.write_text(
+        source.replace(required, "checked.accepted_projection()"), encoding="utf-8"
+    )
+    consumer["path"] = str(path.resolve())
+    # Adjust declarative tokens too: the defining owner classifier must still
+    # require the original move-only consumption outside retained State Apply.
+    for key in ("required_tokens", "ordered_tokens"):
+        consumer[key] = tuple(
+            value.replace(required, "checked.accepted_projection()")
+            for value in consumer[key]
+        )
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", bindings)
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+    message = str(failure.value)
+    assert "missing move-only consumer retired_nonproducer_replica_direct_release" in message
+    assert "checked projection access 'into_projection' expected at least 1, found 0" in message
+
+
+@pytest.mark.parametrize(
+    "binding_id,role,old,new",
+    [
+        pytest.param("replica_queue_disposition_observation", "exact ordinary FIFO owner preflight",
+                     "crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(",
+                     "crate::torii_proxy::unchecked_binding(", id="replica-preflight-original-binding"),
+        pytest.param("replica_queue_disposition_observation", "whole ordered FIFO group byte identity",
+                     "crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(",
+                     "crate::torii_proxy::unchecked_binding(", id="replica-group-original-binding"),
+        pytest.param("replica_queue_disposition_observation", "exact admission-to-reservation binding validation",
+                     "key.proposal_height < binding.admission_context.proposal_height", "false",
+                     id="replica-binding-admission-height"),
+        pytest.param("replica_queue_disposition_observation", "exact admission-to-reservation binding validation",
+                     "binding.canonical_hash() != key.queue_plan_admission_binding_hash", "false",
+                     id="replica-binding-canonical-identity"),
+        pytest.param("replica_queue_disposition_observation", "exact admission-to-reservation binding validation",
+                     "coordinator.lane_incarnation != key.lane_incarnation", "false",
+                     id="replica-binding-incarnation"),
+        pytest.param("execution_input_persistence", "journaled bound progress append planner",
+                     "new_index_bytes: new_entry.to_bytes().to_vec(),", "new_index_bytes: Vec::new(),",
+                     id="progress-existing-entry-preimage"),
+        pytest.param("execution_input_persistence", "journaled bound progress append planner",
+                     "let intent = match BoundProgressAppendIntentV1::for_prepend(",
+                     "let intent = match BoundProgressAppendIntentV1::unchecked_prepend(",
+                     id="progress-prepend-admission"),
+        pytest.param("execution_input_persistence", "bounded prepend exact preimage admission",
+                     "new_index_bytes.extend_from_slice(&old_index_bytes[old.entries_offset as usize..]);",
+                     "new_index_bytes.extend_from_slice(&[]);", id="progress-prepend-preserves-original-entries"),
+        pytest.param("execution_input_persistence", "bounded prepend exact preimage admission",
+                     "intent.validate_against_old_layout(Some(old))?;", "// omit original layout check",
+                     id="progress-prepend-exact-layout"),
+        pytest.param("durable_autonomous_bundle", "active route durable bundle authority",
+                     "if self.prune_recovery_is_required()", "if false", id="bundle-active-prune-fence"),
+        pytest.param("durable_autonomous_bundle", "retained restart durable bundle authority",
+                     "self.require_retained_lane_storage_entry(entry)", "self.accept_unowned_entry(entry)",
+                     id="bundle-restart-original-entry"),
+        pytest.param("durable_autonomous_bundle", None,
+                     "if entry.network_id != expected_network_id", "if false", id="bundle-shared-exact-network"),
+    ],
+)
+def test_production_trace_current_queue_and_kura_owners_are_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    binding_id: str, role: str | None, old: str, new: str,
+) -> None:
+    """Reject bypasses at each current caller and its defining validation owner."""
+    module = load_checker()
+    bindings = copy.deepcopy(module.PRODUCTION_TRACE_EXTRACTION_BINDINGS)
+    binding = next(item for item in bindings if item["id"] == binding_id)
+    endpoint = binding if role is None else next(
+        item for item in binding["supporting_sources"] if item["role"] == role
+    )
+    errors: list[str] = []
+    item = module._production_trace_unique_function(
+        root_dir=ROOT_DIR, relative=endpoint["path"], symbol=endpoint["symbol"],
+        impl_name=endpoint["impl"], errors=errors,
+    )
+    assert errors == [] and item is not None
+    assert item.source.count(old) == 1
+    source = (ROOT_DIR / endpoint["path"]).read_text(encoding="utf-8")
+    assert source.count(item.source) == 1
+    path = tmp_path / "disconnected-current-owner.rs"
+    path.write_text(source.replace(item.source, item.source.replace(old, new, 1), 1), encoding="utf-8")
+    endpoint["path"] = str(path.resolve())
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", bindings)
+    with pytest.raises(ValueError) as failure:
+        module._production_trace_extraction_source_snapshot()
+    message = str(failure.value)
+    assert (role or binding_id) in message
+    assert "missing" in message or "ordered" in message

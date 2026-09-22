@@ -4,8 +4,33 @@
 //! that unwinds leaves its original partial state in its slot; aggregate Drop
 //! releases every physical writer before any slot destroys values or notifies.
 
-use super::{WorldBlock, WorldBlockFields};
+#[cfg(test)]
+use super::WorldBlockFields;
+use super::{
+    WorldBlock,
+    block_field::{BlockField, OriginalPublicationBlock},
+};
 use mv::{BlockAcquisition, BlockMode, BlockRetirement};
+
+pub(super) trait IntoWorldField {
+    type Field;
+    fn into_world_field(self) -> Self::Field;
+}
+impl<B: OriginalPublicationBlock> IntoWorldField for B {
+    type Field = BlockField<B>;
+    fn into_world_field(self) -> Self::Field {
+        BlockField::new(self)
+    }
+}
+impl IntoWorldField for super::TriggerSetBlock<'_> {
+    type Field = Self;
+    fn into_world_field(self) -> Self {
+        self
+    }
+}
+pub(super) fn retain_executing_field<B: IntoWorldField>(block: B) -> B::Field {
+    block.into_world_field()
+}
 
 macro_rules! declare_world_acquisition {
     (; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {
@@ -45,8 +70,28 @@ macro_rules! declare_world_acquisition {
             }
         }
 
+        impl WorldBlock<'_> {
+            pub(super) fn prepare_publication(&mut self) {
+                self.publication.begin_preparation();
+                let fields = self.fields.as_mut().expect("original World block fields");
+                $(fields.$prefix.prepare_publication();)*
+                $(fields.$privacy.prepare_publication();)*
+                $(fields.$suffix.prepare_publication();)*
+                self.publication.finish_preparation();
+            }
+            pub(super) fn publish_prepared(&mut self) {
+                self.publication.begin_publication();
+                let fields = self.fields.as_mut().expect("original World block fields");
+                $(fields.$prefix.publish_prepared();)*
+                $(fields.$privacy.publish_prepared();)*
+                $(fields.$suffix.publish_prepared();)*
+                self.publication.finish_publication();
+            }
+        }
+
         impl BlockRetirement for WorldBlock<'_> {
             fn release_writers(&mut self) {
+                self.publication.release();
                 if let Some(fields) = self.fields.as_mut() {
                     $(fields.$prefix.release_writers();)*
                     $(fields.$privacy.release_writers();)*
@@ -77,11 +122,11 @@ pub(super) fn finish_world_acquisition<'world>(
     finish()
 }
 
+#[cfg(test)]
 impl<'world> WorldBlock<'world> {
     pub(super) fn into_fields(mut self) -> WorldBlockFields<'world> {
-        // TODO: retain joint retirement through consuming commit. Capture now
-        // installs caller-owned slots before invoking any native operation.
-        self.fields.take().expect("original World block fields")
+        self.publication.assert_executing();
+        *self.fields.take().expect("original World block fields")
     }
 }
 
@@ -109,13 +154,16 @@ macro_rules! build_world_block_from_fields {
         });
         pending.initialize($mode);
         world_acquisition::finish_world_acquisition(|| WorldBlock {
-            fields: Some(WorldBlockFields {
+            publication: block_field::AggregatePublication::Executing,
+            // TODO: include this one metadata allocation in complete retained
+            // pre-execution admission before enabling that production path.
+            fields: Some(Box::new(WorldBlockFields {
                 dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
-                $($prefix: pending.$prefix.take().expect("original field acquisition").into_block(),)*
-                $($privacy: pending.$privacy.take().expect("original field acquisition").into_block(),)*
-                $($suffix: pending.$suffix.take().expect("original field acquisition").into_block(),)*
+                $($prefix: world_acquisition::retain_executing_field(pending.$prefix.take().expect("original field acquisition").into_block()),)*
+                $($privacy: world_acquisition::retain_executing_field(pending.$privacy.take().expect("original field acquisition").into_block()),)*
+                $($suffix: world_acquisition::retain_executing_field(pending.$suffix.take().expect("original field acquisition").into_block()),)*
                 external_event_buf: Vec::new(),
-            }),
+            })),
         })
     }};
 }

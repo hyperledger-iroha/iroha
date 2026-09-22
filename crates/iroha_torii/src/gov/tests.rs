@@ -1929,8 +1929,9 @@ async fn gov_get_tally_applies_conviction_factor() {
         );
         stx.world.governance_locks_mut().insert(rid.clone(), locks);
         stx.apply();
-        let iroha_core::state::StateBlock { world, .. } = sblock;
-        world.commit();
+        sblock
+            .commit_world_overlay_for_testing()
+            .expect("commit governance fixture world");
     }
     let res = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
         .await
@@ -1983,8 +1984,9 @@ async fn gov_get_tally_retains_closed_result_after_all_locks_are_released() {
             },
         );
         tx.apply();
-        let iroha_core::state::StateBlock { world, .. } = block;
-        world.commit();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit governance fixture world");
     }
     state.push_block_hash_for_testing(block_hash);
     state.push_block_hash_for_testing(block_hash);
@@ -2029,8 +2031,9 @@ async fn gov_get_tally_projects_zk_abstentions() {
             },
         );
         tx.apply();
-        let iroha_core::state::StateBlock { world, .. } = block;
-        world.commit();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit governance fixture world");
     }
 
     let response = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
@@ -2201,8 +2204,9 @@ async fn gov_get_tally_rejects_invalid_plain_direction() {
         locks.locks.get_mut(&ALICE_ID).unwrap().direction = 3;
         tx.world.governance_locks_mut().insert(rid.clone(), locks);
         tx.apply();
-        let iroha_core::state::StateBlock { world, .. } = block;
-        world.commit();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit governance fixture world");
     }
     let err = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
         .await
@@ -2275,8 +2279,9 @@ async fn legacy_referendum_reads_reject_stored_typed_proposal_fingerprints() {
             },
         );
         tx.apply();
-        let iroha_core::state::StateBlock { world, .. } = block;
-        world.commit();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit governance fixture world");
     }
     let state = Arc::new(state);
     for err in [
@@ -2354,8 +2359,9 @@ async fn gov_get_tally_rejects_accumulator_overflow() {
         }
         tx.world.governance_locks_mut().insert(rid.clone(), locks);
         tx.apply();
-        let iroha_core::state::StateBlock { world, .. } = block;
-        world.commit();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit governance fixture world");
     }
     let err = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
         .await

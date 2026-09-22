@@ -69,6 +69,7 @@ impl TransactionsStorage {
         }
     }
     /// Return the latest committed block height recorded by entrypoint storage.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn latest_height(&self) -> usize {
         self.latest_block
             .load()
@@ -162,7 +163,7 @@ impl TransactionsStorage {
         TransactionsBlock {
             latest_block_ref: &self.latest_block,
             blocks_ref: &self.blocks,
-            _guard: guard,
+            _guard: block::MembershipWriter::new(guard),
             revert,
             current_block: None,
         }
@@ -296,8 +297,7 @@ mod block {
         /// References to [`TransactionsStorage`] struct
         pub(super) latest_block_ref: &'storage ArcSwapOption<BlockInfo>,
         pub(super) blocks_ref: &'storage DashMap<Key, Value>,
-        pub(super) _guard:
-            concread::release::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>,
+        pub(super) _guard: MembershipWriter<'storage>,
         /// Own fields
         pub(super) revert: bool,
         pub(super) current_block: Option<Arc<BlockInfo>>,
@@ -311,6 +311,11 @@ mod block {
         block: TransactionsBlock<'storage>,
         publication: MembershipPublication,
         next_identity: Arc<()>,
+        // Fixed original-owner metadata. During publication the admitted action
+        // stays in place, and every displaced allocation stays in this caller.
+        retired_tip: Option<Arc<BlockInfo>>,
+        publication_started: bool,
+        published: bool,
     }
 
     /// An admitted transition whose original physical writer has been released.
@@ -335,6 +340,7 @@ mod block {
     pub(crate) struct PreparedDetachedTransactionsBlock<'storage, Installation> {
         prepared: PreparedTransactionsBlock<'storage>,
         installation: Installation,
+        preflight_release: Option<concread::release::DeferredRelease>,
     }
 
     /// Original membership payloads and notification after its physical unlock.
@@ -343,19 +349,22 @@ mod block {
         _tip: Option<Arc<BlockInfo>>,
         _staged: Option<Arc<BlockInfo>>,
         _identity: Arc<()>,
+        _publication: MembershipPublication,
         _release: concread::release::DeferredRelease,
     }
 
-    /// Original abort release retained with its installation reservation.
+    /// Original abort or refusal cleanup retained with installation admission.
     pub(crate) struct AbortedTransactions<Installation> {
-        _release: concread::release::DeferredRelease,
-        _installation: Installation,
+        _installation: Option<Installation>,
+        _preflight_release: Option<concread::release::DeferredRelease>,
+        _release: Option<concread::release::DeferredRelease>,
     }
 
     /// Published membership cleanup retained with its installation admission.
     pub(crate) struct PublishedTransactions<Installation> {
         _retirement: TransactionsPublicationRetirement,
         _installation: Installation,
+        _preflight_release: Option<concread::release::DeferredRelease>,
     }
 
     /// A short observation, never authorization to publish a detached journal.
@@ -368,6 +377,24 @@ mod block {
         /// Some committed membership changed after capture.
         Changed,
     }
+
+    #[path = "capture.rs"]
+    mod capture;
+    pub(super) use capture::MembershipWriter;
+    pub use capture::TransactionsBlockField;
+    pub(crate) use capture::TransactionsCaptureSlot;
+
+    #[path = "detached_publication.rs"]
+    mod detached_publication;
+    pub(crate) use detached_publication::DetachedTransactionsPublicationSlot;
+
+    #[cfg(test)]
+    #[path = "detached_publication_tests.rs"]
+    mod detached_publication_tests;
+
+    #[cfg(test)]
+    #[path = "capture_tests.rs"]
+    mod capture_tests;
 
     enum MembershipPublication {
         Repeated,
@@ -383,6 +410,7 @@ mod block {
     impl<'storage> TransactionsBlock<'storage> {
         /// Return whether a canonical block membership update was staged.
         pub(crate) fn has_staged_block(&self) -> bool {
+            self._guard.identity();
             self.current_block.is_some()
         }
         /// Return whether the staged canonical carrier has the exact height and
@@ -392,6 +420,7 @@ mod block {
             height: NonZeroUsize,
             transactions: &HashSet<Key>,
         ) -> bool {
+            self._guard.identity();
             self.current_block
                 .as_ref()
                 .is_some_and(|block| block.height == height && &block.transactions == transactions)
@@ -403,6 +432,7 @@ mod block {
         /// a panic. Attempting to commit without inserting a block results in an error (see
         /// `commit_without_insert_block_fails`).
         pub fn insert_block(&mut self, transactions: HashSet<Key>, height: Value) {
+            self._guard.identity();
             if let Some(current_block) = &self.current_block {
                 assert_eq!(
                     current_block.height, height,
@@ -442,12 +472,9 @@ mod block {
         pub(crate) fn prepare_commit(
             self,
         ) -> Result<PreparedTransactionsBlock<'storage>, TransactionsBlockError> {
-            let publication = self.admit_publication()?;
-            Ok(PreparedTransactionsBlock {
-                block: self,
-                publication,
-                next_identity: Arc::new(()),
-            })
+            let mut capture = self.capture_slot();
+            capture.try_prepare()?;
+            Ok(capture.into_prepared())
         }
         /// Validate that this block can be committed without mutating the storage.
         ///
@@ -457,6 +484,7 @@ mod block {
             self.admit_publication().map(|_| ())
         }
         fn admit_publication(&self) -> Result<MembershipPublication, TransactionsBlockError> {
+            self._guard.identity();
             let previous_block = self.latest_block_ref.load_full();
             let previous_height = previous_block.as_ref().map_or(0, |b| b.height.get());
             let Some(current_block) = self.current_block.as_ref() else {
@@ -494,10 +522,33 @@ mod block {
         }
     }
     impl<'storage> PreparedTransactionsBlock<'storage> {
+        fn new(
+            block: TransactionsBlock<'storage>,
+            publication: MembershipPublication,
+            next_identity: Arc<()>,
+        ) -> Self {
+            Self {
+                block,
+                publication,
+                next_identity,
+                retired_tip: None,
+                publication_started: false,
+                published: false,
+            }
+        }
+
+        fn assert_unpublished(&self) {
+            assert!(
+                !self.publication_started && !self.published,
+                "membership publication was already attempted"
+            );
+        }
+
         /// Move the admitted action and exact cut, then release the writer.
         ///
         /// This adds no collection allocation or copy. Snapshot/checkpoint
         /// projections must already have consumed the original locked reader.
+        #[cfg(test)]
         pub(crate) fn detach(self) -> DetachedTransactionsBlock {
             self.detach_retaining().0
         }
@@ -508,13 +559,17 @@ mod block {
             DetachedTransactionsBlock,
             concread::release::DeferredRelease,
         ) {
+            self.assert_unpublished();
             let Self {
                 block,
                 publication,
                 next_identity,
+                retired_tip: _,
+                publication_started: _,
+                published: _,
             } = self;
             let detached = DetachedTransactionsBlock {
-                predecessor_identity: Arc::clone(&block._guard),
+                predecessor_identity: Arc::clone(block._guard.identity()),
                 predecessor: block.latest_block_ref.load_full(),
                 current: Arc::clone(block.current_block.as_ref().expect("admitted membership")),
                 revert: block.revert,
@@ -526,7 +581,7 @@ mod block {
                 current_block,
                 ..
             } = block;
-            let ((), release) = _guard.release_deferred(drop);
+            let release = _guard.into_release();
             // The detached journal owns the original staged allocation.
             drop(current_block);
             (detached, release)
@@ -543,47 +598,68 @@ mod block {
         /// prevents any other membership writer from changing the admitted cut.
         /// The returned owner defers payload cleanup and retry callbacks until
         /// the caller has released every enclosing publication fence.
-        pub(crate) fn publish(self) -> TransactionsPublicationRetirement {
-            let Self {
-                mut block,
-                publication,
-                next_identity,
-            } = self;
-            let changes_identity = !matches!(&publication, MembershipPublication::Repeated);
-            let tip = match publication {
-                MembershipPublication::Repeated => None,
+        pub(crate) fn publish(mut self) -> TransactionsPublicationRetirement {
+            self.publish_in_place();
+            self.into_retirement()
+        }
+
+        // The caller retains this complete owner throughout every map operation.
+        // No original action, guard, or displaced payload is moved to a callee
+        // local that could notify or reclaim under a sibling on unwind.
+        fn publish_in_place(&mut self) {
+            self.assert_unpublished();
+            self.block._guard.identity();
+            self.publication_started = true;
+            match &self.publication {
+                MembershipPublication::Repeated => {}
                 MembershipPublication::Replace { current } => {
-                    block
+                    self.block
                         .blocks_ref
                         .retain(|_, height| *height < current.height);
-                    block.latest_block_ref.swap(Some(current))
+                    self.retired_tip = self.block.latest_block_ref.swap(Some(Arc::clone(current)));
                 }
                 MembershipPublication::Advance { previous, current } => {
-                    if let Some(previous) = &previous {
+                    if let Some(previous) = previous {
                         for &transaction in &previous.transactions {
-                            block.blocks_ref.insert(transaction, previous.height);
+                            self.block.blocks_ref.insert(transaction, previous.height);
                         }
                     }
-                    // The returned original tip retains the same allocation as
-                    // previous until cleanup outside the enclosing State fences.
-                    block.latest_block_ref.swap(Some(current))
+                    self.retired_tip = self.block.latest_block_ref.swap(Some(Arc::clone(current)));
                 }
-            };
-            let identity = if changes_identity {
-                std::mem::replace(&mut **block._guard, next_identity)
-            } else {
-                next_identity
-            };
+            }
+            if !matches!(&self.publication, MembershipPublication::Repeated) {
+                // Install the exact pre-admitted identity and retain its exact
+                // predecessor in the same field. No identity is reconstructed.
+                std::mem::swap(self.block._guard.identity_mut(), &mut self.next_identity);
+            }
+            self.block.release_writers();
+            self.published = true;
+        }
+
+        fn into_retirement(self) -> TransactionsPublicationRetirement {
+            assert!(
+                self.published,
+                "original membership publication must complete"
+            );
+            let Self {
+                block,
+                publication,
+                next_identity,
+                retired_tip,
+                publication_started: _,
+                published: _,
+            } = self;
             let TransactionsBlock {
                 current_block,
                 _guard,
                 ..
             } = block;
-            let ((), release) = _guard.release_deferred(drop);
+            let release = _guard.into_release();
             TransactionsPublicationRetirement {
-                _tip: tip,
+                _tip: retired_tip,
                 _staged: current_block,
-                _identity: identity,
+                _identity: next_identity,
+                _publication: publication,
                 _release: release,
             }
         }
@@ -608,61 +684,20 @@ mod block {
             admit: impl FnOnce(&Self, &TransactionsStorage) -> Result<Installation, E>,
         ) -> Result<
             PreparedDetachedTransactionsBlock<'storage, Installation>,
-            (Self, mv::PublicationPreparationError<E>),
+            (
+                Self,
+                mv::PublicationPreparationError<E>,
+                AbortedTransactions<Installation>,
+            ),
         > {
-            let wait = storage.released.observe();
-            match self.observe_predecessor(storage) {
-                MembershipPredecessorStatus::Busy => {
-                    return Err((
-                        self,
-                        mv::PublicationPreparationError::after_failed_acquisition(wait),
-                    ));
-                }
-                MembershipPredecessorStatus::Changed => {
-                    return Err((self, mv::PublicationPreparationError::Changed));
-                }
-                MembershipPredecessorStatus::Current => {}
-            }
-            let installation = match admit(&self, storage) {
-                Ok(installation) => installation,
+            let mut slot = self.publication_slot(storage);
+            match slot.try_prepare(admit) {
+                Ok(()) => Ok(slot.into_prepared()),
                 Err(error) => {
-                    return Err((self, mv::PublicationPreparationError::Admission(error)));
+                    let original = slot.recover_original();
+                    Err((original, error, slot.into_cleanup()))
                 }
-            };
-            let wait = storage.released.observe();
-            let Some(guard) = storage.write_lock.try_lock() else {
-                return Err((
-                    self,
-                    mv::PublicationPreparationError::after_failed_acquisition(wait),
-                ));
-            };
-            let guard = storage.released.guard(guard);
-            if !Arc::ptr_eq(&guard, &self.predecessor_identity) {
-                drop(guard);
-                return Err((self, mv::PublicationPreparationError::Changed));
             }
-            let Self {
-                predecessor_identity: _,
-                predecessor: _,
-                current,
-                revert,
-                publication,
-                next_identity,
-            } = self;
-            Ok(PreparedDetachedTransactionsBlock {
-                prepared: PreparedTransactionsBlock {
-                    block: TransactionsBlock {
-                        latest_block_ref: &storage.latest_block,
-                        blocks_ref: &storage.blocks,
-                        _guard: guard,
-                        revert,
-                        current_block: Some(current),
-                    },
-                    publication,
-                    next_identity,
-                },
-                installation,
-            })
         }
 
         /// Borrow the exact admitted carrier height and immutable membership.
@@ -710,13 +745,15 @@ mod block {
             let Self {
                 prepared,
                 installation,
+                preflight_release,
             } = self;
             let (journal, release) = prepared.detach_retaining();
             (
                 journal,
                 AbortedTransactions {
-                    _release: release,
-                    _installation: installation,
+                    _release: Some(release),
+                    _installation: Some(installation),
+                    _preflight_release: preflight_release,
                 },
             )
         }
@@ -729,10 +766,12 @@ mod block {
             let Self {
                 prepared,
                 installation,
+                preflight_release,
             } = self;
             PublishedTransactions {
                 _retirement: prepared.publish(),
                 _installation: installation,
+                _preflight_release: preflight_release,
             }
         }
     }
@@ -751,6 +790,7 @@ mod block {
             Key: Borrow<Q>,
             Q: Hash + Eq + ?Sized,
         {
+            self._guard.identity();
             if let Some(height) = self
                 .current_block
                 .as_ref()
@@ -766,10 +806,11 @@ mod block {
 #[cfg(test)]
 pub(crate) use block::MembershipPredecessorStatus;
 pub(crate) use block::{
-    DetachedTransactionsBlock, PreparedDetachedTransactionsBlock, PreparedTransactionsBlock,
+    DetachedTransactionsBlock, DetachedTransactionsPublicationSlot,
+    PreparedDetachedTransactionsBlock, PreparedTransactionsBlock, TransactionsCaptureSlot,
 };
 #[allow(unused_imports)]
-pub use block::{TransactionsBlock, TransactionsBlockError};
+pub use block::{TransactionsBlock, TransactionsBlockError, TransactionsBlockField};
 
 /// Local identity of an immutable pending row under its retained predecessor.
 ///
@@ -826,7 +867,7 @@ impl TransactionsBlock<'_> {
     /// Bind this owner's exact predecessor and immutable pending membership row.
     pub(in crate::state) fn publication_surface(&self) -> TransactionsPublicationSurface {
         TransactionsPublicationSurface {
-            predecessor: Arc::clone(&self._guard),
+            predecessor: Arc::clone(self._guard.identity()),
             current: self.current_block.clone(),
             revert: self.revert,
         }
@@ -864,6 +905,7 @@ mod membership_projection {
 
     impl TransactionsBlock<'_> {
         fn membership_snapshot(&self) -> Snapshot<'_> {
+            self._guard.identity();
             Snapshot {
                 latest: self.latest_block_ref.load_full(),
                 history: self.blocks_ref,

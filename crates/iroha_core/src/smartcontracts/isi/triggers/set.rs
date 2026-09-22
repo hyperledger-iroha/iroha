@@ -14,9 +14,11 @@ mod acquisition;
 mod detachment;
 pub(crate) use acquisition::SetBlockAcquisition;
 pub(crate) use detachment::{
-    AbortedSet, DetachError, DetachedSet, PreparedSet, PublishedSet, SetBlockCapture,
-    SetPublicationError,
+    AbortedSet, DetachError, DetachedSet, DetachedSetPublicationSlot, PreparedSet, PublishedSet,
+    SetBlockCapture, SetPublicationError,
 };
+
+use crate::state::block_field::{AggregatePublication, BlockField, StorageField};
 
 use super::{
     data_trigger_global_permission_grantee, data_trigger_scope_authorization_is_well_formed,
@@ -229,12 +231,10 @@ fn hash_world_contract(entry: &IvmBytecodeEntry) -> core::result::Result<Hash, S
 /// [`IvmBytecode`]s keyed by contract hash.
 /// Stored together with usage counts so triggers sharing the same blob can be deduplicated.
 type TriggerContractStore = Storage<HashOf<IvmBytecode>, IvmBytecodeEntry>;
-type TriggerContractStoreBlock<'set> = StorageBlock<'set, HashOf<IvmBytecode>, IvmBytecodeEntry>;
 type TriggerContractStoreTransaction<'block> =
     StorageTransaction<'block, HashOf<IvmBytecode>, IvmBytecodeEntry>;
 type TriggerContractStoreView<'set> = StorageView<'set, HashOf<IvmBytecode>, IvmBytecodeEntry>;
 type ActiveTriggerIdStore = Storage<TriggerId, ()>;
-type ActiveTriggerIdStoreBlock<'set> = StorageBlock<'set, TriggerId, ()>;
 type ActiveTriggerIdStoreTransaction<'block> = StorageTransaction<'block, TriggerId, ()>;
 type ActiveTriggerIdStoreView<'set> = StorageView<'set, TriggerId, ()>;
 
@@ -939,6 +939,7 @@ impl FastJsonWrite for Set {
 }
 /// Original trigger journals with one aggregate writer-release boundary.
 pub struct SetBlock<'set> {
+    publication: AggregatePublication,
     fields: Option<SetBlockFields<'set>>,
 }
 
@@ -958,25 +959,25 @@ impl std::ops::DerefMut for SetBlock<'_> {
 /// Original typed trigger fields retained until aggregate writer release.
 pub struct SetBlockFields<'set> {
     /// Triggers using [`DataEventFilter`]
-    data_triggers: StorageBlock<'set, TriggerId, LoadedAction<DataEventFilter>>,
+    data_triggers: StorageField<'set, TriggerId, LoadedAction<DataEventFilter>>,
     /// Triggers using [`PipelineEventFilterBox`]
-    pipeline_triggers: StorageBlock<'set, TriggerId, LoadedAction<PipelineEventFilterBox>>,
+    pipeline_triggers: StorageField<'set, TriggerId, LoadedAction<PipelineEventFilterBox>>,
     /// Triggers using [`TimeEventFilter`]
-    time_triggers: StorageBlock<'set, TriggerId, LoadedAction<TimeEventFilter>>,
+    time_triggers: StorageField<'set, TriggerId, LoadedAction<TimeEventFilter>>,
     /// Triggers using [`ExecuteTriggerEventFilter`]
-    by_call_triggers: StorageBlock<'set, TriggerId, LoadedAction<ExecuteTriggerEventFilter>>,
+    by_call_triggers: StorageField<'set, TriggerId, LoadedAction<ExecuteTriggerEventFilter>>,
     /// Trigger ids with type of events they process
-    ids: StorageBlock<'set, TriggerId, TriggeringEventType>,
+    ids: StorageField<'set, TriggerId, TriggeringEventType>,
     /// Active data trigger ids.
-    active_data_trigger_ids: ActiveTriggerIdStoreBlock<'set>,
+    active_data_trigger_ids: StorageField<'set, TriggerId, ()>,
     /// Active pipeline trigger ids.
-    active_pipeline_trigger_ids: ActiveTriggerIdStoreBlock<'set>,
+    active_pipeline_trigger_ids: StorageField<'set, TriggerId, ()>,
     /// Active time trigger ids.
-    active_time_trigger_ids: ActiveTriggerIdStoreBlock<'set>,
+    active_time_trigger_ids: StorageField<'set, TriggerId, ()>,
     /// Active by-call trigger ids.
-    active_by_call_trigger_ids: ActiveTriggerIdStoreBlock<'set>,
+    active_by_call_trigger_ids: StorageField<'set, TriggerId, ()>,
     /// Original [`IvmBytecode`]s by [`TriggerId`] for querying purposes.
-    contracts: TriggerContractStoreBlock<'set>,
+    contracts: StorageField<'set, HashOf<IvmBytecode>, IvmBytecodeEntry>,
 }
 #[cfg(feature = "json")]
 impl FastJsonWrite for SetBlock<'_> {
@@ -2032,20 +2033,10 @@ impl SetBlock<'_> {
             contracts: fields.contracts.transaction(),
         }
     }
-    /// Commit block's changes
-    pub fn commit(self) {
-        let fields = self.into_fields();
-        // NOTE: commit in reverse order
-        fields.contracts.commit();
-        fields.active_by_call_trigger_ids.commit();
-        fields.active_time_trigger_ids.commit();
-        fields.active_pipeline_trigger_ids.commit();
-        fields.active_data_trigger_ids.commit();
-        fields.ids.commit();
-        fields.by_call_triggers.commit();
-        fields.time_triggers.commit();
-        fields.pipeline_triggers.commit();
-        fields.data_triggers.commit();
+    /// Publish all original trigger journals before retiring any one journal.
+    pub fn commit(mut self) {
+        self.prepare_publication();
+        self.publish_prepared();
     }
     /// Returns a bounded iterator of trigger ids matching a given time event.
     pub fn match_time_event(

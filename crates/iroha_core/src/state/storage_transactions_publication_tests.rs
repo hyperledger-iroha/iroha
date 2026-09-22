@@ -26,7 +26,7 @@ fn prepare(
 ) -> PreparedDetachedTransactionsBlock<'_, ()> {
     detached
         .try_prepare_publication(storage, |_, _| Ok::<_, &'static str>(()))
-        .unwrap_or_else(|(_, error)| panic!("publication preparation: {error:?}"))
+        .unwrap_or_else(|(_, error, _)| panic!("publication preparation: {error:?}"))
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn busy_and_refused_installation_return_the_original_journal_for_retry() {
     let journal = stage(&storage, 2, &[2]).prepare_commit().unwrap().detach();
     let pointer = std::ptr::from_ref(journal.staged_membership().1);
     let writer = storage.block();
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&storage, |_, _| -> Result<(), &str> {
             panic!("busy observation must not attempt installation admission")
         })
@@ -103,7 +103,7 @@ fn busy_and_refused_installation_return_the_original_journal_for_retry() {
         .expect("busy writer");
     assert!(matches!(error, PublicationPreparationError::Busy(_)));
     drop(writer);
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&storage, |_, target| {
             assert!(
                 target.write_lock.try_lock().is_some(),
@@ -136,7 +136,7 @@ fn membership_abort_detach_and_commit_signal_the_exact_busy_writer() {
         let journal = stage(&storage, 2, &[2]).prepare_commit().unwrap().detach();
         let pointer = std::ptr::from_ref(journal.staged_membership().1);
         let competitor = stage(&storage, 2, &[3]).prepare_commit().unwrap();
-        let (journal, error) = journal
+        let (journal, error, _cleanup) = journal
             .try_prepare_publication(&storage, |_, _| Ok::<_, ()>(()))
             .err()
             .expect("membership writer");
@@ -184,14 +184,14 @@ fn foreign_owner_and_an_admission_race_cannot_rebind_the_journal() {
         norito::json::from_str(&norito::json::to_json(&storage).unwrap()).unwrap();
     let journal = stage(&storage, 2, &[2]).prepare_commit().unwrap().detach();
     let pointer = std::ptr::from_ref(journal.staged_membership().1);
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&restored, |_, _| -> Result<(), &str> {
             panic!("foreign identity must be rejected before admission")
         })
         .err()
         .expect("foreign owner");
     assert!(matches!(error, PublicationPreparationError::Changed));
-    let (journal, error) = journal
+    let (journal, error, _cleanup) = journal
         .try_prepare_publication(&storage, |_, target| {
             // Equal bytes after two real replacements still represent a new cut.
             for value in [3, 1] {

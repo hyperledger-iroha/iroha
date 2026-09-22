@@ -202,19 +202,7 @@ DELEGATED_STATE_BINDINGS += (('composed_external_events',
    'autoscale_sample',
    'authorization.composed_write_set_root()')),
  ('commit_inner',
-  ('MergeExecutionCommitSurface::FinalizedCarrier',
-   'merge_execution_commit_surface_result',
-   'canonical_wsv_merge_commit_authorization.take()',
-   'canonical_carrier_commit_metadata_authorization.take()',
-   'merge_execution_write_set_root_from_overlay_with_external_events',
-   'authorization.composed_external_events().0',
-   'authorization.write_set_root',
-   'carrier_authorization.post_finality_write_set_root != current_write_set_root',
-   'certified merge entry has no exact durable carrier before state commit',
-   'transactions.prepare_commit()',
-   'let transactions = tx_validate_result?;',
-   'transactions.publish()',
-   'authorization.composed_write_set_root()')))
+  ('MergeExecutionCommitSurface::FinalizedCarrier', 'merge_execution_commit_surface_result', 'let Some(authorization) = canonical_wsv_merge_commit_authorization.as_ref() else {', 'let Some(carrier_authorization) =\n                    canonical_carrier_commit_metadata_authorization.as_ref()\n                else {', 'merge_execution_write_set_root_from_overlay_with_external_events', 'authorization.composed_external_events().0', 'authorization.write_set_root', 'carrier_authorization.post_finality_write_set_root != current_write_set_root', 'certified merge entry has no exact durable carrier before state commit', 'transactions.try_prepare_publication()', 'tx_validate_result?;', 'transactions.publish_prepared()', 'authorization.composed_write_set_root()', 'let mut this = self;', 'this.fields.as_mut()')))
 
 DELEGATED_STATE_BINDINGS += (("build_merge_execution_candidate_for_consensus", ()), ("select_merge_execution_candidate_prefix", ()))
 

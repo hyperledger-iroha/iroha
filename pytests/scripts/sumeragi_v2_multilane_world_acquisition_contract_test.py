@@ -21,7 +21,7 @@ def test_world_acquisition_accepts_actual_aggregate_owners(fixture):
 
 
 @pytest.mark.parametrize("symbol,old,new", [
-    pytest.param("WorldBlock", "fields: Option<WorldBlockFields<'world>>", "fields: WorldBlockFields<'world>", id="world-original-optional-transfer"),
+    pytest.param("WorldBlock", "fields: Option<Box<WorldBlockFields<'world>>>", "fields: Box<WorldBlockFields<'world>>", id="world-original-optional-transfer"),
     pytest.param("SetBlock", "fields: Option<SetBlockFields<'set>>", "fields: SetBlockFields<'set>", id="trigger-original-optional-transfer"),
     pytest.param("declare_world_acquisition", "$(pub(super) $prefix: Option<$prefix>,)*", "$(pub(super) $prefix: $prefix,)*", id="world-slots-own-original-prefix"),
     pytest.param("declare_world_acquisition", '$(self.$prefix.as_mut().expect("original field acquisition").initialize(mode);)*', '$(self.$prefix.as_mut().expect("original field acquisition").release();)*', id="world-initializes-original-slots"),

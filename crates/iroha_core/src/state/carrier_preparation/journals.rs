@@ -11,7 +11,7 @@
 //! owners through live Validate/cache/Apply before retiring the old writer.
 
 use super::super::*;
-use super::{PreparedCarrier, execution_prefix::ValidatedExecutionPrefix};
+use super::{PreparedCarrier, PreparedCarrierFields, execution_prefix::ValidatedExecutionPrefix};
 #[cfg(test)]
 use crate::query::{
     provider_ingest_finalized::ProviderIngestFinalizedArchiveV1,
@@ -24,6 +24,10 @@ use crate::query::{
 
 #[path = "runtime_journals.rs"]
 mod runtime_journals;
+
+#[path = "state_capture.rs"]
+mod state_capture;
+use state_capture::{StateCaptureError, StateJournalCapture};
 
 #[path = "decision_binding.rs"]
 pub(crate) mod decision_binding;
@@ -312,7 +316,7 @@ impl<'state> PreparedCarrier<'state> {
     > {
         // Exhaustively borrow the complete owner. Adding a retained field must
         // also update admission; a partial State/prefix projection is insufficient.
-        let Self {
+        let PreparedCarrierFields {
             valid,
             state,
             source_prefix,
@@ -321,7 +325,7 @@ impl<'state> PreparedCarrier<'state> {
             native_amx_manifest,
             _world_effects,
             _publication_events,
-        } = &self;
+        } = &*self;
         // Declare before the original owners: reverse local drop order must
         // release them before capacity on every early error, including archive
         // admission before the StateBlock has been decomposed.
@@ -352,16 +356,24 @@ impl<'state> PreparedCarrier<'state> {
         // declared after capacity so every capture/error/unwind releases them first.
         let mut provider_capture = provider_capture;
         let mut reputation_capture = reputation_capture;
-        let Self {
-            valid,
-            mut state,
-            context,
-            execution_prefix,
-            native_amx_manifest,
-            source_prefix,
-            _world_effects: world_effects,
-            _publication_events: publication_events,
-        } = self;
+        // Declare projection payloads before their original writer owner so
+        // unwind releases every physical writer before any projection retires.
+        #[cfg(feature = "telemetry")]
+        let committed_parliament_attempt_counts;
+        #[cfg(feature = "telemetry")]
+        let committed_citizens_total;
+        #[cfg(feature = "telemetry")]
+        let committed_musubi_replication_shortfall_releases;
+        let tiered_snapshot;
+        let geometry;
+        let mut capture_refusal;
+        let checkpoint;
+        let lifecycle;
+        let da_commitments;
+        // Notification custody survives partial capture and materialization unwind.
+        let da_rewind_releases;
+        let mut original = self;
+        let state = &mut original.parts_mut().state;
         // Admit capture overlap, retained originals/final values and eventual
         // installation before projecting geometry/archives or detaching a journal.
         // The callback can inspect the original typed World/runtime/source inputs; it
@@ -369,31 +381,31 @@ impl<'state> PreparedCarrier<'state> {
         // Preserve commit's dirty-only gauges from this exact overlay. Once
         // detached, reading live World would observe a different candidate.
         #[cfg(feature = "telemetry")]
-        let committed_parliament_attempt_counts = state
-            .world
-            .parliament_attempt_counts
-            .is_dirty()
-            .then(|| *state.world.parliament_attempt_counts.get());
-        #[cfg(feature = "telemetry")]
-        let committed_citizens_total = state.world.citizens.is_dirty().then(|| {
-            u64::try_from(state.world.citizens.len())
-                .expect("committed Parliament citizen count must fit into u64")
-        });
-        #[cfg(feature = "telemetry")]
-        let committed_musubi_replication_shortfall_releases =
-            *state.world.musubi_replication_shortfall_releases.get();
+        {
+            committed_parliament_attempt_counts = state
+                .world
+                .parliament_attempt_counts
+                .is_dirty()
+                .then(|| *state.world.parliament_attempt_counts.get());
+            committed_citizens_total = state.world.citizens.is_dirty().then(|| {
+                u64::try_from(state.world.citizens.len())
+                    .expect("committed Parliament citizen count must fit into u64")
+            });
+            committed_musubi_replication_shortfall_releases =
+                *state.world.musubi_replication_shortfall_releases.get();
+        }
         // A cold backend copies the complete tiered baseline. Capture only after
         // admission, from the same immutable World whose deterministic tail was
         // prepared above. The reservation outlives this payload on every exit.
-        let tiered_snapshot = tiered_publication::PreparedTieredSnapshot::prepare(
+        tiered_snapshot = tiered_publication::PreparedTieredSnapshot::prepare(
             &state.world,
             &state.state_ref.tiered_snapshot_worker,
         );
-        let geometry = state.prepare_carrier_geometry()?;
+        geometry = state.prepare_carrier_geometry()?;
         // Reservations were acquired before execution. Original-State capture
         // never acquires an archive index; every refusal still detaches the
         // admitted execution before returning control to a possible waiter.
-        let mut capture_refusal = provider_capture
+        capture_refusal = provider_capture
             .as_mut()
             .and_then(|owner| owner.capture_original(state.as_ref()).err())
             .map(|error| CarrierArchivePreparationError::Provider(Arc::new(error)));
@@ -403,19 +415,30 @@ impl<'state> PreparedCarrier<'state> {
                 .and_then(|owner| owner.capture_original(state.as_ref()).err())
                 .map(|error| CarrierArchivePreparationError::Reputation(Arc::new(error)));
         }
-        let checkpoint = crate::snapshot::canonical_staged_state_snapshot_hash(&state);
-        let lifecycle = state.pending_autoscale_lifecycle.as_ref().map(|pending| {
+        checkpoint = crate::snapshot::canonical_staged_state_snapshot_hash(&state);
+        lifecycle = state.pending_autoscale_lifecycle.as_ref().map(|pending| {
             carrier_lifecycle_effects::PreparedLaneLifecycleEffects::prepare(pending, &state.nexus)
         });
-        let da_commitments = state.pending_da_commitments.take().map(|pending| {
+        da_commitments = state.pending_da_commitments.take().map(|pending| {
             carrier_da_effects::PreparedDaCommitmentEffects::prepare(
                 pending,
                 &state.nexus,
                 state.canonical_runtime.get(),
             )
         });
-        let StateBlock {
+        let PreparedCarrierFields {
+            valid,
+            state,
+            context,
+            execution_prefix,
+            native_amx_manifest,
+            source_prefix,
+            _world_effects: world_effects,
+            _publication_events: publication_events,
+        } = original.into_parts();
+        let StateBlockFields {
             state_ref,
+            da_rewind_releases: original_da_rewind_releases,
             runtime_policy,
             world,
             transactions,
@@ -446,18 +469,29 @@ impl<'state> PreparedCarrier<'state> {
             authenticated_replay_commit,
             replay_prevalidation,
             ..
-        } = *state;
-        let world = world.try_detach_journals(|_| Ok::<(), std::convert::Infallible>(()))?;
-        let runtime = RuntimeJournals::capture(
-            canonical_runtime,
-            commit_topology,
-            prev_commit_topology,
-            lane_consensus_contexts,
-            |_| Ok::<(), std::convert::Infallible>(()),
-        )
-        .unwrap_or_else(|never| match never {});
-        let transactions = transactions.prepare_commit()?.detach();
-        let block_hashes = block_hashes.detach();
+        } = state.into_fields();
+        da_rewind_releases = original_da_rewind_releases;
+        let mut pending = StateJournalCapture::new(
+            world.capture_slot(),
+            runtime_journals::RuntimeCapture::new(
+                canonical_runtime.into_executing(),
+                commit_topology.into_executing(),
+                prev_commit_topology.into_executing(),
+                lane_consensus_contexts.into_executing(),
+            ),
+            transactions.into_capture(),
+            block_hashes.into_executing(),
+        );
+        pending.try_capture().map_err(|error| match error {
+            StateCaptureError::World(error) => CarrierJournalPreparationError::WorldCapture(error),
+            StateCaptureError::Membership(error) => {
+                CarrierJournalPreparationError::Membership(error)
+            }
+        })?;
+        let components = pending.into_components();
+        // Successful capture freed all original State writers; no journal authority
+        // is derived from these completed, same-source notification batches.
+        drop(da_rewind_releases);
         let journals = PreparedCarrierJournals {
             valid,
             context,
@@ -466,12 +500,7 @@ impl<'state> PreparedCarrier<'state> {
             source_prefix,
             checkpoint,
             kura: Arc::clone(&state_ref.kura),
-            components: DetachedCarrierComponents {
-                world,
-                transactions,
-                block_hashes,
-                runtime,
-            },
+            components,
             world_effects,
             provider_capture: None,
             reputation_capture: None,

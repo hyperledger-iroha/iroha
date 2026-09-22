@@ -1,0 +1,183 @@
+//! Replacement rewind notices stay with the original acquisition, execution, and capture owners.
+
+use super::*;
+use crate::state::{
+    carrier_preparation, da_hydration, storage_transactions::TransactionsBlockError,
+};
+use iroha_data_model::prelude::*;
+use std::{collections::HashSet, num::NonZeroUsize};
+
+fn seed_committed_prefix(state: &State, header: BlockHeader) {
+    // The rewind truncates to zero, so no Kura body is fabricated or needed.
+    let mut membership = state.transactions.block();
+    membership.insert_block(HashSet::new(), NonZeroUsize::new(1).unwrap());
+    membership.commit().unwrap();
+    let mut hashes = state.block_hashes.block();
+    hashes.push_for_tests(header.hash());
+    hashes.commit_for_tests();
+}
+
+fn observe_rewind_source(
+    state: &State,
+    state_write: bool,
+) -> (
+    concread::release::ReleaseWait,
+    concread::release::DeferredRelease,
+) {
+    if state_write {
+        let guard = state.state_write_lock.lock();
+        let wait = state.state_write_lock.try_lock_or_wait().err().unwrap();
+        return (wait, guard.release_deferred());
+    }
+    let reader = state.da_indexes_hydrated.read();
+    let wait = state.da_indexes_hydrated.try_write_or_wait().err().unwrap();
+    let original = reader.release_deferred();
+    (wait, original)
+}
+
+#[test]
+fn replacement_rewind_retains_notifications_through_acquisition_execution_and_refusal() {
+    // Cover the actual replacement constructor before-start exits, the common
+    // completed owner handoff, and direct commit's genuine membership refusal.
+    for (exit, state_write) in
+        (0..6).flat_map(|exit| [false, true].map(move |source| (exit, source)))
+    {
+        let (state, proposal, _, _) = fixture();
+        let state: Arc<State> = Arc::from(state);
+        seed_committed_prefix(&state, proposal.header());
+        let journal = membership_probe_before_stage(&state);
+        let callback = membership_probe_callback(&state, journal);
+        let (wait, original_release) = observe_rewind_source(&state, state_write);
+        let waker = Waker::from(Arc::clone(&callback));
+        let mut context = Context::from_waker(&waker);
+        let mut future = wait.clone().wait_for_release();
+        assert!(Pin::new(&mut future).poll(&mut context).is_pending());
+        if exit >= 4 {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                state.block_and_revert_with_pristine_stage(proposal.header(), |_| {
+                    assert_eq!(callback.observations(), [0; 5]);
+                    if exit == 5 {
+                        panic!("original replacement pristine-stage unwind");
+                    }
+                    Err::<(), _>("original replacement pristine-stage refusal")
+                })
+            }));
+            if exit == 5 {
+                assert!(result.is_err());
+            } else {
+                assert!(matches!(
+                    result.unwrap(),
+                    Err(StateBlockStartError::Stage(_))
+                ));
+            }
+        } else if exit == 1 || exit == 2 {
+            let block = state
+                .block_and_revert_with_pristine_stage(proposal.header(), |_| {
+                    assert_eq!(callback.observations(), [0; 5]);
+                    Ok::<_, std::convert::Infallible>(())
+                })
+                .expect("actual fully initialized replacement owner");
+            assert_eq!(callback.observations(), [0; 5]);
+            assert!(Pin::new(&mut future).poll(&mut context).is_pending());
+            if exit == 1 {
+                drop(block);
+            } else {
+                assert!(matches!(
+                    block.commit(),
+                    Err(TransactionsBlockError::MissingInsertBlock)
+                ));
+            }
+        } else {
+            let mut acquired = state.acquire_canonical_runtime_block(true).unwrap();
+            let result = acquired.rewind_da_indexes_to_height(if exit == 3 { 1 } else { 0 });
+            if exit == 3 {
+                assert!(matches!(
+                    result,
+                    Err(da_hydration::DaIndexHydrationError::MissingBlock { .. })
+                ));
+            } else {
+                assert_eq!(result, Ok(()));
+            }
+            assert_eq!(callback.observations(), [0; 5]);
+            assert!(Pin::new(&mut future).poll(&mut context).is_pending());
+            drop(acquired);
+        }
+        assert!(Pin::new(&mut future).poll(&mut context).is_ready());
+        assert!(!wait.is_poisoned());
+        assert_eq!(callback.observations(), [1, 1, 0, 0, 0]);
+        let journal = callback.take_original();
+        assert_eq!(
+            journal.observe_predecessor(&state.transactions),
+            storage_transactions::MembershipPredecessorStatus::Current
+        );
+        assert_eq!(state.transactions.latest_height(), 1);
+        assert_eq!(state.block_hashes.committed_height(), 1);
+        drop((journal, original_release));
+    }
+}
+
+#[test]
+fn replacement_rewind_retains_notifications_through_carrier_capture_and_admission_unwind() {
+    for (exit, state_write) in
+        (0..3).flat_map(|exit| [false, true].map(move |source| (exit, source)))
+    {
+        let (state, proposal, topology, context) = fixture();
+        let state: Arc<State> = Arc::from(state);
+        let journal = membership_probe_before_stage(&state);
+        let callback = membership_probe_callback(&state, journal);
+        let mut carrier =
+            carrier_preparation::tests::prepare(&state, proposal, &topology, &context)
+                .unwrap_or_else(|(_, error)| panic!("actual authenticated carrier: {error}"));
+        let (wait, original_release) = observe_rewind_source(&state, state_write);
+        let waker = Waker::from(Arc::clone(&callback));
+        let mut task = Context::from_waker(&waker);
+        let mut future = wait.clone().wait_for_release();
+        assert!(Pin::new(&mut future).poll(&mut task).is_pending());
+        // Install the exact owner before the same borrowed rewind kernel. This
+        // isolates capture custody on a genuine authenticated ordinary carrier;
+        // it does not manufacture replacement or membership authority.
+        {
+            let fields = carrier.parts_mut().state.fields.as_mut().unwrap();
+            fields.da_rewind_releases = Some(da_hydration::DaRewindReleases::new(&state));
+            state
+                .rewind_da_indexes_to_height_with_releases(
+                    0,
+                    fields.da_rewind_releases.as_mut().unwrap(),
+                )
+                .unwrap();
+        }
+        assert_eq!(callback.observations(), [0; 5]);
+        if exit == 0 {
+            let journals = carrier
+                .prepare_journals(None, None, |_| Ok::<_, ()>(()))
+                .unwrap_or_else(|e| panic!("capture original owner: {e}"));
+            assert!(Pin::new(&mut future).poll(&mut task).is_ready());
+            assert_eq!(callback.observations(), [1, 1, 0, 0, 0]);
+            drop(journals);
+        } else if exit == 1 {
+            let error = carrier
+                .prepare_journals(None, None, |_| Err::<(), _>("exact admission refusal"))
+                .err()
+                .unwrap();
+            assert_eq!(callback.observations(), [0; 5]);
+            assert!(Pin::new(&mut future).poll(&mut task).is_pending());
+            drop(error);
+        } else {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                carrier.prepare_journals(None, None, |_| -> Result<(), ()> {
+                    panic!("actual capture admission unwind")
+                })
+            }));
+            assert!(result.is_err());
+        }
+        assert!(Pin::new(&mut future).poll(&mut task).is_ready());
+        assert!(!wait.is_poisoned());
+        assert_eq!(callback.observations(), [1, 1, 0, 0, 0]);
+        let journal = callback.take_original();
+        assert_eq!(
+            journal.observe_predecessor(&state.transactions),
+            storage_transactions::MembershipPredecessorStatus::Current
+        );
+        drop((journal, original_release));
+    }
+}

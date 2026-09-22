@@ -134,14 +134,15 @@ fn lifecycle_publication_moves_original_projections_and_defers_disk_until_genera
     let path = state.da_shard_cursor_journal_path();
     let disk_before = std::fs::read(&path).ok();
     let generation = state.state_view_generation();
+    let mut publication_notice = state.state_view_publication();
     let _commit = state.state_commit_lock.lock();
     let _lifecycle = state.lane_lifecycle_lock.lock();
     #[cfg(feature = "telemetry")]
     state.telemetry.set_da_receipt_cursor(1, 7, 99);
     let post = {
         let _write = state.state_write_lock.lock();
-        let publication = state.begin_state_view_write();
-        let post = prepared.publish(&state, &publication, true);
+        let publication = publication_notice.begin();
+        let post = publish(prepared, &state, &publication, true);
         assert_eq!(state.state_view_generation(), generation + 1);
         assert!(Arc::ptr_eq(&state.lane_manifests.read(), &manifests));
         assert!(Arc::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
@@ -223,12 +224,13 @@ fn lifecycle_replay_prevalidation_keeps_canonical_watermark_without_cursor_publi
     let prepared = PreparedLaneLifecycleEffects::prepare(&pending, &nexus);
     let path = state.da_shard_cursor_journal_path();
     let disk_before = std::fs::read(&path).ok();
+    let mut publication_notice = state.state_view_publication();
     let _commit = state.state_commit_lock.lock();
     let _lifecycle = state.lane_lifecycle_lock.lock();
     let post = {
         let _write = state.state_write_lock.lock();
-        let publication = state.begin_state_view_write();
-        prepared.publish(&state, &publication, false)
+        let publication = publication_notice.begin();
+        publish(prepared, &state, &publication, false)
     };
     assert!(!post.persist_cursor_journal);
     post.publish(&state);
@@ -240,4 +242,85 @@ fn lifecycle_replay_prevalidation_keeps_canonical_watermark_without_cursor_publi
             .canonical_reset_height_for_lane(LaneId::new(1)),
         Some(1)
     );
+}
+
+#[test]
+fn post_persistence_uses_captured_cursor_without_new_reader_release() {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+
+    let (state, pending_lifecycle, nexus) = fixture();
+    let prepared = PreparedLaneLifecycleEffects::prepare(&pending_lifecycle, &nexus);
+    let path = state.da_shard_cursor_journal_path();
+    assert!(!path.as_os_str().is_empty());
+    let mut indexes = effect_publication::StateEffectLocks::new(&state);
+    let mut notice = state.state_view_publication();
+    let commit = state.state_commit_lock.lock();
+    let lifecycle = state.lane_lifecycle_lock.lock();
+    let write = state.state_write_lock.lock();
+    indexes.try_prepare().expect("original effect writers");
+    let generation = notice.begin();
+    let mut post = prepared.publish(&state, &mut indexes, &generation, true);
+    // A same-carrier cursor update after lifecycle publication must be in the
+    // final persisted image, without reopening the live index afterward.
+    indexes
+        .da_shard_cursors
+        .as_mut()
+        .unwrap()
+        .mark_lanes_canonically_reset(&BTreeSet::from([LaneId::new(1)]), 7);
+    post.capture_snapshot(&state, indexes.da_shard_cursors.as_ref().unwrap());
+    assert_eq!(
+        post.snapshot
+            .as_ref()
+            .unwrap()
+            .canonical_reset_height_for_lane(LaneId::new(1)),
+        Some(7)
+    );
+    let wait = state
+        .da_shard_cursors
+        .try_write_or_wait()
+        .expect_err("original writer held");
+    let mut pending = std::pin::pin!(wait.wait_for_release());
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(pending.as_mut().poll(&mut context).is_pending());
+    drop(generation);
+    indexes.release_writers();
+    post.publish(&state);
+    assert!(
+        pending.as_mut().poll(&mut context).is_pending(),
+        "post work must not emit a fresh reader release under State fences"
+    );
+    let persisted = DaShardCursorJournal::load(&nexus.lane_config, &path).unwrap();
+    assert_eq!(
+        persisted.canonical_reset_height_for_lane(LaneId::new(1)),
+        Some(7)
+    );
+    drop(write);
+    drop(lifecycle);
+    drop(commit);
+    drop(indexes);
+    assert_eq!(pending.as_mut().poll(&mut context), Poll::Ready(()));
+}
+
+// Component tests use the same real index preparation kernel as both publishers.
+fn publish(
+    prepared: PreparedLaneLifecycleEffects,
+    state: &State,
+    generation: &StateViewGenerationWriteGuard<'_>,
+    process: bool,
+) -> LaneLifecyclePostPublication {
+    let mut indexes = effect_publication::StateEffectLocks::new(state);
+    indexes.try_prepare().expect("uncontended original indexes");
+    let mut post = prepared.publish(state, &mut indexes, generation, process);
+    post.capture_snapshot(
+        state,
+        indexes
+            .da_shard_cursors
+            .as_ref()
+            .expect("original cursor writer"),
+    );
+    indexes.release_writers();
+    post
 }

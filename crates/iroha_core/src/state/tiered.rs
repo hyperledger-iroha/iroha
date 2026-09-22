@@ -12,8 +12,10 @@ use eyre::{Context, Result};
 use hex::ToHex as _;
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
 use iroha_model_base::state_path::StatePath;
-#[cfg(test)]
-use mv::storage::StorageReadOnly;
+use mv::{
+    Key, Value,
+    storage::{Block as StorageBlock, StorageReadOnly},
+};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
@@ -124,6 +126,30 @@ impl TieredSnapshotPayload {
         Self {
             entries: Vec::new(),
             complete,
+        }
+    }
+    /// Retain one store's exact overlay values, including incremental deletions.
+    ///
+    /// Keep heterogeneous iterators and cloned values in a per-store frame. An
+    /// expanded loop for every World field reserves their combined stack space
+    /// in debug builds, even when those stores are empty.
+    #[inline(never)]
+    pub(super) fn collect_storage<K, V>(
+        &mut self,
+        storage: &StorageBlock<'_, K, V>,
+        key_handle: impl Fn(K) -> TieredKeyHandle,
+    ) where
+        K: Key,
+        V: Value + json::JsonSerialize + MeasuredBytes,
+    {
+        if self.complete {
+            for (key, value) in storage.iter() {
+                self.push_value(key_handle(key.clone()), Some(value.clone()));
+            }
+        } else {
+            for key in storage.revert_map().keys() {
+                self.push_value(key_handle(key.clone()), storage.get(key).cloned());
+            }
         }
     }
     pub(crate) fn push_value<T>(&mut self, key: TieredKeyHandle, value: Option<T>)

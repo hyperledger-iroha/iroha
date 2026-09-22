@@ -24,6 +24,8 @@ pub(super) struct PreparedLaneLifecycleEffects {
 pub(super) struct LaneLifecyclePostPublication {
     lane_config: iroha_config::parameters::actual::LaneConfig,
     persist_cursor_journal: bool,
+    snapshot: Option<DaShardCursorJournal>,
+    captured: bool,
     transition: PendingAutoscaleTransition,
     transition_height: u64,
     #[cfg(feature = "telemetry")]
@@ -65,31 +67,72 @@ impl PreparedLaneLifecycleEffects {
     pub(super) fn publish(
         self,
         state: &State,
-        publication: &StateViewGenerationWriteGuard<'_>,
+        indexes: &mut effect_publication::StateEffectLocks<'_>,
+        _publication: &StateViewGenerationWriteGuard<'_>,
         publish_process_runtime: bool,
     ) -> LaneLifecyclePostPublication {
-        state.install_prepared_lane_manifests_in_publication(
-            self.manifests,
-            self.privacy,
-            publication,
-        );
-        state.reset_lane_scoped_runtime_indexes(&self.lanes_to_reset);
+        indexes.install_registries(self.manifests, self.privacy);
+        if !self.lanes_to_reset.is_empty() {
+            indexes
+                .merge_admission
+                .as_mut()
+                .expect("prepared merge admission")
+                .prune_lane_progress(&self.lanes_to_reset);
+            indexes
+                .lane_relays
+                .as_mut()
+                .expect("prepared relays")
+                .prune_lanes(&self.lanes_to_reset);
+            indexes
+                .da_commitments
+                .as_mut()
+                .expect("prepared commitments")
+                .prune_lanes(&self.lanes_to_reset);
+            indexes
+                .da_confidential_compute
+                .as_mut()
+                .expect("prepared confidential compute")
+                .prune_lanes(&self.lanes_to_reset);
+            indexes
+                .da_pin_intents
+                .as_mut()
+                .expect("prepared pins")
+                .prune_lanes(&self.lanes_to_reset);
+            indexes
+                .da_receipt_cursors
+                .as_mut()
+                .expect("prepared receipt cursors")
+                .prune_lanes(&self.lanes_to_reset);
+            indexes
+                .da_shard_cursors
+                .as_mut()
+                .expect("prepared shard cursors")
+                .prune_lanes(&self.lanes_to_reset);
+        }
         if publish_process_runtime {
             state.publish_lane_scoped_runtime_reset(&self.lanes_to_reset);
         }
         let records_reset = !self.active_reset_lanes.is_empty() && self.transition_height != 0;
         if records_reset {
-            state
+            indexes
                 .da_shard_cursors
-                .write()
+                .as_mut()
+                .expect("prepared shard cursors")
                 .mark_lanes_canonically_reset(&self.active_reset_lanes, self.transition_height);
         }
         let persist_cursor_journal = publish_process_runtime
             && (records_reset
-                || (!self.lanes_to_reset.is_empty() && state.da_indexes_hydrated.read().is_some()));
+                || (!self.lanes_to_reset.is_empty()
+                    && indexes
+                        .da_indexes_hydrated
+                        .as_ref()
+                        .expect("prepared hydration status")
+                        .is_some()));
         LaneLifecyclePostPublication {
             lane_config: self.lane_config,
             persist_cursor_journal,
+            snapshot: None,
+            captured: false,
             transition: self.transition,
             transition_height: self.transition_height,
             #[cfg(feature = "telemetry")]
@@ -99,12 +142,40 @@ impl PreparedLaneLifecycleEffects {
 }
 
 impl LaneLifecyclePostPublication {
+    /// Capture the final cursor image using the original acquired index, after
+    /// all same-carrier DA updates and before releasing any index guard.
+    pub(super) fn capture_snapshot(&mut self, state: &State, cursors: &DaShardCursorIndex) {
+        assert!(
+            !self.captured,
+            "original lifecycle cursor snapshot captured once"
+        );
+        self.captured = true;
+        if self.persist_cursor_journal {
+            let path = state.da_shard_cursor_journal_path();
+            if !path.as_os_str().is_empty() {
+                self.snapshot = Some(DaShardCursorJournal::from_index(
+                    &self.lane_config,
+                    cursors,
+                    &path,
+                ));
+            }
+        }
+    }
+
     /// Finish under the original commit/lifecycle fences after generation close.
     /// Capture the final cursor index after all same-carrier DA effects, using
     /// this lifecycle's retained mapping rather than a newer live Nexus view.
     pub(super) fn publish(self, state: &State) {
-        if self.persist_cursor_journal {
-            state.persist_da_shard_cursor_journal_with_config(&self.lane_config);
+        assert!(
+            self.captured,
+            "original lifecycle cursor snapshot precedes release"
+        );
+        #[cfg(not(feature = "telemetry"))]
+        let _ = state;
+        if let Some(snapshot) = self.snapshot {
+            if let Err(err) = snapshot.persist() {
+                warn!(?err, "failed to persist DA shard cursor journal");
+            }
         }
         // Preserve existing lifecycle telemetry and log behavior even for replay
         // prevalidation; only cursor/process publication was suppressed before.

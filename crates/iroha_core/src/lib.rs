@@ -141,6 +141,8 @@ pub(crate) mod privacy_verifier;
 /// Atomic private-settlement runtime helpers.
 pub mod private_settlement;
 pub(crate) mod publication_lock;
+/// Reader/writer publication locks with original release-driven retry custody.
+pub mod publication_rwlock;
 /// Query API types and execution.
 pub mod query;
 /// Transaction queue and mempool logic.

@@ -89,6 +89,14 @@ and wake retries after their physical guards are released. Other threads and
 pools keep notifying normally. Notification also preserves the remaining
 original waiters when one callback unwinds, without suppressing its panic.
 
+`allocation::ChargedBuffer<T>` admits one exact fixed backing layout for `Copy`
+elements before allocation. Appending, reordering the initialized slice and
+truncating its prefix cannot grow the allocation or refund its charge early.
+Logical capacity also applies to zero-sized elements. Snapshot payload reads use
+this same owner with `u8`; ordered membership batches can use fixed-width hashes.
+Referenced storage, comparison callbacks and surrounding control owners require
+their own admission. This buffer alone does not fund membership publication.
+
 Writer admission carries original move-only input alongside exact shell charges.
 The existing B+tree wrappers expose `Prepaid<P>` for closed admitted edits:
 under the original writer lock, it plans node/buffer/shell layouts and an explicit
@@ -257,5 +265,13 @@ private generation in that caller-owned slot before further fallible work.
 reclaiming retained values or notifying. Release all siblings first, then drop
 their slots/blocks. Explicit retirement is terminal: it does not create detached
 publication authority and cannot resume a failed edit. Ordinary standalone
-constructors use this same kernel. World capture/commit and enclosing State
-transfers still need their own aggregate lifecycle integration.
+constructors use this same kernel.
+
+Capture aggregates install every inert `BlockCaptureSlot` before calling
+`BlockCapture::try_capture`. Each slot retains its original block through checks
+and admission; successful capture owns the exact detached journal and its original
+`CaptureCleanup`. Release all sibling slots before destroying any failed attempt,
+and retain successful cleanup through every enclosing writer. Standalone and
+prepaid capture use this same kernel. World and TriggerSet now compose these slots;
+consuming commit and enclosing State/runtime transfers remain open. See the
+[capture custody record](../../docs/history/2026-09-21/world-capture-custody.md).

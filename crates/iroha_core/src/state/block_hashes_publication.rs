@@ -16,21 +16,20 @@ pub(crate) struct PreparedBlockHashes<'target, Installation> {
     height: usize,
     committed_height: &'target AtomicUsize,
     installation: Installation,
+    preflight_release: Option<concread::release::DeferredRelease>,
 }
 /// Original abort notifications and resources after the hash writer unlocks.
 pub(crate) struct AbortedBlockHashes<Installation> {
     _owner: NativeLaneStateOwner,
     _release: [concread::release::DeferredRelease; 2],
     _installation: Installation,
+    _preflight_release: Option<concread::release::DeferredRelease>,
 }
 
-/// Original writer notification and installation after a local refusal.
-/// Retain this cleanup until every enclosing physical fence has unlocked.
-#[must_use = "retain hash refusal cleanup through enclosing publication fences"]
-pub(crate) struct RefusedBlockHashes<Installation> {
-    _release: Option<concread::release::DeferredRelease>,
-    _installation: Option<Installation>,
-}
+#[path = "retained_hash_slot.rs"]
+pub(super) mod retained_hash_slot;
+#[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+use retained_hash_slot::RetainedHashSlot;
 
 fn refusal<E>(
     error: OwnedWriteError,
@@ -42,9 +41,10 @@ fn refusal<E>(
         OwnedWriteError::Busy => mv::PublicationPreparationError::after_failed_acquisition(wait),
     }
 }
+#[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
 impl DetachedBlockHashes {
-    /// Admit installation and reacquire the exact original tree predecessor.
-    /// Every refusal retains the same private nodes; readers never veto publication.
+    /// Standalone fixture adapter to the same caller-owned preparation kernel.
+    /// Aggregate production callers retain the slot before invoking admission.
     pub(crate) fn try_prepare_publication<'target, Installation, E>(
         self,
         target: &'target BlockHashes,
@@ -54,107 +54,14 @@ impl DetachedBlockHashes {
         (
             Self,
             mv::PublicationPreparationError<E>,
-            RefusedBlockHashes<Installation>,
+            RetainedHashSlot<'target, Installation>,
         ),
     > {
-        let mut cleanup = RefusedBlockHashes {
-            _release: None,
-            _installation: None,
-        };
-        if self.reserved_tip.is_some() {
-            return Err((self, mv::PublicationPreparationError::Changed, cleanup));
+        let mut slot = RetainedHashSlot::new(self, target);
+        match slot.try_prepare(admit) {
+            Ok(()) => Ok(slot.take_prepared()),
+            Err(error) => Err((slot.recover_original(), error, slot)),
         }
-        let Some(map) = target.map() else {
-            return Err((self, mv::PublicationPreparationError::Changed, cleanup));
-        };
-        let wait = map.observe_reader_release();
-        match self.observe_current(target) {
-            Ok(true) => {}
-            Ok(false) => return Err((self, mv::PublicationPreparationError::Changed, cleanup)),
-            Err(error) => return Err((self, refusal(error, wait), cleanup)),
-        }
-        let installation = match admit(&self, target) {
-            Ok(value) => value,
-            Err(error) => {
-                return Err((
-                    self,
-                    mv::PublicationPreparationError::Admission(error),
-                    cleanup,
-                ));
-            }
-        };
-        cleanup._installation = Some(installation);
-        let height = self.len();
-        let Self {
-            work,
-            mode,
-            visible_len,
-            reserved_tip,
-        } = self;
-        let wait = target.released.observe();
-        let acquired = match map.try_acquire_owned(work) {
-            Ok(acquired) => target.released.poisoning_guard(acquired),
-            Err((work, error)) => {
-                return Err((
-                    Self {
-                        work,
-                        mode,
-                        visible_len,
-                        reserved_tip,
-                    },
-                    refusal(error, wait),
-                    cleanup,
-                ));
-            }
-        };
-        let writer = match acquired.try_map_preserving_release(|acquired| acquired.validate()) {
-            Ok(writer) => writer,
-            Err((acquired, error)) => {
-                let (work, released) = acquired.release_deferred(|acquired| acquired.abort());
-                cleanup._release = Some(released);
-                return Err((
-                    Self {
-                        work,
-                        mode,
-                        visible_len,
-                        reserved_tip,
-                    },
-                    refusal(error, wait),
-                    cleanup,
-                ));
-            }
-        };
-        let wait = map.observe_reader_release();
-        let prepared = match writer.try_map_preserving_release(|writer| writer.try_prepare_commit())
-        {
-            Ok(prepared) => prepared,
-            Err((writer, error)) => {
-                let (work, released) = writer.release_deferred(|writer| writer.detach());
-                cleanup._release = Some(released);
-                return Err((
-                    Self {
-                        work,
-                        mode,
-                        visible_len,
-                        reserved_tip,
-                    },
-                    refusal(error, wait),
-                    cleanup,
-                ));
-            }
-        };
-        Ok(PreparedBlockHashes {
-            owner: NativeLaneStateOwner(map.family()),
-            prepared,
-            mode,
-            visible_len,
-            height,
-            committed_height: &target.committed_height,
-            installation: cleanup
-                ._installation
-                .take()
-                .expect("original hash installation"),
-        })
     }
 }
 impl<'target, Installation> PreparedBlockHashes<'target, Installation> {
@@ -169,6 +76,7 @@ impl<'target, Installation> PreparedBlockHashes<'target, Installation> {
             mode,
             visible_len,
             installation,
+            preflight_release,
             ..
         } = self;
         let ((work, reader), writer) = prepared.release_deferred(|prepared| {
@@ -179,6 +87,7 @@ impl<'target, Installation> PreparedBlockHashes<'target, Installation> {
             _owner: owner,
             _release: [reader, writer],
             _installation: installation,
+            _preflight_release: preflight_release,
         };
         (
             DetachedBlockHashes {
@@ -197,6 +106,7 @@ impl<'target, Installation> PreparedBlockHashes<'target, Installation> {
             height,
             committed_height,
             installation,
+            preflight_release,
             ..
         } = self;
         let published = prepared.map_preserving_release(|prepared| prepared.publish());
@@ -205,6 +115,7 @@ impl<'target, Installation> PreparedBlockHashes<'target, Installation> {
         PublishedBlockHashes {
             _retirement: retirement,
             _installation: installation,
+            _preflight_release: preflight_release,
         }
     }
 }
@@ -215,6 +126,7 @@ pub(crate) struct PublishedBlockHashes<'a, Installation> {
         concread::bptree::BptreeMapCommitRetirement<usize, HashOf<BlockHeader>, BlockHashMode>,
     >,
     _installation: Installation,
+    _preflight_release: Option<concread::release::DeferredRelease>,
 }
 
 #[cfg(test)]
