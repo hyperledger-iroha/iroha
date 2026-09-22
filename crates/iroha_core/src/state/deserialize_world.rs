@@ -8373,6 +8373,10 @@ fn parse_world(
         public_lane_stake_shares: Storage::default(),
         public_lane_rewards: Storage::default(),
         public_lane_reward_claims: Storage::default(),
+        public_lane_reward_accruals: Storage::default(),
+        public_lane_reward_reserves: Storage::default(),
+        public_lane_stake_custody: Storage::default(),
+        public_lane_stake_reserves: Storage::default(),
         lane_relay_emergency_validators,
         zk_assets,
         confidential_policy_transition_index: Storage::default(),
@@ -11181,7 +11185,7 @@ mod decode_tests {
     }
     #[test]
     fn musubi_resolver_checkpoint_keys_use_canonical_nonzero_decimal() {
-        use mv::json::JsonKeyCodec;
+        use norito::json::JsonKeyCodec;
         let revision = MusubiResolverIndexRevisionV1::new(42).expect("revision forty-two");
         let mut encoded = String::new();
         revision.encode_json_key(&mut encoded);

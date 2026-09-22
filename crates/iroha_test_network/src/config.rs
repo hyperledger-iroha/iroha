@@ -29,7 +29,7 @@ use iroha_data_model::{
     isi::{
         Grant, InstructionBox, Mint, SetParameter,
         kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
             KagemushaMintFinalityGenesisParametersV1,
         },
         register::Register,
@@ -387,14 +387,13 @@ fn test_kagemusha_mint_finality_genesis_parameters(
             .expect("derive independent test-only paired-Pasta validator keys")
         })
         .collect();
-    let epoch_roster = KagemushaMintFinalityEpochRosterTemplateV1 {
+    let authority_generation = KagemushaMintFinalityAuthorityGenerationTemplateV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
-        epoch: 0,
+        generation: 0,
         validators,
     };
     let parameters = KagemushaMintFinalityGenesisParametersV1 {
-        epoch_roster,
-        next_epoch_roster: None,
+        authority_generation,
     };
     parameters
         .validate()
@@ -2120,6 +2119,15 @@ mod tests {
                 validator_id.clone(),
                 Quantity::from(10_u32),
                 Metadata::default(),
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                    AssetId::new(
+                        stake_asset_id.clone(),
+                        AccountId::parse_encoded(&nexus.staking.stake_escrow_account_id)
+                            .expect("configured genesis fixture escrow"),
+                    ),
+                    Quantity::from(10_u32),
+                ),
             )
             .into(),
             ActivatePublicLaneValidator::new(lane_one.id, validator_id.clone()).into(),

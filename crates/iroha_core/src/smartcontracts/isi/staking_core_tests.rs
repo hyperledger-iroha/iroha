@@ -1,4 +1,239 @@
 // Same-scope regression coverage extracted to keep the parent source budget bounded.
+// Every fixture plan is an explicit observation of its current network, assets,
+// tenure and amount. No production execution path fills in omitted authority.
+fn fixture_transfer_plan(
+    stx: &StateTransaction<'_, '_>,
+    source_asset: AssetId,
+    destination_asset: AssetId,
+    amount: Quantity,
+    precondition: PublicLaneMonetaryPreconditionV1,
+) -> PublicLaneMonetaryPlanV1 {
+    PublicLaneMonetaryPlanV1 {
+        network_scope: iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Network(
+            *stx.network_id(),
+        ),
+        valid_until_height: stx.block_height(),
+        source_asset,
+        destination_asset,
+        amount,
+        precondition,
+    }
+}
+
+fn fixture_registration_plan(
+    stx: &StateTransaction<'_, '_>,
+    staker: &AccountId,
+    amount: &Quantity,
+) -> PublicLaneMonetaryPlanV1 {
+    let assets = stake_context(
+        &stx.world,
+        &stx.nexus.dataspace_catalog,
+        &stx.nexus.staking,
+        staker,
+        stx.block_unix_timestamp_ms(),
+    )
+    .expect("explicit registration fixture assets");
+    fixture_transfer_plan(
+        stx,
+        assets.staker_asset,
+        assets.escrow_asset,
+        amount.clone(),
+        PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
+            activation_height: scheduled_validator_eligibility_height(stx)
+                .expect("fixture election boundary"),
+        }),
+    )
+}
+
+fn fixture_bond_plan(
+    stx: &StateTransaction<'_, '_>,
+    lane: LaneId,
+    validator: &AccountId,
+    staker: &AccountId,
+    amount: &Quantity,
+) -> PublicLaneMonetaryPlanV1 {
+    let assets = stake_context(
+        &stx.world,
+        &stx.nexus.dataspace_catalog,
+        &stx.nexus.staking,
+        staker,
+        stx.block_unix_timestamp_ms(),
+    )
+    .expect("explicit bond fixture assets");
+    let record = stx
+        .world
+        .public_lane_validators
+        .get(&(lane, validator.clone()))
+        .expect("fixture validator tenure");
+    fixture_transfer_plan(
+        stx,
+        assets.staker_asset,
+        assets.escrow_asset,
+        amount.clone(),
+        PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
+            activation_height: record.activation_height,
+            peer_id: record.peer_id.clone(),
+        }),
+    )
+}
+
+fn fixture_unbond_plan(
+    stx: &StateTransaction<'_, '_>,
+    lane: LaneId,
+    validator: &AccountId,
+    staker: &AccountId,
+    request: Hash,
+) -> PublicLaneMonetaryPlanV1 {
+    let assets = retained_stake_context(&stx.world, lane, validator, staker)
+        .expect("original unbond custody");
+    let record = stx
+        .world
+        .public_lane_validators
+        .get(&(lane, validator.clone()))
+        .expect("fixture validator tenure");
+    let pending = &stx
+        .world
+        .public_lane_stake_shares
+        .get(&stake_key(lane, validator, staker))
+        .expect("fixture stake share")
+        .pending_unbonds[&request];
+    fixture_transfer_plan(
+        stx,
+        assets.escrow_asset,
+        assets.staker_asset,
+        pending.amount.clone(),
+        PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
+            activation_height: record.activation_height,
+            request_hash: public_lane_unbonding_commitment(pending)
+                .expect("exact request commitment"),
+        }),
+    )
+}
+
+fn fixture_slash_plan(
+    stx: &StateTransaction<'_, '_>,
+    lane: LaneId,
+    validator: &AccountId,
+    offence_height: u64,
+    amount: &Quantity,
+) -> PublicLaneMonetaryPlanV1 {
+    let source =
+        retained_stake_custody_asset(&stx.world, lane, validator).expect("original slash custody");
+    let sink = parse_staking_account_literal(
+        &stx.world,
+        &stx.nexus.dataspace_catalog,
+        &stx.nexus.staking.slash_sink_account_id,
+        "slash_sink_account_id",
+        stx.block_unix_timestamp_ms(),
+    )
+    .expect("explicit slash fixture destination");
+    let destination = AssetId::with_scope(source.definition().clone(), sink, *source.scope());
+    let record = stx
+        .world
+        .public_lane_validators
+        .get(&(lane, validator.clone()))
+        .expect("fixture validator tenure");
+    let mut exposure = record.total_stake.clone();
+    for (key, share) in stx.world.public_lane_stake_shares.iter() {
+        if key.0 == lane && &key.1 == validator {
+            for pending in share.pending_unbonds.values() {
+                if offence_height <= pending.slashable_through_height {
+                    exposure = quantity_add(exposure, pending.amount.clone())
+                        .expect("bounded fixture exposure");
+                }
+            }
+        }
+    }
+    fixture_transfer_plan(
+        stx,
+        source,
+        destination,
+        amount.clone(),
+        PublicLaneMonetaryPreconditionV1::Slash(PublicLaneMonetarySlashV1 {
+            activation_height: record.activation_height,
+            slashable_exposure: exposure,
+        }),
+    )
+}
+
+fn fixture_reward_claim_plan(
+    stx: &StateTransaction<'_, '_>,
+    lane: LaneId,
+    account: &AccountId,
+    upto_epoch: Option<u64>,
+) -> iroha_data_model::nexus::PublicLaneRewardClaimPlanV1 {
+    use iroha_data_model::nexus::{
+        PublicLaneMonetaryScopeV1, PublicLaneRewardClaimPlanV1, PublicLaneRewardClaimSourceV1,
+        PublicLaneRewardRecordRefV1, public_lane_reward_record_commitment,
+    };
+    let expected_state = stx
+        .world
+        .public_lane_reward_claims
+        .get(&(lane, account.clone()))
+        .copied();
+    let mut sources = BTreeMap::<AssetId, (Option<Quantity>, Quantity)>::new();
+    for ((source_lane, recipient, asset), accrued) in stx.world.public_lane_reward_accruals.iter() {
+        if *source_lane == lane && recipient == account {
+            sources.insert(asset.clone(), (Some(accrued.clone()), accrued.clone()));
+        }
+    }
+    let mut records = Vec::new();
+    for (key, record) in stx.world.public_lane_rewards.iter() {
+        if key.0 != lane
+            || upto_epoch.is_some_and(|end| key.1 > end)
+            || expected_state
+                .and_then(|state| state.through_epoch)
+                .is_some_and(|done| key.1 <= done)
+        {
+            continue;
+        }
+        records.push(PublicLaneRewardRecordRefV1 {
+            epoch: key.1,
+            record_hash: public_lane_reward_record_commitment(record)
+                .expect("fixture reward commitment"),
+        });
+        let (_, accrued) = sources
+            .entry(record.asset.clone())
+            .or_insert((None, Quantity::zero()));
+        for share in record
+            .shares
+            .iter()
+            .filter(|share| &share.account == account)
+        {
+            *accrued =
+                quantity_add(accrued.clone(), share.amount.clone()).expect("fixture entitlement");
+        }
+    }
+    assert!(records.len() <= iroha_data_model::nexus::MAX_PUBLIC_LANE_REWARD_CLAIM_RECORDS);
+    assert!(sources.len() <= iroha_data_model::nexus::MAX_PUBLIC_LANE_REWARD_CLAIM_SOURCES);
+    PublicLaneRewardClaimPlanV1 {
+        network_scope: PublicLaneMonetaryScopeV1::Network(*stx.network_id()),
+        valid_until_height: stx.block_height(),
+        expected_state,
+        records,
+        sources: sources
+            .into_iter()
+            .map(|(source_asset, (expected_accrued, available))| {
+                let payout = if available >= stx.nexus.staking.reward_dust_threshold {
+                    available
+                } else {
+                    Quantity::zero()
+                };
+                PublicLaneRewardClaimSourceV1 {
+                    destination_asset: AssetId::with_scope(
+                        source_asset.definition().clone(),
+                        account.clone(),
+                        *source_asset.scope(),
+                    ),
+                    source_asset,
+                    expected_accrued,
+                    payout,
+                }
+            })
+            .collect(),
+    }
+}
+
 #[test]
 fn checked_keypair_helpers_preserve_requested_algorithm() {
     assert_eq!(checked_keypair().algorithm(), Algorithm::default());
@@ -152,6 +387,23 @@ fn seed_validator_consensus_key(
         seed_consensus_key_for_role_with_heights(stx, peer, role, status, activation_height, None);
     }
 }
+fn seed_participant_consensus_key(
+    stx: &mut StateTransaction<'_, '_>,
+    peer: &iroha_model_base::peer::PeerId,
+) {
+    // Peer-binding fixtures exercise an independent lane committee. They must
+    // not accidentally add a candidate to the global election pool.
+    clear_consensus_keys_for_peer(stx, peer);
+    let activation_height = stx.block_height();
+    seed_consensus_key_for_role_with_heights(
+        stx,
+        peer,
+        ConsensusKeyRole::Committee,
+        ConsensusKeyStatus::Active,
+        activation_height,
+        None,
+    );
+}
 fn seed_validator_consensus_key_with_heights(
     stx: &mut StateTransaction<'_, '_>,
     peer: &iroha_model_base::peer::PeerId,
@@ -271,6 +523,10 @@ fn configure_reward_fixture(
         .unwrap();
     let (sink, _) = gen_account_in("wonderland");
     let (validator, _) = gen_account_in("wonderland");
+    let (escrow, _) = gen_account_in("wonderland");
+    Register::account(Account::new(escrow.clone()))
+        .execute(&ALICE_ID, stx)
+        .unwrap();
     Register::account(Account::new(sink.clone()))
         .execute(&ALICE_ID, stx)
         .unwrap();
@@ -321,10 +577,15 @@ fn configure_reward_fixture(
     stx.nexus.staking.public_validator_mode =
         iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
     stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
-    stx.nexus.staking.stake_escrow_account_id = sink.to_string();
+    stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
     stx.nexus.staking.slash_sink_account_id = sink.to_string();
     register_peer_for_account(stx, &validator);
     RegisterPublicLaneValidator {
+        monetary_plan: fixture_registration_plan(
+            &stx,
+            &(validator.clone()),
+            &(initial_stake.clone()),
+        ),
         lane_id,
         peer_id: validator_peer_id(&validator),
         validator: validator.clone(),
@@ -416,6 +677,11 @@ fn complete_staking_committee(stx: &mut StateTransaction<'_, '_>, lane_id: LaneI
         .execute(&ALICE_ID, stx)
         .expect("fund committee stake");
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id,
             validator: validator.clone(),

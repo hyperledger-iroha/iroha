@@ -383,6 +383,12 @@ fn stake_genesis_post_topology_transactions(
                 stake_account: validator_id.clone(),
                 initial_stake: iroha_primitives::numeric::Quantity::from(stake),
                 metadata,
+                monetary_plan:
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                        AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
+                        iroha_primitives::numeric::Quantity::from(stake),
+                    ),
             }
             .into(),
         );

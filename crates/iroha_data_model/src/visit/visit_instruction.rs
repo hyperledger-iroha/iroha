@@ -36,7 +36,7 @@ use crate::{
         },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
-            RegisterPublicLaneValidator,
+            RegisterPublicLaneCandidate, RegisterPublicLaneValidator,
         },
     },
     prelude::*,
@@ -360,7 +360,9 @@ fn visit_staking_and_identifier_instruction<V: Visit + ?Sized>(
     visitor: &mut V,
     isi: &InstructionBox,
 ) -> bool {
-    if let Some(v) = isi.as_any().downcast_ref::<RegisterPublicLaneValidator>() {
+    if let Some(v) = isi.as_any().downcast_ref::<RegisterPublicLaneCandidate>() {
+        visitor.visit_register_public_lane_candidate(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RegisterPublicLaneValidator>() {
         visitor.visit_register_public_lane_validator(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RebindPublicLaneValidatorPeer>() {
         visitor.visit_rebind_public_lane_validator_peer(v);
@@ -843,6 +845,7 @@ macro_rules! instruction_visitors {
             visit_claim_twitter_follow_reward(&ClaimTwitterFollowReward),
             visit_send_to_twitter(&SendToTwitter),
             visit_cancel_twitter_escrow(&CancelTwitterEscrow),
+            visit_register_public_lane_candidate(&RegisterPublicLaneCandidate),
             visit_register_public_lane_validator(&RegisterPublicLaneValidator),
             visit_rebind_public_lane_validator_peer(&RebindPublicLaneValidatorPeer),
             visit_activate_public_lane_validator(&ActivatePublicLaneValidator),
@@ -1074,13 +1077,33 @@ mod tests {
         let key_pair = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
         let validator = AccountId::new(key_pair.public_key().clone());
+        let definition = crate::asset::AssetDefinitionId::from_uuid_bytes([
+            1, 2, 3, 4, 5, 6, 0x47, 8, 0x89, 10, 11, 12, 13, 14, 15, 16,
+        ])
+        .expect("fixture definition");
+        let escrow = AccountId::new(
+            KeyPair::try_from_seed(vec![0x12; 32], Algorithm::Ed25519)
+                .expect("fixture escrow")
+                .public_key()
+                .clone(),
+        );
         let instruction = RegisterPublicLaneValidator::new(
             LaneId::SINGLE,
             validator.clone(),
             PeerId::from(validator.expect_single_signatory().clone()),
-            validator,
+            validator.clone(),
             Quantity::from(1_u64),
             Metadata::default(),
+            crate::isi::staking::test_monetary_transfer_plan(
+                crate::asset::AssetId::new(definition.clone(), validator),
+                crate::asset::AssetId::new(definition, escrow),
+                Quantity::from(1_u64),
+                crate::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                    crate::nexus::PublicLaneMonetaryRegistrationV1 {
+                        activation_height: 1,
+                    },
+                ),
+            ),
         );
         let isi = InstructionBox::from(instruction);
         let mut visitor = RegisterVisitor { called: false };

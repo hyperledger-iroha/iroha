@@ -216,6 +216,7 @@ __all__ = [
     "canonical_genesis_header_hash_v1",
     "canonical_signed_transaction_hash_v1",
     "signed_transaction_envelope_from_versioned_v1",
+    "account_faucet_claim_hash_v1",
     "verify_prepared_transaction_context_v1",
     "verify_account_onboarding_receipt_v1",
     "inspect_privacy_exact12_action_driver_transaction_context_v1",
@@ -632,14 +633,47 @@ def committed_transaction_carrier_block_hash(
 def verify_committed_transaction_inclusion(
     transaction_hash: str,
     transaction_response_bytes: bytes,
-    block_response_bytes: bytes,
+    executed_block_wire: bytes,
+    *,
+    finality_bundle_chain_json: str,
+    expected_network_id: NetworkId,
+    trusted_height_context_id: str,
 ) -> Mapping[str, Any]:
-    """Verify native committed-transaction proofs against the exact carrier block."""
+    """Authenticate a selected full output with the existing native finality verifier.
 
+    ``finality_bundle_chain_json`` is a Norito JSON array of 1..4096 exact
+    ``BridgeFinalityBundle`` values (at most 16 MiB UTF-8), ordered from the
+    independently trusted context/checkpoint through immediate successors to the
+    selected carrier. The expected network and initial context must come from
+    trusted network configuration or a previously authenticated checkpoint, never
+    from this response. A one-element array verifies an exact checkpoint context.
+
+    The last verified Commit QC authenticates the exact canonical executed wire.
+    The result includes its typed execution commitment, network/context, carrier
+    identity, wire hash/length and the selected full output hash. Rejected results
+    are authenticated too; callers must check ``result_ok`` for application policy.
+    """
+
+    expected_network_id = _require_network_id(expected_network_id, "expected_network_id")
+    for name, value in (
+        ("transaction_response_bytes", transaction_response_bytes),
+        ("executed_block_wire", executed_block_wire),
+    ):
+        if type(value) is not bytes:
+            raise TypeError(f"{name} must be exact immutable bytes")
+    if type(finality_bundle_chain_json) is not str:
+        raise TypeError("finality_bundle_chain_json must be a string")
+    if len(finality_bundle_chain_json.encode("utf-8")) > 16 * 1024 * 1024:
+        raise ValueError("finality_bundle_chain_json exceeds 16 MiB")
+    if type(trusted_height_context_id) is not str:
+        raise TypeError("trusted_height_context_id must be a canonical hash literal")
     payload = _crypto.verify_committed_transaction_inclusion_json(
         transaction_hash,
         transaction_response_bytes,
-        block_response_bytes,
+        executed_block_wire,
+        finality_bundle_chain_json,
+        expected_network_id,
+        trusted_height_context_id,
     )
     decoded = json.loads(payload)
     if not isinstance(decoded, Mapping):
@@ -2587,6 +2621,32 @@ def _is_native_crypto_instance(value: object, type_name: str) -> bool:
 
     native_type = getattr(_crypto, type_name, None)
     return isinstance(native_type, type) and isinstance(value, native_type)
+
+
+def account_faucet_claim_hash_v1(
+    account_id: str,
+    *,
+    pow_anchor_height: int,
+    pow_nonce_hex: str,
+) -> str:
+    """Return the canonical solved-claim digest for binding.semantic_hash_hex.
+
+    Call after ``solve_account_faucet_pow`` and before constructing the binding
+    passed to ``prepare_account_faucet``. The native helper validates the exact
+    account, positive u64 anchor and 1..32-byte lowercase nonce, then hashes the
+    canonical Norito claim with ``iroha:accounts:faucet:claim:v1\0``. It does not
+    assert that the nonce satisfies the faucet's current proof-of-work policy.
+    """
+
+    if type(account_id) is not str:
+        raise TypeError("account_id must be an exact canonical account string")
+    if type(pow_anchor_height) is not int or not 0 < pow_anchor_height < 1 << 64:
+        raise ValueError("pow_anchor_height must be a positive u64")
+    if type(pow_nonce_hex) is not str:
+        raise TypeError("pow_nonce_hex must be a string")
+    if re.fullmatch(r"(?:[0-9a-f]{2}){1,32}", pow_nonce_hex) is None:
+        raise ValueError("pow_nonce_hex must be 1..32 bytes of canonical lowercase hexadecimal")
+    return str(_crypto.account_faucet_claim_hash_v1(account_id, pow_anchor_height, pow_nonce_hex))
 
 
 def verify_prepared_transaction_context_v1(

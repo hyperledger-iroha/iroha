@@ -3520,6 +3520,20 @@ pub(crate) mod validation_custody;
 
 pub(crate) mod carrier_queue_retirement;
 
+/// Exact archive predecessor custody before the retained validator executes.
+// TODO: consume through the production CarrierValidator with full resource admission.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod archive_reservations;
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect resource-admitted Native preparation to retained validation"
+    )
+)]
+mod native_preparation;
+
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
     state: Arc<State>,
@@ -4410,7 +4424,15 @@ impl V2ApplyService {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let runtime = Arc::clone(&self.state.kagemusha_v1_runtime_verifier);
-        let current_head = artifact.height_context.kagemusha_mint_finality_epoch_id;
+        let current_authorization = &artifact
+            .height_context
+            .kagemusha_mint_finality_authorization;
+        let current_head = current_authorization.authorization_id().map_err(|error| {
+            V2ApplyError::committed_recovery_required(
+                "Kagemusha V1 current epoch authorization",
+                &error,
+            )
+        })?;
         let load_checkpoint = |release_id| {
             if let Some(checkpoint) = self
                 .kura
@@ -4427,7 +4449,8 @@ impl V2ApplyService {
             let checkpoint = runtime
                 .prove_mint_authority_bootstrap(
                     release_id,
-                    &artifact.height_context.kagemusha_mint_finality_epoch_roster,
+                    &artifact.height_context.kagemusha_mint_finality_authority,
+                    current_authorization,
                 )
                 .map_err(|error| {
                     V2ApplyError::committed_recovery_required(
@@ -4438,7 +4461,7 @@ impl V2ApplyService {
             if checkpoint.authority_head != current_head {
                 return Err(V2ApplyError::committed_recovery_required(
                     "Kagemusha V1 mint-authority continuity",
-                    &"no recursively authenticated checkpoint exists for the current roster",
+                    &"no recursively authenticated checkpoint exists for the current epoch authorization",
                 ));
             }
             self.kura
@@ -4485,7 +4508,7 @@ impl V2ApplyService {
                 })?;
         }
 
-        let next_head = artifact
+        let next_authorization = artifact
             .commit_qc
             .kagemusha_finality_seal_payload()
             .map_err(|error| {
@@ -4502,14 +4525,25 @@ impl V2ApplyService {
                     &error,
                 )
             })?
-            .and_then(|bundle| bundle.message.next_finality_epoch_id);
-        if artifact.height_context.next_epoch_snapshot.is_some() && next_head.is_none() {
+            .and_then(|bundle| bundle.message.next_epoch_authorization);
+        let expected_next_authorization = artifact
+            .height_context
+            .next_epoch_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.kagemusha_mint_finality_authorization);
+        if next_authorization != expected_next_authorization {
             return Err(V2ApplyError::committed_recovery_required(
-                "Kagemusha V1 mint-authority rotation",
-                &"epoch boundary finality does not carry a next-roster certificate",
+                "Kagemusha V1 mint-authority transition",
+                &"boundary seal does not carry the exact authenticated next epoch authorization",
             ));
         }
-        if let Some(next_head) = next_head {
+        if let Some(next_authorization) = next_authorization {
+            let next_head = next_authorization.authorization_id().map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Kagemusha V1 successor epoch authorization",
+                    &error,
+                )
+            })?;
             let membership = finalities
                 .first()
                 .and_then(|finality| finality.top_up_membership_witness.clone());
@@ -4544,7 +4578,7 @@ impl V2ApplyService {
                 if successor.authority_head != next_head {
                     return Err(V2ApplyError::committed_recovery_required(
                         "Kagemusha V1 recursive mint-authority rotation",
-                        &"rotation proof exposed a different successor roster",
+                        &"transition proof exposed a different successor epoch authorization",
                     ));
                 }
                 self.kura

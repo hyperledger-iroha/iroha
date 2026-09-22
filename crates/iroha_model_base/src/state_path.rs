@@ -189,7 +189,7 @@ impl norito::json::JsonDeserialize for StatePath {
         Self::from_str(&value).map_err(|error| norito::json::Error::Message(error.reason().into()))
     }
 }
-impl mv::json::JsonKeyCodec for StatePath {
+impl norito::json::JsonKeyCodec for StatePath {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(self.as_ref(), out);
     }

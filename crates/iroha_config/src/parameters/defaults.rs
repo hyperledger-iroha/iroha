@@ -3461,9 +3461,9 @@ pub mod nexus {
         pub const STAKE_ESCROW_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
         /// Account that receives slashed stake (treasury/burn sink).
         pub const SLASH_SINK_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
-        /// Asset definition used for staking bonds.
+        /// Canonical XOR asset used by both staking and Nexus fees.
         pub fn stake_asset_id() -> String {
-            super::super::canonical_asset_definition_literal("nexus.universal", "xor")
+            super::fees::fee_asset_id()
         }
         /// Escrow account that custodies bonded stake.
         pub fn stake_escrow_account_id() -> String {

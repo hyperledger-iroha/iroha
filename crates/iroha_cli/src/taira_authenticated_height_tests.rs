@@ -104,7 +104,7 @@ impl Fixture {
             .genesis
             .consensus_metadata()
             .kagemusha_mint_finality
-            .epoch_roster
+            .authority_generation
             .bind_network_id(network)
             .unwrap();
         let roster = self
@@ -120,8 +120,8 @@ impl Fixture {
             protocol_version: wire::PROTOCOL_VERSION,
             height: header.height().get(),
             epoch: 0,
-            kagemusha_mint_finality_epoch_id: mint.finality_epoch_id().unwrap(),
-            kagemusha_mint_finality_epoch_roster: mint,
+            kagemusha_mint_finality_authorization: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&mint, 20).unwrap(),
+            kagemusha_mint_finality_authority: mint,
             epoch_end_height: 20,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,

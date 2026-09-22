@@ -27,7 +27,7 @@ pub(super) struct KagemushaPreparedMintAuthorityTransportV1 {
     pub(super) certificate_binding: [u8; 32],
     pub(super) authority_head: [u8; 32],
     pub(super) release_id: [u8; 32],
-    pub(super) genesis_roster_id: [u8; 32],
+    pub(super) genesis_authorization_id: [u8; 32],
     pub(super) proof_binding_digest: [u8; 32],
 }
 
@@ -343,19 +343,19 @@ pub fn prove_kagemusha_mint_authority_v1(
             release: eq.release_id,
             profile: eq.profile_digest,
             manifest: eq.artifact_manifest_digest,
-            genesis: eq.genesis_roster_id,
+            genesis: eq.genesis_authorization_id,
             protocol: eq.protocol_digest,
         },
         ReleaseIdentity {
             release: ep.release_id,
             profile: ep.profile_digest,
             manifest: ep.artifact_manifest_digest,
-            genesis: ep.genesis_roster_id,
+            genesis: ep.genesis_authorization_id,
             protocol: ep.protocol_digest,
         },
         witness.release_id,
         witness.certificate.statement.lifecycle.release_id,
-        witness.genesis_roster_id,
+        witness.genesis_authorization_id,
         witness.eq_protocol_digest,
         witness.ep_protocol_digest,
     )?;
@@ -488,7 +488,7 @@ fn finish_transport_from_proofs(
         certificate_binding,
         authority_head,
         release_id,
-        genesis_roster_id,
+        genesis_authorization_id,
         proof_binding_digest,
         ..
     } = prepared;
@@ -544,7 +544,7 @@ fn finish_transport_from_proofs(
         certificate_binding,
         authority_head,
         release_id,
-        genesis_roster_id,
+        genesis_authorization_id,
         proof_binding_digest,
     })
 }
@@ -610,7 +610,7 @@ impl BootstrapInputs {
         Ok(KagemushaMintAuthorityGenerationWitnessV1 {
             step: KagemushaMintAuthorityStepV1::Bootstrap,
             release_id: template.release_id,
-            genesis_roster_id: template.genesis_roster_id,
+            genesis_authorization_id: template.genesis_authorization_id,
             certificate: template.certificate.clone(),
             mint_hash_claim: template.mint_hash_claim.clone(),
             eq_protocol_digest: native_parent_protocol_digest_v1(eq, KagemushaPastaParityV1::Eq)
@@ -657,18 +657,17 @@ pub(super) fn generate(
         .certificate
         .validate_for_step(template.step)
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
-    let roster = template
+    let authorization_id = template
         .certificate
-        .epoch_roster
-        .finality_epoch_id()
-        .map_err(|e| KagemushaArtifactGenerationErrorV1::CircuitBuild(e.to_string()))?;
+        .authorization_head_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
+        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     if template.release_id == [0; 32]
         || template.certificate.statement.lifecycle.release_id != template.release_id
-        || roster != template.genesis_roster_id
-        || template.certificate.seal_bundle.message.finality_epoch_id != roster
+        || authorization_id != template.genesis_authorization_id
     {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
-            "MintAuthority bootstrap certificate differs from release or genesis roster".to_owned(),
+            "MintAuthority bootstrap certificate differs from release or genesis authorization"
+                .to_owned(),
         ));
     }
     // Configure the fixed auxiliary geometry before either witness graph exists. This catches the
@@ -1066,7 +1065,7 @@ pub(super) fn generate(
             inner_ep_circuit_params: inner_ep_layout,
             eq_protocol_digest,
             ep_protocol_digest,
-            genesis_roster_id: template.genesis_roster_id,
+            genesis_authorization_id: template.genesis_authorization_id,
             release_id: template.release_id,
         });
     }

@@ -51,8 +51,13 @@ working/staged whitespace checks pass. These are structural and scoped runtime
 results, not fresh TLAPS or real four/seven-validator network qualification.
 
 Exact selections, compiler artifacts, individual logs and the joined receipt are
-under `dist/sumeragi-main-work/generation167-checkpoint-binding/`. The final build
-is `checkpoint-build4` (identical source/artifacts to build3); the receipt is `checkpoint-verification.json`.
+under `dist/sumeragi-main-work/generation167-checkpoint-binding/`. The qualified
+build is `checkpoint-build3`; the receipt is `checkpoint-verification.json`
+(SHA-256 `e4bc7008c8a3422bbd292cbfb1dc1393a88757c6e90e26a95be63f98be21d7ae`).
+The subsequent build4 captured the same input map, but its attempted receipt
+update refused later source changes. The original passing receipt is preserved;
+`subsequent-source-delta.json` records the later observed merge/source delta.
+Neither build qualifies those subsequent changes.
 The command is `scripts/cargo_fast.sh --stable-local-metadata --incremental --jobs 4 -- test -p iroha_core -p iroha_config -p iroha_torii --lib --no-run --locked --offline`.
 
 The first Core recorder failed after all individual test processes finished;

@@ -258,6 +258,8 @@ pub fn npos_post_topology_instructions(
     peer_count: usize,
     bootstrap_public_lanes: &[LaneId],
     min_self_bond: &Quantity,
+    stake_asset_id: &AssetDefinitionId,
+    escrow_account_id: &AccountId,
 ) -> Result<Vec<InstructionBox>> {
     let effective_peers = peer_count.max(1);
     let mut instructions = Vec::new();
@@ -272,6 +274,12 @@ pub fn npos_post_topology_instructions(
                 stake_account: validator_id.clone(),
                 initial_stake: min_self_bond.clone(),
                 metadata: Metadata::default(),
+                monetary_plan:
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                        AssetId::new(stake_asset_id.clone(), escrow_account_id.clone()),
+                        min_self_bond.clone(),
+                    ),
             }));
             instructions.push(InstructionBox::from(ActivatePublicLaneValidator {
                 lane_id,
@@ -3056,6 +3064,8 @@ mod tests {
             setup.validator_accounts.len(),
             profile.bootstrap_public_lanes.as_slice(),
             SumeragiNposParameters::default().min_self_bond(),
+            &setup.stake_asset,
+            &setup.stake_escrow,
         )
         .expect("post topology instructions");
         let mut registered_validators = HashSet::new();
@@ -3109,9 +3119,16 @@ mod tests {
     fn npos_post_topology_instructions_use_requested_min_self_bond() {
         let min_self_bond = Quantity::from(2_048_u64);
         let bootstrap_public_lanes = [LaneId::new(0), LaneId::new(1)];
-        let instructions =
-            npos_post_topology_instructions(4, &bootstrap_public_lanes, &min_self_bond)
-                .expect("post topology instructions");
+        let profile = NexusProfile::sora_defaults().expect("explicit fixture staking profile");
+        let escrow = nexus_gas_account_id().expect("configured fixture escrow");
+        let instructions = npos_post_topology_instructions(
+            4,
+            &bootstrap_public_lanes,
+            &min_self_bond,
+            &profile.stake_asset_id,
+            &escrow,
+        )
+        .expect("post topology instructions");
         let mut register_count = 0usize;
         let mut activate_count = 0usize;
         let mut registered_pairs = HashSet::new();
@@ -3126,6 +3143,18 @@ mod tests {
                 assert_eq!(
                     register.initial_stake, min_self_bond,
                     "post-topology validator registrations must use configured min self-bond"
+                );
+                assert_eq!(
+                    register.monetary_plan,
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(
+                            profile.stake_asset_id.clone(),
+                            register.stake_account.clone()
+                        ),
+                        AssetId::new(profile.stake_asset_id.clone(), escrow.clone()),
+                        min_self_bond.clone(),
+                    ),
+                    "genesis must authorize the exact configured stake custody"
                 );
             }
             if instruction

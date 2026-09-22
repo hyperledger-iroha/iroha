@@ -186,6 +186,24 @@ impl Kura {
                 "canonical recovery ownership differs from signed carrier",
             ));
         }
+        // Authenticate the signed carrier and its exact ownership above even
+        // when an existing slot needs no repair. The strict raw reader alone
+        // verifies the durable hash, not the complete finalized carrier body.
+        if let Some(existing) = self.read_lane_block_artifact_under_prune_and_canonical_guards(
+            ownership.lane_id,
+            ownership.lane_block_height,
+        )? {
+            return if existing == *artifact {
+                Ok(())
+            } else {
+                Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical recovery slot already contains conflicting evidence",
+                ))
+            };
+        }
+        // Only proved absence enters mutation custody. Keep all original
+        // namespace checks, conflict refusal, publication barriers and readback.
         let _geometry = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(ownership.lane_id)?;
         self.require_active_lane_ownership_artifact(&entry, ownership)?;
@@ -226,6 +244,31 @@ impl Kura {
                 }
             }
         }
+        // Establish durability of every ancestor before publishing a new slot.
+        // The indexed writer below flushes payload, index, and their immediate
+        // parent. If an ancestor barrier fails here, no new artifact exists for
+        // a retry to mistake for completed publication.
+        let directory = data_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                data_path.clone(),
+                "canonical recovery path has no parent directory",
+            )
+        })?;
+        std::fs::create_dir_all(directory)
+            .map_err(|error| Error::MkDir(error, directory.to_path_buf()))?;
+        let recovery_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+            &recovery_namespace,
+            &data_path,
+            &index_path,
+            "canonical lane recovery",
+        )?;
+        if !self.sync_bound_progress_namespace(&recovery_namespace, "canonical lane recovery") {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "canonical lane recovery namespace durability barrier failed",
+            ));
+        }
         let checkpoint = self.write_lane_block_artifact_locked(
             artifact,
             LaneBlockArtifactConflictPolicy::PreserveCanonical,
@@ -250,7 +293,9 @@ impl Kura {
                 )
             },
         )?;
-        if confirmed.as_ref() != Some(artifact) {
+        if confirmed.as_ref() != Some(artifact)
+            || !self.bound_progress_namespace_unchanged(&recovery_namespace)
+        {
             return Err(Self::invalid_lane_artifact_error(
                 data_path,
                 "published canonical lane slot failed exact readback",
@@ -307,7 +352,10 @@ impl Kura {
         let _canonical = self.canonical_chain_lock.lock();
         self.read_block_body_and_wire_with_authority_under_guards(
             height,
-            CanonicalBlockReadAuthority::PublishedBounded { hash: &hash, wire_len },
+            CanonicalBlockReadAuthority::PublishedBounded {
+                hash: &hash,
+                wire_len,
+            },
         )
     }
 
@@ -633,7 +681,7 @@ impl Kura {
         self.active_lane_incarnation_marker(&entry)?;
         let (data_path, index_path) =
             Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
-        let _sidecar = self.sidecar_lock.lock();
+        let sidecar = self.lock_consensus_sidecar_read()?;
         self.ensure_prune_recovery_not_required()?;
         if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
             return Ok(None);
@@ -645,7 +693,7 @@ impl Kura {
             &index_path,
             "lane receipt",
         )?;
-        let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        let mut pair = self.open_bound_progress_pair_in_namespace(namespace)?;
         let artifact = match &mut pair {
             BoundProgressPair::Absent(_) => None,
             BoundProgressPair::Present(bound) => self.read_populated_consensus_lane_slot(
@@ -664,8 +712,8 @@ impl Kura {
         if let Some(artifact) = &artifact {
             self.require_active_lane_artifact(&entry, &artifact.proposal.descriptor)?;
             if attest_durability
-                && let BoundProgressPair::Present(bound) = &pair
-                && !self.sync_bound_progress_sidecar(bound, "lane receipt")
+                && let BoundProgressPair::Present(bound) = pair
+                && !self.sync_lane_receipt_with_namespace_custody(bound, &sidecar)
             {
                 return Err(Self::invalid_lane_artifact_error(
                     index_path,
@@ -743,7 +791,10 @@ impl Kura {
                 "autonomous current pointer has no parent directory",
             )
         })?;
-        let _sidecar = self.sidecar_lock.lock();
+        // LatestReadOnly authenticates the current pointer and view candidates
+        // without promoting or removing them. An absent autonomous payload is
+        // also an observation during ordinary completed-output scheduling.
+        let _sidecar = self.lock_consensus_sidecar_read()?;
         self.ensure_prune_recovery_not_required()?;
         let bytes = self.read_regular_sidecar_bytes(
             &path,
@@ -966,7 +1017,7 @@ impl Kura {
         let entry = self.lane_storage_entry(lane_id)?;
         let marker = self.active_lane_incarnation_marker(&entry)?;
         let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
-        let sidecar = self.sidecar_lock.lock();
+        let sidecar = self.lock_consensus_sidecar_read()?;
         if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
             self.ensure_prune_recovery_not_required()?;
             return Ok(None);
@@ -1014,7 +1065,7 @@ impl Kura {
             }
         }
         let _geometry = self.lane_geometry_lock.lock();
-        let _sidecar = self.sidecar_lock.lock();
+        let _sidecar = self.lock_consensus_sidecar_read()?;
         self.ensure_prune_recovery_not_required()?;
         let stable = match &pair {
             BoundProgressPair::Present(bound) => self.bound_progress_sidecar_unchanged(bound),

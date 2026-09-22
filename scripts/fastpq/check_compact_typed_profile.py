@@ -174,7 +174,7 @@ def wire_size(q,loose=False):
     row_siblings=sibling(19,2*q)
     scalar_siblings=sibling(19,q)
     fri_siblings=[sibling(d,m) for d,m in zip(ds,groups)]
-    row_size=field(4)+field(sequence(342,8))
+    row_size=field(4)+field(342*8)
     query_size=field(4)+2*field(fp4_bytes)
     group_size=field(4)+field(2*field(fp4_bytes))
     rounds=8+sum(field(field(sequence(m,group_size))+field(sequence(s,48)))
@@ -203,7 +203,7 @@ def framed_tree_monotonicity_controls():
     previous=0
     for leaves in range(1,1025):
         sibling_count=parents(19,leaves)-leaves+1
-        row_size=field(4)+field(sequence(342,8))
+        row_size=field(4)+field(342*8)
         combined=field(sequence(leaves,row_size))+field(sequence(sibling_count,48))
         assert combined>previous
         previous=combined;cases+=1
@@ -249,6 +249,7 @@ SOURCE_PATHS = list(CHECKER_SPEC_PATHS) + [
     "crates/fastpq_prover/src/backend/compact_protocol/shared_openings.rs",
     "crates/fastpq_prover/src/backend/merkle_multiproof.rs",
     "crates/fastpq_prover/src/backend/compact_protocol/shared_openings/codec.rs",
+    "crates/fastpq_prover/src/backend/compact_protocol/shared_openings/row_values.rs",
     "crates/fastpq_prover/src/backend/compact_transfer_air.rs",
     "crates/fastpq_prover/src/field.rs",
     "crates/fastpq_prover/src/backend/compact_v1.rs",
@@ -321,16 +322,28 @@ def check_source_contracts(overrides=None):
     shared=read("crates/fastpq_prover/src/backend/compact_protocol/shared_openings.rs")
     expected={
         "SharedProof":"row_root: WireDigest,mixed_root: WireDigest,quotient_root: WireDigest,fri_roots: Vec<WireDigest>,rows: Vec<SharedRow>,queries: Vec<SharedQuery>,row_siblings: Vec<WireDigest>,mixed_siblings: Vec<WireDigest>,quotient_siblings: Vec<WireDigest>,rounds: Vec<SharedRound>,terminal_values: Vec<GoldilocksFp4V1>,",
-        "SharedRow":"index: u32,values: Vec<u64>,",
+        "SharedRow":"index: u32,values: RowValues,",
         "SharedQuery":"index: u32,mixed: GoldilocksFp4V1,quotient: GoldilocksFp4V1,",
         "SharedRound":"groups: Vec<SharedGroup>,siblings: Vec<WireDigest>,",
         "SharedGroup":"index: u32,values: [GoldilocksFp4V1; 2],",
     }
     for name,fields in expected.items():
-        found=re.search(r"\bstruct\s+"+name+r"\s*\{([^}]*)\}",shared,re.S)
+        found=re.search(r"\bstruct\s+"+name+r"(?:<'a>)?\s*\{([^}]*)\}",shared,re.S)
         assert found, name
         assert re.sub(r"\s+","",found.group(1))==re.sub(r"\s+","",fields), name
-    assert 'frame = "fastpq_prover::compact_v1::SharedProofV1"' in shared
+    assert 'frame = "fastpq_prover::compact_v1::FixedRowSharedProofV1"' in shared
+    row=read("crates/fastpq_prover/src/backend/compact_protocol/shared_openings/row_values.rs")
+    row_flat=re.sub(r"\s+","",re.sub(r"//[^\n]*","",row))
+    for fragment in [
+        'struct RowValues([u64; 342]);', 'const WIDTH: usize = 342;',
+        'const BYTES: usize = Self::WIDTH * size_of::<u64>();',
+        'for value in &self.0 { writer.write_all(&value.to_le_bytes())?; }',
+        'decode_context_byte_array::<8>(ptr, &mut offset)?',
+        '*value = u64::from_le_bytes(bytes);', '*value >= GOLDILOCKS_MODULUS',
+        'norito::core::finish_context_fields(ptr, offset)?;',
+        'norito_schema(name = "fastpq_prover::compact_v1::FixedRowValuesV1")',
+    ]:
+        assert re.sub(r"\s+","",fragment) in row_flat, fragment
     protocol=read("crates/fastpq_prover/src/backend/compact_protocol.rs")
     assert "use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;" in protocol
     field_source=read("crates/fastpq_prover/src/field.rs")
@@ -377,7 +390,7 @@ def check_source_contracts(overrides=None):
         'Err(position) => indices.insert(position, value),',
         'if indices.len() == QUERY_COUNT { return Ok(Message::Queries(indices)); }',
         'let values = raw[..needed * 8].chunks_exact(32)',
-        'vec![tape, root.to_le_bytes().to_vec()],',
+        'BodyFields::Two(tape, root),',
         'predecessor: Digest::default(), phase: Phase::Ready(Round(1)),',
         'Phase::Pending { round, raw }',
         'self.phase = Phase::Aborted;',
@@ -394,12 +407,21 @@ def check_source_contracts(overrides=None):
     assert flat.index(canonical)<flat.index('forchunkinraw.chunks_exact(8).take(QUERY_CANDIDATES)')
     for name,fields in {
         'PrefixFrame':'version:u16,identity:Vec<u8>,context:Vec<u8>,',
-        'Frame':'kind:u8,oracle:u8,round:u8,level:u32,position:u32,output_bytes:u32,fields:Vec<Vec<u8>>,',
+        "Frame":"kind:u8,oracle:u8,round:u8,level:u32,position:u32,output_bytes:u32,fields:BodyFields<'a>,",
     }.items():
-        found=re.search(r"\bstruct\s+"+name+r"\s*\{([^}]*)\}",compact,re.S)
+        found=re.search(r"\bstruct\s+"+name+r"(?:<'a>)?\s*\{([^}]*)\}",compact,re.S)
         assert found and normal(found.group(1))==fields,name
     assert 'frame = "fastpq_prover::compact_v1::ProfileContextV1"' in compact
-    assert 'frame = "fastpq_prover::compact_v1::BodyV1"' in compact
+    for fragment in [
+        "impl norito::NoritoSchema for Frame<'_>",
+        'fn nominal_name() -> String { "fastpq_prover::backend::compact_v1::Frame".to_owned() }',
+        'fn frame_name() -> String { "fastpq_prover::compact_v1::BodyV1".to_owned() }',
+        'norito::core::write_seq_len(writer, length)?;',
+        'writer.write_all(self.0)?;',
+        "norito::core::write_element_sequence::<ByteField<'_>, _>",
+        '[ByteField(first), ByteField(second)]',
+    ]:
+        assert normal(fragment) in flat,fragment
     for fragment in [
         'geometry.schema.trace_rows != 65_536', 'geometry.schema.width != 342',
         'geometry.schema.constraints != 923', 'geometry.lde_rows != 524_288',
@@ -415,7 +437,7 @@ def check_source_contracts(overrides=None):
     found=re.search(r"struct StatementContext\s*\{([^}]*)\}",binding,re.S)
     assert found and normal(found.group(1))==statement_fields
     return {"kind":"explicit structural/ordering guards, not complete semantic source equivalence",
-            "shared_schema":"fastpq_prover::compact_v1::SharedProofV1",
+            "shared_schema":"fastpq_prover::compact_v1::FixedRowSharedProofV1",
             "digest_alphabet":"Fp^6; serialized coordinates are not uniform bits",
             "digest_bytes":48,"fp4_bytes":32,"row_columns":342,"AIR_constraints":923,
             "trace_rows":65536,"lde_rows":524288,"folds":17,"terminal_degree":1,
@@ -535,7 +557,12 @@ def negative_source_controls():
     context="crates/fastpq_prover/src/backend/compact_v1.rs"
     binding="crates/fastpq_prover/src/backend/compact_protocol/profile.rs"
     shared="crates/fastpq_prover/src/backend/compact_protocol/shared_openings.rs"
+    row="crates/fastpq_prover/src/backend/compact_protocol/shared_openings/row_values.rs"
     mutations=[
+        (shared,'values: RowValues,','values: Vec<u64>,'),
+        (row,'const WIDTH: usize = 342;','const WIDTH: usize = 341;'),
+        (row,'*value >= GOLDILOCKS_MODULUS','*value > GOLDILOCKS_MODULUS'),
+        (row,'norito::core::finish_context_fields(ptr, offset)?;',''),
         (context,'const QUERY_COUNT: usize = 375;','const QUERY_COUNT: usize = 374;'),
         (context,'const QUERY_CANDIDATES: usize = 401;','const QUERY_CANDIDATES: usize = 400;'),
         (context,'QUERY_CANDIDATES.div_ceil(6) * 48','(QUERY_CANDIDATES * 19).div_ceil(8)'),
@@ -547,12 +574,15 @@ def negative_source_controls():
         (context,'3 => Some(3692)','3 => Some(3688)'),
         (context,'if candidate >= rejection_limit','if candidate > rejection_limit'),
         (context,'raw.chunks_exact(8).take(QUERY_CANDIDATES)','raw.chunks_exact(8).take(QUERY_CANDIDATES - 1)'),
-        (context,'vec![tape, root.to_le_bytes().to_vec()]','vec![root.to_le_bytes().to_vec()]'),
+        (context,'BodyFields::Two(tape, root)','BodyFields::One(root)'),
+        (context,'norito::core::write_seq_len(writer, length)?;','norito::core::write_len(writer, length)?;'),
+        (context,'[ByteField(first), ByteField(second)]','[ByteField(second), ByteField(first)]'),
+        (context,'fastpq_prover::compact_v1::BodyV1','fastpq_prover::compact_v1::ChangedBodyV1'),
         (context,'(leaves == 1 && left != right)','false'),
         (binding,'geometry.schema.width != 342','geometry.schema.width != 343'),
         (binding,'geometry.terminal_degree != 1','geometry.terminal_degree != 2'),
         (binding,'statement: relation.statement_bytes().to_vec()','statement: vec![0]'),
-        (shared,'fastpq_prover::compact_v1::SharedProofV1','fastpq_prover::compact_prototype::SharedProofV1'),
+        (shared,'fastpq_prover::compact_v1::FixedRowSharedProofV1','fastpq_prover::compact_prototype::SharedProofV1'),
         (shared,'    quotient: GoldilocksFp4V1,','    quotient: u64,'),
     ]
     reports=[]
@@ -589,7 +619,7 @@ def main():
     assert candidate["total_G_output_bytes"]==44688
     assert candidate["aggregate_times_2_to_128_interval"]=={
         "lower_numerator":743,"upper_numerator":744,"denominator":1024}
-    assert wire_size(375,True)["frame_bytes"]==6713525
+    assert wire_size(375,True)["frame_bytes"]==6451024
     tree_cases=parent_controls();monotonicity=framed_tree_monotonicity_controls()
     after=assert_source_snapshot(before)
     report={

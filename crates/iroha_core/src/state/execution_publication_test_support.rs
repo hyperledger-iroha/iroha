@@ -241,16 +241,20 @@ impl State {
                     "signed genesis voting keys differ from publication fixture keys".into(),
                 );
             }
+            let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                    self.network_id,
+                    0,
+                    1,
+                    u64::MAX,
+                    &roster,
+                );
             v2_context::build_genesis_height_context(v2_context::GenesisContextInputs {
                 network_id: self.network_id,
                 election: v2_context::FrozenElectionInputs {
                     epoch: 0,
-                    kagemusha_mint_finality_epoch_roster:
-                        crate::kagemusha_v1_test_fixtures::mint_finality_roster(
-                            self.network_id,
-                            0,
-                            &roster,
-                        ),
+                    kagemusha_mint_finality_authorization,
+                    kagemusha_mint_finality_authority,
                     epoch_end_height: u64::MAX,
                     mode: wire::ConsensusMode::Permissioned,
                     roster,

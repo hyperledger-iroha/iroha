@@ -828,8 +828,16 @@ fn v2_finality_artifact_for_block_with_keys_and_context_policy(
         height,
         "fixture finality artifacts must form a contiguous chain"
     );
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, epoch, &roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+            network_id,
+            epoch,
+            (epoch)
+                .checked_add(1)
+                .expect("fixture epoch fits positive heights"),
+            epoch_end_height,
+            &roster,
+        );
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
@@ -842,8 +850,8 @@ fn v2_finality_artifact_for_block_with_keys_and_context_policy(
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
         roster,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         nexus_amx_context_hash: Hash::new(b"kura finality nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout,
@@ -901,7 +909,7 @@ fn v2_finality_artifact_for_block_with_keys_and_context_policy(
     let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
         .expect("aggregate Kura finality fixture votes");
-    let epoch = &context.kagemusha_mint_finality_epoch_roster;
+    let epoch = &context.kagemusha_mint_finality_authority;
     commit_qc.aggregate_signature = if let Some(message) =
         build_kagemusha_mint_finality_seal_message_v1(epoch, &context, &unsigned_vote)
             .expect("derive exact Kura fixture mint-finality message")
@@ -910,7 +918,7 @@ fn v2_finality_artifact_for_block_with_keys_and_context_policy(
             .signers
             .iter()
             .map(|index| {
-                // Match the deterministic keys admitted by mint_finality_roster_and_id.
+                // Match the deterministic keys admitted by mint_finality_authorization_and_authority.
                 let seed_byte = 0xA0_u8
                     .wrapping_add(u8::try_from(*index).expect("fixture signer fits one byte"));
                 let signer = KagemushaMintFinalitySignerV1::from_seed(
@@ -1794,7 +1802,9 @@ fn blank_kura_for_testing_uses_isolated_canonical_primary_storage() {
     );
     assert_eq!(
         kura.configured_lane_catalog_baseline().unwrap(),
-        Some(LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default())),
+        Some(LaneLifecycleParameterV1::catalog_hash(
+            &LaneCatalog::default()
+        )),
     );
     assert!(
         kura.lane_storage_entry(LaneId::SINGLE).is_err(),

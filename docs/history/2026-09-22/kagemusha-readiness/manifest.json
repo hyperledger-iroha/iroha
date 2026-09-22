@@ -1,0 +1,42 @@
+{
+  "date": "2026-09-22",
+  "kind": "source-only-reassessment",
+  "branch": "optimizations",
+  "head_at_capture": "b621e30ad6dcf7179c29210d2746dd4e97b34ac6",
+  "original_sources": {
+    "specs/kagemusha_v1_production_readiness.md": "b8e59347110f89a118eda9b0bd46367078ef53c183c3047f8e0f1550d2819557",
+    "status.md": "a51dd1cc2d8a142dae5faad323ec436a4b039959c23d94c30e4b43c06194b5d9"
+  },
+  "archived_sections": {
+    "implementation-and-validation-original.md": {
+      "source": "specs/kagemusha_v1_production_readiness.md",
+      "start_heading": "## Active implementation \u2014 2026-09-13",
+      "end_exclusive_heading": "## Requested device scope",
+      "sha256": "87d82318b02de230f9e170ae8f1fd959af9b0a56da09d4e33ae16adfbe8dbdd2"
+    },
+    "status-row-original.md": {
+      "source": "status.md",
+      "row_label": "KAGEMUSHA release work",
+      "sha256": "c27ce6af7e3af761ae552a5b1434bb0292e9d8193f0546a7167ab4dfcd13f001"
+    }
+  },
+  "inspected_source_sha256": {
+    "crates/iroha_core/src/zk/kagemusha_v1_recursion/generation.rs": "29c5badc57b75458a53b80f3c6c11d0ad21eb4e061528eb854194c7f195257be",
+    "vendor/halo2-axiom/src/plonk/prover/stored.rs": "02a8d0a5d097b2ea6c5c662af84113a1e2237100f071cc65dc89aa83c29bc9bd",
+    "vendor/halo2-axiom/src/plonk/prover/stored/quotient_commitments.rs": "39ec7ac25fd755995d266cc4f72a8fb1a25b92031b9a018942024c726eda4782",
+    "crates/iroha_core/src/zk/kagemusha_v1_recursion/artifacts/stored_key.rs": "74302aeddaac6cef2163ea747172f8092f42fbafe681928d18e38ec5f536fa2c",
+    "crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1.rs": "2c498ceef5827521adfefe2c00380d586d831a62d0981cb53769048a8f318ee5",
+    "crates/connect_norito_bridge/src/lib.rs": "ace6cd05720bae2d68bc27d07865163f9231491523a5f8a7c5f3e98fb5e02dfa",
+    "crates/connect_norito_bridge/src/kagemusha_device_bridge_v1.rs": "22e65f86667ed553a0fbc3e5a856c041906ca01342563554f6c5867cb4ebfb0a",
+    "crates/iroha_core/src/zk/kagemusha_v1_recursion/guard_verifier.rs": "bc7c5967f5fb7e906f50341182a1a21ae3b530e8484dfafddbfd06736d6b3503",
+    "crates/iroha_core/src/zk/kagemusha_v1_recursion/hardware_transactions.rs": "393e3ca8d8f0cdcbd7c33df326fe519927be981c4d942a85d1a5c9ff66c64c38",
+    "crates/iroha_core/src/zk/kagemusha_v1_state/mod.rs": "ae25dd5ad590d0a25c31a8bc95e5bdbcb3b223dba833e047b46395089d713782",
+    "crates/iroha_core/src/zk/kagemusha_v1_state/response_evidence_archive.rs": "09312218f64c01a9f1de2435f8db50095e17f3f8a05badedca214c726e87f386",
+    "crates/iroha_core/src/zk/kagemusha_v1_recursion/real_handoff_qualification_tests.rs": "496188b32439dff4cdac303423f437ca6576857e1ebf9a72312f7d19de1053f1",
+    "crates/iroha_core/src/zk/kagemusha_v1_recursion/real_payment_corridor.rs": "548ab7734983cf43d8a5dfcce82c1cd3aab1d6606d78e1db67a00a9e2c85ee54",
+    "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs": "2c9860d47cb8f638abce75fb8b07349e1aaef360909c7b94f1b66df78162456e",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaCoreCoordinatorBridgeV1.swift": "6d9ab6d0df82b27f2c172495b6e02ab6b478f008d2328ecee915d5cc04e9d55b",
+    "kotlin/kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaAndroidAuthenticatedHardwareProviderFactoryV1.kt": "2a654d6501d428cc04ae8f5bc8ba6591e3755b825cf42a54364a1e628a426650"
+  },
+  "runtime_tests_run": false
+}

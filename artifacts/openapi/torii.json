@@ -32457,11 +32457,11 @@
             "type": "string"
           },
           "amount": {
-            "description": "Reward amount available to claim (decimal string).",
+            "description": "Total unpaid entitlement including retained accrual, before the payout dust threshold (decimal string).",
             "type": "string"
           },
           "asset": {
-            "description": "Asset identifier for the reward payouts.",
+            "description": "Exact retained custody source asset, including owner and balance scope.",
             "type": "string"
           },
           "lane_id": {
@@ -32469,22 +32469,25 @@
             "format": "uint64",
             "type": "integer"
           },
-          "last_claimed_epoch": {
-            "description": "Latest epoch that was already claimed (0 when none).",
+          "pending_through_epoch": {
+            "description": "Latest processed or newly included reward epoch covered by the unpaid projection.",
             "format": "uint64",
             "type": "integer"
           },
-          "pending_through_epoch": {
-            "description": "Latest epoch included in `amount`.",
+          "processed_through_epoch": {
+            "description": "Last processed reward epoch, independently of payout; null means none, while zero is a real epoch.",
             "format": "uint64",
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
           "lane_id",
           "account",
           "asset",
-          "last_claimed_epoch",
+          "processed_through_epoch",
           "pending_through_epoch",
           "amount"
         ],

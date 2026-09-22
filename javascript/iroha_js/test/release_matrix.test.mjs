@@ -28,15 +28,15 @@ test("buildMarkdownSummary renders release table", () => {
         label: "node20",
         status: "passed",
         duration_ms: 1200,
-        node_version: "v20.11.0",
+        node_version: "v20.19.0",
         log_file: "artifacts/matrix/node20.log",
       },
       {
-        label: "node18",
+        label: "node22",
         status: "failed",
         duration_ms: undefined,
         node_version: undefined,
-        log_file: "artifacts/matrix/node18.log",
+        log_file: "artifacts/matrix/node22.log",
       },
     ],
   };
@@ -44,9 +44,9 @@ test("buildMarkdownSummary renders release table", () => {
   const markdown = buildMarkdownSummary(summary);
   assert.ok(markdown.includes("JS SDK Release Matrix (demo)"));
   assert.ok(
-    markdown.includes("| node20 | passed | 1.2 | v20.11.0 | artifacts/matrix/node20.log |"),
+    markdown.includes("| node20 | passed | 1.2 | v20.19.0 | artifacts/matrix/node20.log |"),
   );
-  assert.ok(markdown.includes("| node18 | failed | n/a | n/a | artifacts/matrix/node18.log |"));
+  assert.ok(markdown.includes("| node22 | failed | n/a | n/a | artifacts/matrix/node22.log |"));
 });
 
 test("buildPrometheusMetrics emits gauges and target details", () => {
@@ -59,16 +59,16 @@ test("buildPrometheusMetrics emits gauges and target details", () => {
         label: "node20",
         status: "passed",
         duration_ms: 1200,
-        node_version: "v20.11.0",
+        node_version: "v20.19.0",
         log_file: "artifacts/matrix/node20.log",
         exit_code: 0,
       },
       {
-        label: "node18",
+        label: "node22",
         status: "failed",
         duration_ms: undefined,
         node_version: undefined,
-        log_file: "artifacts/matrix/node18.log",
+        log_file: "artifacts/matrix/node22.log",
         exit_code: 1,
       },
     ],
@@ -81,12 +81,12 @@ test("buildPrometheusMetrics emits gauges and target details", () => {
   );
   assert.ok(
     metrics.includes(
-      'js_release_matrix_target_duration_seconds{matrix_name="demo",git_rev="abc123",target="node20",status="passed",node_version="v20.11.0",log_file="artifacts/matrix/node20.log"} 1.2',
+      'js_release_matrix_target_duration_seconds{matrix_name="demo",git_rev="abc123",target="node20",status="passed",node_version="v20.19.0",log_file="artifacts/matrix/node20.log"} 1.2',
     ),
   );
   assert.ok(
     metrics.includes(
-      'js_release_matrix_target_exit_code{matrix_name="demo",git_rev="abc123",target="node18",status="failed",log_file="artifacts/matrix/node18.log"} 1',
+      'js_release_matrix_target_exit_code{matrix_name="demo",git_rev="abc123",target="node22",status="failed",log_file="artifacts/matrix/node22.log"} 1',
     ),
   );
 });

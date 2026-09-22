@@ -10,8 +10,7 @@ fault or advanced product qualification.
 
 Use `--native-check-scope full` to execute the full native census,
 including advanced Core history, compaction and fault matrices and proof
-production. Linux additionally selects OpenSSH descriptor custody, native worker
-identity, and generation controls. The runner's selected regression census is
+production. Linux additionally selects OpenSSH descriptor custody. The runner's selected regression census is
 authoritative for the current source and platform.
 `prepare` accepts the same explicit scope and binds it into its request/result;
 changing scope cannot reuse another preparation's success. Both scopes retain
@@ -31,21 +30,13 @@ Before the four-peer fixture, both scopes check that paid lane authorities come
 from registered and activated accounts bound to peers in signed genesis, and
 that failure summaries retain public phase status without transaction payloads.
 
-Both scopes select the seven native single-epoch derivation controls and four
-bounded public epoch-schedule controls. They cover exact network, epoch and
-validator binding, range and fee bounds, explicit public CLI inputs, one private
-pipe consumption, descriptor closure, wiped inputs and complete public output.
-These producer controls do not establish committed maintenance or authorize a
-live transaction; the operator workflow requires its separate lifecycle checks.
-
-Both scopes require the native epoch-maintenance controls for authenticated
-current-height observation, bounded roster schedules, actual-epoch and carrier
-deadlines, fee and lifetime binding, durable single dispatch across renewal, and
-staking admission. The two fixture controls reject unsafe seed-pipe custody and
-noncontiguous or incorrectly bound public schedules before peer startup. The
-complete four-peer network selector remains unchanged. These gate selections do
-not claim operational maintainer startup or supervision; those remain deployment
-prerequisites.
+Both scopes reject the retired Kagami epoch-key derivation commands and verify
+authenticated current-height observations. Before starting peers, retention
+fixtures require exact compiled source identity and reject changed authority
+generations, beacon bindings, predecessor authorizations and height intervals.
+The same real four-peer scenario runs on every platform. Its four independently
+genesis-anchored finality chains verify that certified scheduling transitions
+retain the original validator keys and authenticated beacon session.
 
 Both scopes qualify production beacon capability against the exact public session
 and validator seat, consumed runtime credentials, genesis-bound bootstrap and
@@ -80,7 +71,7 @@ This group runs immediately after configuration and MV ownership checks in both
 scopes. Any failure stops qualification before other startup groups, shipping binary builds
 or network execution; it reuses the same compiled harness and runs each case once.
 
-Both scopes first run 56 selected MV ownership checks after configuration and
+Both scopes run their selected MV ownership checks after configuration and
 before PendingKura: finite allocation credits, exact release/poison wakes, charged
 Cell generations, original map/undo retention, actual epoch reclamation and
 strict allocation-free map handoff/publication. These run once from the same
@@ -88,9 +79,15 @@ immutable copied artifacts and enter the exact independent-pass census. A failur
 stops later Core runtime checks, shipping builds and network qualification; a
 changed MV artifact or selector cannot reuse an earlier checkpoint. The runner
 still compiles its complete native feature graph first. For a cheaper development
-check before that full compilation, existing `--focus-regression` selections can
-target `mv`, `mv-ebr` and `mv-map` plus mandatory configuration. That result remains
-a diagnostic, with no release qualification or independent-checkpoint credit.
+check before that full compilation, `--focus-regression` runs selected `mv`,
+`mv-ebr`, `mv-map`, `mv-admitted-map` and `concread` tests in an earlier build
+phase. Any failure stops before configuration and heavier harness compilation.
+After portable tests and their copied executables finish, the same coordinated
+warm lane builds mandatory configuration and any remaining selected harnesses.
+Configuration must still pass before the overall diagnostic succeeds, including
+portable-only requests. Each phase reports its own feature graph; these results
+provide no release qualification or independent-checkpoint credit. Immutable
+qualification continues to compile and test its complete graph.
 
 Both scopes also require the signed stopped-predecessor controls: strict state
 decoding, retained directory identity across archive/restore, complete process

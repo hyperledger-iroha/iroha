@@ -2868,6 +2868,7 @@ impl BlockValidationError {
         use crate::state::MergeLedgerCommitError;
         match error {
             MergeLedgerCommitError::BlockHashAdmission(error) => Self::BlockHashAdmission(error),
+            MergeLedgerCommitError::NativeControlValidation(error) => *error,
             MergeLedgerCommitError::MissingCertifiedMergeSidecar { entry_hash } => {
                 Self::MissingCertifiedMergeSidecar { entry_hash }
             }
@@ -12173,22 +12174,23 @@ pub(crate) mod valid {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
-            let mint_finality_roster = crate::kagemusha_v1_test_fixtures::mint_finality_roster(
-                state.network_id,
-                0,
-                &roster,
-            );
-            let mint_finality_epoch_id = mint_finality_roster
-                .finality_epoch_id()
-                .expect("cache fixture mint-finality roster is canonical");
+            let mint_finality_authority =
+                crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+                    state.network_id,
+                    0,
+                    &roster,
+                );
+            let mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &mint_finality_authority, u64::MAX,
+            ).expect("cache fixture has exact genesis authorization");
             let genesis_parameters = wire::SumeragiV2GenesisContextParameters::recommended();
             let mut parent_context = wire::HeightContext {
                 network_id: state.network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
-                kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+                kagemusha_mint_finality_authorization: mint_finality_authorization,
+                kagemusha_mint_finality_authority: mint_finality_authority,
                 epoch_end_height: u64::MAX,
                 next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
@@ -12638,15 +12640,19 @@ pub(crate) mod valid {
                     },
                 )
                 .collect::<Vec<_>>();
-            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                    network_id, 7, &roster,
+            let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                    network_id,
+                    0,
+                    1,
+                    u64::MAX,
+                    &roster,
                 );
             let height_context = iroha_data_model::block::consensus_v2::HeightContext {
                 network_id,
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
                 height: block.header().height().get(),
-                epoch: 7,
+                epoch: 0,
                 epoch_end_height: u64::MAX,
                 next_epoch_snapshot: None,
                 mode: iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
@@ -12662,8 +12668,8 @@ pub(crate) mod valid {
                 quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
                     .expect("equal-vote fixture has a canonical quorum"),
                 roster,
-                kagemusha_mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster,
+                kagemusha_mint_finality_authorization,
+                kagemusha_mint_finality_authority,
                 nexus_amx_context_hash: Hash::new(b"equal-vote-merge-nexus-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
@@ -13905,10 +13911,12 @@ pub(crate) mod valid {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
-            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+            let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
                     state.network_id,
                     0,
+                    1,
+                    u64::MAX,
                     &roster,
                 );
             let context = if block.header().height().get() == 1 {
@@ -13927,8 +13935,8 @@ pub(crate) mod valid {
                     quorum: wire::DualQuorum::from_roster(&roster)
                         .expect("exact four-validator quorum"),
                     roster,
-                    kagemusha_mint_finality_epoch_id,
-                    kagemusha_mint_finality_epoch_roster,
+                    kagemusha_mint_finality_authorization,
+                    kagemusha_mint_finality_authority,
                     nexus_amx_context_hash:
                         crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state)
                             .expect("valid committed catalog"),
@@ -14864,9 +14872,13 @@ pub(crate) mod valid {
                 )
                 .collect::<Vec<_>>();
             let network_id = crate::sumeragi::synthetic_network_id("v2-artifact-bound-commit");
-            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                    network_id, 0, &roster,
+            let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                    network_id,
+                    0,
+                    1,
+                    u64::MAX,
+                    &roster,
                 );
             let context = iroha_data_model::block::consensus_v2::HeightContext {
                 network_id,
@@ -14881,8 +14893,8 @@ pub(crate) mod valid {
                 quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
                     .expect("fixture quorum"),
                 roster,
-                kagemusha_mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster,
+                kagemusha_mint_finality_authorization,
+                kagemusha_mint_finality_authority,
                 nexus_amx_context_hash: Hash::new(b"v2 artifact-bound commit context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
@@ -19470,9 +19482,13 @@ pub(crate) mod valid {
                 })
                 .collect::<Vec<_>>();
             let network_id = *state.network_id_ref();
-            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                    network_id, 0, &roster,
+            let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                    network_id,
+                    0,
+                    1,
+                    u64::MAX,
+                    &roster,
                 );
             let context = consensus_v2::HeightContext {
                 network_id,
@@ -19486,8 +19502,8 @@ pub(crate) mod valid {
                 snapshot_bootstrap: Some(anchor),
                 quorum: consensus_v2::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
-                kagemusha_mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster,
+                kagemusha_mint_finality_authorization,
+                kagemusha_mint_finality_authority,
                 nexus_amx_context_hash: Hash::new(b"snapshot validation Nexus/AMX"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: consensus_v2::DataAvailabilityLayout {

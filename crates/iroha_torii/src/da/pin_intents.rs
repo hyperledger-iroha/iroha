@@ -460,31 +460,35 @@ mod tests {
             ..Nexus::default()
         }
     }
-    fn app_with_nexus_lane_ids(lane_ids: &[u32]) -> crate::SharedAppState {
-        // Capture the intended immutable configured baseline while opening Kura
-        // and constructing State, before seeding the pin projection or a block.
-        crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
-            iroha_core::state::World::default(),
-            nexus_with_lane_ids(lane_ids),
-        )
-    }
     fn install_stale_runtime_lane_geometry(app: &crate::SharedAppState, stale_lane: LaneId) {
-        let authoritative_catalog = lane_catalog_with_lane_ids(&[0]);
+        assert!(
+            app.state
+                .nexus_snapshot()
+                .lane_config
+                .entry(stale_lane)
+                .is_none(),
+            "the removed lane must be absent from authoritative runtime state"
+        );
         let stale_geometry_catalog = lane_catalog_with_lane_ids(&[0, stale_lane.as_u32()]);
         let mut nexus = app.state.nexus.write();
-        nexus.lane_catalog = authoritative_catalog;
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&stale_geometry_catalog);
         assert!(
             nexus.lane_config.entry(stale_lane).is_some(),
             "fixture must retain stale runtime geometry for the removed lane"
         );
+        drop(nexus);
+        let canonical = app.state.nexus_snapshot();
+        assert!(canonical.lane_config.entry(stale_lane).is_none());
+        assert!(
+            !canonical
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == stale_lane)
+        );
     }
-    fn install_future_created_autoscale_lane(
-        app: &crate::SharedAppState,
-        lane_id: LaneId,
-        created_height: u64,
-    ) {
+    fn future_created_autoscale_nexus(lane_id: LaneId, created_height: u64) -> Nexus {
         let mut elastic_lane = ModelLaneConfig {
             id: lane_id,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -503,13 +507,40 @@ mod tests {
             vec![ModelLaneConfig::default(), elastic_lane],
         )
         .expect("future-created autoscale lane catalog");
-        let mut nexus = app.state.nexus.write();
+        // A synthetic policy input, never admitted as committed State: real
+        // lifecycle admission rejects a future creation height at the current tip.
+        let mut nexus = Nexus::default();
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
         nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
         nexus.lane_catalog = lane_catalog;
+        nexus
+    }
+    fn install_uncommitted_autoscale_overlay(app: &crate::SharedAppState, lane_id: LaneId) {
+        let overlay = future_created_autoscale_nexus(lane_id, 7);
+        {
+            let mut nexus = app.state.nexus.write();
+            nexus.autoscale = overlay.autoscale;
+            nexus.lane_config = overlay.lane_config;
+            nexus.lane_catalog = overlay.lane_catalog;
+            assert!(
+                nexus.lane_catalog.lanes().iter().any(|lane| {
+                    lane.id == lane_id && lane.autoscale_created_height() == Some(7)
+                })
+            );
+        }
+        let canonical = app.state.nexus_snapshot();
+        assert!(!canonical.autoscale.enabled);
+        assert!(canonical.lane_config.entry(lane_id).is_none());
+        assert!(
+            !canonical
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == lane_id)
+        );
     }
     fn seed_pin_store(app: &mut crate::SharedAppState, store: DaPinStore) {
         let app = std::sync::Arc::get_mut(app).expect("unique app state");
@@ -523,7 +554,18 @@ mod tests {
             .map(|intent| intent.lane_id.as_u32())
             .chain(core::iter::once(0))
             .collect::<Vec<_>>();
-        let mut app = app_with_nexus_lane_ids(&lane_ids);
+        app_with_historical_pin_intents(intents, nexus_with_lane_ids(&lane_ids))
+    }
+    fn app_with_historical_pin_intents(
+        intents: Vec<DaPinIntent>,
+        current_nexus: Nexus,
+    ) -> crate::SharedAppState {
+        // The signed historical bundle remains available even when its lane is
+        // absent from the current authoritative catalog.
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+            iroha_core::state::World::default(),
+            current_nexus,
+        );
         let bundle = DaPinIntentBundle::new(intents);
         let bundle_for_store = bundle.clone();
         let keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -562,6 +604,21 @@ mod tests {
             .collect::<Vec<_>>();
         seed_pin_store(&mut app, DaPinStore::from_intents(&entries));
         app
+    }
+    fn historical_pin_proof(app: &crate::SharedAppState) -> DaPinIntentProof {
+        let block = app
+            .state
+            .block_by_height(NonZeroUsize::new(1).expect("nonzero height"))
+            .expect("historical signed block must remain available");
+        build_da_pin_intent_proof(
+            block
+                .as_ref()
+                .da_pin_intents()
+                .expect("historical pin bundle"),
+            1,
+            0,
+        )
+        .expect("historical pin proof")
     }
     #[test]
     fn list_uses_forward_only_keyset_cursor() {
@@ -945,17 +1002,8 @@ mod tests {
     #[tokio::test]
     async fn handler_verify_uses_historical_header_after_lane_removal() {
         let intent = sample_intent(1, 3, 7);
-        let app = app_with_pin_intent_bundle(vec![intent.clone()]);
-        let JsonBody(proof) = super::handler_prove_pin_intent(
-            State(app.clone()),
-            NoritoJson(DaPinIntentQueryRequest {
-                storage_ticket: Some(intent.storage_ticket),
-                ..DaPinIntentQueryRequest::default()
-            }),
-        )
-        .await
-        .expect("pin intent proof lookup should succeed");
-        let proof = proof.expect("indexed pin intent should be present before lane removal");
+        let app = app_with_historical_pin_intents(vec![intent.clone()], nexus_with_lane_ids(&[0]));
+        let proof = historical_pin_proof(&app);
         install_stale_runtime_lane_geometry(&app, intent.lane_id);
         let JsonBody(response) = super::handler_verify_pin_intent(State(app), NoritoJson(proof))
             .await
@@ -968,19 +1016,10 @@ mod tests {
     }
     #[tokio::test]
     async fn handler_list_and_prove_ignore_stale_runtime_lane_geometry() {
-        let mut app = app_with_nexus_lane_ids(&[0, 1]);
-        let stale = DaPinIntentWithLocation {
-            intent: sample_intent(1, 4, 8),
-            location: DaCommitmentLocation {
-                block_height: 9,
-                index_in_bundle: 1,
-            },
-        };
-        seed_pin_store(
-            &mut app,
-            DaPinStore::from_intents(std::slice::from_ref(&stale)),
-        );
-        install_stale_runtime_lane_geometry(&app, stale.intent.lane_id);
+        let stale = sample_intent(1, 4, 8);
+        let app = app_with_historical_pin_intents(vec![stale.clone()], nexus_with_lane_ids(&[0]));
+        assert_eq!(historical_pin_proof(&app).intent, stale);
+        install_stale_runtime_lane_geometry(&app, stale.lane_id);
         let JsonBody(page) = super::handler_list_pin_intents(
             State(app.clone()),
             NoritoJson(DaPinIntentListRequest::default()),
@@ -994,7 +1033,7 @@ mod tests {
         let JsonBody(proof) = super::handler_prove_pin_intent(
             State(app),
             NoritoJson(DaPinIntentQueryRequest {
-                storage_ticket: Some(stale.intent.storage_ticket),
+                storage_ticket: Some(stale.storage_ticket),
                 ..DaPinIntentQueryRequest::default()
             }),
         )
@@ -1006,21 +1045,11 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn handlers_use_current_visibility_but_historical_verification() {
+    async fn handlers_ignore_uncommitted_autoscale_overlay_but_verify_historical_proof() {
         let intent = sample_intent(1, 5, 9);
-        let app = app_with_pin_intent_bundle(vec![intent.clone()]);
-        let JsonBody(historical_proof) = super::handler_prove_pin_intent(
-            State(app.clone()),
-            NoritoJson(DaPinIntentQueryRequest {
-                storage_ticket: Some(intent.storage_ticket),
-                ..DaPinIntentQueryRequest::default()
-            }),
-        )
-        .await
-        .expect("pin intent proof lookup should succeed");
-        let historical_proof =
-            historical_proof.expect("proof must exist before current lane visibility changes");
-        install_future_created_autoscale_lane(&app, intent.lane_id, 7);
+        let app = app_with_historical_pin_intents(vec![intent.clone()], nexus_with_lane_ids(&[0]));
+        let historical_proof = historical_pin_proof(&app);
+        install_uncommitted_autoscale_overlay(&app, intent.lane_id);
         let JsonBody(page) = super::handler_list_pin_intents(
             State(app.clone()),
             NoritoJson(DaPinIntentListRequest::default()),
@@ -1029,7 +1058,7 @@ mod tests {
         .expect("pin intent list should succeed");
         assert!(
             page.intents.is_empty(),
-            "future-created autoscale lane pin intents must not be listed before creation height"
+            "an uncommitted overlay must not expose a historical lane's pin intents"
         );
         let JsonBody(proof) = super::handler_prove_pin_intent(
             State(app.clone()),
@@ -1042,7 +1071,7 @@ mod tests {
         .expect("pin intent proof lookup should succeed");
         assert!(
             proof.is_none(),
-            "future-created autoscale lane pin intents must not produce public proofs"
+            "an uncommitted overlay must not authorize public proofs for a historical lane"
         );
         let JsonBody(response) =
             super::handler_verify_pin_intent(State(app), NoritoJson(historical_proof))

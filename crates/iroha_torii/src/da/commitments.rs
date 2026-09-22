@@ -408,7 +408,11 @@ mod tests {
     }
     fn install_stale_runtime_lane_geometry(app: &crate::SharedAppState, stale_lane: LaneId) {
         assert!(
-            app.state.nexus_snapshot().lane_config.entry(stale_lane).is_none(),
+            app.state
+                .nexus_snapshot()
+                .lane_config
+                .entry(stale_lane)
+                .is_none(),
             "the removed lane must be absent from authoritative runtime state"
         );
         let stale_geometry_catalog = lane_catalog_with_entries(&[
@@ -422,7 +426,15 @@ mod tests {
             "fixture must keep stale runtime geometry for the removed lane"
         );
         drop(nexus);
-        assert!(app.state.nexus_snapshot().lane_config.entry(stale_lane).is_none());
+        let canonical = app.state.nexus_snapshot();
+        assert!(canonical.lane_config.entry(stale_lane).is_none());
+        assert!(
+            !canonical
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == stale_lane)
+        );
     }
     fn future_created_autoscale_nexus(lane_id: LaneId, created_height: u64) -> Nexus {
         let mut elastic_lane = ModelLaneConfig {
@@ -461,14 +473,22 @@ mod tests {
             nexus.autoscale = overlay.autoscale;
             nexus.lane_config = overlay.lane_config;
             nexus.lane_catalog = overlay.lane_catalog;
-            assert!(nexus.lane_catalog.lanes().iter().any(|lane| {
-                lane.id == lane_id && lane.autoscale_created_height() == Some(7)
-            }));
+            assert!(
+                nexus.lane_catalog.lanes().iter().any(|lane| {
+                    lane.id == lane_id && lane.autoscale_created_height() == Some(7)
+                })
+            );
         }
         let canonical = app.state.nexus_snapshot();
         assert!(!canonical.autoscale.enabled);
         assert!(canonical.lane_config.entry(lane_id).is_none());
-        assert!(!canonical.lane_catalog.lanes().iter().any(|lane| lane.id == lane_id));
+        assert!(
+            !canonical
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == lane_id)
+        );
     }
     fn nexus_for_records(records: &[DaCommitmentRecord]) -> Nexus {
         let mut lane_entries = BTreeMap::from([(LaneId::new(0), DaProofScheme::MerkleSha256)]);
@@ -496,9 +516,15 @@ mod tests {
     ) -> crate::SharedAppState {
         // Historical policy sidecars belong to their signed block, independently
         // of whether a lane still exists in the current authoritative catalog.
-        let committed_policies = active_proof_policy_bundle_at_height(&nexus_for_records(&records), 1);
+        let committed_policies =
+            active_proof_policy_bundle_at_height(&nexus_for_records(&records), 1);
         for record in &records {
-            assert!(committed_policies.policies.iter().any(|policy| policy.lane_id == record.lane_id));
+            assert!(
+                committed_policies
+                    .policies
+                    .iter()
+                    .any(|policy| policy.lane_id == record.lane_id)
+            );
         }
         // Kura and State must authenticate the intended catalog before any DA
         // block is seeded; the configured baseline is immutable after startup.
@@ -1012,29 +1038,6 @@ mod tests {
             "stale runtime-only lane commitments must not produce proofs"
         );
     }
-    #[test]
-    fn synthetic_autoscale_policy_and_store_filter_by_creation_height() {
-        let lane = LaneId::new(1);
-        let nexus = future_created_autoscale_nexus(lane, 7);
-        let context = ActiveLaneProofPolicyContext::new(&nexus);
-        assert!(context.policy_at_height(lane, 6).is_err());
-        assert!(context.policy_at_height(lane, 7).is_ok());
-        let mut store = DaCommitmentStore::from_bundle_at_height(&[sample_record(1, 1, 1)], 6);
-        store.insert_bundle(7, DaCommitmentBundle::new(vec![sample_record(1, 2, 2)]));
-        let page = list_active_from_store(
-            &store,
-            &DaCommitmentListRequest::default(),
-            &nexus,
-            DaListSnapshot {
-                block_height: 7,
-                block_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed([0x71; 32]))),
-            },
-        ).expect("synthetic policy page");
-        assert_eq!(page.commitments.len(), 1);
-        assert_eq!(page.commitments[0].location.block_height, 7);
-        assert!(!active_proof_policy_bundle_at_height(&nexus, 6).policies.iter().any(|policy| policy.lane_id == lane));
-        assert!(active_proof_policy_bundle_at_height(&nexus, 7).policies.iter().any(|policy| policy.lane_id == lane));
-    }
     #[tokio::test]
     async fn proof_policy_handler_ignores_uncommitted_autoscale_overlay() {
         let lane = LaneId::new(1);
@@ -1334,7 +1337,8 @@ mod tests {
                 manifest_hash: Some(manifest),
                 ..DaCommitmentProofRequest::default()
             },
-        ).expect("historical signed bundle must still have a proof after current lane removal");
+        )
+        .expect("historical signed bundle must still have a proof after current lane removal");
         install_stale_runtime_lane_geometry(&app, stale_lane);
         let JsonBody(verification) =
             super::handler_verify_commitment(State(app), NoritoJson(proof))

@@ -114,26 +114,11 @@ into the output directory.
   signer at descriptor 198; the daemon binds it to the authenticated genesis and
   matching epoch rosters. Private signing material never belongs in source or
   public artifacts.
-- `kagemusha derive-mint-finality-next-epoch-v1` derives a public next-epoch
-  parameter from exactly four sorted BLS voter identities and independent seeds
-  supplied through an inherited pipe. It does not establish election eligibility
-  or submit the parameter. The caller must commit the selected roster before
-  the current epoch's final height: for final height B, it must be committed by
-  B-1. The next epoch starts at B+1; do not stage its successor until the current
-  boundary has finalized and the transition is observed.
-- `kagemusha derive-mint-finality-epoch-schedule-v1` consumes the same protected
-  seed pipe once and emits a public schedule for `iroha taira epoch-maintenance`.
-  Supply `--epoch`, `--epoch-count` (1–256), `--payment-asset`, and a positive
-  `--transaction-fee-maximum`, alongside the exact network and four ordered voters.
-  Provision the schedule from the validators' installed independent seeds;
-  unrelated keys cannot sign after rotation. The required public `genesis_roster`
-  is derived from the same consumed seeds at epoch zero and must exactly match
-  the authenticated signed genesis before a maintainer accepts the schedule.
-  This detects substituted original seeds in a pinned native provisioning run;
-  it is not a proof linking arbitrary external schedules to private seeds.
-  Public schedules authorize bounded
-  fees and require renewal when their finite epoch range is exhausted. They do
-  not prove future election eligibility or submit ledger transactions.
+- Scheduling epochs retain the exact authenticated mint-finality authority
+  generation and installed beacon binding through incumbent-certified epoch
+  authorizations. Per-epoch key schedules are not a provisioning interface.
+  TODO: expose prepared generation activation only after consensus owns the
+  frozen target, all-seat custody readiness, and authenticated beacon transition.
 - Writes genesis, signed genesis, its exact hash, per-peer configs,
   `client.toml`, `start.sh`, `stop.sh`, and a generated guide
 - Generic generated stop scripts validate pidfiles against the expected peer

@@ -1596,8 +1596,8 @@ def test_ebr_fresh_pair_acquisition_requires_original_joint_custody(fixture, sym
     pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::initialize', 'block.failed = true;', 'block.failed = false;', id='map-reset-and-replay-arm-logical-failure'),
     pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::initialize', 'revert.clear();\n        block.failed = false;', 'block.failed = false;\n        revert.clear();', id='map-clear-finishes-before-disarming'),
     pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'WriterPhase::release', '*self = Self::Retired(retirement);', 'drop(retirement);', id='map-retains-cursor-after-physical-release'),
-    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::into_block', 'self.complete,', 'true,', id='partial-map-cannot-transfer'),
-    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::drop', 'crate::BlockAcquisition::release(self);', 'let _ = self;', id='default-map-slot-drop-releases-before-fields'),
+    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'inherent BlockAcquisitionSlot::into_block', 'self.complete,', 'true,', id='partial-map-cannot-transfer'),
+    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::drop', 'self.release();', 'let _ = self;', id='default-map-slot-drop-releases-before-fields'),
     pytest.param('crates/mv/src/storage.rs', 'method', 'StorageWriters::release', 'let (blocks, blocks_release) = blocks.release_deferred(|writer| writer.abort_retaining());', 'let (blocks, blocks_release) = blocks.release_deferred(|writer| writer.abort_retaining());\n        drop(blocks);\n        let blocks = panic!("premature original current destruction");', id='map-retirement-retains-current-through-undo-unlock'),
     pytest.param('crates/mv/src/storage.rs', 'method', 'StorageWriters::drop', 'self.release();', 'let _ = self;', id='default-map-pair-drop-shares-retirement'),
     pytest.param('crates/mv/src/storage.rs', 'enum', 'StorageWriterState', '        _blocks: BptreeMapAbandonment<K, V, M>,\n        _revert: BptreeMapAbandonment<K, Option<V>, M>,\n        _blocks_release: concread::release::DeferredRelease,\n        _revert_release: concread::release::DeferredRelease,', '        _blocks_release: concread::release::DeferredRelease,\n        _revert_release: concread::release::DeferredRelease,\n        _blocks: BptreeMapAbandonment<K, V, M>,\n        _revert: BptreeMapAbandonment<K, Option<V>, M>,', id='map-cleanup-before-original-notifications'),
@@ -2026,7 +2026,7 @@ def test_group_preparation_requires_concrete_original_inventory(fixture, path, o
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'admit(self.original(), self.target)', 'admit(other, self.target)', id='world-original-admission'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'self.installation = Some(installation);', 'drop(installation);', id='world-installation-retained'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'self.phase = Some(Phase::Fields(', 'let _callee = Some(Phase::Fields(', id='world-phase-installed-before-fields'),
-    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'fields.fields.push(original.publication_slot(self.target));', 'let mut field = original.publication_slot(self.target); field.try_prepare().unwrap(); fields.fields.push(field);', id='world-all-inert-slots-before-callee'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'fields\n                .fields\n                .push(original.publication_slot(self.target, self.scope));', 'let mut field = original.publication_slot(self.target, self.scope); field.try_prepare().unwrap(); fields.fields.push(field);', id='world-all-inert-slots-before-callee'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'fields.retry.reverse();', '// reverse omitted', id='world-exact-original-field-order'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'return Err(WorldPublicationError::Field(error));', 'let _ignored = error;', id='world-component-refusal-propagates'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::recover_original', 'self.retryable && !self.released', 'true', id='world-recovery-no-unwound-authority'),
@@ -2036,11 +2036,11 @@ def test_group_preparation_requires_concrete_original_inventory(fixture, path, o
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::into_prepared', 'self.complete && !self.released', 'true', id='world-rejects-partial-publication'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::into_cleanup', 'fields.admission.is_none()', 'true', id='world-recovery-before-cleanup'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::drop', 'self.release_writers();', '// physical release lost', id='world-drop-original-slots'),
-    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::try_prepare', 'self.phase = FieldPhase::Prepared(slot.into_prepared());', 'self.phase = FieldPhase::Prepared(other.into_prepared());', id='storage-same-original-prepared-field'),
-    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release', 'slot.release_writers();', 'drop(slot);', id='storage-partial-field-physical-pass'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::try_prepare', 'self.phase = FieldPhase::Prepared(M::into_prepared(slot));', 'self.phase = FieldPhase::Prepared(M::into_prepared(other));', id='storage-same-original-prepared-field'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release', 'M::release_writers(slot);', 'drop(slot);', id='storage-partial-field-physical-pass'),
     pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release', 'self.aborted = Some(retirement);', 'drop(retirement);', id='storage-prepared-field-retains-abort-cleanup'),
-    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release_for_recovery', 'slot.recover_original()', '{ slot.release_writers(); slot.recover_original() }', id='storage-normal-recovery-before-terminal-release'),
-    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::publish', 'self.published = Some(journal.publish());', 'drop(journal.publish());', id='storage-published-original-retirement-retained'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release_for_recovery', 'M::recover_original(slot)', '{ M::release_writers(slot); M::recover_original(slot) }', id='storage-normal-recovery-before-terminal-release'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::publish', 'self.published = Some(M::publish(journal));', 'drop(M::publish(journal));', id='storage-published-original-retirement-retained'),
     pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::try_prepare', 'self.phase = FieldPhase::Prepared(slot.into_prepared());', 'self.phase = FieldPhase::Prepared(other.into_prepared());', id='cell-same-original-prepared-field'),
     pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::release', 'slot.release_writers();', 'drop(slot);', id='cell-partial-field-physical-pass'),
     pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::release', 'self.aborted = Some(retirement);', 'drop(retirement);', id='cell-prepared-field-retains-abort-cleanup'),
@@ -2425,3 +2425,36 @@ def test_committed_drain_metadata_release_custody(fixture, path, kind, symbol, o
     errors = validate(fixture)
     assert any(f"Native preparation {symbol} missing executable relation " in error for error in errors), errors
     assert all(error.startswith("Native preparation ") and (" missing executable relation " in error or " missing or reorders executable relation " in error) for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    pytest.param("WorldStorageMode<K, V> for Prepaid::publication_slot",
+                 "Some(scope) => original.try_publication_slot(scope, target)",
+                 "Some(scope) => original.try_publication_slot(scope, other)",
+                 id="prepaid-original-target"),
+    pytest.param("WorldStorageMode<K, V> for Prepaid::publication_slot",
+                 "PublicationPreparationError::Admission(AdmittedStorageError::ScopeIdentity)",
+                 "PublicationPreparationError::Changed", id="missing-scope-is-admission-refusal"),
+    pytest.param("WorldStorageMode<K, V> for Prepaid::release_writers",
+                 "slot.release_writers();", "let _ = slot;", id="prepaid-original-writer-release"),
+    pytest.param("WorldStorageMode<K, V> for Prepaid::recover_original",
+                 'journal.take().expect("original refused field")',
+                 'panic!("discarded original journal")', id="refusal-retains-original-journal"),
+    pytest.param("WorldStorageMode<K, V> for Untracked::abort",
+                 "prepared.abort()", "other.abort()", id="untracked-original-abort"),
+])
+def test_world_storage_mode_delegates_exact_original_owners(fixture, symbol, old, new):
+    root, _, checker, _ = fixture
+    target = root / "crates/iroha_core/src/state/world_storage_mode.rs"
+    source = target.read_text()
+    (item,) = checker._extract_rust_binding_items(source, "method", symbol)
+    assert item.count(old) == 1
+    owners = [owner for owner in checker._rust_impl_items(source, symbol.rsplit("::", 1)[0])
+              if item in owner]
+    assert len(owners) == 1
+    owner = owners[0]
+    assert source.count(owner) == 1
+    target.write_text(source.replace(owner, owner.replace(item, item.replace(old, new), 1), 1))
+    errors = validate(fixture)
+    assert any(f"{symbol} missing executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors

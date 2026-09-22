@@ -1,4 +1,4 @@
-//! Current typed topology intent and native-derived pre-plan reset context.
+//! Current typed topology intent and native-derived reset context.
 use super::*;
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -60,15 +60,13 @@ pub(in super::super) struct ResetTopologyIntentV1 {
     pub(in super::super) timeouts: TimeoutsV1,
 }
 
-/// Real native local inputs required before either generated plan exists.
+/// Real native local inputs required before the generated beacon plan exists.
 #[derive(clap::Args, Debug)]
 pub(in super::super) struct ResetContextInputs {
     #[arg(long, value_name = "DIR")]
     pub(in super::super) public_inputs: PathBuf,
     #[arg(long, value_name = "PATH")]
     pub(in super::super) runtime_client_config: PathBuf,
-    #[arg(long, value_name = "PATH")]
-    pub(in super::super) maintenance_admin_config: PathBuf,
     #[arg(long, value_name = "PATH", num_args = 4)]
     pub(in super::super) validator_client_config: Vec<PathBuf>,
     #[arg(long, value_name = "PATH")]
@@ -92,12 +90,8 @@ pub(in super::super) struct DerivedResetContext {
     pub(in super::super) validator_clients: Vec<ValidatorClientV1>,
     pub(in super::super) edge: EdgeV1,
     pub(in super::super) operator_public_key: String,
-    pub(in super::super) maintenance_admin_identity: MaintenanceAdminIdentityV1,
-    pub(in super::super) maintenance_admin_config_sha256: String,
-    pub(in super::super) http_operator_key_sha256: String,
     pub(in super::super) public_inputs: public_inputs::PublicInputsV1,
     pub(in super::super) canary_onboarding_request: AccountOnboardingPlanRequestV1,
-    pub(in super::super) observation_trust_bytes: Vec<u8>,
     pub(super) runtime: RuntimeParts,
     pins: Vec<PinnedInput>,
     public_directory: PathBuf,
@@ -170,14 +164,8 @@ impl DerivedResetContext {
     pub(super) fn build_inventory(
         &self,
         beacon_bootstrap: host::beacon::BeaconBootstrapPlanV1,
-        epoch_supervisor: host::epoch_supervisor::EpochSupervisorPlanV1,
     ) -> Result<InventoryV1> {
         self.revalidate()?;
-        if epoch_supervisor.http_operator_key_sha256 != self.http_operator_key_sha256 {
-            return Err(eyre!(
-                "supervisor HTTP credential digest differs from actual native context"
-            ));
-        }
         let mut value = InventoryV1 {
             schema: INVENTORY_SCHEMA_V1.into(),
             qualification_scope: self.intent.qualification_scope.clone(),
@@ -197,9 +185,6 @@ impl DerivedResetContext {
             faucet_policy: self.intent.faucet_policy.clone(),
             fee_intent: self.intent.fee_intent.clone(),
             beacon_bootstrap,
-            epoch_supervisor,
-            maintenance_admin_config_sha256: self.maintenance_admin_config_sha256.clone(),
-            maintenance_admin_identity: self.maintenance_admin_identity.clone(),
             cleanup: self.intent.cleanup.clone(),
             timeouts: self.intent.timeouts.clone(),
             artifact_closure_sha256: String::new(),
@@ -245,8 +230,6 @@ pub(in super::super) fn derive_reset_context(
         crate::operator_key::load_operator_key_pair_fd(u32::try_from(operator.file.as_raw_fd())?)?;
     let operator_public_key = pair.public_key().to_string();
     validator_operator_public_key(&operator_public_key)?;
-    let http_operator_key_sha256 =
-        host::hash_pinned_input(&operator, "validator operator key", None)?;
     revalidate_pinned(&operator, "validator operator key")?;
     drop(pair);
     let release =
@@ -259,15 +242,9 @@ pub(in super::super) fn derive_reset_context(
         .collect::<Vec<_>>();
     let known_hosts = validate_known_host_endpoints(&endpoints, &inputs.known_hosts)?;
     let (runtime, mut pins) = derive_runtime_parts(intent, inputs, &public)?;
-    let (identity, admin_hash, admin, wire) = derive_administrator(
-        intent,
-        inputs,
-        &public,
-        &operator_public_key,
-        &runtime.runtime_client_config_sha256,
-    )?;
+    let wire = pin_authenticated_genesis(inputs, &public)?;
     let wire_bytes = pinned_bytes(&wire, 64 * 1024 * 1024)?;
-    let trust = deployment_profile::derive_admitted_profile(
+    deployment_profile::derive_admitted_profile(
         &public.genesis_hash,
         &public.canary_onboarding_request,
         &release.validators,
@@ -275,17 +252,8 @@ pub(in super::super) fn derive_reset_context(
         &public,
         &wire_bytes,
     )?;
-    if !trust
-        .peers
-        .iter()
-        .any(|p| p.torii_origin == identity.torii_origin)
-    {
-        return Err(eyre!(
-            "actual administrator origin is not selected observation trust"
-        ));
-    }
     pins.extend(release.pins);
-    pins.extend([operator, admin, wire, known_hosts]);
+    pins.extend([operator, wire, known_hosts]);
     let context = DerivedResetContext {
         intent: intent.clone(),
         revision: release.revision,
@@ -293,12 +261,8 @@ pub(in super::super) fn derive_reset_context(
         validator_clients: intent.validator_clients.clone(),
         edge: release.edge,
         operator_public_key,
-        maintenance_admin_identity: identity,
-        maintenance_admin_config_sha256: admin_hash,
-        http_operator_key_sha256,
         canary_onboarding_request: public.canary_onboarding_request.clone(),
         public_inputs: public,
-        observation_trust_bytes: json::to_vec(&trust)?,
         runtime,
         pins,
         public_directory: inputs.public_inputs.clone(),
@@ -314,39 +278,18 @@ pub(in super::super) fn derive_reset_context(
     Err(eyre!("native reset context requires Unix"))
 }
 
-fn derive_administrator(
-    intent: &ResetTopologyIntentV1,
+/// Pin and authenticate both native genesis representations before deriving trust.
+fn pin_authenticated_genesis(
     inputs: &ResetContextInputs,
     public: &public_inputs::PublicInputsV1,
-    operator_public_key: &str,
-    runtime_hash: &str,
-) -> Result<(MaintenanceAdminIdentityV1, String, PinnedInput, PinnedInput)> {
-    if inputs.maintenance_admin_config == inputs.runtime_client_config
-        || inputs.maintenance_admin_config == inputs.validator_operator_key
-        || inputs
-            .validator_client_config
-            .contains(&inputs.maintenance_admin_config)
-    {
-        return Err(eyre!(
-            "maintenance administrator must have separate native custody"
-        ));
-    }
-    let admin = pin_owner_private_file(
-        &inputs.maintenance_admin_config,
-        "maintenance administrator config",
-    )?;
-    let config = host::load_client_config_for_reset_genesis(
-        &admin,
-        "maintenance administrator config",
-        &public.genesis_hash,
-    )?;
+) -> Result<PinnedInput> {
     let manifest_path = inputs.public_inputs.join("genesis.json");
     let (manifest, manifest_bytes) = read_json::<iroha_genesis::RawGenesisTransaction>(
         &manifest_path,
-        "maintenance authenticated genesis manifest",
+        "authenticated genesis manifest",
     )?;
     let path = inputs.public_inputs.join("genesis.signed.nrt");
-    let (file, snapshot) = open_pinned_regular(&path, "maintenance authenticated signed genesis")?;
+    let (file, snapshot) = open_pinned_regular(&path, "authenticated signed genesis")?;
     let wire = PinnedInput {
         path,
         file,
@@ -356,9 +299,7 @@ fn derive_administrator(
     if sha256_hex(&manifest_bytes) != public.raw_manifest_sha256
         || sha256_hex(&wire_bytes) != public.signed_genesis_sha256
     {
-        return Err(eyre!(
-            "maintenance genesis differs from authenticated bundle"
-        ));
+        return Err(eyre!("signed genesis differs from authenticated bundle"));
     }
     iroha_genesis::validate_prepared_genesis_bundle(
         &wire_bytes,
@@ -366,38 +307,8 @@ fn derive_administrator(
         &public.genesis_public_key,
         public.network_id.into_genesis_hash(),
     )?;
-    validate_genesis_maintenance_grant(&manifest, &config.account)?;
-    let key = config.key_pair.public_key();
-    let hash = host::hash_pinned_input(&admin, "maintenance administrator config", None)?;
-    if key.try_algorithm()? != Algorithm::Ed25519
-        || config.account != AccountId::new(key.clone())
-        || config.account.to_string() == public.canary_onboarding_request.account_id
-        || key.to_string() == operator_public_key
-        || intent
-            .validator_clients
-            .iter()
-            .any(|c| c.account_id == config.account.to_string())
-        || hash == runtime_hash
-        || !intent.validator_clients.iter().any(|c| {
-            c.torii_origin == config.torii_api_url.as_str()
-                || c.probe_origin == config.torii_api_url.as_str()
-        })
-    {
-        return Err(eyre!(
-            "native maintenance administrator identity, separation or origin differs"
-        ));
-    }
-    let identity = MaintenanceAdminIdentityV1 {
-        account_id: config.account.to_string(),
-        public_key: key.to_string(),
-        network_id: config.network_id.to_string(),
-        genesis_hash: public.genesis_hash.clone(),
-        chain_discriminant: config.account_chain_discriminant,
-        torii_origin: config.torii_api_url.as_str().into(),
-    };
-    revalidate_pinned(&admin, "maintenance administrator config")?;
-    revalidate_pinned(&wire, "maintenance authenticated signed genesis")?;
-    Ok((identity, hash, admin, wire))
+    revalidate_pinned(&wire, "authenticated signed genesis")?;
+    Ok(wire)
 }
 
 fn derive_runtime_parts(
@@ -522,7 +433,6 @@ impl From<&LocalInputs> for ResetContextInputs {
         Self {
             public_inputs: input.public_inputs.clone(),
             runtime_client_config: input.runtime_client_config.clone(),
-            maintenance_admin_config: input.maintenance_admin_config.clone(),
             validator_client_config: input.validator_client_config.clone(),
             onboarding_token: input.onboarding_token.clone(),
             validator_operator_key: input.validator_operator_key.clone(),

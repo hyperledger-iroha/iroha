@@ -142,7 +142,7 @@ fn verify_manifest(
             unique_peers.len()
         ));
     }
-    crate::genesis::ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+    crate::genesis::ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
         manifest,
         &peers_with_pops,
     )?;

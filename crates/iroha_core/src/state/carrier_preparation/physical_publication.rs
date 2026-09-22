@@ -764,6 +764,8 @@ impl<Admission, BindingAdmission, Installation>
 
 #[path = "publication.rs"]
 mod publication;
+#[cfg(test)]
+pub(crate) use publication::PublishedCarrier;
 pub(crate) use publication::PublishedNativeApply;
 
 #[cfg(test)]

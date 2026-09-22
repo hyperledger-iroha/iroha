@@ -99,11 +99,13 @@ fn core_context_rejects_same_label_foreign_genesis_network() {
     let mut foreign = canonical.clone();
     foreign.network_id = test_network_id(0x7B);
     (
-        foreign.kagemusha_mint_finality_epoch_id,
-        foreign.kagemusha_mint_finality_epoch_roster,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        foreign.kagemusha_mint_finality_authorization,
+        foreign.kagemusha_mint_finality_authority,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
         foreign.network_id,
         foreign.epoch,
+        foreign.kagemusha_mint_finality_authorization.first_height,
+        foreign.epoch_end_height,
         &foreign.roster,
     );
     foreign

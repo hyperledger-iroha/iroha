@@ -412,7 +412,8 @@ impl StateBlock<'_> {
         }
         // This is also the preview used before replay's checkpoint comparison.
         // Repeating it later cannot mutate the retained net publication surface.
-        self.prepare_replay_checkpoint_preview();
+        self.prepare_replay_checkpoint_preview()
+            .map_err(|error| error.to_string())?;
         FinalizedPublicationSurface::capture(self)
     }
 }

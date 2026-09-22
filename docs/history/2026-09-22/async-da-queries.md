@@ -37,8 +37,8 @@ describes the existing 1,000-row rejection bound and shared selector rules.
 
 ## Qualification
 
-The final three-library build passes with unchanged captured selected sources.
-Its exact emitted harnesses pass 922 SDK, 321 shared DTO and 53 storage tests,
+The three-library checkpoint before the subsequent repository merge passes
+with unchanged captured selected sources. Its exact emitted harnesses pass 922 SDK, 321 shared DTO and 53 storage tests,
 with ordinary stacks and no failures or ignored tests. These are 1,296 distinct
 library passes, not full workspace qualification. Tests cover exact signatures
 (including altered-body/network negatives), authority isolation, current-thread
@@ -97,7 +97,21 @@ authentication tests, the pin-cursor negative, MCP/OpenAPI contracts and all
 13 manifest controls. Four visibility fixtures still changed only a local Nexus
 overlay rather than authoritative canonical runtime; a fifth assertion expected
 retired bundle-hash wording instead of the current tree-descriptor error.
-TODO: Append the final Torii runtime result after those fixture corrections. Complete Core and release qualification belong to
+The corrections are applied: current authoritative lane visibility is separate
+from each historical block's policy sidecar, and fixtures assert that a local
+configuration overlay cannot alter canonical runtime. Existing Core tests own
+creation-height filtering with valid committee metadata.
+
+A concurrent merge then changed the workspace to HEAD `6841b7a875` and changed
+149 captured Rust/configuration inputs. The in-flight CLI rebuild retained its
+source-drift failure: it compiled new staking callers against an older emitted
+model. Its missing types are present in the merged source. A fresh Core build
+then exposed separate enum schema/JSON-tag errors in newly merged KAGEMUSHA and
+staking records; those require canonical model corrections, not API shims.
+The pre-merge passes above are scoped evidence, not qualification of that merged
+candidate.
+TODO: Append the final model/library/Torii and CLI results after the coordinated
+merged-source rebuild. Complete Core and release qualification belong to
 their respective owners and are not inferred from these DA tests.
 
 Captures live under

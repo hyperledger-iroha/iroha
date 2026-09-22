@@ -3479,7 +3479,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         (
             "let _geometry = self.lane_geometry_lock.lock();",
             "let marker = self.active_lane_incarnation_marker(&entry)?;",
-            "let _sidecar = self.sidecar_lock.lock();",
+            "let _sidecar = self.lock_consensus_sidecar_read()?;",
             "self.ensure_prune_recovery_not_required()?;",
             "AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES,",
             "if pointer.lane_id != lane_id",
@@ -4983,7 +4983,7 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
         (
             "let _geometry = self.lane_geometry_lock.lock();",
             "let marker = self.active_lane_incarnation_marker(&entry)?;",
-            "let _sidecar = self.sidecar_lock.lock();",
+            "let _sidecar = self.lock_consensus_sidecar_read()?;",
             "self.ensure_prune_recovery_not_required()?;",
             "AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES,",
             "if pointer.lane_id != lane_id",

@@ -690,11 +690,13 @@ fn autonomous_retirement_handoff_fixture(
     context.height = attempt.payload.origin_proposal.descriptor.proposal_height;
     context.parent_commit_qc = None;
     (
-        context.kagemusha_mint_finality_epoch_id,
-        context.kagemusha_mint_finality_epoch_roster,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        context.kagemusha_mint_finality_authorization,
+        context.kagemusha_mint_finality_authority,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
         context.network_id,
         context.epoch,
+        context.epoch.checked_add(1).expect("positive epoch height"),
+        context.epoch_end_height,
         &context.roster,
     );
     context

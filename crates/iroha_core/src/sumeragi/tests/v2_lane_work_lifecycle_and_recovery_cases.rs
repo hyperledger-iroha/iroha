@@ -777,16 +777,40 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
     boundary_context.epoch = current_epoch;
     boundary_context.epoch_end_height = boundary_context.height;
     let next_epoch = current_epoch.checked_add(1).expect("successor epoch");
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+    (
+        boundary_context.kagemusha_mint_finality_authorization,
+        boundary_context.kagemusha_mint_finality_authority,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+        boundary_context.network_id,
+        current_epoch,
+        current_epoch.checked_add(1).expect("positive epoch height"),
+        boundary_context.height,
+        &boundary_context.roster,
+    );
+    let kagemusha_mint_finality_authority =
+        crate::kagemusha_v1_test_fixtures::mint_finality_authority(
             boundary_context.network_id,
-            next_epoch,
+            boundary_context
+                .kagemusha_mint_finality_authority
+                .generation
+                .checked_add(1)
+                .expect("next authority generation"),
             &successor_roster,
+        );
+    let kagemusha_mint_finality_authorization =
+        crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+            &boundary_context.kagemusha_mint_finality_authorization,
+            &kagemusha_mint_finality_authority,
+            boundary_context
+                .height
+                .checked_add(epoch_length.get())
+                .expect("successor epoch end height"),
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
         );
     boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch: next_epoch,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         epoch_end_height: boundary_context
             .height
             .checked_add(epoch_length.get())
@@ -1178,15 +1202,26 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
             })
             .expect("durable view-one certificate");
     let mut block = block;
-    { let outputs = crate::execution_output_test_support::structural_network_outputs(&block, &[], Vec::new());
-let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
-block.set_execution_outputs(outputs, fragments, Default::default(),
-Vec::new(),
-Default::default(),
-Default::default(),
-Vec::new(),
-&crate::execution_output_test_support::structural_output_limits()) }
-        .expect("attach the carrier's empty deterministic execution result");
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &block,
+            &[],
+            Vec::new(),
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        block.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+    }
+    .expect("attach the carrier's empty deterministic execution result");
     let executed_signature =
         SignatureOf::try_from_hash(keys[leader_index].private_key(), block.header().hash())
             .expect("sign the executed autonomous carrier");

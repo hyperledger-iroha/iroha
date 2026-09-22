@@ -29,7 +29,7 @@ use crate::{
         },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
-            RegisterPublicLaneValidator,
+            RegisterPublicLaneCandidate, RegisterPublicLaneValidator,
         },
     },
     prelude::*,

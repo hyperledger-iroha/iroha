@@ -170,7 +170,7 @@ pub use mint_finality::{
     build_kagemusha_mint_finality_seal_message_v1, decode_kagemusha_mint_finality_seal_bundle_v1,
     decode_kagemusha_mint_finality_seal_share_v1, derive_kagemusha_mint_finality_validator_keys_v1,
     kagemusha_mint_finality_empty_root_v1, kagemusha_top_up_leaf_from_receipt_v1,
-    sign_kagemusha_mint_finality_seal_v1, validate_kagemusha_mint_finality_epoch_v1,
+    sign_kagemusha_mint_finality_seal_v1, validate_kagemusha_mint_finality_authority_v1,
     validate_kagemusha_mint_finality_genesis_parameter_keys_v1,
     validate_kagemusha_mint_finality_roster_keys_v1, verify_kagemusha_mint_finality_seal_bundle_v1,
     verify_kagemusha_mint_finality_seal_share_v1, verify_kagemusha_top_up_membership_v1,
@@ -1749,10 +1749,10 @@ pub struct KagemushaMintFinalityHelperVerificationRequestV1<'a> {
     pub proof: &'a KagemushaPairedProofV1,
     /// Exact paired certificate digest constrained by both helper parities.
     pub finality_certificate_binding: DigestV1,
-    /// Current recursively authenticated roster identifier.
+    /// Current recursively authenticated authorization identifier.
     pub finality_authority_head: DigestV1,
-    /// Release-pinned genesis roster identifier.
-    pub finality_genesis_roster_id: DigestV1,
+    /// Release-pinned complete genesis scheduling authorization identifier.
+    pub finality_genesis_authorization_id: DigestV1,
     /// Eq deferred audit, which binds the shared pair transcript and the exact Ep audit.
     pub finality_proof_binding_digest: DigestV1,
     /// Release-pinned artifact manifest carried by the mint credit.
@@ -2027,7 +2027,7 @@ pub fn verify_kagemusha_mint_finality_helper_v1<V: KagemushaRecursiveVerifierV1>
             proof: &mint_credit.proof,
             finality_certificate_binding: mint_credit.finality_certificate_binding,
             finality_authority_head: mint_credit.finality_authority_head,
-            finality_genesis_roster_id: mint_credit.finality_genesis_roster_id,
+            finality_genesis_authorization_id: mint_credit.finality_genesis_authorization_id,
             finality_proof_binding_digest: mint_credit.finality_proof_binding_digest,
             artifact_manifest_digest: mint_credit.artifact_manifest_digest,
         })

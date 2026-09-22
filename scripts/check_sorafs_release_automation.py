@@ -896,6 +896,8 @@ RELEASE_VERSION_MAP_CONTRACT_MARKERS: dict[str, tuple[str, ...]] = {
 }
 WORKFLOWS: dict[str, tuple[str, ...]] = {
     ".github/workflows/sorafs-cli-release.yml": (
+        '- "scripts/sorafs_javascript_test_events.mjs"',
+        '- "scripts/tests/sorafs_javascript_test_events_test.mjs"',
         '"sorafs-cli-v*"',
         '- "scripts/check_sorafs_mobile_parity_reports.py"',
         '- "scripts/tests/check_sorafs_mobile_parity_reports_test.py"',
@@ -927,6 +929,19 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/tests/sorafs_java_consumer_artifact_test.py"',
         '- "scripts/tests/sorafs_java_dependency_origins_test.py"',
         '- "scripts/tests/sorafs_sdk_artifact_index_test.py"',
+        '- "scripts/sorafs_javascript_archive.py"',
+        '- "scripts/sorafs_javascript_dependencies.py"',
+        '- "scripts/sorafs_javascript_package_source.py"',
+        '- "scripts/sorafs_javascript_native_cache.mjs"',
+        '- "scripts/tests/sorafs_javascript_archive_fixtures.py"',
+        '- "scripts/tests/sorafs_javascript_archive_test.py"',
+        '- "scripts/tests/sorafs_javascript_archive_bounds_test.py"',
+        '- "scripts/tests/sorafs_javascript_dependencies_test.py"',
+        '- "scripts/tests/sorafs_javascript_package_fixtures.py"',
+        '- "scripts/tests/sorafs_javascript_package_source_test.py"',
+        '- "scripts/tests/sorafs_javascript_package_bounds_test.py"',
+        '- "scripts/tests/fixtures/sorafs_npm_archive_v1.tgz"',
+        '- "specs/sorafs/javascript_original_archives_v1.md"',
         '- "ci/verify_privacy_python_wheel.py"',
         '- "ci/privacy_sdk_cargo_lockfile_test.sh"',
         '- "scripts/tests/python_wheel_byte_owner_test.py"',
@@ -1032,6 +1047,8 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/tests/validate_release_image_bases_test.py"',
         '- "scripts/tests/release_profile_validation_test.py"',
         '- "scripts/tests/release_manifest_signing_test.py"',
+        '- "scripts/tests/release_output_parent_cleanup_test.py"',
+        '- "scripts/tests/release_output_transaction_cleanup_test.py"',
         '- "scripts/tests/release_manifest_signing_test.sh"',
         '- "scripts/tests/generate_release_manifest_test.py"',
         '- "scripts/tests/generate_sorafs_cli_release_manifest_test.py"',
@@ -1185,6 +1202,9 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     ),
     ".github/workflows/sorafs-orchestrator-sdk.yml": (
+        "node --test scripts/tests/sorafs_javascript_test_events_test.mjs scripts/tests/sorafs_javascript_child_files_test.mjs scripts/tests/sorafs_javascript_child_input_test.mjs scripts/tests/sorafs_javascript_child_loads_test.mjs scripts/tests/sorafs_javascript_child_session_test.mjs",
+        '- "scripts/sorafs_javascript_test_events.mjs"',
+        '- "scripts/tests/sorafs_javascript_test_events_test.mjs"',
         'cron: "41 3 * * *"',
         '- "scripts/check_sorafs_mobile_parity_reports.py"',
         '- "scripts/tests/check_sorafs_mobile_parity_reports_test.py"',
@@ -1216,6 +1236,59 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     ),
 }
+SORAFS_JAVASCRIPT_CONTENT_PATHS = frozenset({
+    "scripts/sorafs_javascript_tree_custody.py",
+    "scripts/sorafs_javascript_qualification_source.py",
+    "scripts/sorafs_javascript_qualification_custody.py",
+    "scripts/fixtures/sorafs_javascript_qualification_sources_v1.json",
+    "scripts/tests/sorafs_javascript_qualification_source_test.py",
+    "specs/sorafs/javascript_qualification_source_v1.md",
+    "scripts/sorafs_javascript_installed.py",
+    "scripts/sorafs_javascript_install_metadata.py",
+    "scripts/sorafs_javascript_installed_custody.py",
+    "scripts/tests/sorafs_javascript_installed_test.py",
+})
+SORAFS_JAVASCRIPT_CHILD_PATHS = frozenset({
+    'scripts/sorafs_javascript_child.mjs',
+    'scripts/sorafs_javascript_child_entry.mjs',
+    'scripts/sorafs_javascript_child_input.mjs',
+    'scripts/sorafs_javascript_child_loads.mjs',
+    'scripts/sorafs_javascript_child_session.mjs',
+    'scripts/tests/sorafs_javascript_child_fixture.mjs',
+    'scripts/tests/sorafs_javascript_child_input_test.mjs',
+    'scripts/tests/sorafs_javascript_child_loads_test.mjs',
+    'scripts/tests/sorafs_javascript_child_contract_test.mjs',
+    'scripts/tests/sorafs_javascript_child_session_test.mjs',
+    'scripts/tests/sorafs_javascript_child_abi_contract_test.py',
+    'specs/sorafs/javascript_child_bootstrap_v1.md',
+    'scripts/sorafs_javascript_native_cache.mjs',
+    'scripts/fixtures/sorafs_javascript_qualification_sources_v1.json',
+    "scripts/sorafs_javascript_child_files.mjs",
+    "scripts/tests/sorafs_javascript_child_files_test.mjs",
+    "scripts/sorafs_javascript_test_events.mjs",
+    "scripts/tests/sorafs_javascript_test_events_test.mjs",
+})
+SORAFS_JAVASCRIPT_PARITY_RUNNER = "ci/sdk_sorafs_orchestrator.sh"
+SORAFS_JAVASCRIPT_SOURCE_COMMAND = '    "${node_binary}" --test "${REPO_ROOT}/scripts/tests/sorafs_javascript_child_contract_test.mjs" "${sdk_root}/test/sorafsNativeSuiteStructure.test.js"'
+SORAFS_JAVASCRIPT_CHILD_ABI_TEST = 'scripts/tests/sorafs_javascript_child_abi_contract_test.py'
+SORAFS_JAVASCRIPT_CHILD_WORKFLOWS = (
+    ".github/workflows/sorafs-cli-release.yml",
+    ".github/workflows/sorafs-orchestrator-sdk.yml",
+)
+SORAFS_JAVASCRIPT_CHILD_COMMAND = "node --test scripts/tests/sorafs_javascript_test_events_test.mjs scripts/tests/sorafs_javascript_child_files_test.mjs scripts/tests/sorafs_javascript_child_input_test.mjs scripts/tests/sorafs_javascript_child_loads_test.mjs scripts/tests/sorafs_javascript_child_session_test.mjs"
+SORAFS_JAVASCRIPT_CHILD_STEP = (
+    "      - name: Verify fixed JavaScript child-custody ownership\n"
+    f"        run: {SORAFS_JAVASCRIPT_CHILD_COMMAND}"
+)
+SORAFS_JAVASCRIPT_NODE_STEP = (
+    "      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6\n"
+    "        with:\n"
+    '          node-version: "24"\n'
+    "          cache: npm\n"
+    "          cache-dependency-path: javascript/iroha_js/package-lock.json"
+)
+
+
 NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV = (
     "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"
 )
@@ -2044,6 +2117,7 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
 
     errors = _validate_cosign_qualification(root, source)
     errors.extend(_validate_native_authority_runtime(root, source))
+    errors.extend(_javascript_child_abi_controls_errors(source))
     provenance_commands = tuple(
         re.finditer(
             rf"(?m)^{re.escape(SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND)}$",
@@ -2141,6 +2215,57 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
     return errors
 
 
+def _javascript_child_source_controls_errors(source: str) -> list[str]:
+    """Bind real AST commands to the existing locked npm install before native build."""
+    section = _contract_section(source, "\nrun_javascript_parity() {\n", "\nrun_swift_parity() {")
+    sequence = "    npm ci\n" + SORAFS_JAVASCRIPT_SOURCE_COMMAND + "\n    CARGO_BUILD_JOBS=1 \\\n"
+    if (section is None or section.count(sequence) != 1
+            or source.count(SORAFS_JAVASCRIPT_SOURCE_COMMAND) != 1
+            or source.count("sorafs_javascript_child_contract_test.mjs") != 1
+            or source.count("sorafsNativeSuiteStructure.test.js") != 1):
+        return ["JavaScript child source controls must run once after locked npm installation before native build"]
+    return []
+
+
+def _javascript_child_abi_controls_errors(source: str) -> list[str]:
+    """Require the ABI source contract inside the actual release pytest batch."""
+    batches = re.findall(r"(?m)^python3 -m pytest -q \\\n((?:  [^\n]+\n)+)", source)
+    line = "  " + SORAFS_JAVASCRIPT_CHILD_ABI_TEST + " \\"
+    if (len(batches) != 1 or batches[0].splitlines().count(line) != 1
+            or source.count(SORAFS_JAVASCRIPT_CHILD_ABI_TEST) != 1):
+        return ["JavaScript child ABI controls must execute once in the release pytest batch"]
+    return []
+
+
+def _javascript_child_controls_workflow_errors(relative: str, source: str) -> list[str]:
+    """Require literal triggers and the fixed unconditional Node24 execution step."""
+    errors: list[str] = []
+    entries = _pull_request_path_entries(source) or ()
+    if any(entries.count(path) != 1 for path in SORAFS_JAVASCRIPT_CHILD_PATHS):
+        errors.append(f"{relative}: JavaScript child-custody pull_request paths must appear exactly once")
+    if relative != ".github/workflows/sorafs-orchestrator-sdk.yml":
+        return errors
+    job = _workflow_job(source, "sdk-parity")
+    if job is None:
+        return errors + [f"{relative}: JavaScript child-custody owner requires sdk-parity"]
+    # Reuse the existing exact-indentation workflow contract; these are real
+    # list items, never text inside a run block or a commented marker.
+    steps = [match.group(0).rstrip() for match in re.finditer(
+        r"(?ms)^      - .*?(?=^      - |\Z)", job
+    )]
+    node = [index for index, step in enumerate(steps) if step == SORAFS_JAVASCRIPT_NODE_STEP]
+    event = [index for index, step in enumerate(steps) if step == SORAFS_JAVASCRIPT_CHILD_STEP]
+    header = job.split("    steps:\n", 1)[0]
+    if (len(node) != 1 or len(event) != 1 or event[0] != node[0] + 1
+            or job.count(SORAFS_JAVASCRIPT_CHILD_COMMAND) != 1
+            or re.search(r"(?m)^    if:", header)):
+        errors.append(
+            f"{relative}: JavaScript child-custody controls must run unconditionally exactly once "
+            "immediately after the fixed Node24 setup"
+        )
+    return errors
+
+
 def _validate_workflow_source(relative: str, source: str) -> list[str]:
     """Return deterministic contract errors for one workflow source."""
 
@@ -2160,9 +2285,17 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
         if marker not in source:
             errors.append(f"{relative}: missing contract marker `{marker}`")
 
+    if relative in SORAFS_JAVASCRIPT_CHILD_WORKFLOWS:
+        errors.extend(_javascript_child_controls_workflow_errors(relative, source))
+
     if relative == ".github/workflows/sorafs-cli-release.yml":
         pull_request_path_entries = _pull_request_path_entries(source)
         pull_request_paths = _pull_request_paths(source)
+        if any((pull_request_path_entries or ()).count(path) != 1
+               for path in SORAFS_JAVASCRIPT_CONTENT_PATHS):
+            errors.append(
+                f"{relative}: JavaScript content source/test triggers must appear exactly once"
+            )
         invalid_promotion_trigger_counts = sorted(
             (trigger, (pull_request_path_entries or ()).count(trigger))
             for trigger in SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TRIGGER_PATHS
@@ -3206,6 +3339,9 @@ def validate_release_automation(root: Path) -> dict[str, Any]:
     errors.extend(_validate_package_release_smoke(root))
     errors.extend(_validate_reference_sdk_release_examples(root))
     errors.extend(_validate_native_governance_sdk_contract(root))
+    errors.extend(_javascript_child_source_controls_errors(_read_bytes_no_follow(
+        _require_regular_repo_file(root, SORAFS_JAVASCRIPT_PARITY_RUNNER)
+    ).decode("utf-8")))
     errors.extend(_validate_runtime_provider_deployment_contract(root))
     if errors:
         raise ValueError("; ".join(errors))

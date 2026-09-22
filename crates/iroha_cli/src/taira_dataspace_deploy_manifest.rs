@@ -184,7 +184,15 @@ pub(super) fn test_trust() -> finality::TrustV1 {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{NetworkId, account::address::ChainDiscriminantGuard};
+    use iroha_data_model::{
+        NetworkId,
+        account::address::ChainDiscriminantGuard,
+        asset::{AssetDefinitionId, AssetId},
+        nexus::{
+            PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
+            PublicLaneMonetarySlashV1,
+        },
+    };
     use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::Quantity;
 
@@ -194,6 +202,17 @@ mod tests {
                 .unwrap()
                 .public_key()
                 .clone(),
+        )
+    }
+
+    fn staking_asset(owner: AccountId) -> AssetId {
+        AssetId::new(
+            AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::try_new("manifest", "universal")
+                    .expect("fixture domain"),
+                "stake".parse().expect("fixture asset name"),
+            ),
+            owner,
         )
     }
 
@@ -211,12 +230,47 @@ mod tests {
                         account.clone(),
                         Quantity::from(1_u64),
                         Metadata::default(),
+                        PublicLaneMonetaryPlanV1::genesis_registration(
+                            staking_asset(account.clone()),
+                            staking_asset(self::account(140)),
+                            Quantity::from(1_u64),
+                        ),
                     )
                     .into(),
                     ActivatePublicLaneValidator::new(LaneId::SINGLE, account).into(),
                 ]
             })
             .collect()
+    }
+
+    #[test]
+    fn structural_binding_fixture_carries_exact_genesis_transfers() {
+        let _profile = ChainDiscriminantGuard::enter(369);
+        let trust = finality::test_trust();
+        let instructions = instructions(&trust.peers);
+        let registrations = instructions
+            .iter()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(registrations.len(), VALIDATORS);
+        assert!(validator_bindings(&instructions, &trust.peers).is_ok());
+        for registration in registrations {
+            assert_eq!(registration.stake_account, registration.validator);
+            assert_ne!(registration.stake_account, account(140));
+            assert_eq!(
+                registration.monetary_plan,
+                PublicLaneMonetaryPlanV1::genesis_registration(
+                    staking_asset(registration.stake_account.clone()),
+                    staking_asset(account(140)),
+                    registration.initial_stake.clone(),
+                )
+            );
+            assert!(registration.monetary_plan.has_canonical_shape());
+        }
     }
 
     #[test]
@@ -387,10 +441,30 @@ mod tests {
                 amount: Quantity::from(1_u64),
                 reason_code: "double_sign".into(),
                 metadata: Metadata::default(),
+                monetary_plan: PublicLaneMonetaryPlanV1 {
+                    network_scope: PublicLaneMonetaryScopeV1::Genesis,
+                    valid_until_height: 1,
+                    source_asset: staking_asset(account(140)),
+                    destination_asset: staking_asset(account(141)),
+                    amount: Quantity::from(1_u64),
+                    precondition: PublicLaneMonetaryPreconditionV1::Slash(
+                        PublicLaneMonetarySlashV1 {
+                            activation_height: 1,
+                            slashable_exposure: Quantity::from(1_u64),
+                        },
+                    ),
+                },
             }
             .into(),
         ];
         for change in changes {
+            if let Some(slash) = change.as_any().downcast_ref::<SlashPublicLaneValidator>() {
+                assert!(slash.monetary_plan.has_canonical_shape());
+                assert_ne!(
+                    slash.monetary_plan.source_asset,
+                    slash.monetary_plan.destination_asset
+                );
+            }
             let mut changed = valid.clone();
             changed.push(change);
             assert!(validator_bindings(&changed, &trust.peers).is_err());

@@ -16,7 +16,7 @@ use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 
-use mv::json::JsonKeyCodec;
+use norito::json::JsonKeyCodec;
 use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},

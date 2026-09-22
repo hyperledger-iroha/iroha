@@ -1204,7 +1204,7 @@ fn verify_kagemusha_mint_finality_vote(
         )
         .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
     crate::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_seal_share_v1(
-        &context.kagemusha_mint_finality_epoch_roster,
+        &context.kagemusha_mint_finality_authority,
         context,
         vote,
         &share,
@@ -1234,7 +1234,7 @@ fn verify_kagemusha_mint_finality_certificate(
         )
         .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
     crate::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_seal_bundle_v1(
-        &context.kagemusha_mint_finality_epoch_roster,
+        &context.kagemusha_mint_finality_authority,
         context,
         certificate,
         &bundle,

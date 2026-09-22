@@ -1316,17 +1316,13 @@ mod kagemusha_finality_boundary {
         fn new() -> Self {
             let (mut context, keys, pops) = authenticated_context();
             context.epoch_end_height = context.height;
-            let next_roster = crate::kagemusha_v1_test_fixtures::mint_finality_roster(
-                context.network_id,
-                context.epoch + 1,
-                &context.roster,
-            );
+            context.kagemusha_mint_finality_authorization.last_height = context.height;
+            let next_authority = context.kagemusha_mint_finality_authority.clone();
+            let next_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(&context.kagemusha_mint_finality_authorization, &next_authority, context.height + 100, iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Retain);
             context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
                 epoch: context.epoch + 1,
-                kagemusha_mint_finality_epoch_id: next_roster
-                    .finality_epoch_id()
-                    .expect("next Pasta epoch identity"),
-                kagemusha_mint_finality_epoch_roster: next_roster,
+                kagemusha_mint_finality_authorization: next_authorization,
+                kagemusha_mint_finality_authority: next_authority,
                 epoch_end_height: context.height + 100,
                 mode: context.mode,
                 roster: context.roster.clone(),
@@ -1364,7 +1360,7 @@ mod kagemusha_finality_boundary {
                 signature: Vec::new(),
             };
             let message = mint::build_kagemusha_mint_finality_seal_message_v1(
-                &context.kagemusha_mint_finality_epoch_roster,
+                &context.kagemusha_mint_finality_authority,
                 &context,
                 &vote,
             )
@@ -1481,7 +1477,7 @@ mod kagemusha_finality_boundary {
             share: &KagemushaMintFinalitySealShareV1,
         ) -> Result<(), mint::KagemushaMintFinalityErrorV1> {
             mint::verify_kagemusha_mint_finality_seal_share_v1(
-                &self.context.kagemusha_mint_finality_epoch_roster,
+                &self.context.kagemusha_mint_finality_authority,
                 &self.context,
                 vote,
                 share,
@@ -1494,7 +1490,7 @@ mod kagemusha_finality_boundary {
             bundle: &KagemushaMintFinalitySealBundleV1,
         ) -> Result<(), mint::KagemushaMintFinalityErrorV1> {
             mint::verify_kagemusha_mint_finality_seal_bundle_v1(
-                &self.context.kagemusha_mint_finality_epoch_roster,
+                &self.context.kagemusha_mint_finality_authority,
                 &self.context,
                 certificate,
                 bundle,
@@ -1510,7 +1506,7 @@ mod kagemusha_finality_boundary {
         let signer = mint::KagemushaMintFinalitySignerV1::from_seed(
             zeroize::Zeroizing::new([0xA0 + u8::try_from(index).expect("small index"); 32]),
             index,
-            &context.kagemusha_mint_finality_epoch_roster,
+            &context.kagemusha_mint_finality_authority,
         )
         .expect("independently provisioned fixture Pasta signer");
         mint::sign_kagemusha_mint_finality_seal_v1(&signer, message)
@@ -1543,7 +1539,7 @@ mod kagemusha_finality_boundary {
         let mut vote = fixture.vote.clone();
         vote.execution_commitment = execution_commitment(0xC2);
         let message = mint::build_kagemusha_mint_finality_seal_message_v1(
-            &fixture.context.kagemusha_mint_finality_epoch_roster,
+            &fixture.context.kagemusha_mint_finality_authority,
             &fixture.context,
             &vote,
         )
@@ -1551,10 +1547,10 @@ mod kagemusha_finality_boundary {
         .expect("boundary still requires a seal");
         assert_eq!(message.kagemusha_top_up_count, 0);
         assert_eq!(
-            message.next_finality_epoch_id,
-            fixture.share.message.next_finality_epoch_id
+            message.next_epoch_authorization,
+            fixture.share.message.next_epoch_authorization
         );
-        assert!(message.next_finality_epoch_id.is_some());
+        assert!(message.next_epoch_authorization.is_some());
         (vote, message)
     }
 
@@ -1623,10 +1619,27 @@ mod kagemusha_finality_boundary {
         message: &KagemushaMintFinalitySealMessageV1,
     ) -> Vec<(&'static str, KagemushaMintFinalitySealMessageV1)> {
         let changes: [(&str, fn(&mut KagemushaMintFinalitySealMessageV1)); 11] = [
-            ("finality epoch", |m| m.finality_epoch_id[0] ^= 1),
+            ("epoch authorization", |m| {
+                m.epoch_authorization.authority_id[0] ^= 1;
+                if let Some(next) = &mut m.next_epoch_authorization {
+                    next.authority_id = m.epoch_authorization.authority_id;
+                }
+            }),
             ("validator count", |m| m.validator_count = 7),
-            ("network", |m| m.network_id = test_network_id(0xD3)),
-            ("height", |m| m.block_height += 1),
+            ("network", |m| {
+                m.network_id = test_network_id(0xD3);
+                m.epoch_authorization.network_id = m.network_id;
+                if let Some(next) = &mut m.next_epoch_authorization {
+                    next.network_id = m.network_id;
+                }
+            }),
+            ("height", |m| {
+                m.block_height += 1;
+                m.epoch_authorization.last_height += 1;
+                if let Some(next) = &mut m.next_epoch_authorization {
+                    next.first_height += 1;
+                }
+            }),
             ("context", |m| {
                 m.height_context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(
                     Hash::new(b"other seal context"),
@@ -1641,15 +1654,24 @@ mod kagemusha_finality_boundary {
             }),
             ("top-up count", |m| m.kagemusha_top_up_count += 1),
             ("next epoch", |m| {
-                m.next_finality_epoch_id = Some([0xD4; 32])
+                m.next_epoch_authorization
+                    .as_mut()
+                    .expect("boundary successor")
+                    .last_height += 1
             }),
-            ("missing next epoch", |m| m.next_finality_epoch_id = None),
+            ("missing next epoch", |m| m.next_epoch_authorization = None),
         ];
         changes
             .into_iter()
             .map(|(label, change)| {
                 let mut changed = message.clone();
                 change(&mut changed);
+                if let Some(next) = &mut changed.next_epoch_authorization {
+                    next.previous_authorization_id = changed
+                        .epoch_authorization
+                        .authorization_id()
+                        .expect("substituted predecessor remains canonical");
+                }
                 changed
                     .validate()
                     .expect("negative keeps a structurally valid statement");

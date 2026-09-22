@@ -64,6 +64,24 @@ on:
       - "scripts/tests/check_native_sdk_abi23_artifact_test.py"
       - "scripts/tests/check_sorafs_python_native_sdk_evidence_contract.sh"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
+      - "scripts/sorafs_javascript_test_events.mjs"
+      - "scripts/tests/sorafs_javascript_test_events_test.mjs"
+      - "scripts/sorafs_javascript_child.mjs"
+      - "scripts/sorafs_javascript_child_entry.mjs"
+      - "scripts/sorafs_javascript_child_input.mjs"
+      - "scripts/sorafs_javascript_child_loads.mjs"
+      - "scripts/sorafs_javascript_child_session.mjs"
+      - "scripts/tests/sorafs_javascript_child_fixture.mjs"
+      - "scripts/tests/sorafs_javascript_child_input_test.mjs"
+      - "scripts/tests/sorafs_javascript_child_loads_test.mjs"
+      - "scripts/tests/sorafs_javascript_child_contract_test.mjs"
+      - "scripts/tests/sorafs_javascript_child_session_test.mjs"
+      - "scripts/tests/sorafs_javascript_child_abi_contract_test.py"
+      - "specs/sorafs/javascript_child_bootstrap_v1.md"
+      - "scripts/sorafs_javascript_native_cache.mjs"
+      - "scripts/fixtures/sorafs_javascript_qualification_sources_v1.json"
+      - "scripts/sorafs_javascript_child_files.mjs"
+      - "scripts/tests/sorafs_javascript_child_files_test.mjs"
       - "scripts/check_sorafs_release_automation.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
       - "scripts/check_sorafs_mobile_parity_reports.py"
@@ -128,6 +146,8 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: javascript/iroha_js/package-lock.json
+      - name: Verify fixed JavaScript child-custody ownership
+        run: node --test scripts/tests/sorafs_javascript_test_events_test.mjs scripts/tests/sorafs_javascript_child_files_test.mjs scripts/tests/sorafs_javascript_child_input_test.mjs scripts/tests/sorafs_javascript_child_loads_test.mjs scripts/tests/sorafs_javascript_child_session_test.mjs
       - name: Install Apple Rust targets
         run: |
           resolve_mobile_tool() {

@@ -78,13 +78,15 @@ fn context() -> wire::HeightContext {
         .collect::<Vec<_>>();
     roster.sort();
     let network_id = test_network_id(0x61);
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 1, &roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+            network_id, 0, 1, 100, &roster,
+        );
     wire::HeightContext {
         network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
-        epoch: 1,
+        epoch: 0,
         epoch_end_height: 100,
         next_epoch_snapshot: None,
         mode: wire::ConsensusMode::Permissioned,
@@ -92,8 +94,8 @@ fn context() -> wire::HeightContext {
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
         roster,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         nexus_amx_context_hash: Hash::new(b"nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: wire::DataAvailabilityLayout {
@@ -164,13 +166,15 @@ fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) 
         })
         .collect::<Vec<_>>();
     let network_id = test_network_id(0x62);
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 3, &roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+            network_id, 0, 1, 100, &roster,
+        );
     let context = wire::HeightContext {
         network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
-        epoch: 3,
+        epoch: 0,
         epoch_end_height: 100,
         next_epoch_snapshot: None,
         mode: wire::ConsensusMode::Permissioned,
@@ -178,8 +182,8 @@ fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) 
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
         roster,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         nexus_amx_context_hash: Hash::new(b"authenticated nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: wire::DataAvailabilityLayout {
@@ -404,17 +408,20 @@ fn aggregate_verification_rejects_signer_without_aligned_pop() {
 fn boundary_context_rejects_missing_invalid_and_foreign_future_pops_before_voting() {
     let (mut context, _keys, proofs) = authenticated_context();
     context.epoch_end_height = context.height;
+    context.kagemusha_mint_finality_authorization.last_height = context.height;
     let next_epoch = context.epoch + 1;
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-            context.network_id,
-            next_epoch,
-            &context.roster,
+    let kagemusha_mint_finality_authority = context.kagemusha_mint_finality_authority.clone();
+    let kagemusha_mint_finality_authorization =
+        crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+            &context.kagemusha_mint_finality_authorization,
+            &kagemusha_mint_finality_authority,
+            context.height + 10,
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Retain,
         );
     context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch: next_epoch,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         epoch_end_height: context.height + 10,
         mode: context.mode,
         roster: context.roster.clone(),

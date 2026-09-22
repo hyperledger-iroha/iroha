@@ -9,6 +9,10 @@
 //! The included release-harness entrypoint parameterizes the same production
 //! workflow across N=2,3,4,8,16 and publishes only measured process evidence.
 
+#[path = "atomic_private_settlement_observation.rs"]
+mod peer_observation;
+use peer_observation::collect_bounded_observations;
+
 use super::localnet_npos::npos_override_instruction;
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
@@ -535,6 +539,11 @@ fn genesis_post_topology(
                     validator.clone(),
                     Quantity::from(VALIDATOR_STAKE),
                     Metadata::default(),
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_definition.clone(), validator.clone()),
+                        AssetId::new(stake_definition.clone(), ALICE_ID.clone()),
+                        Quantity::from(VALIDATOR_STAKE),
+                    ),
                 )
                 .into(),
             );
@@ -2052,35 +2061,59 @@ fn provisional_materials(
     Ok(finalize_atomic_private_settlement_provisional_bundle_v1(manifest, inputs)?.materials)
 }
 
+/// Keep receipt diagnostics scoped to one query without changing its returned value.
+fn observe_smoke_receipt_job_v1<R>(
+    context: Option<SmokeDiagnosticContextV1>,
+    reported_finalized: &AtomicBool,
+    query: impl FnOnce() -> R,
+    finalized_height: impl FnOnce(&R) -> Option<u64>,
+) -> R {
+    let _diagnostics = SmokeDiagnosticScopeV1::install(context);
+    let response = query();
+    if let Some(height) = finalized_height(&response)
+        && !reported_finalized.swap(true, Ordering::Relaxed)
+    {
+        observe_smoke_diagnostic_milestone_v1(
+            SmokeDiagnosticPhaseV1::FinalizedReceiptReported,
+            height,
+        );
+    }
+    response
+}
+
+#[cfg(test)]
+#[path = "atomic_private_settlement_receipt_observation_tests.rs"]
+mod receipt_observation_controls;
+
 fn assert_no_partial_visibility(network: &Network, bundle_id: Hash, phase: &str) -> Result<()> {
-    for peer in network.all_peers() {
-        match peer
+    let peers = network.all_peers().cloned().collect::<Vec<_>>();
+    ensure!(!peers.is_empty(), "pending observations omitted every peer");
+    let observations = collect_bounded_observations(peers, TEST_STACK_BYTES, |peer| {
+        let response = peer
             .client()
             .client()
-            .private_settlement_bundle_receipt_v1(bundle_id)
-        {
+            .private_settlement_bundle_receipt_v1(bundle_id);
+        (peer.id(), response)
+    });
+    let mut failures = Vec::new();
+    for (peer_id, response) in observations {
+        match response {
             Ok(PrivateSettlementBundleReceiptResponseV1::Pending { .. }) => {}
             Ok(PrivateSettlementBundleReceiptResponseV1::Finalized(receipt)) => {
-                return Err(eyre!(
-                    "{phase}: peer {} exposed {} finalized legs before global carrier",
-                    peer.id(),
+                failures.push(format!(
+                    "{phase}: peer {peer_id} exposed {} finalized legs before global carrier",
                     receipt.legs.len()
                 ));
             }
             Ok(PrivateSettlementBundleReceiptResponseV1::Aborted(_)) => {
-                return Err(eyre!(
-                    "{phase}: peer {} exposed an unexpected abort",
-                    peer.id()
-                ));
+                failures.push(format!("{phase}: peer {peer_id} exposed an unexpected abort"));
             }
-            Err(error) => {
-                return Err(eyre!(
-                    "{phase}: peer {} receipt query failed instead of proving pending state: {error}",
-                    peer.id()
-                ));
-            }
+            Err(error) => failures.push(format!(
+                "{phase}: peer {peer_id} receipt query failed instead of proving pending state: {error:?}"
+            )),
         }
     }
+    ensure!(failures.is_empty(), "{}", failures.join("; "));
     Ok(())
 }
 
@@ -2090,33 +2123,51 @@ fn wait_for_identical_receipt(
 ) -> Result<iroha::data_model::nexus::PrivateSettlementReceiptV1> {
     let started = Instant::now();
     let mut last = String::new();
-    let mut reported_finalized = false;
+    let reported_finalized = AtomicBool::new(false);
     while started.elapsed() < FINALITY_TIMEOUT {
-        let mut receipts = Vec::new();
-        for peer in network.all_peers() {
-            match peer
-                .client()
-                .client()
-                .private_settlement_bundle_receipt_v1(bundle_id)
-            {
-                Ok(PrivateSettlementBundleReceiptResponseV1::Finalized(receipt)) => {
-                    if !reported_finalized {
-                        observe_smoke_diagnostic_milestone_v1(
-                            SmokeDiagnosticPhaseV1::FinalizedReceiptReported,
-                            receipt.finalized_height,
-                        );
-                        reported_finalized = true;
+        let peers = network.all_peers().cloned().collect::<Vec<_>>();
+        let expected_observations = peers.len();
+        ensure!(
+            expected_observations > 0,
+            "receipt observations omitted every peer"
+        );
+        let diagnostic_context = SmokeDiagnosticScopeV1::capture();
+        let observations = collect_bounded_observations(peers, TEST_STACK_BYTES, |peer| {
+            let response = observe_smoke_receipt_job_v1(
+                diagnostic_context.clone(),
+                &reported_finalized,
+                || {
+                    peer.client()
+                        .client()
+                        .private_settlement_bundle_receipt_v1(bundle_id)
+                },
+                |response| match response {
+                    Ok(PrivateSettlementBundleReceiptResponseV1::Finalized(receipt)) => {
+                        Some(receipt.finalized_height)
                     }
-                    receipts.push(receipt)
+                    _ => None,
+                },
+            );
+            (peer.id(), response)
+        });
+        let mut receipts = Vec::new();
+        let mut not_finalized = Vec::new();
+        for (peer_id, response) in observations {
+            match response {
+                Ok(PrivateSettlementBundleReceiptResponseV1::Finalized(receipt)) => {
+                    receipts.push(receipt);
                 }
-                Ok(other) => last = format!("{} returned {other:?}", peer.id()),
-                Err(error) => last = format!("{}: {error}", peer.id()),
+                Ok(other) => not_finalized.push(format!("{peer_id} returned {other:?}")),
+                Err(error) => not_finalized.push(format!("{peer_id}: {error:?}")),
             }
         }
-        if receipts.len() == network.all_peers().count()
-            && receipts.windows(2).all(|pair| pair[0] == pair[1])
-        {
-            return Ok(receipts.remove(0));
+        if receipts.len() == expected_observations {
+            if receipts.windows(2).all(|pair| pair[0] == pair[1]) {
+                return Ok(receipts.remove(0));
+            }
+            last = "all peers finalized, but their receipts differ".to_owned();
+        } else {
+            last = not_finalized.join("; ");
         }
         thread::sleep(POLL_INTERVAL);
     }
@@ -2260,7 +2311,7 @@ struct SmokeDiagnosticContextV1 {
 }
 
 std::thread_local! {
-    // Enabled only inside the N3 diagnostic and its explicitly scoped proof workers.
+    // Enabled only inside the N3 diagnostic and its explicitly scoped workers.
     // Registered benchmark helpers otherwise remain observationally unchanged.
     static SMOKE_DIAGNOSTIC_CONTEXT_V1: std::cell::RefCell<Option<SmokeDiagnosticContextV1>> = const { std::cell::RefCell::new(None) };
 }

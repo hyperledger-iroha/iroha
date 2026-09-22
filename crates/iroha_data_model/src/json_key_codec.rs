@@ -1,7 +1,7 @@
 //! Canonical JSON object key codecs for persisted data-model identities.
 use iroha_crypto::Hash;
-use mv::json::JsonKeyCodec;
 use norito::json;
+use norito::json::JsonKeyCodec;
 macro_rules! impl_id_key_codec {
     ($($ty:path),+ $(,)?) => {
         $(
@@ -788,7 +788,8 @@ mod tests {
     };
     use iroha_crypto::KeyPair;
     use iroha_model_base::topology::DataSpaceId;
-    use mv::{json::JsonKeyCodec, storage::Storage};
+    use mv::storage::Storage;
+    use norito::json::JsonKeyCodec;
     use norito::json::{Parser, from_json, to_json};
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")

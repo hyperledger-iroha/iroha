@@ -207,6 +207,8 @@ def _retired_file(path: Path) -> bytes | None:
 class KagemushaHardCutTests(unittest.TestCase):
     """Enforce the unaliased first-release KAGEMUSHA surface."""
 
+    maxDiff = None
+
     def test_repository_contains_no_retired_product_identity(self) -> None:
         failures: list[str] = []
         for path in _repository_files():

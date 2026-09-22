@@ -369,6 +369,8 @@ impl<Admission, BindingAdmission> DecisionBoundCarrierJournals<Admission, Bindin
 
 #[path = "physical_publication.rs"]
 mod physical_publication;
+#[cfg(test)]
+pub(crate) use physical_publication::PublishedCarrier;
 pub(crate) use physical_publication::PublishedNativeApply;
 
 #[path = "archive_publication.rs"]

@@ -57,8 +57,14 @@ impl ServeSchedulerFixture {
             })
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("certified-serve-scheduler");
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                network_id,
+                0,
+                1,
+                u64::MAX,
+                &roster,
+            );
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -72,8 +78,8 @@ impl ServeSchedulerFixture {
             quorum: wire::DualQuorum::from_roster(&roster)
                 .expect("four-validator Certified-Serve scheduler quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"Certified-Serve scheduler nexus"),
             execution_policy_hash: Hash::new(b"Certified-Serve scheduler policy"),
             da_layout: wire::DataAvailabilityLayout {

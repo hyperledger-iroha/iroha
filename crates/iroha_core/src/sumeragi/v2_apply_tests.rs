@@ -638,6 +638,8 @@ include!("tests/v2_apply_unsealed_00.rs");
 include!("tests/v2_apply_unsealed_01.rs");
 include!("tests/v2_apply_unsealed_02.rs");
 include!("tests/v2_apply_post_checkpoint_binding.rs");
+include!("v2_apply/archive_reservations_tests.rs");
+include!("v2_apply/native_preparation_error_tests.rs");
 
 /// Canonical height-one material for exercising the recovered Decision Apply
 /// worker from another Sumeragi unit-test module.

@@ -317,8 +317,8 @@ pub struct KagemushaRecursiveVerifierProfileV1 {
     pub mint_hash_claim_eq_protocol_digest: [u8; 32],
     /// Actual compiled Ep ordered mint-hash claim protocol identity.
     pub mint_hash_claim_ep_protocol_digest: [u8; 32],
-    /// Release-pinned genesis mint-finality roster identifier.
-    pub mint_genesis_roster_id: [u8; 32],
+    /// Release-pinned genesis mint-finality authorization identifier.
+    pub mint_genesis_authorization_id: [u8; 32],
 }
 
 impl KagemushaRecursiveVerifierProfileV1 {
@@ -361,7 +361,7 @@ impl KagemushaRecursiveVerifierProfileV1 {
         bytes.push(16);
         bytes.extend_from_slice(&self.mint_ep_protocol_digest);
         bytes.push(17);
-        bytes.extend_from_slice(&self.mint_genesis_roster_id);
+        bytes.extend_from_slice(&self.mint_genesis_authorization_id);
         for (tag, params) in [
             (18_u8, &self.inner_mint_authorization_eq),
             (19, &self.inner_mint_authorization_ep),
@@ -476,7 +476,7 @@ impl KagemushaRecursiveVerifierProfileV1 {
                 .any(|(index, digest)| mint_protocols[index + 1..].contains(digest))
             || decode::<Fp>(self.mint_eq_protocol_digest).is_none()
             || decode::<Fq>(self.mint_ep_protocol_digest).is_none()
-            || self.mint_genesis_roster_id == [0; 32]
+            || self.mint_genesis_authorization_id == [0; 32]
         {
             return Err("invalid Kagemusha finalized-mint protocol identities".to_owned());
         }
@@ -534,7 +534,7 @@ pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
     mint_authorization_ep_protocol_digest: [u8; 32],
     mint_eq_protocol_digest: [u8; 32],
     mint_ep_protocol_digest: [u8; 32],
-    mint_genesis_roster_id: [u8; 32],
+    mint_genesis_authorization_id: [u8; 32],
     release_id: [u8; 32],
     suite_id: [u8; 32],
     vk_set_digest: [u8; 32],
@@ -917,7 +917,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             mint_authorization_ep_protocol_digest,
             mint_eq_protocol_digest,
             mint_ep_protocol_digest,
-            mint_genesis_roster_id: profile.mint_genesis_roster_id,
+            mint_genesis_authorization_id: profile.mint_genesis_authorization_id,
             release_id: recursion.release_id,
             suite_id: artifacts.suite_id(),
             vk_set_digest: artifacts.vk_set_digest(),
@@ -1192,10 +1192,10 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         self.mint_ep_protocol_digest
     }
 
-    /// Return the release-pinned genesis mint-finality roster identifier.
+    /// Return the release-pinned genesis mint-finality authorization identifier.
     #[must_use]
-    pub const fn mint_genesis_roster_id(&self) -> [u8; 32] {
-        self.mint_genesis_roster_id
+    pub const fn mint_genesis_authorization_id(&self) -> [u8; 32] {
+        self.mint_genesis_authorization_id
     }
 
     /// Reverify a release bootstrap or Kura-persisted rotation authority checkpoint.
@@ -1209,7 +1209,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             self.release_id,
             self.mint_eq_protocol_digest,
             self.mint_ep_protocol_digest,
-            self.mint_genesis_roster_id,
+            self.mint_genesis_authorization_id,
         )?;
         let eq_history = KagemushaEqAccumulatorV1::try_from_bytes(&checkpoint.proof.eq_history)
             .map_err(|error| error.to_string())?;
@@ -1226,7 +1226,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             certificate_binding: checkpoint.certificate_binding,
             authority_head: checkpoint.authority_head,
             release_id: checkpoint.release_id,
-            genesis_roster_id: checkpoint.genesis_roster_id,
+            genesis_authorization_id: checkpoint.genesis_authorization_id,
             eq_protocol_digest: checkpoint.proof.eq_protocol_digest,
             ep_protocol_digest: checkpoint.proof.ep_protocol_digest,
             eq_deferred_audit: checkpoint.proof.eq_deferred_audit,
@@ -1459,7 +1459,7 @@ impl KagemushaRecursiveVerifierV1 for KagemushaAuthenticatedRecursiveVerifierV1 
             self.release_id,
             self.mint_eq_protocol_digest,
             self.mint_ep_protocol_digest,
-            self.mint_genesis_roster_id,
+            self.mint_genesis_authorization_id,
             self.artifact_manifest_digest,
         )?;
         validate_proof_length("Eq mint-authority", &request.proof.eq_proof)?;
@@ -1936,7 +1936,7 @@ mod checked_loader_tests {
             mint_hash_claim_ep_protocol_digest: crate::zk::kagemusha_v1_poseidon::encode(Fq::from(
                 7,
             )),
-            mint_genesis_roster_id: [3; 32],
+            mint_genesis_authorization_id: [3; 32],
         }
     }
 
@@ -2483,13 +2483,13 @@ fn validate_mint_checkpoint_release_v1(
     release_id: [u8; 32],
     eq_protocol_digest: [u8; 32],
     ep_protocol_digest: [u8; 32],
-    genesis_roster_id: [u8; 32],
+    genesis_authorization_id: [u8; 32],
 ) -> Result<(), String> {
     if checkpoint.release_id != release_id
         || checkpoint.statement.lifecycle.release_id != release_id
         || checkpoint.proof.eq_protocol_digest != eq_protocol_digest
         || checkpoint.proof.ep_protocol_digest != ep_protocol_digest
-        || checkpoint.genesis_roster_id != genesis_roster_id
+        || checkpoint.genesis_authorization_id != genesis_authorization_id
     {
         return Err("Kagemusha mint-authority checkpoint release mismatch".to_owned());
     }
@@ -2501,7 +2501,7 @@ fn validate_mint_finality_release_v1(
     release_id: [u8; 32],
     eq_protocol_digest: [u8; 32],
     ep_protocol_digest: [u8; 32],
-    genesis_roster_id: [u8; 32],
+    genesis_authorization_id: [u8; 32],
     artifact_manifest_digest: [u8; 32],
 ) -> Result<(), String> {
     if request.statement.lifecycle.release_id != release_id
@@ -2510,7 +2510,7 @@ fn validate_mint_finality_release_v1(
         || request.ep_protocol_digest != ep_protocol_digest
         || request.proof.eq_protocol_digest != eq_protocol_digest
         || request.proof.ep_protocol_digest != ep_protocol_digest
-        || request.finality_genesis_roster_id != genesis_roster_id
+        || request.finality_genesis_authorization_id != genesis_authorization_id
     {
         return Err("Kagemusha mint-authority release binding mismatch".to_owned());
     }
@@ -2565,7 +2565,7 @@ mod compact_mint_verifier_tests {
             statement: credit.statement,
             certificate_binding: credit.finality_certificate_binding,
             authority_head: credit.finality_authority_head,
-            genesis_roster_id: credit.finality_genesis_roster_id,
+            genesis_authorization_id: credit.finality_genesis_authorization_id,
             proof_binding_digest: credit.finality_proof_binding_digest,
             proof: credit.proof,
         };
@@ -2575,7 +2575,7 @@ mod compact_mint_verifier_tests {
                 checkpoint.release_id,
                 checkpoint.proof.eq_protocol_digest,
                 checkpoint.proof.ep_protocol_digest,
-                checkpoint.genesis_roster_id,
+                checkpoint.genesis_authorization_id,
             )
         };
         check(&checkpoint).expect("metadata preflight only");
@@ -2586,7 +2586,7 @@ mod compact_mint_verifier_tests {
                 1 => changed.statement.lifecycle.release_id = [0xC2; 32],
                 2 => changed.proof.eq_protocol_digest[0] ^= 1,
                 3 => changed.proof.ep_protocol_digest[0] ^= 1,
-                _ => changed.genesis_roster_id = [0xC3; 32],
+                _ => changed.genesis_authorization_id = [0xC3; 32],
             }
             assert!(
                 check(&changed).is_err(),
@@ -2604,7 +2604,7 @@ mod compact_mint_verifier_tests {
                 credit.statement.lifecycle.release_id,
                 credit.proof.eq_protocol_digest,
                 credit.proof.ep_protocol_digest,
-                credit.finality_genesis_roster_id,
+                credit.finality_genesis_authorization_id,
                 credit.artifact_manifest_digest,
             )
         };
@@ -2614,7 +2614,7 @@ mod compact_mint_verifier_tests {
             match index {
                 0 => changed.statement.lifecycle.release_id = [0xC1; 32],
                 1 => changed.artifact_manifest_digest = [0xC2; 32],
-                2 => changed.finality_genesis_roster_id = [0xC3; 32],
+                2 => changed.finality_genesis_authorization_id = [0xC3; 32],
                 3 => changed.proof.eq_protocol_digest[0] ^= 1,
                 4 => changed.proof.ep_protocol_digest[0] ^= 1,
                 _ => {}
@@ -2709,7 +2709,7 @@ struct MintPublicPartsV1 {
     certificate_binding: [u8; 32],
     authority_head: [u8; 32],
     release_id: [u8; 32],
-    genesis_roster_id: [u8; 32],
+    genesis_authorization_id: [u8; 32],
     eq_protocol_digest: [u8; 32],
     ep_protocol_digest: [u8; 32],
     eq_deferred_audit: [u8; 32],
@@ -2854,7 +2854,7 @@ fn mint_public_instances<F: KagemushaPoseidonFieldV1>(
         || [
             request.finality_certificate_binding,
             request.finality_authority_head,
-            request.finality_genesis_roster_id,
+            request.finality_genesis_authorization_id,
             request.finality_proof_binding_digest,
         ]
         .contains(&[0; 32])
@@ -2876,7 +2876,7 @@ fn mint_public_instances<F: KagemushaPoseidonFieldV1>(
             certificate_binding: request.finality_certificate_binding,
             authority_head: request.finality_authority_head,
             release_id: request.statement.lifecycle.release_id,
-            genesis_roster_id: request.finality_genesis_roster_id,
+            genesis_authorization_id: request.finality_genesis_authorization_id,
             eq_protocol_digest: request.eq_protocol_digest,
             ep_protocol_digest: request.ep_protocol_digest,
             eq_deferred_audit: request.proof.eq_deferred_audit,
@@ -2895,7 +2895,7 @@ fn mint_public_instances_from_parts<F: KagemushaPoseidonFieldV1>(
     let certificate = digest_limbs::<F>(parts.certificate_binding);
     let authority = digest_limbs::<F>(parts.authority_head);
     let release = digest_limbs::<F>(parts.release_id);
-    let genesis = digest_limbs::<F>(parts.genesis_roster_id);
+    let genesis = digest_limbs::<F>(parts.genesis_authorization_id);
     let eq_protocol = digest_limbs::<F>(parts.eq_protocol_digest);
     let ep_protocol = digest_limbs::<F>(parts.ep_protocol_digest);
     let eq_audit = digest_limbs::<F>(parts.eq_deferred_audit);

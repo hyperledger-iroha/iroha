@@ -32,13 +32,13 @@ trait FieldShells {
     fn prepared_layout() -> Layout;
 }
 
-impl<K: Key, V: Value> FieldShells for Storage<K, V> {
+impl<K: Key, V: Value, M: WorldStorageMode<K, V>> FieldShells for Storage<K, V, M> {
     fn retained_layout() -> Layout {
-        Layout::new::<RetainedStorage<K, V>>()
+        Layout::new::<RetainedStorage<K, V, M>>()
     }
 
     fn prepared_layout() -> Layout {
-        publication::storage_shell_layout::<K, V>()
+        publication::storage_shell_layout::<K, V, M>()
     }
 }
 

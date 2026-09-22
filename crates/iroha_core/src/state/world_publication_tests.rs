@@ -63,7 +63,7 @@ fn all_images(world: &World) -> Vec<(&'static str, String)> {
 
 fn prepare<'a, A>(journal: DetachedWorld<A>, target: &'a World) -> PreparedWorld<'a, A, ()> {
     journal
-        .try_prepare_publication(target, |_, _| Ok::<_, ()>(()))
+        .try_prepare_publication(target, None, |_, _| Ok::<_, ()>(()))
         .unwrap_or_else(|(_, error, _)| panic!("World preparation refused: {error:?}"))
 }
 
@@ -86,7 +86,7 @@ fn prepare_field<'target>(
     Box<dyn PreparedWorldField + 'target>,
     (Box<dyn PreparedWorldField + 'target>, FieldRefusal),
 > {
-    let mut slot = original.publication_slot(target);
+    let mut slot = original.publication_slot(target, None);
     match slot.try_prepare() {
         Ok(()) => Ok(slot),
         Err(error) => Err((slot, error)),
@@ -120,7 +120,7 @@ fn complete_world_preparation_holds_every_inventory_writer_and_matches_direct_co
     mutate(&mut original, 2, "world_publish");
     mutate(&mut reference, 2, "world_publish");
     let prepared = prepare(capture(original), &world);
-    assert_eq!(probes.len(), 278);
+    assert_eq!(probes.len(), 282);
     // Probe each original field separately, so an early busy field cannot hide
     // a missing writer later in the heterogeneous World inventory.
     for probe in probes {
@@ -177,7 +177,7 @@ fn world_publication_retains_original_busy_notification_until_aggregate_unlock()
     mutate(&mut original, 19, "deferred_world_wake");
     let prepared = prepare(capture(original), &world);
     let (_, error, _cleanup) = competitor
-        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .try_prepare_publication(&world, None, |_, _| Ok::<_, ()>(()))
         .err()
         .unwrap();
     drop(_cleanup);
@@ -295,7 +295,7 @@ fn every_busy_world_field_releases_all_earlier_writers_and_retains_complete_retr
             ]
         };
     }
-    let holders: [(&str, for<'a> fn(&'a World) -> Box<dyn WriterHold + 'a>); 278] =
+    let holders: [(&str, for<'a> fn(&'a World) -> Box<dyn WriterHold + 'a>); 282] =
         with_world_overlay_fields!(holders);
     let world = fixture();
     let before = all_images(&world);
@@ -307,7 +307,7 @@ fn every_busy_world_field_releases_all_earlier_writers_and_retains_complete_retr
     for (name, hold) in holders {
         let held = hold(&world);
         let (retained, error, _cleanup) = journal
-            .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+            .try_prepare_publication(&world, None, |_, _| Ok::<_, ()>(()))
             .err()
             .expect("busy original field");
         drop(_cleanup);
@@ -356,7 +356,7 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
     let expected = journal.fields().collect::<Vec<_>>();
     let custody = physical_custody(&journal);
     let (journal, error, _cleanup) = journal
-        .try_prepare_publication(&world, |_, _| Err::<(), _>("capacity"))
+        .try_prepare_publication(&world, None, |_, _| Err::<(), _>("capacity"))
         .err()
         .expect("capacity refusal");
     drop(_cleanup);
@@ -378,12 +378,12 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
             ]
         };
     }
-    let invalidators: [(&str, fn(&World)); 278] = with_world_overlay_fields!(invalidators);
+    let invalidators: [(&str, fn(&World)); 282] = with_world_overlay_fields!(invalidators);
     let (name, invalidate) = invalidators.last().unwrap();
     assert_eq!(*name, last.name);
     let dropped = Arc::new(AtomicBool::new(false));
     let (journal, error, _cleanup) = journal
-        .try_prepare_publication(&world, |_, target| {
+        .try_prepare_publication(&world, None, |_, target| {
             invalidate(target);
             Ok::<_, ()>(Installation {
                 world: Arc::clone(&world),
@@ -397,7 +397,10 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
         panic!("exact changed field")
     };
     assert_eq!(refusal.field, last.name);
-    assert_eq!(refusal.cause, PublicationPreparationError::Changed);
+    assert!(matches!(
+        refusal.cause,
+        PublicationPreparationError::Changed
+    ));
     assert!(dropped.load(Ordering::SeqCst));
     assert_eq!(journal.fields().collect::<Vec<_>>(), expected);
     assert_eq!(physical_custody(&journal), custody);
@@ -423,7 +426,7 @@ fn world_publication_hands_original_extras_and_both_resource_guards_to_aggregate
             .try_detach_journals(|_| Ok::<_, ()>(Reservation(Arc::clone(&captured))))
             .unwrap();
         let prepared = journal
-            .try_prepare_publication(&world, |_, _| {
+            .try_prepare_publication(&world, None, |_, _| {
                 Ok::<_, ()>(Installation {
                     world: Arc::clone(&world),
                     dropped: Arc::clone(&installed),
@@ -501,6 +504,7 @@ impl RetainedWorldField for UnwindField {
     fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
+        scope: Option<&'target AllocationScope<'target>>,
     ) -> Box<dyn PreparedWorldField + 'target> {
         let Self {
             original,
@@ -508,7 +512,7 @@ impl RetainedWorldField for UnwindField {
             dropped,
         } = *self;
         Box::new(UnwindPreparedField {
-            original: original.publication_slot(target),
+            original: original.publication_slot(target, scope),
             boundary,
             dropped,
         })
@@ -579,7 +583,7 @@ fn world_publication_unwind_retains_both_admissions_until_original_fields_drop()
                 })
             })
             .unwrap();
-        assert_eq!(journal.field_count(), 278);
+        assert_eq!(journal.field_count(), 282);
         // A separate read-only capture holds exact original-cut probes for every
         // real field before any unwind can poison its physical writer.
         let probe = capture(world.block());
@@ -609,7 +613,7 @@ fn world_publication_unwind_retains_both_admissions_until_original_fields_drop()
         );
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let prepared = journal
-                .try_prepare_publication(&world, |_, _| {
+                .try_prepare_publication(&world, None, |_, _| {
                     Ok::<_, ()>(UnwindAdmission {
                         field_dropped: Arc::clone(&field_dropped),
                         refund_order: Arc::clone(&installation_refund),
@@ -657,9 +661,8 @@ fn world_publication_unwind_retains_both_admissions_until_original_fields_drop()
                         poisoned,
                         "{boundary:?}: untouched/released {name} must remain usable"
                     );
-                    assert_eq!(
-                        error.cause,
-                        PublicationPreparationError::Poisoned,
+                    assert!(
+                        matches!(error.cause, PublicationPreparationError::Poisoned),
                         "{boundary:?}: {name} must be poisoned, not busy or changed"
                     );
                     drop(original);
@@ -724,7 +727,7 @@ fn world_abort_retains_all_original_boxes_and_notifications_until_aggregate_unlo
     mutate(&mut original, 19, "deferred_world_wake");
     let prepared = prepare(capture(original), &world);
     let (_, error, _cleanup) = competitor
-        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .try_prepare_publication(&world, None, |_, _| Ok::<_, ()>(()))
         .err()
         .unwrap();
     drop(_cleanup);
@@ -803,6 +806,7 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
         fn publication_slot<'target>(
             self: Box<Self>,
             target: &'target World,
+            scope: Option<&'target AllocationScope<'target>>,
         ) -> Box<dyn PreparedWorldField + 'target> {
             let Self {
                 original,
@@ -811,7 +815,7 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
                 callback,
             } = *self;
             Box::new(PreparedObservePrefix {
-                original: original.publication_slot(target),
+                original: original.publication_slot(target, scope),
                 journal: Some(journal),
                 future,
                 callback,
@@ -830,7 +834,7 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
         fn try_prepare(&mut self) -> Result<(), FieldRefusal> {
             let journal = self.journal.take().expect("one original prefix probe");
             let (_, error, cleanup) = journal
-                .try_prepare_publication(self.target, |_, _| Ok::<_, ()>(()))
+                .try_prepare_publication(self.target, None, |_, _| Ok::<_, ()>(()))
                 .err()
                 .expect("earlier original field is held");
             drop(cleanup);
@@ -898,7 +902,7 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
     let outer = fence.lock().unwrap();
     let blocked = world.smart_contract_state.block();
     let (journal, error, cleanup) = journal
-        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .try_prepare_publication(&world, None, |_, _| Ok::<_, ()>(()))
         .err()
         .expect("late field refuses the complete original World");
     let WorldPublicationError::Field(refusal) = error else {

@@ -27,15 +27,6 @@ pub(super) struct LocalInputs {
     public_inputs: PathBuf,
     #[arg(long, value_name = "PATH")]
     runtime_client_config: PathBuf,
-    /// Separate native maintenance owner; authenticated genesis must register and grant it.
-    #[arg(long, value_name = "PATH")]
-    maintenance_admin_config: PathBuf,
-    /// Original held seed files, in the exact signed sorted validator mapping.
-    #[arg(long, value_name = "PATH", num_args = 4)]
-    epoch_seed_sources: Vec<PathBuf>,
-    /// Closed public single-service plan including explicit until-stopped policy and exact bytes.
-    #[arg(long, value_name = "PATH")]
-    epoch_supervisor_plan: PathBuf,
     #[arg(long, value_name = "PATH", num_args = 4)]
     validator_client_config: Vec<PathBuf>,
     #[arg(long, value_name = "PATH")]
@@ -239,11 +230,7 @@ fn derive_inventory_from_intent(
         &inputs.beacon_validator_unit,
         &context.public_inputs.genesis_public_key,
     )?;
-    let (supervisor, _) = read_json::<host::epoch_supervisor::EpochSupervisorPlanV1>(
-        &inputs.epoch_supervisor_plan,
-        "epoch supervisor plan",
-    )?;
-    let mut inventory = context.build_inventory(beacon, supervisor)?;
+    let mut inventory = context.build_inventory(beacon)?;
     // Retain the existing signed-genesis/nonce/seat rederivation gate, not merely plan decoding.
     host::beacon::derive_plan(
         &mut inventory,
@@ -252,8 +239,6 @@ fn derive_inventory_from_intent(
         &inputs.beacon_validator_unit,
         &context.public_inputs.genesis_public_key,
     )?;
-    host::epoch_supervisor::validate_plan(&inventory)?;
-    validate_original_epoch_seed_sources(&inventory, inputs)?;
     let operator_key =
         host::pin_validator_operator_key(&inputs.validator_operator_key, &inventory)?;
     validate_inventory(&inventory)?;
@@ -310,108 +295,6 @@ fn validate_validator_pin_fee_asset(
     Ok(())
 }
 
-/// Admit separate administrator material only through native pinned config custody.
-/// Public genesis permission evidence is a prerequisite, not a substitute for the
-/// supervisor worker's fresh effective-permission check before every dispatch.
-/// Pin original seeds by custody and identity only. Public artifacts never contain seed digests.
-fn validate_original_epoch_seed_sources(
-    inventory: &InventoryV1,
-    inputs: &LocalInputs,
-) -> Result<()> {
-    let sources = &inventory.epoch_supervisor.original_seed_sources;
-    if inputs.epoch_seed_sources.len() != 4 || sources.len() != 4 {
-        return Err(eyre!(
-            "epoch supervisor requires four explicitly mapped original seed files"
-        ));
-    }
-    let mut paths = BTreeSet::new();
-    #[cfg(unix)]
-    let mut inodes = BTreeSet::new();
-    for (path, source) in inputs.epoch_seed_sources.iter().zip(sources) {
-        if path != Path::new(&source.path) || !paths.insert(path) {
-            return Err(eyre!(
-                "original epoch seed path differs from the signed public mapping"
-            ));
-        }
-        let input = pin_owner_private_file(path, "original epoch seed")?;
-        if input.snapshot.len != 32 || path.canonicalize()? != *path {
-            return Err(eyre!(
-                "original epoch seed must be a canonical direct 32-byte private file"
-            ));
-        }
-        #[cfg(unix)]
-        if input.snapshot.mode & 0o7777 != 0o600
-            || !inodes.insert((input.snapshot.dev, input.snapshot.ino))
-        {
-            return Err(eyre!(
-                "original epoch seeds require distinct owner0600 files"
-            ));
-        }
-        revalidate_pinned(&input, "original epoch seed")?;
-    }
-    Ok(())
-}
-
-fn validate_genesis_maintenance_grant(
-    manifest: &iroha_genesis::RawGenesisTransaction,
-    account: &AccountId,
-) -> Result<()> {
-    validate_maintenance_grant_instructions(manifest.instructions(), account)
-}
-
-pub(super) fn validate_maintenance_grant_instructions<'a, I>(
-    instructions: I,
-    account: &AccountId,
-) -> Result<()>
-where
-    I: IntoIterator<Item = &'a iroha_data_model::isi::InstructionBox>,
-{
-    use iroha_data_model::{
-        Identifiable as _,
-        isi::{GrantBox, RegisterBox, RevokeBox, UnregisterBox},
-    };
-    let mut registered = false;
-    let mut granted = false;
-    for instruction in instructions {
-        if let Some(RegisterBox::Account(register)) =
-            instruction.as_any().downcast_ref::<RegisterBox>()
-        {
-            if register.object().id() == account {
-                registered = true;
-            }
-        }
-        if let Some(UnregisterBox::Account(unregister)) =
-            instruction.as_any().downcast_ref::<UnregisterBox>()
-        {
-            if unregister.object() == account {
-                registered = false;
-                granted = false;
-            }
-        }
-        if let Some(GrantBox::Permission(grant)) = instruction.as_any().downcast_ref::<GrantBox>() {
-            if grant.destination() == account
-                && grant.object().name() == "CanSetParameters"
-                && grant.object().payload().get() == "null"
-            {
-                granted = registered;
-            }
-        }
-        if let Some(RevokeBox::Permission(revoke)) =
-            instruction.as_any().downcast_ref::<RevokeBox>()
-        {
-            if revoke.destination() == account && revoke.object().name() == "CanSetParameters" {
-                granted = false;
-            }
-        }
-    }
-    if !registered || !granted {
-        return Err(eyre!(
-            "authenticated signed genesis must register the exact maintenance administrator and grant CanSetParameters"
-        ));
-    }
-    Ok(())
-}
-
 pub(super) fn validate_taira_genesis_mode(
     mode: iroha::data_model::parameter::system::SumeragiConsensusMode,
 ) -> Result<()> {
@@ -449,10 +332,6 @@ fn sign_inventory(
     }
     let claims = AuthorizationClaimsV1 {
         action: "reset_and_deploy".to_owned(),
-        epoch_supervisor_authorization: "until_stopped".to_owned(),
-        epoch_supervisor_policy_sha256: inventory.epoch_supervisor.policy_sha256.clone(),
-        maintenance_admin_config_sha256: inventory.maintenance_admin_config_sha256.clone(),
-        maintenance_admin_identity: inventory.maintenance_admin_identity.clone(),
         qualification_scope: inventory.qualification_scope,
         deployment_id: inventory.deployment_id.clone(),
         inventory_sha256: sha256_hex(bytes),

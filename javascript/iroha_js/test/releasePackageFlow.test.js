@@ -11,6 +11,7 @@ const provenanceScript = readFileSync(
 test("publish lifecycle builds dist before tests and verifies the immutable packed install", () => {
   const lifecycle = packageJson.scripts.prepublishOnly;
   const expectedOrder = [
+    "npm run check:node-engine",
     "npm run check:changelog",
     "npm run build:dist",
     "npm run lint:test",

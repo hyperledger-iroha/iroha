@@ -32,6 +32,34 @@ and the [Python producer](sorafs/python_consumer_producer_v1.md) with its
 [original-index verifier](sorafs/python_index_adapter_v1.md). The
 [September 22 checkpoint](../docs/history/2026-09-22/python-index-integration.md)
 records its source-observed component validation; it does not close F12 or SF11.
+The [JavaScript archive checkpoint](../docs/history/2026-09-22/javascript-original-archive-integration.md)
+adds bounded original npm/dependency ownership and records its component checks;
+the installed JavaScript producer, original-index adapter and qualification remain open.
+The [package/assertion checkpoint](../docs/history/2026-09-22/javascript-package-and-assertion-integration.md)
+adds exact package/source projection, shared assertions and native cache
+observation with 1,756 scoped controls; it does not qualify installed execution.
+The [runtime-floor checkpoint](../docs/history/2026-09-22/javascript-node-floor-integration.md)
+adds the shared Node minimum, privacy build ordering and repeatable local packing;
+1,910 integrated controls pass while native and release qualification stay open.
+The [Cargo/bundle checkpoint](../docs/history/2026-09-22/cargo-graph-and-javascript-bundle-integration.md)
+reconciles the committed dependency pin and brings measured bundles within
+unchanged ceilings; native, full source-seal and release qualification stay open.
+The [test-event checkpoint](../docs/history/2026-09-22/javascript-test-event-integration.md)
+adds the bounded fixed Node 24 case observer and CI wiring with 1,469 component
+controls; actual installed source/runtime/native custody and execution remain required.
+The [installed/snapshot checkpoint](../docs/history/2026-09-22/javascript-installed-and-snapshot-integration.md)
+adds exact npm installed content, retained tree/native snapshot checks and the
+shared directory-opener repair; 2,220 integrated controls pass while actual
+installed execution, remaining publication cleanup and release authority stay open.
+The [source/publication checkpoint](../docs/history/2026-09-22/javascript-source-and-publication-cleanup.md)
+integrates the fixed qualification core and reviewed transaction cleanup with
+2,069 affected controls. Same-process native execution, concurrent pathname
+rollback, State admission/cutover and candidate release authority remain open.
+The [fixed-child checkpoint](../docs/history/2026-09-22/javascript-fixed-child-integration.md)
+integrates the same-session Node child and dependency-ordered CI controls;
+1,764 component/static checks pass. Actual native execution and parent/index
+authority remain open; the pending State cutover requires a reader-notification
+fence correction before integration.
 
 The component ledgers remain the detailed acceptance authorities:
 [privacy](privacy_first_release_closure.md),

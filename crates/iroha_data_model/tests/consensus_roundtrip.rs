@@ -19,8 +19,10 @@ use iroha_data_model::{
         },
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
-        KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalityGenesisParametersV1,
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+        KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
 };
@@ -50,15 +52,15 @@ fn sample_block_hash(seed: u8) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(sample_hash(seed))
 }
 
-fn mint_finality_roster(
+fn mint_finality_authority(
     network_id: NetworkId,
-    epoch: u64,
+    generation: u64,
     roster: &[ValidatorPower],
-) -> KagemushaMintFinalityEpochRosterV1 {
-    KagemushaMintFinalityEpochRosterV1 {
+) -> KagemushaMintFinalityAuthorityGenerationV1 {
+    KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch,
+        generation,
         validators: roster
             .iter()
             .enumerate()
@@ -247,20 +249,40 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
         })
         .collect::<Vec<_>>();
     roster.sort();
-    let height = rng.next_u64().max(1);
+    let height = rng.next_u64().max(2);
     let network_id = NetworkId::from_genesis_hash(rng_block_hash(rng));
-    let epoch = rng.next_u64();
-    let mint_finality_roster = mint_finality_roster(network_id, epoch, &roster);
-    let mint_finality_epoch_id = mint_finality_roster
-        .finality_epoch_id()
-        .expect("valid fixture mint-finality roster");
+    let epoch = rng.next_u64().max(1);
+    let authority = mint_finality_authority(network_id, 0, &roster);
+    // This randomized codec fixture carries a shape-valid retained schedule; it
+    // does not attempt to synthesize an arbitrary-length certified history.
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        epoch,
+        first_height: 2,
+        last_height: height,
+        authority_generation: authority.generation,
+        authority_id: authority
+            .authority_id()
+            .expect("valid randomized authority"),
+        beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+            session_id: [7; 32],
+            transcript_hash: [8; 32],
+        }),
+        previous_authorization_id: [0x33; 32],
+        transition_id: [0; 32],
+        decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+    };
+    authorization
+        .validate_against_authority(&authority)
+        .expect("shape-valid codec schedule");
     let context = HeightContext {
         network_id,
         protocol_version: V2_PROTOCOL_VERSION,
         height,
         epoch,
-        kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+        kagemusha_mint_finality_authorization: authorization,
+        kagemusha_mint_finality_authority: authority,
         epoch_end_height: height,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,
@@ -424,23 +446,25 @@ fn kagemusha_mint_finality_genesis_parameters_norito_roundtrip() {
         })
         .collect::<Vec<_>>();
     roster.sort();
-    let template = |epoch| {
-        let roster = mint_finality_roster(network_id, epoch, &roster);
-        KagemushaMintFinalityEpochRosterTemplateV1 {
-            version: roster.version,
-            epoch: roster.epoch,
-            validators: roster.validators,
-        }
-    };
+    let authority = mint_finality_authority(network_id, 0, &roster);
     let parameters = KagemushaMintFinalityGenesisParametersV1 {
-        epoch_roster: template(0),
-        next_epoch_roster: Some(template(1)),
+        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
+            version: authority.version,
+            generation: authority.generation,
+            validators: authority.validators,
+        },
     };
     parameters.validate().expect("valid genesis authority");
     assert_roundtrip(&parameters);
+    let mut non_genesis = parameters.clone();
+    non_genesis.authority_generation.generation = 1;
+    assert!(
+        non_genesis.validate().is_err(),
+        "genesis cannot install a relabeled successor generation"
+    );
     assert_eq!(
         parameters
-            .epoch_roster
+            .authority_generation
             .bind_network_id(network_id)
             .expect("bind final network identity")
             .network_id,

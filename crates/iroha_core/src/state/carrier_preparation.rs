@@ -29,6 +29,8 @@ mod execution_prefix;
 )]
 mod journals;
 pub(super) mod queue_retirement;
+#[cfg(test)]
+pub(crate) use journals::PublishedCarrier;
 pub(crate) use journals::PublishedNativeApply;
 pub(crate) use journals::RetainedCarrier;
 

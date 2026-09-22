@@ -2384,7 +2384,7 @@ fn make_network_builder_with_sorafs(
                 );
         });
     }
-    if config.nexus.is_some() {
+    if let Some(profile) = config.nexus.as_ref() {
         builder = builder.without_npos_genesis_bootstrap();
         for transaction in nexus_bootstrap_post_topology {
             builder = builder.with_genesis_post_topology_isi(transaction);
@@ -2392,12 +2392,10 @@ fn make_network_builder_with_sorafs(
         builder =
             builder.with_genesis_post_topology_isi(instructions::npos_post_topology_instructions(
                 config.peer_count,
-                config
-                    .nexus
-                    .as_ref()
-                    .map(|profile| profile.bootstrap_public_lanes.as_slice())
-                    .unwrap_or(&[]),
+                profile.bootstrap_public_lanes.as_slice(),
                 npos_params.min_self_bond(),
+                &profile.stake_asset_id,
+                &instructions::nexus_gas_account_id()?,
             )?);
     }
     if let Ok(filter) = std::env::var("RUST_LOG") {
@@ -7744,6 +7742,20 @@ mod tests {
             }
         }
     }
+    fn synthetic_npos_preflight_assets() -> (AssetDefinitionId, AccountId) {
+        let definition = AssetDefinitionId::derive_from_components(
+            iroha_model_base::domain::DomainId::try_new("preflight", "universal")
+                .expect("fixture domain"),
+            "stake".parse().expect("fixture asset name"),
+        );
+        let custody = AccountId::new(
+            KeyPair::try_from_seed(vec![0x51; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("checked preflight custody key")
+                .public_key()
+                .clone(),
+        );
+        (definition, custody)
+    }
     fn synthetic_npos_preflight_instructions(
         peer_count: usize,
         bootstrap_public_lanes: &[LaneId],
@@ -7752,6 +7764,9 @@ mod tests {
         stake_values: &[Quantity],
     ) -> Vec<InstructionBox> {
         let mut instructions = Vec::new();
+        // These instructions are inspected structurally, not executed against a node.
+        // Author custody explicitly so every negative isolates its stated preflight failure.
+        let (stake_asset, custody) = synthetic_npos_preflight_assets();
         let fallback_stake = SumeragiNposParameters::default().min_self_bond().clone();
         for idx in 0..peer_count {
             let key_pair = checked_izanami_ed25519_key_fixture();
@@ -7776,6 +7791,11 @@ mod tests {
                             stake_account: validator.clone(),
                             initial_stake: stake.clone(),
                             metadata: Metadata::default(),
+                            monetary_plan: iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(stake_asset.clone(), validator.clone()),
+                                AssetId::new(stake_asset.clone(), custody.clone()),
+                                stake.clone(),
+                            ),
                         }),
                     ),
                 );
@@ -8099,6 +8119,44 @@ mod tests {
             );
         }
         Ok(())
+    }
+    #[test]
+    fn synthetic_npos_preflight_has_complete_genesis_transfers() {
+        init_instruction_registry();
+        let amount = SumeragiNposParameters::default().min_self_bond().clone();
+        let instructions = synthetic_npos_preflight_instructions(
+            4,
+            &[LaneId::SINGLE, LaneId::new(3)],
+            true,
+            true,
+            &vec![amount.clone(); 4],
+        );
+        let summary = audit_npos_preflight_instructions(
+            instructions.iter(),
+            4,
+            &[LaneId::SINGLE, LaneId::new(3)],
+            &amount,
+        )
+        .expect("complete synthetic fixture passes its structural preflight");
+        assert_eq!(summary.register_validator_count, 8);
+        let (definition, custody) = synthetic_npos_preflight_assets();
+        for registration in instructions.iter().filter_map(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+        }) {
+            assert_ne!(registration.validator, custody);
+            assert_eq!(registration.stake_account, registration.validator);
+            assert_eq!(
+                registration.monetary_plan,
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(definition.clone(), registration.stake_account.clone()),
+                    AssetId::new(definition.clone(), custody.clone()),
+                    registration.initial_stake.clone(),
+                )
+            );
+            assert!(registration.monetary_plan.has_canonical_shape());
+        }
     }
     #[test]
     fn npos_preflight_audit_fails_on_missing_activation() {

@@ -583,8 +583,10 @@ fn persist_merge_carrier_finality_chain_for_state_test(
             "fixture finality must form one contiguous chain",
         );
         let network_id = *state.network_id_ref();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                network_id, 0, 1, 100, &roster,
+            );
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -597,8 +599,8 @@ fn persist_merge_carrier_finality_chain_for_state_test(
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid finality quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"state merge finality nexus context"),
             execution_policy_hash: Hash::new(b"state merge finality execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -746,8 +748,12 @@ fn autonomous_merge_commit_authorization_fixture(
 fn autonomous_transfer_evidence_fixture(
     mode: QueuePlanTransferFixture,
 ) -> (State, MergeLedgerEntry, SignedBlock) {
-    let UnpersistedAutonomousMergeFixture { state, entry, carrier, .. } =
-        unpersisted_autonomous_merge_commit_fixture(false, false, Some(mode), false, None, false);
+    let UnpersistedAutonomousMergeFixture {
+        state,
+        entry,
+        carrier,
+        ..
+    } = unpersisted_autonomous_merge_commit_fixture(false, false, Some(mode), false, None, false);
     (state, entry, carrier)
 }
 #[derive(Clone, Copy)]
@@ -1332,7 +1338,8 @@ fn unpersisted_autonomous_merge_commit_fixture(
         0,
     );
     let batch = state
-        .build_merge_execution_batch_from_source_prefix(1, application_header, vec![source]).expect("fixture hash admission")
+        .build_merge_execution_batch_from_source_prefix(1, application_header, vec![source])
+        .expect("fixture hash admission")
         .expect("fixture source produces a canonical autonomous execution batch");
     if runtime_effect.is_some() {
         for lane in &batch.lanes {

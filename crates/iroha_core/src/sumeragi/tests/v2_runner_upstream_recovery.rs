@@ -82,11 +82,15 @@ fn initially_absent_configured_validator_claims_one_process_generation() {
     later_context.quorum = wire::DualQuorum::from_roster(&later_context.roster)
         .expect("rotated-in roster has a valid dual quorum");
     (
-        later_context.kagemusha_mint_finality_epoch_id,
-        later_context.kagemusha_mint_finality_epoch_roster,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        later_context.kagemusha_mint_finality_authorization,
+        later_context.kagemusha_mint_finality_authority,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
         later_context.network_id,
         later_context.epoch,
+        later_context
+            .kagemusha_mint_finality_authorization
+            .first_height,
+        later_context.epoch_end_height,
         &later_context.roster,
     );
     later_context

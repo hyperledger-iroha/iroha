@@ -69,7 +69,7 @@ fn validate_consensus_manifest(manifest: &RawGenesisTransaction) -> color_eyre::
         )
         .map_err(|error| eyre!("invalid KAGEMUSHA mint-finality public parameters: {error}"))?;
     } else {
-        super::ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+        super::ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
             manifest, &topology,
         )?;
     }

@@ -17,7 +17,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     label: "toriiClient.js",
     entryPoint: join(ROOT, "src", "toriiClient.js"),
     platform: "node",
-    target: "node18",
+    target: "node20.19",
     // The first-release simplification audit measured a 1,082,470-byte eager
     // closure before moving Norito-heavy validation, Kagemusha, SCCP, and route
     // governance behind the existing optional boundary. The reviewed eager path

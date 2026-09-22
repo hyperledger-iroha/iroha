@@ -78,8 +78,8 @@ use iroha_genesis::GenesisBlock;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_test_network::{
-    NetworkBuilder, NetworkPeer, ReleasePrebuiltBinary, genesis_factory_with_post_topology,
-    init_instruction_registry, resolve_release_prebuilt_binary,
+    NetworkBuilder, NetworkPeer, ReleasePrebuiltBinary, init_instruction_registry,
+    resolve_release_prebuilt_binary, unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
 use sha2::{Digest as _, Sha256};
@@ -119,6 +119,18 @@ fn validator_keypair(index: usize) -> KeyPair {
     .expect("derive deterministic retained-BPNG-lane validator signer")
 }
 
+fn staking_custody_account() -> AccountId {
+    AccountId::new(
+        KeyPair::try_from_seed(
+            format!("{NETWORK_SEED}-staking-custody").into_bytes(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive fixture custody identity")
+        .public_key()
+        .clone(),
+    )
+}
+
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
@@ -138,6 +150,7 @@ fn custom_genesis_post_topology(topology: &[PeerId]) -> Vec<Vec<InstructionBox>>
         .checked_add(&stake)
         .expect("two validator self-stakes must be representable");
     let mut bootstrap = vec![
+        Register::account(Account::new(staking_custody_account())).into(),
         Register::domain(Domain::new(
             DomainId::try_new("nexus", "universal").expect("nexus domain"),
         ))
@@ -170,11 +183,35 @@ fn custom_genesis_post_topology(topology: &[PeerId]) -> Vec<Vec<InstructionBox>>
                 validator.clone(),
                 stake.clone(),
                 Metadata::default(),
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), validator.clone()),
+                    AssetId::new(stake_asset_id.clone(), staking_custody_account()),
+                    stake.clone(),
+                ),
             )
             .into(),
         );
         default_lane_validators
             .push(ActivatePublicLaneValidator::new(LaneId::SINGLE, validator).into());
+    }
+    for instruction in &default_lane_validators {
+        if let Some(registration) = instruction
+            .as_any()
+            .downcast_ref::<RegisterPublicLaneValidator>()
+        {
+            assert_eq!(
+                registration.monetary_plan,
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(
+                        stake_asset_definition_id(),
+                        registration.stake_account.clone()
+                    ),
+                    AssetId::new(stake_asset_definition_id(), staking_custody_account()),
+                    registration.initial_stake.clone(),
+                ),
+                "fixture registration must agree with its explicitly authored staking config"
+            );
+        }
     }
     vec![bootstrap, default_lane_validators]
 }
@@ -2080,7 +2117,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .with_npos_consensus()
         .without_npos_genesis_bootstrap()
         .with_genesis_block(|topology, topology_entries| {
-            genesis_factory_with_post_topology(
+            unexecuted_genesis_factory_with_post_topology(
                 Vec::new(),
                 custom_genesis_post_topology(topology.as_ref()),
                 topology,
@@ -2095,6 +2132,18 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
             // Fees are fixed in the original network and retained on restart.
             // Keep one fluent borrow of the configuration writer.
             layer
+                .write(
+                    ["nexus", "staking", "stake_asset_id"],
+                    stake_asset_definition_id().to_string(),
+                )
+                .write(
+                    ["nexus", "staking", "stake_escrow_account_id"],
+                    staking_custody_account().to_string(),
+                )
+                .write(
+                    ["nexus", "staking", "slash_sink_account_id"],
+                    staking_custody_account().to_string(),
+                )
                 .write(["snapshot", "mode"], "disabled")
                 .write(["kura", "init_mode"], "strict")
                 .write(

@@ -2,6 +2,8 @@
 //!
 //! Capacity preparation carries no witness authority. The consuming move validates the original
 //! owner, retires Lagrange snapshots, and preserves its actual plan/challenges/context/cursor.
+#[path = "retirement/blind.rs"]
+mod blind;
 #[path = "retirement/quotient.rs"]
 mod quotient;
 

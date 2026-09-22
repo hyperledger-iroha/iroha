@@ -20612,6 +20612,23 @@ fn torii_authorize_signed_query_routes(
             }
         }
         SignedQueryScope::TargetAccount(target) => {
+            let state_view = app.state.view();
+            let exact_account_permission: Permission =
+                iroha_executor_data_model::permission::query::CanReadAccountData {
+                    account: target.clone(),
+                }
+                .into();
+            if torii_account_has_permission(
+                state_view.world(),
+                authority,
+                &exact_account_permission,
+            ) {
+                // The signed query's exact target is already classified above.
+                // Honor its account-scoped read grant across that account's
+                // routes without granting any broader dataspace or alias read.
+                // The native executor still validates the exact query itself.
+                return Ok(routes);
+            }
             let readable_routes = if torii_same_account_read_identity(app, authority, target) {
                 torii_visible_account_read_routes(app, Some(authority))
             } else {

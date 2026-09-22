@@ -316,6 +316,11 @@ fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Instructio
                     validator_id.clone(),
                     Quantity::from(VALIDATOR_STAKE),
                     Metadata::default(),
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                        AssetId::new(stake_asset_id.clone(), gas_account()),
+                        Quantity::from(VALIDATOR_STAKE),
+                    ),
                 )
                 .into(),
             );

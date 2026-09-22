@@ -34,7 +34,7 @@ use iroha_data_model::{
     block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT,
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1,
-        KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalitySealBundleV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalitySealBundleV1,
         KagemushaPastaSchnorrSignatureV1, KagemushaTopUpMembershipWitnessV1,
         kagemusha_mint_finality_peer_id_digest_v1, kagemusha_mint_finality_root_v1,
     },
@@ -57,12 +57,15 @@ use crate::zk::{
     pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256ConfigV1, PastaSha256JobsV1},
 };
 
+mod epoch_authorization;
+use epoch_authorization::{constrain_authorization_successor, constrain_epoch_authorization};
+
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
 const MINT_ROOT_BRIDGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality-root";
 const MINT_SEAL_MESSAGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality-seal-message";
 const MINT_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality:challenge";
-const MINT_FINALITY_EPOCH_ROSTER_DOMAIN_V1: &[u8] =
-    b"iroha:kagemusha:v1:mint-finality-epoch-roster";
+const MINT_FINALITY_AUTHORITY_GENERATION_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:mint-finality-authority-generation";
 const MINT_CERTIFICATE_BINDING_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-certificate-binding";
 const EQ_PARITY_TAG: u8 = 0;
 const EP_PARITY_TAG: u8 = 1;
@@ -78,9 +81,9 @@ const EP_PARITY_TAG: u8 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(u64)]
 pub enum KagemushaMintAuthorityStepV1 {
-    /// Pin the release-authenticated genesis roster without accepting a quorum assertion.
+    /// Pin the release-authenticated genesis authorization without accepting a quorum assertion.
     Bootstrap = 0,
-    /// Let the current roster's exact quorum authorize the next roster identifier.
+    /// Let the current quorum certify the next epoch authorization, including retention.
     Rotate = 1,
     /// Prove one reserve receipt under the recursively authenticated current roster.
     FinalizedMint = 2,
@@ -99,12 +102,33 @@ pub struct KagemushaMintCertificateWitnessV1 {
     pub membership: KagemushaTopUpMembershipWitnessV1,
     /// Exact current-epoch `2f + 1` paired Pasta seal bundle.
     pub seal_bundle: KagemushaMintFinalitySealBundleV1,
-    /// Complete dynamic epoch roster.  The recursive relation must authenticate its derived state
+    /// Complete immutable key generation. The recursive relation must authenticate its derived state
     /// digest; it is not trusted merely because it is present here.
-    pub epoch_roster: KagemushaMintFinalityEpochRosterV1,
+    pub authority_generation: KagemushaMintFinalityAuthorityGenerationV1,
 }
 
 impl KagemushaMintCertificateWitnessV1 {
+    /// Return the scheduling authorization authenticated by this recursive step.
+    pub(super) fn authorization_head_for_step(
+        &self,
+        step: KagemushaMintAuthorityStepV1,
+    ) -> Result<DigestV1, String> {
+        self.validate_for_step(step)?;
+        let message = &self.seal_bundle.message;
+        let authorization = match step {
+            KagemushaMintAuthorityStepV1::Rotate => {
+                message.next_epoch_authorization.as_ref().ok_or_else(|| {
+                    "mint-authority transition lacks its next authorization".to_owned()
+                })?
+            }
+            KagemushaMintAuthorityStepV1::Bootstrap
+            | KagemushaMintAuthorityStepV1::FinalizedMint => &message.epoch_authorization,
+        };
+        authorization
+            .authorization_id()
+            .map_err(|error| error.to_string())
+    }
+
     /// Validate all non-authoritative shape and semantic bindings before circuit construction.
     ///
     /// Signature equations and roster authority are intentionally not reduced to this native
@@ -133,8 +157,8 @@ impl KagemushaMintCertificateWitnessV1 {
             .signing_digest()
             .map_err(|error| error.to_string())?;
         let roster = self
-            .epoch_roster
-            .finality_epoch_id()
+            .authority_generation
+            .authority_id()
             .map_err(|error| error.to_string())?;
         let mut hasher = Sha256::new();
         hasher.update(MINT_CERTIFICATE_BINDING_DOMAIN_V1);
@@ -154,7 +178,7 @@ impl KagemushaMintCertificateWitnessV1 {
         self.statement
             .validate_shape()
             .map_err(|error| format!("invalid mint statement: {error}"))?;
-        self.epoch_roster
+        self.authority_generation
             .validate()
             .map_err(|error| format!("invalid mint-finality roster: {error}"))?;
         self.seal_bundle
@@ -175,8 +199,12 @@ impl KagemushaMintCertificateWitnessV1 {
             self.seal_bundle
                 .validate()
                 .map_err(|error| format!("invalid mint-finality seal bundle: {error}"))?;
-        } else if !self.seal_bundle.seals.is_empty() {
-            return Err("mint-authority bootstrap must not carry validator seals".into());
+        } else if !self.seal_bundle.seals.is_empty()
+            || self.seal_bundle.message.epoch_authorization.decision
+                != iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis
+            || self.seal_bundle.message.next_epoch_authorization.is_some()
+        {
+            return Err("mint-authority bootstrap requires genesis without seals or a successor".into());
         }
         if step == KagemushaMintAuthorityStepV1::FinalizedMint {
             self.membership
@@ -188,27 +216,30 @@ impl KagemushaMintCertificateWitnessV1 {
             )
             .map_err(|error| error.to_string())?;
         } else if step == KagemushaMintAuthorityStepV1::Rotate
-            && self.seal_bundle.message.next_finality_epoch_id.is_none()
+            && self.seal_bundle.message.next_epoch_authorization.is_none()
         {
-            return Err("mint-authority rotation lacks the quorum-signed next roster".into());
+            return Err(
+                "mint-authority transition lacks the quorum-signed next authorization".into(),
+            );
         }
         let statement_digest = self
             .statement
             .canonical_digest()
             .map_err(|error| format!("failed to digest mint statement: {error}"))?;
-        let expected_epoch_id = self
-            .epoch_roster
-            .finality_epoch_id()
-            .map_err(|error| format!("failed to digest mint-finality roster: {error}"))?;
         let message = &self.seal_bundle.message;
+        message
+            .epoch_authorization
+            .validate_against_authority(&self.authority_generation)
+            .map_err(|error| {
+                format!("mint authority does not match certified scheduling authorization: {error}")
+            })?;
         if (step == KagemushaMintAuthorityStepV1::FinalizedMint
             && (self.membership.leaf.statement_digest != statement_digest
                 || self.membership.leaf.amount != self.statement.amount))
-            || self.statement.lifecycle.network_id != self.epoch_roster.network_id
-            || message.network_id != self.epoch_roster.network_id
-            || message.finality_epoch_id != expected_epoch_id
+            || self.statement.lifecycle.network_id != self.authority_generation.network_id
+            || message.network_id != self.authority_generation.network_id
             || usize::try_from(message.validator_count).ok()
-                != Some(self.epoch_roster.validators.len())
+                != Some(self.authority_generation.validators.len())
         {
             return Err(
                 "mint statement, receipt leaf, seal message, and epoch roster differ".into(),
@@ -220,7 +251,7 @@ impl KagemushaMintCertificateWitnessV1 {
 
 /// Cells produced by the reusable mint-certificate relation.
 ///
-/// `roster_state_digest` and `epoch` must be consumed by the stable recursive authority carrier.
+/// `authorization_state_digest` and `epoch` must be consumed by the stable recursive authority carrier.
 /// Exposing only `mint_instances` without that recursive check is not monetary authority.
 pub(super) struct KagemushaAssignedMintCertificateV1<F: KagemushaPoseidonFieldV1> {
     pub(super) step: AssignedValue<F>,
@@ -228,7 +259,7 @@ pub(super) struct KagemushaAssignedMintCertificateV1<F: KagemushaPoseidonFieldV1
     pub(super) rotate: AssignedValue<F>,
     pub(super) finalized_mint: AssignedValue<F>,
     pub(super) mint_instances: [AssignedValue<F>; 3],
-    pub(super) roster_state_digest: [AssignedValue<F>; 2],
+    pub(super) authorization_state_digest: [AssignedValue<F>; 2],
     pub(super) certificate_binding_digest: [AssignedValue<F>; 2],
     #[expect(
         dead_code,
@@ -240,7 +271,7 @@ pub(super) struct KagemushaAssignedMintCertificateV1<F: KagemushaPoseidonFieldV1
         reason = "Retain constrained roster cells for recursive authority composition"
     )]
     pub(super) next_epoch_present: AssignedValue<F>,
-    pub(super) next_epoch_id_digest: [AssignedValue<F>; 2],
+    pub(super) next_authorization_id_digest: [AssignedValue<F>; 2],
 }
 
 /// Circuit-side jobs emitted by one parity's mint-certificate component.
@@ -610,9 +641,10 @@ where
     gate.assert_is_const(ctx, &enabled_zero_count, &C::Base::ZERO);
     let index_lt_count = range.is_less_than(ctx, leaf_index, top_up_count, 32);
     let one = ctx.load_constant(C::Base::ONE);
+    let zero = ctx.load_constant(C::Base::ZERO);
     constrain_equal_if(ctx, gate, index_lt_count, one, finalized_mint);
 
-    let validator_count_value = witness.epoch_roster.validators.len();
+    let validator_count_value = witness.authority_generation.validators.len();
     let validator_count_u32 = u32::try_from(validator_count_value)
         .map_err(|_| "mint roster length does not fit u32".to_owned())?;
     let validator_count = assign_uint(ctx, &range, u128::from(validator_count_u32), 32);
@@ -631,56 +663,79 @@ where
     );
     ctx.constrain_equal(&three_f_plus_one, &validator_count);
 
-    let finality_epoch_id = assign_bytes(ctx, &range, &message.finality_epoch_id);
-    let network_id = assign_bytes(ctx, &range, witness.epoch_roster.network_id.as_bytes());
-    let epoch = assign_uint(ctx, &range, u128::from(witness.epoch_roster.epoch), 64);
+    let authorization = constrain_epoch_authorization(
+        ctx,
+        &range,
+        &mut sha,
+        Some(&message.epoch_authorization),
+        one,
+    )?;
+    constrain_equal_if(ctx, gate, authorization.genesis, one, bootstrap);
+    let authorization_state_digest = sha_digest_limbs(ctx, gate, &authorization.digest);
+    let epoch = authorization.epoch;
+    let network_id = assign_bytes(
+        ctx,
+        &range,
+        witness.authority_generation.network_id.as_bytes(),
+    );
+    for (actual, expected) in network_id.iter().zip(&authorization.network) {
+        let difference = gate.sub(ctx, actual.quantum_cell(), expected.quantum_cell());
+        gate.assert_is_const(ctx, &difference, &C::Base::ZERO);
+    }
+    let generation = assign_uint(
+        ctx,
+        &range,
+        u128::from(witness.authority_generation.generation),
+        64,
+    );
+    ctx.constrain_equal(&generation, &authorization.generation);
     let block_height = assign_uint(ctx, &range, u128::from(message.block_height), 64);
-    assert_nonzero(ctx, gate, block_height);
+    let before_epoch = range.is_less_than(ctx, block_height, authorization.first_height, 64);
+    let after_epoch = range.is_less_than(ctx, authorization.last_height, block_height, 64);
+    gate.assert_is_const(ctx, &before_epoch, &C::Base::ZERO);
+    gate.assert_is_const(ctx, &after_epoch, &C::Base::ZERO);
     let context_id = assign_bytes(ctx, &range, message.height_context_id.0.as_ref());
     let subject_digest = assign_bytes(ctx, &range, &message.subject_digest);
     let execution_digest = assign_bytes(ctx, &range, &message.execution_commitment_digest);
-    let (next_epoch_present_value, next_epoch_id_value) = match message.next_finality_epoch_id {
-        Some(next_epoch_id) => (true, next_epoch_id),
-        None => (false, [0; 32]),
-    };
-    let next_epoch_present = ctx.load_witness(C::Base::from(u64::from(next_epoch_present_value)));
+    let next_epoch_present = ctx.load_witness(C::Base::from(u64::from(
+        message.next_epoch_authorization.is_some(),
+    )));
     gate.assert_bit(ctx, next_epoch_present);
+    constrain_equal_if(ctx, gate, next_epoch_present, zero, bootstrap);
     let next_epoch_present_byte = PastaSha256ByteV1::range_checked(ctx, &range, next_epoch_present);
-    let next_epoch_id = assign_bytes(ctx, &range, &next_epoch_id_value);
-    let next_epoch_absent = gate.not(ctx, next_epoch_present);
-    for byte in &next_epoch_id {
-        let absent_byte = gate.mul(ctx, byte.quantum_cell(), Existing(next_epoch_absent));
-        gate.assert_is_const(ctx, &absent_byte, &C::Base::ZERO);
-    }
-    let next_epoch_sum = next_epoch_id
-        .iter()
-        .copied()
-        .fold(ctx.load_zero(), |sum, byte| {
-            gate.add(ctx, Existing(sum), byte.quantum_cell())
-        });
-    let next_epoch_is_zero = gate.is_zero(ctx, next_epoch_sum);
-    let present_zero = gate.mul(
+    let next_authorization = constrain_epoch_authorization(
         ctx,
-        Existing(next_epoch_present),
-        Existing(next_epoch_is_zero),
+        &range,
+        &mut sha,
+        message.next_epoch_authorization.as_ref(),
+        next_epoch_present,
+    )?;
+    constrain_authorization_successor(
+        ctx,
+        &range,
+        &authorization,
+        &next_authorization,
+        next_epoch_present,
     );
-    gate.assert_is_const(ctx, &present_zero, &C::Base::ZERO);
-    constrain_equal_if(ctx, gate, next_epoch_present, one, rotate);
-    let next_epoch_id_digest = sha_digest_limbs(
+    constrain_equal_if(
         ctx,
         gate,
-        &next_epoch_id
+        block_height,
+        authorization.last_height,
+        next_epoch_present,
+    );
+    constrain_equal_if(ctx, gate, next_epoch_present, one, rotate);
+    let next_authorization_id =
+        mask_sha_bytes(ctx, &range, &next_authorization.digest, next_epoch_present);
+    let next_authorization_id_digest = sha_digest_limbs(
+        ctx,
+        gate,
+        &next_authorization_id
             .clone()
             .try_into()
-            .expect("next mint-finality epoch ID width"),
+            .expect("authorization identity width"),
     );
-    for bytes in [
-        &finality_epoch_id,
-        &network_id,
-        &context_id,
-        &subject_digest,
-        &execution_digest,
-    ] {
+    for bytes in [&network_id, &context_id, &subject_digest, &execution_digest] {
         assert_bytes_nonzero(ctx, gate, bytes);
     }
     let validator_count_bytes = uint_bytes_le(ctx, gate, validator_count, 32);
@@ -693,7 +748,7 @@ where
             constant_bytes(MINT_SEAL_MESSAGE_DOMAIN_V1),
             vec![PastaSha256ByteV1::constant(0)],
             constant_bytes(&KAGEMUSHA_CHAIN_VERSION_V1.to_le_bytes()),
-            finality_epoch_id.clone(),
+            authorization.digest.to_vec(),
             validator_count_bytes,
             network_id.clone(),
             block_height_bytes,
@@ -703,17 +758,16 @@ where
             marked_root.to_vec(),
             top_up_count_bytes,
             vec![next_epoch_present_byte],
-            next_epoch_id,
+            next_authorization_id,
         ]
         .concat(),
     )?;
-
     let mut roster_preimage = [
-        constant_bytes(MINT_FINALITY_EPOCH_ROSTER_DOMAIN_V1),
+        constant_bytes(MINT_FINALITY_AUTHORITY_GENERATION_DOMAIN_V1),
         vec![PastaSha256ByteV1::constant(0)],
         constant_bytes(&KAGEMUSHA_CHAIN_VERSION_V1.to_le_bytes()),
         network_id,
-        uint_bytes_le(ctx, gate, epoch, 64),
+        uint_bytes_le(ctx, gate, generation, 64),
         uint_bytes_le(ctx, gate, validator_count, 32),
     ]
     .concat();
@@ -756,7 +810,7 @@ where
         previous_active = active;
 
         let (peer_digest, current_key_bytes, reciprocal_key_bytes) = if active_value {
-            let keys = &witness.epoch_roster.validators[slot];
+            let keys = &witness.authority_generation.validators[slot];
             let peer_digest = kagemusha_mint_finality_peer_id_digest_v1(&keys.validator)
                 .map_err(|error| error.to_string())?;
             if C::Base::IS_EQ_PARITY {
@@ -894,13 +948,12 @@ where
     );
     constrain_equal_if(ctx, gate, signer_sum, expected_quorum, seal_enabled);
     let roster_digest = sha_digest(ctx, &mut sha, roster_preimage)?;
-    for (actual, expected) in roster_digest.iter().zip(&finality_epoch_id) {
+    for (actual, expected) in roster_digest.iter().zip(&authorization.authority_id) {
         ctx.constrain_equal(
             &actual.assigned().expect("roster digest byte is assigned"),
             &expected.assigned().expect("epoch ID byte is assigned"),
         );
     }
-    let roster_state_digest = sha_digest_limbs(ctx, gate, &roster_digest);
     let certificate_binding = sha_digest(
         ctx,
         &mut sha,
@@ -924,11 +977,11 @@ where
             rotate,
             finalized_mint,
             mint_instances,
-            roster_state_digest,
+            authorization_state_digest,
             certificate_binding_digest,
             epoch,
             next_epoch_present,
-            next_epoch_id_digest,
+            next_authorization_id_digest,
         },
         KagemushaMintCertificateJobsV1 { sha, dense },
     ))
@@ -1301,7 +1354,12 @@ where
     signing.extend_from_slice(MINT_SEAL_MESSAGE_DOMAIN_V1);
     signing.push(0);
     signing.extend_from_slice(&KAGEMUSHA_CHAIN_VERSION_V1.to_le_bytes());
-    signing.extend_from_slice(&message.finality_epoch_id);
+    signing.extend_from_slice(
+        &message
+            .epoch_authorization
+            .authorization_id()
+            .map_err(|error| error.to_string())?,
+    );
     signing.extend_from_slice(&message.validator_count.to_le_bytes());
     signing.extend_from_slice(message.network_id.as_bytes());
     signing.extend_from_slice(&message.block_height.to_le_bytes());
@@ -1317,10 +1375,10 @@ where
     bridge[31] |= 1;
     signing.extend_from_slice(&bridge);
     signing.extend_from_slice(&message.kagemusha_top_up_count.to_le_bytes());
-    match message.next_finality_epoch_id {
-        Some(next_epoch_id) => {
+    match message.next_epoch_authorization {
+        Some(next) => {
             signing.push(1);
-            signing.extend_from_slice(&next_epoch_id);
+            signing.extend_from_slice(&next.authorization_id().map_err(|error| error.to_string())?);
         }
         None => {
             signing.push(0);

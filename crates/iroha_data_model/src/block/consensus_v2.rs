@@ -134,8 +134,8 @@ pub const MERGE_CARRIER_COMMITMENT_VERSION_V1: u16 = 1;
 /// Keeping the bytes here lets configuration-independent genesis builders emit
 /// a valid signed template without introducing a data-model/config cycle.
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
-    252, 238, 165, 67, 6, 187, 192, 204, 100, 65, 162, 170, 111, 109, 245, 238, 230, 164, 4, 4, 1,
-    15, 225, 229, 13, 73, 186, 219, 203, 11, 169, 39,
+    91, 38, 248, 103, 86, 84, 235, 0, 186, 36, 255, 38, 66, 136, 73, 143, 217, 61, 247, 57, 245,
+    196, 18, 254, 31, 190, 33, 199, 229, 145, 52, 179,
 ];
 /// Canonical V1 boot execution-policy identity emitted by the recommended genesis template.
 ///
@@ -607,14 +607,13 @@ pub struct HeightContext {
     pub height: Height,
     /// Finalized validator-election epoch.
     pub epoch: u64,
-    /// Canonical identifier of the exact paired-Pasta validator-key roster authorized for this
-    /// epoch's KAGEMUSHA V1 mint-finality seals.
-    pub kagemusha_mint_finality_epoch_id: [u8; 32],
-    /// Complete bounded paired-Pasta public-key roster whose canonical digest equals
-    /// [`Self::kagemusha_mint_finality_epoch_id`]. Keeping the roster in the immutable context
-    /// makes historical top-up finality independently verifiable after key rotation.
-    pub kagemusha_mint_finality_epoch_roster:
-        crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
+    /// Complete scheduling authorization certified by the preceding boundary or signed genesis.
+    pub kagemusha_mint_finality_authorization:
+        crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+    /// Complete immutable paired-Pasta generation selected by the scheduling authorization.
+    /// Retaining these exact keys across epochs requires an explicit certified retention.
+    pub kagemusha_mint_finality_authority:
+        crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
     /// Last height governed by this epoch's frozen election snapshot.
     pub epoch_end_height: Height,
     /// Complete transition selected from the committed pre-state when this is
@@ -664,8 +663,8 @@ impl HeightContext {
             protocol_version: self.protocol_version,
             height: self.height,
             epoch: self.epoch,
-            kagemusha_mint_finality_epoch_id: self.kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: self.kagemusha_mint_finality_epoch_roster.clone(),
+            kagemusha_mint_finality_authorization: self.kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority: self.kagemusha_mint_finality_authority.clone(),
             epoch_end_height: self.epoch_end_height,
             next_epoch_snapshot: self.next_epoch_snapshot.clone(),
             mode: self.mode,
@@ -708,24 +707,24 @@ impl HeightContext {
             return Err(ValidationError::EpochEndsBeforeHeight);
         }
         self.quorum.validate_roster(&self.roster)?;
-        if self.kagemusha_mint_finality_epoch_id == [0; 32] {
-            return Err(ValidationError::InvalidKagemushaMintFinalityEpochId);
+        let authority = &self.kagemusha_mint_finality_authority;
+        let authorization = &self.kagemusha_mint_finality_authorization;
+        if authorization.validate_against_authority(authority).is_err()
+            || authorization.network_id != self.network_id
+            || authorization.epoch != self.epoch
+            || authorization.first_height > self.height
+            || authorization.last_height != self.epoch_end_height
+        {
+            return Err(ValidationError::InvalidKagemushaMintFinalityAuthorization);
         }
-        let mint_roster = &self.kagemusha_mint_finality_epoch_roster;
-        if mint_roster.validate().is_err()
-            || (
-                mint_roster.network_id,
-                mint_roster.epoch,
-                mint_roster.validators.len(),
-            ) != (self.network_id, self.epoch, self.roster.len())
-            || mint_roster
+        if authority.validators.len() != self.roster.len()
+            || authority
                 .validators
                 .iter()
                 .zip(&self.roster)
                 .any(|(mint, consensus)| mint.validator != consensus.validator)
-            || mint_roster.finality_epoch_id().ok() != Some(self.kagemusha_mint_finality_epoch_id)
         {
-            return Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster);
+            return Err(ValidationError::InvalidKagemushaMintFinalityAuthorityGeneration);
         }
         if self.nexus_amx_context_hash == Hash::prehashed([0; Hash::LENGTH]) {
             return Err(ValidationError::InvalidNexusAmxContextHash);
@@ -841,9 +840,10 @@ struct HeightContextIdentity {
     protocol_version: u16,
     height: Height,
     epoch: u64,
-    kagemusha_mint_finality_epoch_id: [u8; 32],
-    kagemusha_mint_finality_epoch_roster:
-        crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
+    kagemusha_mint_finality_authorization:
+        crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+    kagemusha_mint_finality_authority:
+        crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
     epoch_end_height: Height,
     next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
     mode: ConsensusMode,
@@ -4212,9 +4212,9 @@ pub enum ValidationError {
     /// The mandatory process-local execution-policy commitment is zero or non-canonical.
     InvalidExecutionPolicyHash,
     /// The mandatory KAGEMUSHA V1 mint-finality epoch-roster commitment is zero.
-    InvalidKagemushaMintFinalityEpochId,
+    InvalidKagemushaMintFinalityAuthorization,
     /// The embedded public Pasta roster does not exactly match its context commitment/election.
-    InvalidKagemushaMintFinalityEpochRoster,
+    InvalidKagemushaMintFinalityAuthorityGeneration,
     /// A certificate or message is bound to another height context.
     WrongHeightContext,
     /// Signer count cannot be represented on the wire.
@@ -4399,10 +4399,10 @@ impl fmt::Display for ValidationError {
             Self::InvalidExecutionPolicyHash => {
                 f.write_str("height context has an invalid execution-policy hash")
             }
-            Self::InvalidKagemushaMintFinalityEpochId => {
+            Self::InvalidKagemushaMintFinalityAuthorization => {
                 f.write_str("height context has an invalid KAGEMUSHA V1 mint-finality epoch id")
             }
-            Self::InvalidKagemushaMintFinalityEpochRoster => f.write_str(
+            Self::InvalidKagemushaMintFinalityAuthorityGeneration => f.write_str(
                 "height context KAGEMUSHA V1 mint-finality roster does not match its commitment",
             ),
             Self::WrongHeightContext => f.write_str("message is bound to another height context"),
@@ -4718,20 +4718,20 @@ fn signature_preimage(domain: &[u8], encoded_payload: &[u8]) -> Vec<u8> {
 
 /// Build deterministic paired-Pasta authority aligned to a unit-test consensus roster.
 #[cfg(test)]
-pub(crate) fn test_kagemusha_mint_finality_roster(
+pub(crate) fn test_kagemusha_mint_finality_authority(
     network_id: NetworkId,
-    epoch: u64,
+    generation: u64,
     roster: &[ValidatorPower],
-) -> crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+) -> crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
     use crate::isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
         KagemushaMintFinalityValidatorKeysV1,
     };
 
-    KagemushaMintFinalityEpochRosterV1 {
+    KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch,
+        generation,
         validators: roster
             .iter()
             .enumerate()
@@ -4755,7 +4755,8 @@ pub(crate) fn test_genesis_context_parameters() -> SumeragiV2GenesisContextParam
 pub(crate) fn test_kagemusha_mint_finality_genesis_parameters()
 -> crate::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
     use crate::isi::kagemusha_v1::{
-        KagemushaMintFinalityEpochRosterTemplateV1, KagemushaMintFinalityGenesisParametersV1,
+        KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityGenesisParametersV1,
     };
 
     let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -4772,14 +4773,13 @@ pub(crate) fn test_kagemusha_mint_finality_genesis_parameters()
         })
         .collect::<Vec<_>>();
     roster.sort_by(|left, right| left.validator.cmp(&right.validator));
-    let bound = test_kagemusha_mint_finality_roster(network_id, 0, &roster);
+    let bound = test_kagemusha_mint_finality_authority(network_id, 0, &roster);
     KagemushaMintFinalityGenesisParametersV1 {
-        epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
             version: bound.version,
-            epoch: bound.epoch,
+            generation: bound.generation,
             validators: bound.validators,
         },
-        next_epoch_roster: None,
     }
 }
 #[cfg(test)]
@@ -4836,18 +4836,20 @@ mod terminal_height_context_tests {
         let network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"terminal-height genesis")),
         );
-        let mint_finality_roster =
-            test_kagemusha_mint_finality_roster(network_id, u64::MAX, &roster);
-        let mint_finality_epoch_id = mint_finality_roster
-            .finality_epoch_id()
-            .expect("valid terminal mint-finality roster");
+        let mint_finality_roster = test_kagemusha_mint_finality_authority(network_id, 0, &roster);
+        let mint_finality_authorization =
+            crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &mint_finality_roster,
+                u64::MAX,
+            )
+            .expect("valid terminal mint-finality authorization");
         HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: u64::MAX,
-            epoch: u64::MAX,
-            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+            epoch: 0,
+            kagemusha_mint_finality_authorization: mint_finality_authorization,
+            kagemusha_mint_finality_authority: mint_finality_roster,
             epoch_end_height: u64::MAX,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
@@ -4877,6 +4879,9 @@ mod terminal_height_context_tests {
         let mut nonterminal_boundary = terminal;
         nonterminal_boundary.height = u64::MAX - 1;
         nonterminal_boundary.epoch_end_height = u64::MAX - 1;
+        nonterminal_boundary
+            .kagemusha_mint_finality_authorization
+            .last_height = u64::MAX - 1;
         let parent = nonterminal_boundary
             .parent_commit_qc
             .as_mut()

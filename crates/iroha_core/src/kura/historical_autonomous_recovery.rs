@@ -676,7 +676,8 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     "historical autonomous recovery reader has an invalid record limit",
                 ));
             }
-            let _sidecar_guard = self.sidecar_lock.lock();
+            // Complete bounded observation only; dependency repair has its own mutation gate.
+            let _sidecar_guard = self.lock_consensus_sidecar_read()?;
             let mut records = Vec::new();
             let mut aggregate_bytes = 0_u64;
             let aggregate_byte_limit = self.historical_autonomous_recovery_aggregate_byte_limit();

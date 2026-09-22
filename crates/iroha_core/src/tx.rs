@@ -7548,12 +7548,34 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut state_block = state.block(header);
-        state_block
-            .transactions
-            .insert_block_with_single_tx(accepted.as_ref().hash_as_entrypoint(), nonzero!(1_usize));
-        state_block.commit().expect("block commit");
+        let entrypoint_hash = accepted.hash_as_entrypoint();
+        let generation = state.state_view_generation();
+        let checked = accepted
+            .clone()
+            .into_checked(&state.view())
+            .expect("the replay identity is initially pending");
+
+        // Exercise committed replay membership through its storage owner. Whole
+        // carrier publication also requires the exact finalized block hash.
+        let mut membership = state.transactions.block();
+        membership.insert_block_with_single_tx(entrypoint_hash, nonzero!(1_usize));
+        assert!(
+            !checked.is_in_blockchain(&state.view()),
+            "staging replay membership must not expose it to committed readers"
+        );
+        membership.commit().expect("commit replay membership");
+        assert!(checked.is_in_blockchain(&state.view()));
+        assert_eq!(
+            state.committed_entrypoint_height(&entrypoint_hash),
+            Some(nonzero!(1_usize))
+        );
+        assert_eq!(state.committed_height(), 0);
+        assert_eq!(state.latest_block_hash_fast(), None);
+        assert_eq!(
+            state.state_view_generation(),
+            generation,
+            "the focused membership fixture does not publish World"
+        );
         let view = state.view();
         let result = accepted.into_checked(&view);
         assert!(matches!(result, Err((_, TransactionAlreadyCommitted))));
@@ -8651,6 +8673,27 @@ pub mod tests {
             validator: counterparty.clone(),
             staker: counterparty.clone(),
             request_id,
+            monetary_plan: iroha_data_model::nexus::PublicLaneMonetaryPlanV1 {
+                network_scope: iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Network(
+                    test_network_id(),
+                ),
+                valid_until_height: 2,
+                source_asset: iroha_data_model::asset::AssetId::of(
+                    cash_leg.asset_definition_id.clone(),
+                    authority.clone(),
+                ),
+                destination_asset: iroha_data_model::asset::AssetId::of(
+                    cash_leg.asset_definition_id.clone(),
+                    counterparty.clone(),
+                ),
+                amount: 1u32.into(),
+                precondition: iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Unbond(
+                    iroha_data_model::nexus::PublicLaneMonetaryUnbondV1 {
+                        activation_height: 1,
+                        request_hash: iroha_crypto::Hash::new(b"time-sensitive-pending-unbond"),
+                    },
+                ),
+            },
         };
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             finalize

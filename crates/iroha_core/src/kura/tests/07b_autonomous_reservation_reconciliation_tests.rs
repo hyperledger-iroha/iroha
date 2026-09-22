@@ -1286,10 +1286,14 @@ fn historical_autonomous_recovery_record_for_kura(
     roster.sort_by(|left, right| left.validator.cmp(&right.validator));
     // Bind the recovery context and its derived mint roster to the signed payload.
     let network_id = payload.network_id;
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
             network_id,
             payload.epoch,
+            (payload.epoch)
+                .checked_add(1)
+                .expect("fixture epoch fits positive heights"),
+            descriptor.proposal_height.saturating_add(100),
             &roster,
         );
     let historical_context = HeightContext {
@@ -1319,8 +1323,8 @@ fn historical_autonomous_recovery_record_for_kura(
         ),
         quorum: DualQuorum::from_roster(&roster).expect("historical recovery fixture quorum"),
         roster,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         nexus_amx_context_hash: Hash::new_from_chunks(&[
             b"kura:test:historical-recovery:nexus:v1\0",
             fixture_tag,

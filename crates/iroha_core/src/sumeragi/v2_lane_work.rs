@@ -21762,10 +21762,12 @@ pub(super) mod tests {
                 power,
             })
             .collect::<Vec<_>>();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
                 network_id,
                 context_epoch,
+                npos_epoch_length.map_or(1, |length| context_epoch * length + 1),
+                context_epoch_end_height,
                 &roster,
             );
         let mut context = wire::HeightContext {
@@ -21815,8 +21817,8 @@ pub(super) mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: super::super::v2_recovery::committed_nexus_amx_context_hash(
                 state.as_ref(),
             )
@@ -21861,11 +21863,13 @@ pub(super) mod tests {
                         .saturating_mul(length)
                 });
                 (
-                    parent_context.kagemusha_mint_finality_epoch_id,
-                    parent_context.kagemusha_mint_finality_epoch_roster,
-                ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                    parent_context.kagemusha_mint_finality_authorization,
+                    parent_context.kagemusha_mint_finality_authority,
+                ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
                     network_id,
                     parent_context.epoch,
+                    npos_epoch_length.map_or(1, |length| parent_context.epoch * length + 1),
+                    parent_context.epoch_end_height,
                     &parent_context.roster,
                 );
                 let signed_block: &SignedBlock = block.as_ref();
@@ -22742,11 +22746,13 @@ pub(super) mod tests {
                 wire::DualQuorum::from_roster(&successor.roster).expect("successor dual quorum");
         }
         (
-            successor.kagemusha_mint_finality_epoch_id,
-            successor.kagemusha_mint_finality_epoch_roster,
-        ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+            successor.kagemusha_mint_finality_authorization,
+            successor.kagemusha_mint_finality_authority,
+        ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
             successor.network_id,
             successor.epoch,
+            successor.kagemusha_mint_finality_authorization.first_height,
+            successor.epoch_end_height,
             &successor.roster,
         );
         successor
@@ -28165,8 +28171,13 @@ pub(super) mod tests {
         assert_eq!(durable.prepare_qc, retained.prepare_qc);
         assert_eq!(durable.commit_qc, retained.commit_qc);
     }
-    #[test]
-    fn canonical_lane_recovery_restores_handoff_after_losing_carrier_retirement() {
+    fn with_recovered_canonical_lane_handoff(
+        check: impl FnOnce(
+            &mut V2LaneWorkAdapter,
+            &LaneBlockProposalV1,
+            &wire::finality::V2FinalityArtifact,
+        ),
+    ) {
         let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
         let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
         let mut losing = proposal.clone();
@@ -28292,6 +28303,118 @@ pub(super) mod tests {
                 .expect("idempotent recovery"),
             0
         );
+        check(&mut adapter, &proposal, &artifact);
+    }
+
+    #[test]
+    fn canonical_lane_recovery_restores_handoff_after_losing_carrier_retirement() {
+        with_recovered_canonical_lane_handoff(|_, _, _| {});
+    }
+
+    fn repeat_complete_lane_recovery_consumer(discard_custody: bool) {
+        with_recovered_canonical_lane_handoff(|adapter, proposal, finality| {
+            let receipt = adapter.kura.read_lane_completion_receipt(proposal).unwrap();
+            let certificate = adapter
+                .kura
+                .read_lane_completion_certificate(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .unwrap();
+            assert!(receipt.is_some() && certificate.is_some());
+            let state_height = adapter.state.committed_height();
+            let height = NonZeroUsize::new(usize::try_from(finality.height).unwrap()).unwrap();
+            let canonical_hash = adapter.kura.get_durable_block_hash(height);
+            assert_eq!(canonical_hash, Some(finality.block_hash));
+            assert_eq!(adapter.persist_anchored_sessions().unwrap(), 0);
+            assert!(
+                adapter
+                    .durable_completion_matches_finality(finality)
+                    .unwrap()
+            );
+            let started = std::time::Instant::now();
+            for _ in 0..32 {
+                if discard_custody {
+                    adapter.kura.clear_receipt_namespace_durability_for_tests();
+                }
+                assert_eq!(adapter.persist_anchored_sessions().unwrap(), 0);
+                assert!(
+                    adapter
+                        .durable_completion_matches_finality(finality)
+                        .unwrap()
+                );
+                assert_eq!(
+                    adapter.kura.read_lane_completion_receipt(proposal).unwrap(),
+                    receipt
+                );
+                assert_eq!(
+                    adapter
+                        .kura
+                        .read_lane_completion_certificate(
+                            proposal.descriptor.lane_id,
+                            proposal.descriptor.lane_block_height,
+                        )
+                        .unwrap(),
+                    certificate
+                );
+                assert_eq!(adapter.state.committed_height(), state_height);
+                assert_eq!(adapter.kura.get_durable_block_hash(height), canonical_hash);
+                assert!(!adapter.output_guard.restart_required());
+            }
+            println!(
+                "receipt_namespace_complete_consumer discard_custody={discard_custody} cycles=32 elapsed_ns={}",
+                started.elapsed().as_nanos()
+            );
+        });
+    }
+
+    #[test]
+    fn canonical_lane_recovery_repeated_complete_consumer_control() {
+        repeat_complete_lane_recovery_consumer(true);
+    }
+
+    #[test]
+    fn canonical_lane_recovery_repeated_complete_consumer_retained() {
+        repeat_complete_lane_recovery_consumer(false);
+    }
+
+    #[test]
+    fn canonical_lane_recovery_complete_consumer_preserves_receipt_directory_barrier() {
+        struct ResetReceiptDirectoryFault;
+        impl Drop for ResetReceiptDirectoryFault {
+            fn drop(&mut self) {
+                Kura::receipt_namespace_directory_failure_for_tests(false);
+            }
+        }
+        let _reset = ResetReceiptDirectoryFault;
+        with_recovered_canonical_lane_handoff(|adapter, _, finality| {
+            assert_eq!(adapter.persist_anchored_sessions().unwrap(), 0);
+            assert!(
+                adapter
+                    .durable_completion_matches_finality(finality)
+                    .unwrap()
+            );
+            assert!(!Kura::receipt_namespace_directory_failure_for_tests(true));
+            assert_eq!(adapter.persist_anchored_sessions().unwrap(), 0);
+            assert!(
+                adapter
+                    .durable_completion_matches_finality(finality)
+                    .unwrap()
+            );
+            assert!(
+                Kura::receipt_namespace_directory_failure_for_tests(true),
+                "whole consumer must retain the receipt-only directory barrier"
+            );
+            adapter.kura.clear_receipt_namespace_durability_for_tests();
+            assert!(
+                adapter.persist_anchored_sessions().is_err(),
+                "discarded custody must expose the same pending receipt barrier failure"
+            );
+            assert!(
+                !Kura::receipt_namespace_directory_failure_for_tests(false),
+                "the receipt namespace barrier must consume its own failure"
+            );
+        });
     }
     #[test]
     fn globally_applied_lane_body_without_certificate_remains_recoverable() {

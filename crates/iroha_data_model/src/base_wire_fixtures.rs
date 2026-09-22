@@ -140,7 +140,7 @@ fn public<
         .insert("json".to_owned(), Value::from(encoded));
 }
 
-fn storage_key<T: NoritoSerialize + mv::json::JsonKeyCodec>(
+fn storage_key<T: NoritoSerialize + norito::json::JsonKeyCodec>(
     records: &mut [Value],
     case: &str,
     value: &T,

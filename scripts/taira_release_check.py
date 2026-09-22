@@ -33,8 +33,9 @@ After configuration, explicit MV ownership stages and the complete admitted-map,
 Concread admission/writer/checkpoint source census execute before exact Pending Kura
 recovery controls. Either prerequisite stops qualification on failure before
 other startup checks, shipping builds or network execution. These controls use
-the same complete native compile graph; focused development checks can compile
-only configuration and selected MV targets, without qualifying a release.
+the same complete native compile graph. Focused development checks execute
+selected MV targets before building mandatory configuration in the same lane;
+that separate diagnostic graph never qualifies a release.
 After mandatory startup checks, both scopes separately metadata-check every
 authoritative shipping binary with default production features before CLI and
 long independent tests. This check also reruns when an independent checkpoint
@@ -48,10 +49,13 @@ Configuration and compiler paths match authenticated preparation, while source
 remains the mutable checkout. These checks never qualify release artifacts and
 accept no live configuration, credentials, SSH, deployment or signing inputs.
 Repeat --focus-regression HARNESS=EXACT_TEST for prequalification: metadata-check
-and compile mandatory configuration plus only the explicitly selected harnesses,
-then execute configuration and those exact tests. Unselected harnesses wait for
-immutable preparation. Selected Pending Kura recovery controls run immediately
-after configuration and must pass before the remaining focused regressions.
+and compile only explicitly selected harnesses. Selected portable MV/Concread
+controls run first in a separate diagnostic Cargo graph. Configuration and the
+remaining targets build afterward in the same warm lane; configuration must pass
+before nonportable tests and overall success. Unselected harnesses wait for
+immutable preparation, whose complete compile graph is unchanged. Selected Pending
+Kura recovery runs immediately after configuration and must pass before the
+remaining nonportable focused regressions.
 The metadata pass catches type/import errors early; the
 selected build still detects codegen-only errors. This diagnostic writes no qualification checkpoint and
 does not replace immutable preparation or its complete gate.
@@ -196,9 +200,7 @@ STAGES = (
     )),
     ("occupied runtime and service unit recovery", (
         "taira_public_reset::host::occupied::tests::occupied_runtime_rejects_builder_tools_and_each_missing_runtime_role",
-        "taira_public_reset::host::epoch_supervisor::tests::prior_release_protection_preserves_independent_authenticated_tool_roots",
-        "taira_public_reset::host::epoch_supervisor::tests::prior_release_protection_rejects_malformed_state_or_plan",
-        "taira_public_reset::host::tests::cleanup_preserves_prior_supervisor_release_across_hosts_and_replay",
+        "taira_public_reset::host::tests::cleanup_preserves_prior_release_during_discovery_and_replay",
         "taira_public_reset::host::occupied::tests::occupied_runtime_accepts_split_source_and_configuration_binding",
         "taira_public_reset::host::occupied::tests::occupied_runtime_rejects_incomplete_or_foreign_artifact_custody",
         "taira_public_reset::host::occupied::tests::occupied_runtime_wire_requires_explicit_artifacts_and_argv",
@@ -1247,22 +1249,19 @@ NETWORK_OBSERVATION_STAGES = (("signed genesis paid authority and public failure
 )), ("exact retained-height replay observation", (
     "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
 )),)
-# Linux qualification exercises the supervised renewal/restart owner within the
-# same full application workload. macOS retains the finite-maintenance case.
+# Every platform qualifies retained authority generations against the same four
+# independent genesis-anchored chains and full application workload.
 BEACON_NETWORK_TEST = (
-    'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart'
-    if sys.platform == "linux" else
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
-BEACON_NETWORK_STAGES = (("fresh beacon custody, paid deployment, catalog replay and both route snapshot sequences"
-                          + (", supervised renewal and restart" if sys.platform == "linux" else ""), (
+BEACON_NETWORK_STAGES = (("fresh beacon custody, retained authority, paid deployment, catalog replay and both route snapshot sequences", (
     BEACON_NETWORK_TEST,
 )),)
 
-NETWORK_OBSERVATION_STAGES += (('public epoch maintenance fixture admission', (
-    'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup',
-    'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
-    'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
+NETWORK_OBSERVATION_STAGES += (('authenticated epoch retention fixture admission', (
+    'production_beacon_bootstrap::epoch_retention::production_epoch_retention_requires_exact_source_identity_before_setup',
+    'production_beacon_bootstrap::epoch_retention::production_epoch_retention_binds_exact_generation_beacon_and_interval',
+    'production_beacon_bootstrap::epoch_retention::production_epoch_retention_rejects_changed_generation_beacon_parent_and_schedule',
 )),)
 
 NETWORK_OBSERVATION_STAGES += (('retained native canary failure evidence', (
@@ -1508,18 +1507,8 @@ KAGAMI_STAGES = (("canonical Kagami export projection", (
 )),)
 
 
-KAGAMI_STAGES += (("native epoch derivation and bounded public maintenance schedule", (
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::derived_parameter_matches_core_and_binds_network_epoch_and_order',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::public_context_rejects_malformed_network_epoch_count_order_and_duplicates',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::parser_exposes_only_public_arguments_and_numeric_pipe_descriptor',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::seed_reader_enforces_exact_bound_and_wipes_success_rejections_and_unwind',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::read_errors_are_redacted_and_partial_seeds_are_wiped',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::buffered_output_failures_are_returned',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::inherited_descriptor_ownership_is_closed',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_matches_native_parameters_and_preserves_exact_public_caps',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_rejects_empty_unbounded_overflowed_and_zero_fee_ranges',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_command_consumes_one_private_pipe_and_emits_only_complete_public_json',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_parser_requires_explicit_bounded_public_range_and_fee_cap',
+KAGAMI_STAGES += (("retired epoch key derivation commands are rejected", (
+    'kagemusha::tests::parser_rejects_epoch_key_derivation_commands',
 )),)
 
 
@@ -1733,42 +1722,16 @@ STAGES += (("native beacon reset authority, bounded recovery and public input as
     'taira_public_reset::inputs::tests::assembler_rejects_incomplete_topology_before_reading_runtime_inputs',
 )), )
 
-STAGES += (('native epoch maintenance and authenticated current height', (
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_schedule_rejects_wrong_epoch_network_and_membership',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_waits_for_actual_epoch_and_preserves_carrier_deadline',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_preparation_binds_single_parameter_fee_and_original_lifetime',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_journal_preserves_one_dispatch_across_schedule_renewal',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_staking_preflight_rejects_fallback_and_changed_tenure',
+STAGES += (('authenticated current height', (
+    'taira::tests::retired_epoch_maintenance_commands_are_rejected',
     'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_repeat_current_preserves_freshness_and_advancing_contract',
     'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_restart_transport_never_masks_fixed_peer_identity',
 )),)
 
-STAGES += (("native epoch supervisor custody and restart continuity", (
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_partial_initialization_never_replaces_retained_dispatch',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_readiness_rechecks_transition_after_completion_wait',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_retains_original_trust_across_explicit_release_observation',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_status_parser_has_no_seed_or_mutation_inputs',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_policy_schedule_and_custody_reject_wrong_public_authority',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_readiness_names_bind_policy_and_process_incarnation',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_rolling_batches_retain_one_epoch_overlap_and_checked_bounds',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_custody_rejects_changed_shared_and_wrong_length_seed_files',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_worker_lock_and_cursor_preserve_exclusive_restart_state',
-)),)
 
 
-STAGES += (("native epoch supervisor journal quiescence", (
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_excludes_active_worker_until_drop',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_absence_is_read_only_and_revalidated',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_never_repairs_missing_lock',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_rejects_symlink_parent_and_child',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_rejects_parent_and_child_rebinding',
-)), )
 
 
-if sys.platform == "linux":
-    STAGES += (("native epoch supervisor process incarnation", (
-        'taira_public_reset::host::epoch_worker_process_identity_binds_current_kernel_incarnation',
-    )),)
 
 
 KAGAMI_STAGES += (('native beacon history physical input and execution root distinction', (
@@ -1776,77 +1739,36 @@ KAGAMI_STAGES += (('native beacon history physical input and execution root dist
 )), )
 
 
-STAGES += (('native epoch supervisor pure generation admission', (
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_accepts_exact_public_inputs_without_files',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_foreign_origin_and_taira_profile',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_administrator_and_missing_genesis_grant',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_shared_operator_key',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_changed_trust_and_network',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_changed_custody',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_requires_bounded_closed_schemas',
+
+
+STAGES += (("shared deployment exclusion and durable reset ownership", (
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_owner_rejects_foreign_missing_and_expired_recovery',
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_owner_cannot_restart_from_existing_host_progress',
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_terminal_replay_requires_exact_action_and_retained_intent',
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_owner_waits_for_all_local_seals_and_rollbacks',
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_lock_excludes_other_descriptors_and_rejects_rebinding',
+)),)
+
+STAGES += (('native reset schema and ordered service barriers', (
+    'taira_public_reset::executor_model::tests::reset_execution_preserves_beacon_and_service_order_without_epoch_writer',
+    'taira_public_reset::executor_model::tests::retired_inventory_fields_and_seven_artifact_closure_are_rejected',
+    'taira_public_reset::executor_model::tests::retired_epoch_supervisor_commands_and_inputs_are_rejected',
+    'taira_public_reset::inputs::tests::authorization_rejects_retired_supervisor_fields',
+    'taira_public_reset::host::tests::host_frontier_preserves_four_beacon_activations_before_restart',
 )), )
 
 
-STAGES += (('native reset epoch authority custody and ordered service barriers', (
-    'taira_public_reset::executor_model::tests::epoch_supervisor_pause_and_start_are_explicit_ordered_barriers',
-    'taira_public_reset::executor_model::tests::epoch_supervisor_pause_failure_prevents_validator_stop',
-    'taira_public_reset::executor_model::tests::maintenance_admin_admission_rejects_canary_operator_and_network_substitution',
-    'taira_public_reset::executor_model::tests::old_inventory_shape_and_seven_artifact_closure_are_rejected',
-    'taira_public_reset::inputs::tests::maintenance_grant_requires_registration_and_survives_no_revocation',
-    'taira_public_reset::inputs::tests::ongoing_supervisor_authorization_is_explicit_and_separate_from_reset_expiry',
-    'taira_public_reset::host::epoch_supervisor::tests::unit_matches_independent_python_golden_and_exact_native_argv',
-    'taira_public_reset::host::epoch_supervisor::tests::first_install_pause_requires_genuine_manager_absence',
-    'taira_public_reset::host::epoch_supervisor::tests::plan_rejects_wrong_administrator_origin_and_seed_role_mapping',
-    'taira_public_reset::host::epoch_supervisor::tests::status_argv_contains_only_readonly_native_operation_and_exact_worker',
-    'taira_public_reset::host::epoch_supervisor::tests::paths_reject_expansion_and_finite_reset_aliases',
-    'taira_public_reset::host::epoch_supervisor::tests::native_status_rejects_previous_worker_or_changed_manager_incarnation',
-    'taira_public_reset::host::tests::epoch_supervisor_host_frontier_has_one_pause_and_one_post_beacon_start',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_rejects_shared_wrong_mode_length_and_symlink',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_held_descriptor_rejects_rebinding_and_changed_content',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_content_binding_preserves_offset_and_rejects_metadata_collisions',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_retention_is_exact_idempotent_and_never_overwrites',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_invalid_body_does_not_create_retained_paths',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_fifo_is_rejected_without_waiting_for_a_writer',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_partial_staging_never_becomes_or_blocks_final',
-)), )
 
 
-if sys.platform == "linux":
-    STAGES += (('native Linux epoch generation activation intent', (
-        'taira_public_reset::host::epoch_generation::linux::tests::preparation_requires_explicit_installed_and_successor_intent',
-        'taira_public_reset::host::epoch_generation::linux::tests::generation_binding_rejects_alternate_cli_and_private_path',
-        'taira_public_reset::host::epoch_generation::linux::tests::service_intent_never_infers_activation_from_original_absence',
-    )), )
 
 
-STAGES += (("native epoch public admission restores caller profile", (
-    'taira_public_reset::host::epoch_supervisor::tests::epoch_public_admission_scopes_taira_and_restores_foreign_caller_profile',
-)), )
-
-
-STAGES += (("native public reset and epoch input producer closure", (
-    'taira_public_reset::host::epoch_generation::public_binding_tests::public_projection_cannot_satisfy_native_credential_admission',
-    'taira_public_reset::host::epoch_generation::public_binding_tests::public_binding_still_rejects_changed_hash_argv_and_network',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_derives_exact_policy_unit_custody_and_update_binding',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_implicit_prior_and_invalid_ongoing_bounds',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_unmapped_sources_and_admin_genesis_substitution',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_requires_explicit_until_stopped_cli_intent',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_publication_is_atomic_and_never_replaces',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_first_install_derives_exact_native_closure_without_private_files',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_rejects_incomplete_or_changed_build_and_operation',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_preserves_original_intent_separately_from_installed_state',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_rejects_rebased_authority_trust_and_seed_sources',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_closed_preparation_has_no_implicit_state_or_receipt',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_output_is_atomic_private_and_never_replaced',
+STAGES += (("native public reset input producer closure", (
     'taira_public_reset::inputs::tests::topology_context_checks_scope_and_budget_before_custody',
     'taira_public_reset::inputs::tests::native_context_rejects_scope_before_opening_actual_inputs',
-    'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_precedes_supervisor_plan_without_weakening_export',
+    'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_precedes_artifact_closure_without_weakening_export',
     'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_rejects_truncated_or_extra_slot_vectors',
     'taira_public_reset::inputs::context_release::tests::reset_context_artifact_derives_real_bytes_and_retains_drift_custody',
     'taira_public_reset::inputs::context_release::tests::reset_context_artifact_rejects_wrong_mode_and_symlink_before_projection',
-    'taira_public_reset::host::epoch_generation::completed_wrapper_tests::materialization_output_is_complete_closed_update_input',
-    'taira_public_reset::host::epoch_generation::completed_wrapper_tests::completed_update_keeps_original_intent_and_actual_installed_state_distinct',
-    'taira_public_reset::host::epoch_generation::completed_wrapper_tests::completed_update_rejects_foreign_receipt_and_network',
 )), )
 
 
@@ -2041,6 +1963,14 @@ MV_OWNERSHIP_STAGES = (
         'storage::admitted_tests::fresh_pair_acquisition::admitted_undo_poison_precedes_busy_current_without_policy',
         'storage::admitted_tests::fresh_pair_acquisition::ordinary_undo_poison_does_not_wait_for_current',
     )),
+    ('scoped admitted Storage acquisition retains caller custody', (
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::admitted_scoped_acquisition_rejects_foreign_scope_before_locks_or_policy',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::admitted_scoped_start_and_reset_refusals_retain_original_owners_for_release',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::admitted_scoped_second_provider_failure_defers_all_aggregate_native_wakes',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::admitted_scoped_busy_current_retains_undo_until_caller_release',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::scoped_original_block_capture_releases_scope_and_keeps_replacement_custody',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::ordinary_acquisition_retains_zero_sized_scope_and_original_protocol',
+    )),
     ('original Storage successor publication', (
         'storage::publication_tests::acquired_map_refusal_never_fabricates_foreign_or_busy_release',
         'storage::publication_tests::stale_map_pair_refusal_defers_actual_releases_through_enclosing_fence',
@@ -2135,6 +2065,73 @@ MV_MAP_STAGES = (("original owned map successors across refusal and publication"
 # Native cutover owners run before process/network qualification. These checks
 # retain exact sources and resource obligations; they do not open live ingress.
 CORE_NATIVE_CONNECTION_STAGES = (
+    ('native producer assembly retains exact decisions and independent work', (
+        'state::tests::native_candidate_uses_exact_decisions_and_canonical_recorded_execution',
+        'state::tests::native_candidate_fits_whole_priority_prefix_before_signing',
+        'state::tests::native_candidate_stale_observation_waits_without_signing_or_custody_loss',
+        'state::tests::native_candidate_controls_fit_without_displacing_or_duplicating_economic_input',
+        'state::tests::native_candidate_refuses_unsupported_carrier_controls_before_signing',
+        'state::tests::native_candidate_proof_rejects_foreign_state_and_network',
+        'state::tests::native_candidate_handoff_rejects_retired_merge_before_signing',
+        'state::tests::native_candidate_handoff_rejects_foreign_original_state',
+        'state::tests::native_candidate_partial_atomic_handoff_retains_waits_and_independent_work',
+        'sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback',
+        'state::tests::native_preparation_preserves_local_recorder_conflict',
+    )),
+    ('native preparation and recorded controls preserve original validation', (
+        'state::tests::native_preparation_single_retains_real_suffix_controls_and_unpublished_outputs',
+        'state::tests::native_preparation_atomic_retains_real_suffix_controls_and_unpublished_outputs',
+        'state::tests::native_preparation_single_authenticates_original_durable_sources_under_lease',
+        'state::tests::native_preparation_atomic_authenticates_original_durable_sources_under_lease',
+        'state::tests::native_preparation_rejects_signed_noncanonical_time',
+        'state::tests::native_preparation_rejects_signed_confidential_policy_substitution',
+        'state::tests::native_preparation_rejects_wrong_and_multiple_origin_signatures',
+        'state::tests::native_preparation_rejects_stale_source_without_execution_or_publication',
+        'state::tests::native_preparation_retained_prefix_does_not_authorize_raw_state_commit',
+        'state::tests::native_preparation_refreshes_source_after_actual_finalized_height_advance',
+        'state::tests::native_recorded_control_rejects_changed_opening_and_stale_verified_height',
+        'state::tests::native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon',
+    )),
+    ('native service preparation retains original source and archive owners', (
+        'state::tests::native_service_preparation_single_preserves_original_sources_and_archives',
+        'state::tests::native_service_preparation_atomic_preserves_original_sources_and_archives',
+        'state::tests::native_service_preparation_index_busy_precedes_execution',
+        'state::tests::native_service_preparation_capture_busy_releases_partial_owner',
+        'state::tests::native_service_preparation_stale_source_skips_archives_and_execution',
+        'state::tests::native_service_preparation_foreign_source_and_body_are_rejected',
+        'state::tests::native_service_preparation_recorder_conflict_releases_archives',
+    )),
+    ('native failure provenance retains local dependencies', (
+        'sumeragi::v2_apply::tests::native_preparation_errors::hash_admission_retains_original_release_and_runner_through_all_native_origins',
+        'sumeragi::v2_apply::tests::native_preparation_errors::native_controls_preserve_local_storage_failure_and_semantic_rejection',
+        'sumeragi::v2_apply::tests::native_preparation_errors::metadata_and_recorder_diagnostics_cannot_authorize_negative_markers',
+        'sumeragi::v2_apply::tests::native_preparation_errors::governed_native_batch_limit_remains_a_semantic_body_verdict',
+    )),
+    ('preexecution archive reservation preserves original service and release', (
+        'sumeragi::v2_apply::tests::archive_reservations::acquires_original_pair_without_execution',
+        'sumeragi::v2_apply::tests::archive_reservations::index_busy_wakes_original_runner',
+        'sumeragi::v2_apply::tests::archive_reservations::second_capture_refusal_releases_first',
+        'sumeragi::v2_apply::tests::archive_reservations::original_capture_drop_wakes_runner_and_preserves_old_wait',
+        'sumeragi::v2_apply::tests::archive_reservations::rejects_mismatch_before_acquisition',
+        'sumeragi::v2_apply::tests::archive_reservations::handoff_retains_owner_on_context_wire_and_service_mismatch',
+        'sumeragi::v2_apply::tests::archive_reservations::local_archive_failure_requires_recovery',
+    )),
+    ('archive capture reservations retain exact release identity', (
+        'query::archive_capture::tests::only_the_exact_original_gate_accepts_its_retained_owner',
+        'query::archive_capture::tests::observers_neither_own_nor_cancel_the_reservation',
+        'query::archive_capture::tests::release_before_wait_registration_cannot_be_missed',
+        'query::archive_capture::tests::active_wait_is_woken_by_the_actual_owner_drop',
+        'query::archive_capture::tests::old_wait_remains_released_while_a_new_owner_is_active',
+        'query::archive_capture::tests::move_to_another_worker_preserves_custody_without_retaining_the_archive',
+        'query::archive_capture::tests::concurrent_attempts_retain_exactly_one_original_owner',
+    )),
+    ('retained validation dispatch preserves original request and carrier', (
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_marker_failures_return_exact_wait_and_original_owner',
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_capture_refusal_keeps_exact_wait_without_success_marker',
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cache_and_reproposal_reuse_original_owner',
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_foreign_store_returns_request_before_execution',
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cached_scalar_receipt_cannot_replace_missing_owner',
+    )),
     ('original successor admission and reader readiness', (
         'state::block_hashes_admission::tests::successor_reader_contention_wakes_from_original_reader_release',
         'state::block_hashes_admission::tests::successor_admission_signals_only_actual_writer_after_unlock',
@@ -2169,6 +2166,11 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::world_journals::resources::tests::world_shell_planning_never_reads_targets_or_acquires_held_writers',
         'state::world_journals::resources::tests::world_shell_planning_checks_each_sum_count_and_vector_layout_overflow',
         'state::carrier_preparation::journals::tests::carrier_journal_shell_plan_precedes_execution_and_survives_capture',
+    )),
+    ('scoped original World storage publication', (
+        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_refuses_missing_and_foreign_scope_before_writers',
+        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_preserves_original_pair_through_abort_and_publish',
+        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_busy_retry_keeps_exact_original_values',
     )),
     ('retained candidate descriptors and exact marker custody', (
         'sumeragi::v2_body_store::tests::retained_validation_tests::incomplete_retained_owner_cannot_authorize_a_marker_even_when_resume_reports_success',
@@ -3887,7 +3889,7 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
 def validate_mv_test_registration(root: Path) -> None:
     """Reject stale registered MV names before Cargo; native listing stays authoritative.
 
-    This is a bounded lexical guard for fourteen explicit, flat test modules, not a
+    This is a bounded lexical guard for explicit, flat test modules, not a
     Rust parser or a claim that the selected subset exhausts each module.
     The existing pure lexer runs from the same captured source as this gate.
     """
@@ -3905,6 +3907,7 @@ def validate_mv_test_registration(root: Path) -> None:
         ("storage::detached_tests::", "storage.rs", "storage/detached_tests.rs", "detached_tests"),
         ("storage::admitted_tests::", "storage.rs", "storage/admitted_tests.rs", "admitted_tests"),
         ("storage::admitted_tests::fresh_pair_acquisition::", "storage/admitted_tests.rs", "storage/fresh_pair_acquisition_tests.rs", "fresh_pair_acquisition"),
+        ("storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::", "storage/fresh_pair_acquisition_tests.rs", "storage/scoped_acquisition_tests.rs", "scoped_acquisition"),
         ("storage::touches::tests::", "storage/touches.rs", "storage/touches_tests.rs", "tests"),
     )
     try:
@@ -4163,8 +4166,11 @@ def focused_regression_stages(qualification_scope: str, requested):
 
 def run_prequalification(root: Path, *, focused_regressions, qualification_scope: str = "basic",
                          environment: dict[str, str], lock_fds: tuple[int, ...]) -> None:
-    """Check and compile configuration and requested harnesses, then run exact focuses.
+    """Run exact portable controls before configuration and heavier diagnostics.
 
+    Each phase retains its own Cargo feature graph and artifact observations in
+    the same coordinated lane. Configuration is mandatory for overall success;
+    immutable qualification still compiles and executes its complete graph.
     Called only from the coordinated mutable development lane. This function has
     no signed-source, qualification checkpoint, or release-result interface.
     """
@@ -4195,12 +4201,36 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
     # their shared package graph. Prepare owns the complete qualification graph.
     selections = tuple(name for name in complete_selections
                        if name == "config" or name in focused)
-    print(f"[taira-prequalify] request {len(selections)} focused native harnesses; "
-          "execute configuration plus explicit focused regressions", flush=True)
+    selected_harness_count = len(selections)
+    portable = tuple(name for name in selections if name in MV_OWNERSHIP_HARNESSES)
+    selections = tuple(name for name in selections if name not in portable)
+    if portable:
+        print("[taira-prequalify] portable diagnostic Cargo graph: " + ", ".join(portable)
+              + "; mandatory configuration and remaining targets follow; NOT qualification", flush=True)
+        started = time.monotonic()
+        check_test_harnesses(root, env, harnesses=portable, lock_fds=lock_fds)
+        with compile_test_harnesses(root, env, harnesses=portable, lock_fds=lock_fds) as copies:
+            failures = []
+            for name in portable:
+                try:
+                    run_stages(copies[name], fixture_root, env, focused[name], lock_fds)
+                except SelectedRegressionFailures as error:
+                    failures.extend(error.failures)
+                copies.release(name)
+            if failures:
+                raise SelectedRegressionFailures(failures)
+        # Finish all consumers and close their artifact context before another
+        # Cargo graph can replace original outputs. This pass earns no checkpoint.
+        portable_count = sum(len(tests) for name in portable for _, tests in focused[name])
+        print(f"[taira-prequalify] portable diagnostic passed: {portable_count} exact tests "
+              f"in {time.monotonic() - started:.1f}s; mandatory configuration and "
+              "remaining diagnostics pending", flush=True)
+    print("[taira-prequalify] remaining diagnostic Cargo graph: " + ", ".join(selections)
+          + "; execute mandatory configuration before nonportable regressions", flush=True)
     check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
     with compile_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds) as harnesses:
-        # Configuration is always a prerequisite; explicitly focused config
-        # tests already execute here and must not execute twice.
+        # Configuration remains mandatory for final success and gates the
+        # nonportable phase. Explicit focused config tests must not run twice.
         run_config_checks(harnesses, fixture_root, env, lock_fds)
         for name in selections:
             if name != "config" and name not in focused:
@@ -4241,7 +4271,7 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
                                cwd=root, env=env, stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during prequalification; rerun the focused diagnostic")
     requested_count = sum(len(names) for stages in focused.values() for _, names in stages)
-    print(f"[taira-prequalify] diagnostic passed: {len(selections)} selected harnesses compiled; "
+    print(f"[taira-prequalify] diagnostic passed: {selected_harness_count} selected harnesses compiled; "
           f"{requested_count} focused regressions and mandatory configuration passed. "
           "NOT release qualification; immutable prepare still runs its complete gate.", flush=True)
 
@@ -4408,7 +4438,7 @@ def main() -> int:
     parser.add_argument("--native-linker", choices=("system", "llvm"), default=release.default_development_linker(),
                         help="development only: LLVM 18 by default on Linux (clang-18/lld-18 required), system on macOS; explicit system selects the diagnostic fallback; changing selection rebuilds Cargo dependencies")
     parser.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
-                        help="development diagnostic: metadata-check and compile configuration plus explicitly selected test harnesses; not qualification")
+                        help="development diagnostic: run selected portable ownership targets first, then mandatory configuration and remaining explicit harnesses; not qualification")
     args = parser.parse_args()
     try:
         options = {"native_check_scope": args.native_check_scope, "native_linker": args.native_linker}

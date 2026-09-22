@@ -221,14 +221,15 @@ exponents are intermediate bounds, not production security-bit claims.
 
 The current canonical SharedProof layout uses a 40-byte Norito header,
 compact field/element lengths, fixed u64 sequence counts, 48-byte digests,
-32-byte encoded extension elements, 3,093-byte encoded complete-row elements,
+32-byte encoded extension elements, 2,743-byte encoded complete-row elements
+(each includes an index and exactly 342 raw little-endian u64 cells),
 71-byte mixed/quotient query elements, and 72-byte FRI group elements.
 The exact formula agrees with the current Rust structural sizing assertion of
-6,713,525 bytes. The checker has one canonical field carrier and no optional
+6,451,024 bytes. The checker has one canonical field carrier and no optional
 retired-proof input. This equality does not execute Rust or authenticate a proof.
 
 Projecting the same field layout to q=375 with minimal frontiers gives an
-upper bound of **4,279,877 bytes per segment**. The corresponding maximal-byte
+upper bound of **4,017,376 bytes per segment**. The corresponding maximal-byte
 shape has sibling counts
 7,024 row, 3,887 mixed, 3,887 quotient and 18,245 FRI digests.
 These are not independent upper bounds on each sibling frontier: opening all
@@ -252,7 +253,7 @@ owner separately. The projection itself is not a measurement or a production
 profile change.
 
 Using the source's looser preflight ceiling of m*depth sibling entries gives
-**6,713,525 bytes**. Such a largest shape can pass a structural sizing step
+**6,451,024 bytes**. Such a largest shape can pass a structural sizing step
 while failing the later exact frontier check; it is a relevant hostile decode
 resource bound, not a valid proof maximum.
 

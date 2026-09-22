@@ -1399,10 +1399,10 @@ mod tests {
             u64::try_from(signed_genesis.len()).expect("genesis wire length fits u64");
         let genesis_executed_wire_hash = Hash::new(&signed_genesis);
         let mint_finality_roster =
-            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
                 version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
                 network_id,
-                epoch: 0,
+                generation: 0,
                 validators: roster.iter().enumerate().map(|(index, validator)| {
                     iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                         &[0xA0 + u8::try_from(index).expect("four-validator fixture"); 32],
@@ -1411,16 +1411,16 @@ mod tests {
                     ).expect("derive real paired-Pasta fixture authority")
                 }).collect(),
             };
-        let mint_finality_epoch_id = mint_finality_roster
-            .finality_epoch_id()
-            .expect("canonical fixture mint-finality roster");
+        let mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+            &mint_finality_roster, 10,
+        ).expect("canonical fixture genesis authorization");
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
-            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+            kagemusha_mint_finality_authorization: mint_finality_authorization,
+            kagemusha_mint_finality_authority: mint_finality_roster,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,

@@ -590,6 +590,12 @@ impl VerifySettlementArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_core::zk::kagemusha_v1_recursion::{
+        KagemushaMintFinalitySignerV1, build_kagemusha_mint_finality_seal_message_v1,
+        decode_kagemusha_mint_finality_seal_bundle_v1,
+        derive_kagemusha_mint_finality_validator_keys_v1, sign_kagemusha_mint_finality_seal_v1,
+        verify_kagemusha_mint_finality_seal_bundle_v1,
+    };
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         account::AccountId,
@@ -598,7 +604,9 @@ mod tests {
             builder::BlockBuilder,
             consensus_v2::{
                 BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
-                GlobalPhase, QuorumCertificate, ValidatorPower, Vote, finality::V2FinalityArtifact,
+                GlobalPhase, KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1, QuorumCertificate,
+                ValidatorPower, Vote, decode_kagemusha_consensus_signature_envelope_v1,
+                encode_kagemusha_consensus_signature_envelope_v1, finality::V2FinalityArtifact,
             },
             execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
             output_budget::ExecutionOutputLimits,
@@ -606,10 +614,16 @@ mod tests {
         bridge::BRIDGE_FINALITY_PROOF_VERSION_V2,
         execution_proofs::{ExecutionProofEnvelopeV1, ExecutionPublicInputsV1},
         game::GameOutcomeV1,
+        isi::kagemusha_v1::{
+            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+            KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+            KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalitySealBundleV1,
+        },
         transaction::{FeePaymentIntent, TransactionResultInner, signed::TransactionBuilder},
         trigger::DataTriggerSequence,
     };
     use iroha_model_base::peer::PeerId;
+    use norito::codec::Encode as _;
     use std::{num::NonZeroU64, str::FromStr as _};
     const FIXTURE_NETWORK_ID: &str =
         "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7";
@@ -797,36 +811,34 @@ mod tests {
                 .next_epoch_snapshot
                 .as_ref()
         });
-        let epoch = snapshot.map_or_else(
-            || {
-                previous.map_or(0, |parent| {
-                    parent.finality.finality_artifact.height_context.epoch
-                })
-            },
-            |next| next.epoch,
-        );
-        let mint_roster = mint_finality_roster(network_id, epoch, &roster);
+        let (authorization, authority) = match (snapshot, previous) {
+            (Some(next), _) => (
+                next.kagemusha_mint_finality_authorization,
+                next.kagemusha_mint_finality_authority.clone(),
+            ),
+            (None, Some(parent)) => {
+                let parent_context = &parent.finality.finality_artifact.height_context;
+                (
+                    parent_context.kagemusha_mint_finality_authorization,
+                    parent_context.kagemusha_mint_finality_authority.clone(),
+                )
+            }
+            (None, None) => {
+                let authority = mint_finality_authority(network_id, &roster);
+                let authorization =
+                    KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 1_000_000)
+                        .expect("fixture genesis scheduling authorization");
+                (authorization, authority)
+            }
+        };
         let context = HeightContext {
             network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             height,
-            epoch,
-            kagemusha_mint_finality_epoch_id: mint_roster
-                .finality_epoch_id()
-                .expect("fixture paired-Pasta roster id"),
-            kagemusha_mint_finality_epoch_roster: mint_roster,
-            epoch_end_height: snapshot.map_or_else(
-                || {
-                    previous.map_or(1_000_000, |parent| {
-                        parent
-                            .finality
-                            .finality_artifact
-                            .height_context
-                            .epoch_end_height
-                    })
-                },
-                |next| next.epoch_end_height,
-            ),
+            epoch: authorization.epoch,
+            kagemusha_mint_finality_authorization: authorization,
+            kagemusha_mint_finality_authority: authority,
+            epoch_end_height: authorization.last_height,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: previous
@@ -867,41 +879,75 @@ mod tests {
             .expect("fixture finality matches block header");
         (artifact, keys)
     }
-    fn mint_finality_roster(
+    fn mint_finality_seed(index: usize) -> [u8; 32] {
+        // Public fixture-only seeds are independent of the randomly generated BLS keys.
+        let index = u8::try_from(index).expect("small fixture validator index");
+        [0xB0_u8.checked_add(index).expect("fixture seed byte"); 32]
+    }
+    fn mint_finality_authority(
         network_id: NetworkId,
-        epoch: u64,
         roster: &[ValidatorPower],
-    ) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
-        use iroha_data_model::isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
-            KagemushaMintFinalityValidatorKeysV1,
-        };
-        KagemushaMintFinalityEpochRosterV1 {
+    ) -> KagemushaMintFinalityAuthorityGenerationV1 {
+        let authority = KagemushaMintFinalityAuthorityGenerationV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
-            epoch,
+            generation: 0,
             validators: roster
                 .iter()
                 .enumerate()
-                .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
-                    validator: validator.validator.clone(),
-                    eq_proof_public_key: [u8::try_from(index + 1).unwrap(); 32],
-                    ep_proof_public_key: [u8::try_from(index + 17).unwrap(); 32],
+                .map(|(index, validator)| {
+                    derive_kagemusha_mint_finality_validator_keys_v1(
+                        &mint_finality_seed(index),
+                        0,
+                        validator.validator.clone(),
+                    )
+                    .expect("derive real paired-Pasta fixture keys")
                 })
                 .collect(),
-        }
+        };
+        authority
+            .validate()
+            .expect("canonical fixture key generation");
+        authority
     }
     fn seal_epoch_boundary(fixture: &mut Fixture) {
         use iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot;
         let artifact = &mut fixture.finality.finality_artifact;
         let mut context = artifact.height_context.clone();
-        let next_roster =
-            mint_finality_roster(context.network_id, context.epoch + 1, &context.roster);
+        assert_eq!(
+            context.height, 1,
+            "this fixture closes its signed genesis schedule"
+        );
+        assert_eq!(context.epoch, 0);
         context.epoch_end_height = context.height;
-        context.next_epoch_snapshot = Some(FinalizedNextEpochSnapshot {
+        context.kagemusha_mint_finality_authorization =
+            KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &context.kagemusha_mint_finality_authority,
+                context.epoch_end_height,
+            )
+            .expect("genesis authorization ends at the fixture boundary");
+        let next_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
             epoch: context.epoch + 1,
-            kagemusha_mint_finality_epoch_id: next_roster.finality_epoch_id().unwrap(),
-            kagemusha_mint_finality_epoch_roster: next_roster,
+            first_height: context.height + 1,
+            last_height: 1_000_000,
+            beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                session_id: [0xC5; 32],
+                transcript_hash: [0xC6; 32],
+            }),
+            previous_authorization_id: context
+                .kagemusha_mint_finality_authorization
+                .authorization_id()
+                .unwrap(),
+            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+            ..context.kagemusha_mint_finality_authorization
+        };
+        next_authorization
+            .validate_successor(&context.kagemusha_mint_finality_authorization)
+            .expect("exact contiguous retained scheduling authorization");
+        context.next_epoch_snapshot = Some(FinalizedNextEpochSnapshot {
+            epoch: next_authorization.epoch,
+            kagemusha_mint_finality_authorization: next_authorization,
+            kagemusha_mint_finality_authority: context.kagemusha_mint_finality_authority.clone(),
             epoch_end_height: 1_000_000,
             mode: context.mode,
             roster: context.roster.clone(),
@@ -931,14 +977,14 @@ mod tests {
         fixture.trusted_context_id = *artifact.context_id().0.as_ref();
     }
     fn signed_commit_qc(
-        _context: &HeightContext,
+        context: &HeightContext,
         subject: BlockSubject,
         execution_commitment: &ExecutionCommitment,
         round: ConsensusRound,
         keys: &[KeyPair],
     ) -> QuorumCertificate {
         let signers = [0, 1, 2];
-        let preimage = Vote {
+        let vote = Vote {
             round,
             proposal_round: round,
             phase: GlobalPhase::Commit,
@@ -946,8 +992,8 @@ mod tests {
             execution_commitment: *execution_commitment,
             signer: 0,
             signature: Vec::new(),
-        }
-        .signature_preimage();
+        };
+        let preimage = vote.signature_preimage();
         let shares = signers
             .iter()
             .map(|index| {
@@ -958,7 +1004,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        QuorumCertificate {
+        let mut certificate = QuorumCertificate {
             round,
             proposal_round: round,
             phase: GlobalPhase::Commit,
@@ -967,7 +1013,44 @@ mod tests {
             signers: vec![0, 1, 2],
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                 .expect("aggregate fixture commit votes"),
+        };
+        let authority = &context.kagemusha_mint_finality_authority;
+        if let Some(message) =
+            build_kagemusha_mint_finality_seal_message_v1(authority, context, &vote)
+                .expect("derive exact fixture mint-finality statement")
+        {
+            let seals = certificate
+                .signers
+                .iter()
+                .map(|index| {
+                    let signer = KagemushaMintFinalitySignerV1::from_seed(
+                        zeroize::Zeroizing::new(mint_finality_seed(
+                            usize::try_from(*index).unwrap(),
+                        )),
+                        *index,
+                        authority,
+                    )
+                    .expect("admit fixture seed against authoritative Pasta keys");
+                    sign_kagemusha_mint_finality_seal_v1(&signer, &message)
+                        .expect("sign both Pasta parity statements")
+                })
+                .collect();
+            let bundle = KagemushaMintFinalitySealBundleV1 { message, seals };
+            certificate.aggregate_signature = encode_kagemusha_consensus_signature_envelope_v1(
+                KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,
+                &certificate.aggregate_signature,
+                &bundle.encode(),
+            )
+            .expect("canonical BLS plus paired-Pasta CommitQC envelope");
+            verify_kagemusha_mint_finality_seal_bundle_v1(
+                authority,
+                context,
+                &certificate,
+                &bundle,
+            )
+            .expect("verify actual exact-quorum paired-Pasta fixture seals");
         }
+        certificate
     }
 
     fn bundle(fixture: &Fixture) -> Bundle {
@@ -1130,11 +1213,106 @@ mod tests {
         );
     }
     #[test]
+    fn zero_top_up_boundary_carries_verifiable_paired_pasta_authorization() {
+        let mut fixture = make_fixture(Vec::new(), false);
+        seal_epoch_boundary(&mut fixture);
+        let artifact = &fixture.finality.finality_artifact;
+        let context = &artifact.height_context;
+        let certificate = &artifact.commit_qc;
+        assert_eq!(certificate.execution_commitment.kagemusha_top_up_count, 0);
+        assert!(
+            certificate
+                .execution_commitment
+                .kagemusha_top_up_root
+                .is_none()
+        );
+        let parts =
+            decode_kagemusha_consensus_signature_envelope_v1(&certificate.aggregate_signature)
+                .unwrap()
+                .expect("a boundary has a paired-Pasta envelope even without top-ups");
+        assert_eq!(parts.kind, KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1);
+        let seals = decode_kagemusha_mint_finality_seal_bundle_v1(parts.auxiliary_payload).unwrap();
+        let next = context.next_epoch_snapshot.as_ref().unwrap();
+        assert_eq!(
+            seals.message.next_epoch_authorization,
+            Some(next.kagemusha_mint_finality_authorization)
+        );
+        assert_eq!(
+            seals.message.epoch_authorization,
+            context.kagemusha_mint_finality_authorization
+        );
+        assert_eq!(seals.seals.len(), 3);
+        assert_eq!(
+            context.kagemusha_mint_finality_authority.validators.len(),
+            4
+        );
+        assert_eq!(
+            next.kagemusha_mint_finality_authority,
+            context.kagemusha_mint_finality_authority
+        );
+        assert_eq!(next.kagemusha_mint_finality_authority.generation, 0);
+        assert_eq!(next.kagemusha_mint_finality_authorization.epoch, 1);
+        verify_kagemusha_mint_finality_seal_bundle_v1(
+            &context.kagemusha_mint_finality_authority,
+            context,
+            certificate,
+            &seals,
+        )
+        .expect("native paired-Pasta equations authenticate the exact retained schedule");
+        let mut altered_signature = seals.clone();
+        altered_signature.seals[0].eq_proof_signature.response[0] ^= 1;
+        assert!(
+            verify_kagemusha_mint_finality_seal_bundle_v1(
+                &context.kagemusha_mint_finality_authority,
+                context,
+                certificate,
+                &altered_signature,
+            )
+            .is_err()
+        );
+        let mut altered_schedule = seals;
+        altered_schedule
+            .message
+            .next_epoch_authorization
+            .as_mut()
+            .unwrap()
+            .last_height -= 1;
+        assert!(
+            verify_kagemusha_mint_finality_seal_bundle_v1(
+                &context.kagemusha_mint_finality_authority,
+                context,
+                certificate,
+                &altered_schedule,
+            )
+            .is_err()
+        );
+    }
+    #[test]
     fn continuation_authenticates_epoch_transition_exactly_at_file_boundary() {
         let mut parent = make_fixture(Vec::new(), false);
         seal_epoch_boundary(&mut parent);
         let child = make_fixture_after(Vec::new(), false, Some(&parent));
         assert_eq!(child.finality.finality_artifact.height_context.epoch, 1);
+        let selected = parent
+            .finality
+            .finality_artifact
+            .height_context
+            .next_epoch_snapshot
+            .as_ref()
+            .unwrap();
+        let child_context = &child.finality.finality_artifact.height_context;
+        assert_eq!(
+            child_context.kagemusha_mint_finality_authorization,
+            selected.kagemusha_mint_finality_authorization
+        );
+        assert_eq!(
+            child_context.kagemusha_mint_finality_authority,
+            selected.kagemusha_mint_finality_authority
+        );
+        assert_eq!(
+            child_context.kagemusha_mint_finality_authority.generation,
+            0
+        );
         let mut stream = FinalityStream::new(&expectations(&parent)).unwrap();
         stream.consume(&bundle(&parent).finality).unwrap();
         stream

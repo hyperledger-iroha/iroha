@@ -109,7 +109,9 @@ gh workflow run javascript-sdk-rc-matrix.yml
 ```
 
 The workflow fans out across `ubuntu-latest`, `macos-latest`, and
-`windows-latest` with Node.js 18 and 20. Each run installs dependencies,
+`windows-latest` with Node.js versions at or above the declared 20.19.0 minimum.
+Preserve the existing release matrix and record exact runtime versions; the
+minimum declaration does not qualify those runs. Each run installs dependencies,
 executes `npm run build:native`, runs `npm test`, and captures an `npm pack`
 tarball inside `rc-matrix-<os>-node<version>` artifacts. Download those
 artifacts and store them next to the provenance bundle so reviewers can confirm

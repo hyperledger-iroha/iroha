@@ -593,7 +593,7 @@ fn prepared_journals_retain_the_original_cut_and_drop_without_publication() {
             .touched_values,
         1
     );
-    assert_eq!(journals.components.world.field_count(), 278);
+    assert_eq!(journals.components.world.field_count(), 282);
     assert_eq!(journals.components.world.mode(), mv::BlockMode::Ordinary);
     assert!(journals.components.world.matches_current(&state.world));
     assert_eq!(
@@ -771,7 +771,7 @@ fn complete_carrier_journals_move_to_a_worker_after_the_original_state_is_droppe
     let returned = std::thread::spawn(move || {
         assert_eq!(journals.execution_prefix_commitment(), prefix);
         assert_eq!(journals.valid.as_ref().hash(), proposal.hash());
-        assert_eq!(journals.components.world.field_count(), 278);
+        assert_eq!(journals.components.world.field_count(), 282);
         assert!(!journals.publication_events.is_empty());
         journals
     })

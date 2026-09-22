@@ -577,8 +577,14 @@ mod recovered_sign_capacity_tests {
             })
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("v2-worker-test");
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                network_id,
+                0,
+                1,
+                u64::MAX,
+                &roster,
+            );
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -592,8 +598,8 @@ mod recovered_sign_capacity_tests {
             quorum: wire::DualQuorum::from_roster(&roster)
                 .expect("scheduler fixture equal-vote quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"v2-worker-test-context"),
             execution_policy_hash: Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -3005,7 +3011,9 @@ impl ProductionLifecycleOwnerV1 {
         )
     }
     pub(in crate::sumeragi) fn assert_cold_ready_fetch_bad_carrier_rejected_for_test(&mut self) {
-        self.registry.registry_mut().assert_cold_fetch_guard_rejects_bad_carrier_for_test();
+        self.registry
+            .registry_mut()
+            .assert_cold_fetch_guard_rejects_bad_carrier_for_test();
     }
 
     /// Opaque byte-stable view of the exact concrete registry for mutation checks.

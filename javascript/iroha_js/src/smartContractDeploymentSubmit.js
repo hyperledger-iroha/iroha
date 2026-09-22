@@ -1,3 +1,4 @@
+import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { Buffer } from "buffer";
 
 import { verifyEd25519Strict as verifyEd25519 } from "./ed25519Strict.js";
@@ -20,11 +21,11 @@ const HASH_LITERAL_PATTERN = /^hash:([0-9A-F]{64})#[0-9A-F]{4}$/u;
 
 function requirePlainObject(value, context) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`${context} must be a plain object`);
+    rejectType(`${context} must be a plain object`);
   }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {
-    throw new TypeError(`${context} must be a plain object`);
+    rejectType(`${context} must be a plain object`);
   }
   return value;
 }
@@ -32,7 +33,7 @@ function requirePlainObject(value, context) {
 function assertOnlyObjectKeys(value, allowed, context) {
   const unexpected = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unexpected.length > 0) {
-    throw new TypeError(
+    rejectType(
       `${context} contains unsupported fields: ${unexpected.sort().join(", ")}`,
     );
   }
@@ -46,7 +47,7 @@ function requireExactString(value, context) {
     /[\u0000-\u001F\u007F-\u009F]/u.test(value) ||
     value.normalize("NFC") !== value
   ) {
-    throw new TypeError(
+    rejectType(
       `${context} must be a non-empty exact NFC string without control characters`,
     );
   }
@@ -55,7 +56,7 @@ function requireExactString(value, context) {
 
 function requireExactHashHex(value, context) {
   if (typeof value !== "string" || !/^[0-9a-f]{63}[13579bdf]$/u.test(value)) {
-    throw new TypeError(
+    rejectType(
       `${context} must be an exact canonical lowercase 32-byte Iroha hash`,
     );
   }
@@ -68,7 +69,7 @@ function normalizeUnsigned(value, maximum, context) {
     normalized = value;
   } else if (typeof value === "number") {
     if (!Number.isSafeInteger(value)) {
-      throw new TypeError(
+      rejectType(
         `${context} must be a safe integer, bigint, or canonical decimal string`,
       );
     }
@@ -76,12 +77,12 @@ function normalizeUnsigned(value, maximum, context) {
   } else if (typeof value === "string" && /^(?:0|[1-9]\d*)$/u.test(value)) {
     normalized = BigInt(value);
   } else {
-    throw new TypeError(
+    rejectType(
       `${context} must be an unsigned integer, bigint, or canonical decimal string`,
     );
   }
   if (normalized < 0n || normalized > maximum) {
-    throw new RangeError(`${context} is outside its unsigned integer range`);
+    rejectRange(`${context} is outside its unsigned integer range`);
   }
   return normalized;
 }
@@ -94,14 +95,14 @@ function copyBytes(value, context) {
     );
   }
   if (value instanceof ArrayBuffer) return Buffer.from(new Uint8Array(value));
-  throw new TypeError(`${context} must be bytes`);
+  rejectType(`${context} must be bytes`);
 }
 
 function normalizeDetachedEd25519Signature(value, context) {
   let bytes;
   if (typeof value === "string") {
     if (!/^[0-9A-Fa-f]{128}$/u.test(value)) {
-      throw new TypeError(`${context} string must be exactly 64 bytes of hexadecimal`);
+      rejectType(`${context} string must be exactly 64 bytes of hexadecimal`);
     }
     bytes = Buffer.from(value, "hex");
   } else if (
@@ -122,20 +123,20 @@ function normalizeDetachedEd25519Signature(value, context) {
       envelope.algorithm !== "ed25519" &&
       envelope.algorithm !== 0
     ) {
-      throw new TypeError(`${context}.algorithm must be ed25519`);
+      rejectType(`${context}.algorithm must be ed25519`);
     }
     const aliases = ["signature", "bytes", "payload"].filter(
       (field) => envelope[field] !== undefined,
     );
     if (aliases.length !== 1) {
-      throw new TypeError(
+      rejectType(
         `${context} must provide exactly one of signature, bytes, or payload`,
       );
     }
     return normalizeDetachedEd25519Signature(envelope[aliases[0]], context);
   }
   if (bytes.length !== 64) {
-    throw new TypeError(`${context} must contain exactly 64 bytes`);
+    rejectType(`${context} must contain exactly 64 bytes`);
   }
   return bytes;
 }
@@ -150,11 +151,11 @@ function normalizedHashHex(value, context) {
       contractAlias: "placeholder::universal",
     }).CommitContractDeployment.code_hash;
   } catch (error) {
-    throw new TypeError(`${context} is not a canonical 32-byte hash: ${error.message}`);
+    rejectType(`${context} is not a canonical 32-byte hash: ${error.message}`);
   }
   const match = HASH_LITERAL_PATTERN.exec(normalized);
   if (!match) {
-    throw new TypeError(`${context} did not normalize to a canonical hash literal`);
+    rejectType(`${context} did not normalize to a canonical hash literal`);
   }
   return match[1].toLowerCase();
 }
@@ -165,7 +166,7 @@ async function buildSignedManifestRegistrationStep({
   signManifest,
 }) {
   if (prepared.manifest.provenance !== null) {
-    throw new Error("compiler manifest must be unsigned before local provenance signing");
+    rejectError("compiler manifest must be unsigned before local provenance signing");
   }
   const payloadBytes = noritoEncodeContractManifestSignaturePayload(
     prepared.manifest,
@@ -195,7 +196,7 @@ async function buildSignedManifestRegistrationStep({
     verified = false;
   }
   if (!verified) {
-    throw new Error(
+    rejectError(
       "manifest signature does not verify over the canonical Norito payload",
     );
   }
@@ -214,7 +215,7 @@ async function buildSignedManifestRegistrationStep({
     signedManifest,
   );
   if (!canonicalPayload.equals(payloadBytes)) {
-    throw new Error("signed manifest changed its canonical provenance payload");
+    rejectError("signed manifest changed its canonical provenance payload");
   }
   return Object.freeze({
     kind: "register_manifest",
@@ -226,26 +227,26 @@ function requireAppliedStatus(result, expectedHash, context) {
   const envelope = requirePlainObject(result, `${context} status`);
   const observedHash = requireExactHashHex(envelope.hash, `${context} status hash`);
   if (observedHash !== expectedHash) {
-    throw new Error(`${context} status hash does not match the submitted transaction`);
+    rejectError(`${context} status hash does not match the submitted transaction`);
   }
   if (envelope.scope !== "global") {
-    throw new Error(`${context} status scope must be global`);
+    rejectError(`${context} status scope must be global`);
   }
   if (envelope.resolved_from !== "state") {
-    throw new Error(`${context} status must be resolved from persisted state`);
+    rejectError(`${context} status must be resolved from persisted state`);
   }
   const status = requirePlainObject(envelope.status, `${context} status payload`);
   if (status.kind !== "Applied") {
-    throw new Error(`${context} did not return state-resolved Applied finality`);
+    rejectError(`${context} did not return state-resolved Applied finality`);
   }
   if (!Number.isSafeInteger(status.block_height) || status.block_height < 1) {
-    throw new Error(`${context} Applied status must include a positive block height`);
+    rejectError(`${context} Applied status must include a positive block height`);
   }
 }
 
 function requireCanonicalDecimal(value, maximum, context) {
   if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value)) {
-    throw new TypeError(`${context} must be a canonical decimal string`);
+    rejectType(`${context} must be a canonical decimal string`);
   }
   return normalizeUnsigned(value, maximum, context);
 }
@@ -270,17 +271,17 @@ function validateDeploymentState(
   assertOnlyObjectKeys(state, fields, "deployment state");
   for (const field of fields) {
     if (!Object.hasOwn(state, field)) {
-      throw new TypeError(`deployment state is missing ${field}`);
+      rejectType(`deployment state is missing ${field}`);
     }
   }
   if (state.authority !== authority) {
-    throw new Error("deployment state authority does not match the deployment authority");
+    rejectError("deployment state authority does not match the deployment authority");
   }
   if (state.contract_alias !== contractAlias) {
-    throw new Error("deployment state alias does not match the requested alias");
+    rejectError("deployment state alias does not match the requested alias");
   }
   if (state.dataspace_alias !== dataspaceAlias) {
-    throw new Error("deployment state disagrees with the alias dataspace");
+    rejectError("deployment state disagrees with the alias dataspace");
   }
   const observedChainDiscriminant = requireCanonicalDecimal(
     state.chain_discriminant,
@@ -288,7 +289,7 @@ function validateDeploymentState(
     "deployment state chain_discriminant",
   );
   if (observedChainDiscriminant !== chainDiscriminant) {
-    throw new Error("deployment state chain discriminant does not match the deployment chain");
+    rejectError("deployment state chain discriminant does not match the deployment chain");
   }
   const deployNonce = requireCanonicalDecimal(
     state.deploy_nonce,
@@ -306,14 +307,14 @@ function validateDeploymentState(
     "deployment state observed_block_height",
   );
   if (observedBlockHeight < 1n) {
-    throw new Error("deployment state observed_block_height must be positive");
+    rejectError("deployment state observed_block_height must be positive");
   }
   const observedBlockHash = requireExactString(
     state.observed_block_hash,
     "deployment state observed_block_hash",
   );
   if (!HASH_LITERAL_PATTERN.test(observedBlockHash)) {
-    throw new Error(
+    rejectError(
       "deployment state observed_block_hash must be a canonical Iroha hash literal",
     );
   }
@@ -434,7 +435,7 @@ export async function continueDeploySmartContractBrowser({
       "previousContractAddress",
     );
     if (previous.dataspaceId !== state.dataspaceId) {
-      throw new Error(
+      rejectError(
         "previousContractAddress belongs to a different deployment dataspace",
       );
     }

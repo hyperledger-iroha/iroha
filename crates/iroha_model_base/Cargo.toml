@@ -26,7 +26,6 @@ iroha_schema = { workspace = true }
 iroha_ffi = { workspace = true, optional = true }
 derive_more = { workspace = true, features = ["as_ref", "display", "debug", "constructor", "from_str", "from", "into", "try_into", "deref"] }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
-mv = { path = "../mv" }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 # Name normalization is consensus-visible. The source checks the baked data
 # against the existing reviewed fingerprint before accepting normalization.
@@ -34,6 +33,8 @@ icu_normalizer = { version = "=2.2.0", default-features = false, features = ["co
 idna = { version = "1.1.0", default-features = false, features = ["std"] }
 
 [dev-dependencies]
+# Storage round-trip integration belongs to tests, not the model dependency graph.
+mv = { workspace = true }
 # The immutable schema fixture was captured with all algorithm enum variants.
 # Keep this test selection separate from the minimal production dependency.
 iroha_crypto = { workspace = true, default-features = false, features = ["bls", "gost", "sm"] }

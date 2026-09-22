@@ -352,7 +352,7 @@ reports absence; every other failure, including route unavailability or a
 wrong-network-prefix rejection, propagates without fallback.
 
 ```python
-from iroha_python import ToriiClient, authority_fee_payment
+from iroha_python import ToriiClient, account_faucet_claim_hash_v1, authority_fee_payment
 
 client = ToriiClient("https://taira.sora.org")
 account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
@@ -363,6 +363,12 @@ definition = client.get_asset_definition("ds#wonderland.is")
 
 puzzle = client.get_account_faucet_puzzle()
 anchor_height, nonce_hex = ToriiClient.solve_account_faucet_pow(account_id, puzzle)
+public_reset_binding = {
+    **public_reset_binding,
+    "semantic_hash_hex": account_faucet_claim_hash_v1(
+        account_id, pow_anchor_height=anchor_height, pow_nonce_hex=nonce_hex
+    ),
+}
 prepared_response = client.prepare_account_faucet(
     account_id,
     binding=public_reset_binding,
@@ -389,6 +395,12 @@ Load `configured_faucet_asset_definition_id` and `configured_faucet_amount`
 from independent trusted configuration, never from the prepared response. Both
 values are mandatory on prepare and submit, and the amount must be a canonical
 positive quantity string.
+
+Compute the binding's `semantic_hash_hex` after solving PoW with
+`account_faucet_claim_hash_v1`, then pass that exact solved claim to
+`prepare_account_faucet`. The helper uses the same validated native claim and
+Norito digest as prepared-transaction verification. It hashes the claim; Torii
+still verifies that the nonce satisfies the current faucet puzzle.
 
 The first-release faucet claim carries `pow_anchor_height` as a direct positive
 integer and `pow_nonce_hex` as 1–32 bytes of canonical lowercase hexadecimal.
@@ -1292,10 +1304,25 @@ the nonce-bearing body once, with redirects and transport retries disabled. Tori
 exact transaction predicate, signature, freshness, nonce, and involved-account/operator
 authorization.
 
-`get_verified_committed_transaction(...)` verifies the network input and its complete
-execution output against the carrier block. Its `VerifiedCommittedTransaction.output_hash`
-binds the full output, including the result and execution context. Scheduled `Time`
-outputs are separate from network transactions and cannot be returned by this helper.
+`get_verified_committed_transaction(...)` requires exact `executed_block_wire` bytes,
+`finality_bundle_chain_json` (a Norito JSON array of 1–4096 `BridgeFinalityBundle`
+values, at most 16 MiB UTF-8), and `trusted_height_context_id`. The array starts at
+an independently trusted context/checkpoint and follows immediate successors to
+the selected carrier. Obtain the typed `network_id` and canonical checksummed
+context hash from trusted network configuration or a previously authenticated
+checkpoint; copying them from the response does not establish trust.
+
+The native `BridgeFinalityVerifier` authenticates each bundle before the final
+Commit QC's execution commitment is joined to the exact canonical executed wire
+and selected input/full-output proofs. The returned `VerifiedCommittedTransaction`
+contains the carrier hash/height, authenticated network/context, typed
+`execution_commitment`, executed wire hash/length, and full `output_hash`. The
+low-level `verify_committed_transaction_inclusion(...)` accepts the same proof
+and trust inputs with exact committed-query response bytes for offline consumers.
+Both helpers authenticate rejected results; application code must check
+`result_ok` before treating an operation as successful. Internal `Time` and
+`Pipeline` outputs cannot be selected as network transactions. Header signatures
+alone cannot authenticate execution outputs.
 
 Native instructions and deployed-contract calls can share one ordered, atomic
 batch. Any batch containing a contract call must bind a positive `gas_limit`

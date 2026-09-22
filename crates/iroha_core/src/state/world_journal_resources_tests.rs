@@ -42,7 +42,7 @@ fn world_shell_plan_matches_constructed_capture_and_installation_layouts() {
             demand.capture_bytes()
         );
         let prepared = retained
-            .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+            .try_prepare_publication(&world, None, |_, _| Ok::<_, ()>(()))
             .unwrap_or_else(|(_, error, _)| panic!("fixture preparation refused: {error:?}"));
         {
             let (retry_vector, prepared_vector, prepared_layouts) =
@@ -106,14 +106,14 @@ fn world_shell_reservation_holds_capture_abort_retry_and_refunds_after_drop() {
         Err(AllocationRefusal::Capacity { .. })
     ));
     let prepared = retained
-        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .try_prepare_publication(&world, None, |_, _| Ok::<_, ()>(()))
         .unwrap_or_else(|(_, error, _)| panic!("fixture preparation refused: {error:?}"));
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     let retained = prepared.abort().0;
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     let held_writer = world.soradns_last_publish_ms.block();
     let (retained, error, _cleanup) = retained
-        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .try_prepare_publication(&world, None, |_, _| Ok::<_, ()>(()))
         .err()
         .expect("busy owner must preserve retained shells and reservation");
     drop(_cleanup);
@@ -121,7 +121,7 @@ fn world_shell_reservation_holds_capture_abort_retry_and_refunds_after_drop() {
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     drop(held_writer);
     let prepared = retained
-        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .try_prepare_publication(&world, None, |_, _| Ok::<_, ()>(()))
         .unwrap_or_else(|(_, error, _)| panic!("fixture retry refused: {error:?}"));
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     drop(prepared);
