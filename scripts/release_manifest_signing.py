@@ -437,133 +437,304 @@ def _open_release_output_parent(
             metadata = os.fstat(descriptor)
             lineage.append((metadata.st_dev, metadata.st_ino))
         return descriptor, tuple(lineage), tuple(descriptors)
-    except (OSError, NotImplementedError) as exc:
+    except BaseException as exc:
+        # A failed close may already have released its numeric descriptor. Drain
+        # every other acquired handle once, never retry, and retain both failures.
+        cleanup_errors = []
         for descriptor in reversed(descriptors):
-            os.close(descriptor)
-        raise ReleaseManifestSignatureError(
-            "release output parent directory could not be opened without links"
-        ) from exc
+            try:
+                os.close(descriptor)
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+        if isinstance(exc, (OSError, NotImplementedError)):
+            message = "release output parent directory could not be opened without links"
+            if cleanup_errors:
+                message += f"; {len(cleanup_errors)} descriptor cleanup attempt(s) failed"
+            failure = ReleaseManifestSignatureError(message)
+            failure.cleanup_errors = tuple(cleanup_errors)
+            raise failure from exc
+        if cleanup_errors:
+            # Preserve control-flow/unexpected exception identity and its existing
+            # cause/context on Python 3.10, while retaining cleanup diagnostics.
+            exc.cleanup_errors = tuple(cleanup_errors)
+        raise
 
 
 class _ReleaseOutputTransaction:
-    """Retain output directory and inode authority until the whole set commits."""
+    """Retain output authority until commit or a terminal, fully attempted rollback.
+
+    Cleanup diagnostics are immutable ``transaction_cleanup_errors`` tuples on
+    the original exception. A cleanup-only failure raises the same release error
+    type, with ``outputs_retained`` indicating a validated publication whose
+    descriptor cleanup failed; that failure never claims rollback succeeded.
+    """
 
     def __init__(self, outputs: list[tuple[Path, str]]) -> None:
         self.outputs = dict(outputs)
         self.parents: dict[
             Path, tuple[int, tuple[tuple[int, int], ...], tuple[int, ...]]
         ] = {}
-        self.created: list[tuple[Path, int, FileIdentity]] = []
+        # None records ownership before the first fstat can fail. Only the held
+        # descriptor may later supply that missing rollback inode identity.
+        self.created: list[tuple[Path, int, Optional[FileIdentity]]] = []
+        self._state = "new"
+        self._active = False
+        self._failure: Optional[BaseException] = None
+        self._cleanup_reentry: Optional[BaseException] = None
+
+    def _refuse(self, message: str) -> None:
+        failure = ReleaseManifestSignatureError(message)
+        if self._active and self._state == "closed" and self._cleanup_reentry is None:
+            self._cleanup_reentry = failure
+        if self._failure is None and self._state != "closed":
+            self._failure = failure
+        raise failure
+
+    def _healthy(self) -> None:
+        if self._failure is not None:
+            raise ReleaseManifestSignatureError(
+                "release output transaction was invalidated by an earlier failure"
+            ) from self._failure
+
+    def _operate(self, action):
+        if self._active:
+            self._refuse("release output transaction activity is reentrant")
+        if self._state != "open":
+            self._refuse("release output transaction is not open")
+        self._healthy()
+        self._active = True
+        try:
+            result = action()
+            self._healthy()
+            return result
+        except BaseException as exc:
+            if self._failure is None:
+                self._failure = exc
+            raise
+        finally:
+            self._active = False
+
+    @staticmethod
+    def _attach_cleanup(exception: BaseException, errors: tuple[BaseException, ...]) -> None:
+        if errors:
+            previous = getattr(exception, "transaction_cleanup_errors", ())
+            exception.transaction_cleanup_errors = (*previous, *errors)
+
+    @staticmethod
+    def _close_descriptors(descriptors) -> tuple[BaseException, ...]:
+        errors = []
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except BaseException as exc:
+                errors.append(exc)
+        return tuple(errors)
+
+    @classmethod
+    def _raise_cleanup(cls, errors: tuple[BaseException, ...], *, outputs_retained=False) -> None:
+        label = "validated outputs retained; " if outputs_retained else ""
+        failure = ReleaseManifestSignatureError(
+            f"release output transaction {label}cleanup failed; {len(errors)} operation(s) failed"
+        )
+        cls._attach_cleanup(failure, errors)
+        failure.outputs_retained = outputs_retained
+        raise failure from errors[0]
 
     def __enter__(self):
+        if self._active or self._state != "new" or self._failure is not None:
+            self._refuse("release output transaction cannot be entered again")
+        self._state = "open"
         try:
-            for path, label in self.outputs.items():
-                if path.parent not in self.parents:
-                    self.parents[path.parent] = _open_release_output_parent(path.parent)
-                _require_new_output(path, label)
-            self.assert_unchanged()
-        except BaseException:
-            self.__exit__(*sys.exc_info())
+            self._operate(self._acquire)
+        except BaseException as exc:
+            self._attach_cleanup(exc, self._finish(rollback=True))
             raise
         return self
 
+    def _acquire(self) -> None:
+        for path, label in self.outputs.items():
+            if path.parent not in self.parents:
+                acquired = _open_release_output_parent(path.parent)
+                try:
+                    self.parents[path.parent] = acquired
+                except BaseException as exc:
+                    # Assignment may publish before an interruption is raised.
+                    # The exact retained tuple then belongs only to _finish;
+                    # otherwise this local owner must drain its descriptors.
+                    if dict.get(self.parents, path.parent) is not acquired:
+                        self._attach_cleanup(exc, self._close_descriptors(acquired[2]))
+                    raise
+            self._healthy()
+            _require_new_output(path, label)
+        self._assert_unchanged()
+
     def assert_unchanged(self) -> None:
         """Reject path-lineage replacement and changes to any installed output."""
+        self._operate(self._assert_unchanged)
 
+    def _assert_unchanged(self) -> None:
         for parent, (_, expected_lineage, _) in self.parents.items():
             _, lineage, descriptors = _open_release_output_parent(parent)
-            for descriptor in reversed(descriptors):
-                os.close(descriptor)
-            if lineage != expected_lineage:
-                raise ReleaseManifestSignatureError(
-                    "release output parent directory was replaced"
-                )
+            try:
+                if lineage != expected_lineage:
+                    raise ReleaseManifestSignatureError(
+                        "release output parent directory was replaced"
+                    )
+                self._healthy()
+            except BaseException as exc:
+                self._attach_cleanup(exc, self._close_descriptors(descriptors))
+                raise
+            errors = self._close_descriptors(descriptors)
+            if errors:
+                self._raise_cleanup(errors)
+            self._healthy()
         for path, descriptor, expected_identity in self.created:
             try:
                 named = os.stat(
-                    path.name,
-                    dir_fd=self.parents[path.parent][0],
-                    follow_symlinks=False,
+                    path.name, dir_fd=self.parents[path.parent][0], follow_symlinks=False
                 )
                 opened = os.fstat(descriptor)
             except OSError as exc:
                 raise ReleaseManifestSignatureError(
                     "release output changed during publication"
                 ) from exc
-            if (
-                not stat.S_ISREG(named.st_mode)
-                or _identity(named) != expected_identity
-                or _identity(opened) != expected_identity
-            ):
-                raise ReleaseManifestSignatureError(
-                    "release output changed during publication"
-                )
+            if (expected_identity is None or not stat.S_ISREG(named.st_mode)
+                    or _identity(named) != expected_identity or _identity(opened) != expected_identity):
+                raise ReleaseManifestSignatureError("release output changed during publication")
+            self._healthy()
 
-    def install(
-        self, path: Path, payload: bytes, label: str, *, mode: int = 0o644
-    ) -> None:
+    def install(self, path: Path, payload: bytes, label: str, *, mode: int = 0o644) -> None:
         """Create and retain one exclusive output under its preflight directory."""
+        self._operate(lambda: self._install(path, payload, label, mode))
 
+    def _install(self, path: Path, payload: bytes, label: str, mode: int) -> None:
         if path not in self.outputs:
             raise ReleaseManifestSignatureError("unbound release output path")
-        self.assert_unchanged()
+        self._assert_unchanged()
         parent_descriptor = self.parents[path.parent][0]
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
         try:
             descriptor = os.open(path.name, flags, mode, dir_fd=parent_descriptor)
         except OSError as exc:
             raise ReleaseManifestSignatureError(f"cannot create {label}: {exc}") from exc
-        self.created.append((path, descriptor, _identity(os.fstat(descriptor))))
+        record = None
         try:
+            record = (path, descriptor, None)
+            self.created.append(record)
+        except BaseException as exc:
+            # append may publish before reporting an interruption. Transfer is
+            # proved by that exact record, never by a reusable descriptor number.
+            # Terminal cleanup owns a published record; only an untransferred
+            # descriptor is rolled back and closed by this local owner.
+            if record is not None and any(
+                    retained is record for retained in list.__iter__(self.created)):
+                raise
+            if self._failure is None:
+                self._failure = exc
+            errors = []
+            try:
+                self._rollback_one(path, descriptor, None, self.parents, errors)
+            except BaseException as cleanup_error:
+                errors.append(cleanup_error)
+            errors.extend(self._close_descriptors((descriptor,)))
+            self._attach_cleanup(exc, tuple(errors))
+            raise
+        try:
+            self.created[-1] = (path, descriptor, _identity(os.fstat(descriptor)))
+            self._healthy()
             view = memoryview(payload)
             while view:
                 written = os.write(descriptor, view)
                 if written <= 0:
-                    raise ReleaseManifestSignatureError(
-                        f"short write while creating {label}"
-                    )
+                    raise ReleaseManifestSignatureError(f"short write while creating {label}")
                 view = view[written:]
+                self._healthy()
             os.fsync(descriptor)
             installed = os.fstat(descriptor)
             if installed.st_nlink != 1 or installed.st_mode & 0o022:
-                raise ReleaseManifestSignatureError(
-                    "release output changed during publication"
-                )
+                raise ReleaseManifestSignatureError("release output changed during publication")
             self.created[-1] = (path, descriptor, _identity(installed))
-            self.assert_unchanged()
+            self._assert_unchanged()
             os.fsync(parent_descriptor)
         except OSError as exc:
             raise ReleaseManifestSignatureError(f"cannot publish {label}: {exc}") from exc
 
-    def __exit__(self, exception_type, exception, traceback) -> None:
-        committed = False
+    @staticmethod
+    def _rollback_one(path, descriptor, identity, parents, errors) -> None:
+        # Retained inode erasure is independent of whether its name was replaced.
+        # Attempt each cleanup action, but never unlink a known foreign inode.
+        for operation in (lambda: os.ftruncate(descriptor, 0), lambda: os.fsync(descriptor)):
+            try:
+                operation()
+            except BaseException as exc:
+                errors.append(exc)
+        if identity is None:
+            try:
+                identity = _identity(os.fstat(descriptor))
+            except BaseException as exc:
+                errors.append(exc)
+                return
+        parent_descriptor = parents[path.parent][0]
         try:
-            if exception_type is None:
-                self.assert_unchanged()
-                committed = True
-        finally:
-            for path, descriptor, identity in reversed(self.created):
-                if not committed:
-                    # Truncate our retained inode even if an attacker moved or
-                    # hardlinked it; never remove a substituted file by pathname.
+            named = os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        except BaseException as exc:
+            errors.append(exc)
+            return
+        if not stat.S_ISREG(named.st_mode) or (named.st_dev, named.st_ino) != identity[:2]:
+            return
+        try:
+            os.unlink(path.name, dir_fd=parent_descriptor)
+        except BaseException as exc:
+            errors.append(exc)
+            return
+        try:
+            os.fsync(parent_descriptor)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def _finish(self, *, rollback: bool) -> tuple[BaseException, ...]:
+        # Detach before any cleanup I/O. A close can succeed before it reports an
+        # error, and its numeric descriptor may immediately belong to someone else.
+        created, parents = tuple(self.created), self.parents
+        self.created, self.parents = [], {}
+        self._state, self._active = "closed", True
+        errors = []
+        try:
+            if rollback:
+                for path, descriptor, identity in reversed(created):
                     try:
-                        os.ftruncate(descriptor, 0)
-                        os.fsync(descriptor)
-                        parent_descriptor = self.parents[path.parent][0]
-                        named = os.stat(
-                            path.name,
-                            dir_fd=parent_descriptor,
-                            follow_symlinks=False,
-                        )
-                        if (named.st_dev, named.st_ino) == identity[:2]:
-                            os.unlink(path.name, dir_fd=parent_descriptor)
-                            os.fsync(parent_descriptor)
-                    except OSError:
-                        pass
-                os.close(descriptor)
-            for _, _, descriptors in self.parents.values():
-                for descriptor in reversed(descriptors):
-                    os.close(descriptor)
+                        self._rollback_one(path, descriptor, identity, parents, errors)
+                    except BaseException as exc:
+                        errors.append(exc)
+            errors.extend(self._close_descriptors(tuple(row[1] for row in created)))
+            for _, _, descriptors in reversed(tuple(parents.values())):
+                errors.extend(self._close_descriptors(descriptors))
+        finally:
+            self._active = False
+        if self._cleanup_reentry is not None and not any(
+                error is self._cleanup_reentry for error in errors):
+            errors.append(self._cleanup_reentry)
+        return tuple(errors)
+
+    def __exit__(self, exception_type, exception, traceback) -> None:
+        if self._active:
+            self._refuse("release output transaction exit is reentrant")
+        if self._state != "open":
+            self._refuse("release output transaction is not open")
+        if exception is not None:
+            self._attach_cleanup(exception, self._finish(rollback=True))
+            return
+        try:
+            self.assert_unchanged()
+        except BaseException as exc:
+            self._attach_cleanup(exc, self._finish(rollback=True))
+            raise
+        outputs_retained = bool(self.created)
+        errors = self._finish(rollback=False)
+        if errors:
+            self._raise_cleanup(errors, outputs_retained=outputs_retained)
 
 
 def _unlink_if_identity(path: Path, expected_identity: FileIdentity) -> None:

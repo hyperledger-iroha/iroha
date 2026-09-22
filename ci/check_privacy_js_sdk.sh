@@ -137,6 +137,8 @@ case "${NODE_VERSION}" in
     ;;
 esac
 
+"${NODE_BIN}" scripts/check-node-engine.mjs
+
 export PYTHONDONTWRITEBYTECODE=1
 
 "${NODE_BIN}" scripts/build-native.mjs

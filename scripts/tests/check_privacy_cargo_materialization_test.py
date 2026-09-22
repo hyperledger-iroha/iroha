@@ -60,20 +60,25 @@ privacy_sdk_materialize_canonical_cargo_lock "$2" "$3" "$state" "$4"
         self.assertEqual(self.lock.stat(), before)
 
     def test_stale_graph_owner_rejects_current_authenticated_source(self):
-        # A preceding reviewed digest is a rejected fixture, never an alternate
-        # selector. Even a correct current physical seal cannot authorize it.
-        stale_digest = "6db7b8e403d3f0ceda056552ede710d5f57b2c423290640f368b51e7f4c91ddd"
-        self.assertNotEqual(stale_digest, OWNER[0])
-        state = self.run_python_owner("privacy_sdk_file_seal", [self.lock])
-        self.assertEqual(state.returncode, 0, state.stderr)
-        before = self.lock.stat(), self.lock.read_bytes()
-        result = self.run_python_owner(
-            "privacy_sdk_materialize_canonical_cargo_lock",
-            [self.source, self.destination, "present:" + state.stdout.strip(), stale_digest],
+        # Preceding reviewed digests are rejected fixtures, never alternate
+        # selectors. Even a correct current physical seal cannot authorize them.
+        stale_digests = (
+            "6db7b8e403d3f0ceda056552ede710d5f57b2c423290640f368b51e7f4c91ddd",
+            "398cd15f1b51bc25d673acc766f98c8910446246a2ba33b0e97f17332bf57d40",
         )
-        self.assert_rejected(result)
-        self.assertIn("authenticated reviewed state", result.stderr)
-        self.assertEqual((self.lock.stat(), self.lock.read_bytes()), before)
+        for stale_digest in stale_digests:
+            with self.subTest(stale_digest=stale_digest):
+                self.assertNotEqual(stale_digest, OWNER[0])
+                state = self.run_python_owner("privacy_sdk_file_seal", [self.lock])
+                self.assertEqual(state.returncode, 0, state.stderr)
+                before = self.lock.stat(), self.lock.read_bytes()
+                result = self.run_python_owner(
+                    "privacy_sdk_materialize_canonical_cargo_lock",
+                    [self.source, self.destination, "present:" + state.stdout.strip(), stale_digest],
+                )
+                self.assert_rejected(result)
+                self.assertIn("authenticated reviewed state", result.stderr)
+                self.assertEqual((self.lock.stat(), self.lock.read_bytes()), before)
 
     def test_current_owner_rejects_stale_authenticated_state(self):
         state = self.run_python_owner("privacy_sdk_file_seal", [self.lock])

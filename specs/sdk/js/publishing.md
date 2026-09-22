@@ -319,4 +319,5 @@ Notes:
 ## Future Automation
 
 - Generate release candidates via GitHub Actions using matrix builds for
-  Node 18/20 with Arm64 and x64.
+  the declared Node 20.19.0 minimum and the existing Node 20, 22 and 24 CI lines
+  with Arm64 and x64; retain exact runtime versions and candidate-specific results.
