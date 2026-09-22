@@ -8,8 +8,11 @@ use crate::{
     publication::{CapturedPublication, NextPublication, Publication},
 };
 
+#[path = "cell/detached_publication.rs"]
+mod detached_publication;
 #[path = "cell/physical.rs"]
 mod physical;
+pub use detached_publication::DetachedPublicationSlot;
 use physical::PreparedCellWriters;
 #[path = "cell/acquisition.rs"]
 mod acquisition;
@@ -331,6 +334,16 @@ impl<V: Value, Admission, Charge: Send + Sync + 'static> Detached<V, Admission, 
         self.metadata.mode == block.mode && self.metadata.predecessor.same_as(&block.predecessor)
     }
 
+    /// Install this original detached pair before any physical preparation.
+    /// Construction moves original custody and performs no lock or admission.
+    /// The aggregate must release every slot before dropping any slot cleanup.
+    pub fn publication_slot<'target, Installation>(
+        self,
+        target: &'target Cell<V, Charge>,
+    ) -> DetachedPublicationSlot<'target, V, Admission, Installation, Charge> {
+        DetachedPublicationSlot::new(self, target)
+    }
+
     /// Reacquire both original writers around the exact owned successors.
     ///
     /// No successor clone or generation allocation occurs. The original charges
@@ -352,83 +365,14 @@ impl<V: Value, Admission, Charge: Send + Sync + 'static> Detached<V, Admission, 
         E,
         Installation,
     > {
-        let mut cleanup = PublicationCleanup::empty();
-        let (checked, probe) = self
-            .metadata
-            .predecessor
-            .try_check_current(&target.publication);
-        cleanup.identities[0] = probe;
-        if let Err(error) = checked {
-            return Err((self, error, cleanup));
-        }
-        let installation = match admit(&self, target) {
-            Ok(installation) => installation,
+        let mut slot = self.publication_slot(target);
+        match slot.try_prepare(admit) {
+            Ok(()) => Ok(slot.into_prepared()),
             Err(error) => {
-                return Err((self, PublicationPreparationError::Admission(error), cleanup));
+                let original = slot.recover_original();
+                Err((original, error, slot.into_cleanup()))
             }
-        };
-        cleanup.installation = Some(installation);
-        let Self {
-            revert,
-            blocks,
-            metadata,
-        } = self;
-        let wait = target.revert_released.observe();
-        let revert = match target.revert.try_write_owned(revert) {
-            Ok(writer) => target.revert_released.poisoning_guard(writer),
-            Err(revert) => {
-                let error = if target.revert.is_poisoned() {
-                    PublicationPreparationError::Poisoned
-                } else {
-                    PublicationPreparationError::after_failed_acquisition(wait)
-                };
-                return Err((
-                    Self {
-                        revert,
-                        blocks,
-                        metadata,
-                    },
-                    error,
-                    cleanup,
-                ));
-            }
-        };
-        let wait = target.blocks_released.observe();
-        let blocks = match target.blocks.try_write_owned(blocks) {
-            Ok(writer) => target.blocks_released.poisoning_guard(writer),
-            Err(blocks) => {
-                let error = if target.blocks.is_poisoned() {
-                    PublicationPreparationError::Poisoned
-                } else {
-                    PublicationPreparationError::after_failed_acquisition(wait)
-                };
-                let (revert, released) = revert.release_deferred(|writer| writer.detach());
-                cleanup.writers[1] = Some(released);
-                return Err((
-                    Self {
-                        revert,
-                        blocks,
-                        metadata,
-                    },
-                    error,
-                    cleanup,
-                ));
-            }
-        };
-        let mut prepared = PreparedPublication {
-            writers: PreparedCellWriters::new(revert, blocks, cleanup.identities[0].take()),
-            metadata,
-            installation: cleanup.installation.take().expect("original installation"),
-        };
-        if let Err(error) = prepared.writers.prepare(
-            target,
-            &prepared.metadata.predecessor,
-            prepared.metadata.dirty,
-        ) {
-            let (journal, cleanup) = prepared.abort();
-            return Err((journal, error, cleanup));
         }
-        Ok(prepared)
     }
 }
 
@@ -597,17 +541,9 @@ mod block {
             }
         }
         /// Apply aggregated changes to the storage
-        pub fn commit(self) {
-            let Self {
-                writers,
-                dirty,
-                publication,
-                predecessor: _,
-                mode: _,
-            } = self;
-            // Even an untouched block publishes its clear-undo transition and
-            // rotates pair identity before either writer can notify a waiter.
-            publish_pair(writers, publication, NextPublication::new(), dirty, true);
+        pub fn commit(mut self) {
+            self.prepare_attached_publication();
+            self.publish_attached_prepared();
         }
 
         /// Admit metadata retention, then release writers around their original allocations.
@@ -979,3 +915,18 @@ mod executing_writers_tests;
 #[cfg(test)]
 #[path = "cell/partial_acquisition_tests.rs"]
 mod partial_acquisition_tests;
+
+impl<V: Value, Charge: Send + Sync + 'static> Block<'_, V, Charge> {
+    pub(super) fn prepare_attached_publication(&mut self) {
+        self.writers
+            .prepare_publication(self.publication, &self.predecessor, self.dirty);
+    }
+
+    pub(super) fn publish_attached_prepared(&mut self) {
+        self.writers.publish_prepared();
+    }
+}
+
+#[path = "cell/publication_slot.rs"]
+mod publication_slot;
+pub use publication_slot::BlockPublicationSlot;

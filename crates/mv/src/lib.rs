@@ -71,3 +71,22 @@ impl<T: Clone + Send + Sync + 'static> Value for T {}
 
 #[cfg(test)]
 mod capture_tests;
+
+/// Prepare and publish an owned original publication slot under caller custody.
+///
+/// Creating a slot consumes its executing Block. A borrowed operation callback
+/// cannot obtain publication authority merely from its mutable Block reference.
+/// An aggregate prepares every child before publishing the first. Preparation
+/// preserves ordinary blocking lock behavior and may panic on a poisoned/failed
+/// owner; the original remains in its caller for joint release. Publication
+/// retains cleanup in place without notifying or acquiring another physical lock.
+pub trait BlockPublication: BlockRetirement {
+    /// Prepare exact original data and identity owners; no edits are allowed next.
+    /// Preparation is one-shot, including after a caught failure or unwind.
+    fn prepare_publication(&mut self);
+    /// Install the checked original pair and retain retirement in this owner.
+    fn publish_prepared(&mut self);
+}
+
+#[cfg(test)]
+mod attached_publication_tests;

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 
+from sumeragi_v2_multilane_geometry_evidence_contract import _code
+
 KURA = 'crates/iroha_core/src/kura.rs'
 DATA = 'crates/iroha_data_model/src/block/consensus.rs'
 CAPACITY = 'crates/iroha_core/src/kura/native_amx_publication_capacity.rs'
@@ -57,6 +59,23 @@ def validate(root, items, errors, read_item, extract):
             for token in tokens:
                 if token not in item:
                     errors.append(f'{path}: current Native owner {symbol} lacks {token!r}')
+
+    for path, kind, symbol, expected in REPAIR_PREFIX_EXACT:
+        current = owner(path, kind, symbol)
+        if current is not None and _code(current) != _code(expected):
+            errors.append(f'{path}: repair-prefix executable owner {symbol} changed its authenticated cleanup relation')
+    for path, kind, symbol, tokens in REPAIR_PREFIX_ORDER:
+        current = owner(path, kind, symbol)
+        if current is not None:
+            value = _code(current)
+            cursor = -1
+            for token in tokens:
+                token = _code(token)
+                position = value.find(token, cursor + 1)
+                if value.count(token) != 1 or position < 0:
+                    errors.append(f'{path}: repair-prefix ordered owner {symbol} lost original preflight/cleanup ordering')
+                    break
+                cursor = position
 
     # The generic method parser intentionally does not infer generic trait
     # ownership. Bind this exact decoder impl and its complete checked method.
@@ -764,3 +783,815 @@ COMPLETED_JOIN = ('fn native_amx_publication_plan_is_durably_complete_under_prun
  'reservation.index_record.clone()); if let Some(record) = record { '
  'self.remove_native_amx_publication_index_exact_locked(&record)?; } '
  'self.native_amx_publication_capacity_reservations .lock() .remove(&carrier); Ok(true) }')
+
+
+# Original CompletedRepair authority precedes exact prefix cleanup; ordinary inventory stays strict.
+INDEX = 'crates/iroha_core/src/kura/native_amx_publication_index.rs'
+PREFIX = 'crates/iroha_core/src/kura/native_amx_repair_prefix.rs'
+# One reviewed body supplies both the ledger row and executable equality check.
+REPAIR_PREFIX_OWNERS = (('crates/iroha_core/src/kura.rs',
+  'fn',
+  'inventory_native_amx_evidence_files_locked',
+  (),
+  '    fn inventory_native_amx_evidence_files_locked(\n'
+  '        &self,\n'
+  '        namespace: &BoundProgressNamespace,\n'
+  '        allow_transient: bool,\n'
+  '    ) -> Result<NativeAmxEvidenceInventory> {\n'
+  '        self.inventory_native_amx_evidence_with_repair_prefix_locked(\n'
+  '            namespace,\n'
+  '            allow_transient,\n'
+  '            None,\n'
+  '        )\n'
+  '    }'),
+ ('crates/iroha_core/src/kura.rs',
+  'fn',
+  'inventory_native_amx_evidence_with_repair_prefix_locked',
+  ('parse_native_amx_evidence_path',
+   'regular_sidecar_metadata_for',
+   'STRICT_INIT_MAX_BLOCK_BYTES',
+   'native_amx_participant_evidence_retention',
+   'native_amx_participant_evidence_startup_bytes',
+   'native_amx_participant_evidence_file_bytes',
+   'native_amx_evidence_total_payload_bytes',
+   'shared aggregate byte bound',
+   'stable_sidecar_metadata_unchanged',
+   'progress_mutation_namespace_unchanged'),
+  '    fn inventory_native_amx_evidence_with_repair_prefix_locked(\n'
+  '        &self,\n'
+  '        namespace: &BoundProgressNamespace,\n'
+  '        allow_transient: bool,\n'
+  '        repair_prefix: Option<&NativeAmxEvidenceFile>,\n'
+  '    ) -> Result<NativeAmxEvidenceInventory> {\n'
+  '        if !Self::progress_mutation_namespace_unchanged(namespace) {\n'
+  '            return Err(Self::invalid_lane_artifact_error(\n'
+  '                namespace.data_path.clone(),\n'
+  '                "Native AMX evidence namespace changed before inventory",\n'
+  '            ));\n'
+  '        }\n'
+  '        let directory = namespace.data_path.parent().ok_or_else(|| {\n'
+  '            Self::invalid_lane_artifact_error(\n'
+  '                namespace.data_path.clone(),\n'
+  '                "Native AMX evidence namespace has no directory",\n'
+  '            )\n'
+  '        })?;\n'
+  '        let mut inventory = NativeAmxEvidenceInventory::default();\n'
+  '        let entries = std::fs::read_dir(directory)\n'
+  '            .map_err(|error| Error::IO(error, directory.to_path_buf()))?;\n'
+  '        for entry in entries {\n'
+  '            let entry = entry.map_err(|error| Error::IO(error, directory.to_path_buf()))?;\n'
+  '            let path = entry.path();\n'
+  '            let Some((kind, participant_height, temporary)) =\n'
+  '                Self::parse_native_amx_evidence_path(&path)?\n'
+  '            else {\n'
+  '                continue;\n'
+  '            };\n'
+  '            let metadata = Self::regular_sidecar_metadata_for(&self.store_root, &path, '
+  'directory)?\n'
+  '                .ok_or_else(|| {\n'
+  '                    Self::invalid_lane_artifact_error(\n'
+  '                        path.clone(),\n'
+  '                        "Native AMX evidence disappeared during bounded inventory",\n'
+  '                    )\n'
+  '                })?;\n'
+  '            let len = metadata.file.len();\n'
+  '            let owned_prefix = repair_prefix.is_some_and(|candidate| {\n'
+  '                allow_transient\n'
+  '                    && temporary\n'
+  '                    && kind == NativeAmxEvidenceKind::Manifest\n'
+  '                    && candidate.path == path\n'
+  '                    && candidate.participant_height == participant_height\n'
+  '                    && Self::stable_sidecar_metadata_unchanged(&candidate.metadata, &metadata)\n'
+  '            });\n'
+  '            if (len == 0 && !owned_prefix)\n'
+  '                || len > STRICT_INIT_MAX_BLOCK_BYTES\n'
+  '                || len > self.native_amx_participant_evidence_file_bytes()\n'
+  '            {\n'
+  '                return Err(Self::invalid_lane_artifact_error(\n'
+  '                    path,\n'
+  '                    format!(\n'
+  '                        "{} has an empty or oversized standalone payload for the shared stable '
+  'budget",\n'
+  '                        kind.label()\n'
+  '                    ),\n'
+  '                ));\n'
+  '            }\n'
+  '            let file = NativeAmxEvidenceFile {\n'
+  '                kind,\n'
+  '                participant_height,\n'
+  '                path: path.clone(),\n'
+  '                metadata,\n'
+  '            };\n'
+  '            if temporary {\n'
+  '                if inventory.temporaries.insert(kind, file).is_some() {\n'
+  '                    return Err(Self::invalid_lane_artifact_error(\n'
+  '                        directory.to_path_buf(),\n'
+  '                        format!(\n'
+  '                            "{} retains more than one publication temporary",\n'
+  '                            kind.label()\n'
+  '                        ),\n'
+  '                    ));\n'
+  '                }\n'
+  '                continue;\n'
+  '            }\n'
+  '            let (stable, aggregate) = match kind {\n'
+  '                NativeAmxEvidenceKind::Manifest => (\n'
+  '                    &mut inventory.manifests,\n'
+  '                    &mut inventory.manifest_stable_bytes,\n'
+  '                ),\n'
+  '                NativeAmxEvidenceKind::Receipt => {\n'
+  '                    (&mut inventory.receipts, &mut inventory.receipt_stable_bytes)\n'
+  '                }\n'
+  '            };\n'
+  '            if stable.insert(participant_height, file).is_some() {\n'
+  '                return Err(Self::invalid_lane_artifact_error(\n'
+  '                    path,\n'
+  '                    format!(\n'
+  '                        "{} repeats participant height {participant_height}",\n'
+  '                        kind.label()\n'
+  '                    ),\n'
+  '                ));\n'
+  '            }\n'
+  '            *aggregate = aggregate.checked_add(len).ok_or_else(|| {\n'
+  '                Self::invalid_lane_artifact_error(\n'
+  '                    directory.to_path_buf(),\n'
+  '                    format!("{} aggregate byte count overflowed", kind.label()),\n'
+  '                )\n'
+  '            })?;\n'
+  '        }\n'
+  '        let stable_entry_limit = self\n'
+  '            .native_amx_participant_evidence_retention()\n'
+  '            .get()\n'
+  '            .checked_add(usize::from(allow_transient))\n'
+  '            .ok_or_else(|| {\n'
+  '                Self::invalid_lane_artifact_error(\n'
+  '                    directory.to_path_buf(),\n'
+  '                    "Native AMX evidence entry bound overflowed",\n'
+  '                )\n'
+  '            })?;\n'
+  '        let aggregate_limit = if allow_transient {\n'
+  '            self.native_amx_participant_evidence_startup_bytes()?\n'
+  '        } else {\n'
+  '            self.native_amx_participant_evidence_file_bytes()\n'
+  '        };\n'
+  '        for kind in [\n'
+  '            NativeAmxEvidenceKind::Manifest,\n'
+  '            NativeAmxEvidenceKind::Receipt,\n'
+  '        ] {\n'
+  '            let temporary_count = usize::from(\n'
+  '                inventory\n'
+  '                    .temporary(kind)\n'
+  '                    .is_some_and(|file| file.kind == kind),\n'
+  '            );\n'
+  '            if inventory\n'
+  '                .stable(kind)\n'
+  '                .len()\n'
+  '                .checked_add(temporary_count)\n'
+  '                .is_none_or(|count| count > stable_entry_limit)\n'
+  '            {\n'
+  '                return Err(Self::invalid_lane_artifact_error(\n'
+  '                    directory.to_path_buf(),\n'
+  '                    format!("{} exceeds its retained record bound", kind.label()),\n'
+  '                ));\n'
+  '            }\n'
+  '        }\n'
+  '        if Self::native_amx_evidence_total_payload_bytes(&inventory)\n'
+  '            .is_none_or(|bytes| bytes > aggregate_limit)\n'
+  '        {\n'
+  '            return Err(Self::invalid_lane_artifact_error(\n'
+  '                directory.to_path_buf(),\n'
+  '                "Native AMX manifests, receipts, and temporaries exceed their shared aggregate '
+  'byte bound",\n'
+  '            ));\n'
+  '        }\n'
+  '        if !allow_transient && !inventory.temporaries.is_empty() {\n'
+  '            return Err(Self::invalid_lane_artifact_error(\n'
+  '                directory.to_path_buf(),\n'
+  '                "Native AMX evidence retains an unresolved publication temporary",\n'
+  '            ));\n'
+  '        }\n'
+  '        for file in inventory\n'
+  '            .manifests\n'
+  '            .values()\n'
+  '            .chain(inventory.receipts.values())\n'
+  '            .chain(inventory.temporaries.values())\n'
+  '        {\n'
+  '            let current =\n'
+  '                Self::regular_sidecar_metadata_for(&self.store_root, &file.path, directory)?\n'
+  '                    .ok_or_else(|| {\n'
+  '                        Self::invalid_lane_artifact_error(\n'
+  '                            file.path.clone(),\n'
+  '                            "Native AMX evidence disappeared after bounded inventory",\n'
+  '                        )\n'
+  '                    })?;\n'
+  '            if !Self::stable_sidecar_metadata_unchanged(&file.metadata, &current) {\n'
+  '                return Err(Self::invalid_lane_artifact_error(\n'
+  '                    file.path.clone(),\n'
+  '                    "Native AMX evidence changed during bounded inventory",\n'
+  '                ));\n'
+  '            }\n'
+  '        }\n'
+  '        if !Self::progress_mutation_namespace_unchanged(namespace) {\n'
+  '            return Err(Self::invalid_lane_artifact_error(\n'
+  '                directory.to_path_buf(),\n'
+  '                "Native AMX evidence namespace changed during inventory",\n'
+  '            ));\n'
+  '        }\n'
+  '        Ok(inventory)\n'
+  '    }'),
+ ('crates/iroha_core/src/kura/native_amx_publication_index.rs',
+  'method',
+  'Kura::require_native_amx_completed_repair_receipt_at_target_locked',
+  (),
+  '    fn require_native_amx_completed_repair_receipt_at_target_locked(\n'
+  '        &self,\n'
+  '        entry: &impl LaneArtifactStorageView,\n'
+  '        receipt: &NativeAmxParticipantApplicationReceiptArtifact,\n'
+  '        recovery: Option<(\n'
+  '            &NativeAmxPublicationIndexRecord,\n'
+  '            &NativeAmxParticipantApplicationManifestArtifactV1,\n'
+  '        )>,\n'
+  '    ) -> Result<()> {\n'
+  '        let descriptor = &receipt.participant_proposal.descriptor;\n'
+  '        self.require_active_lane_artifact(entry, descriptor)?;\n'
+  '        let namespace = self.native_amx_evidence_namespace_for_entry(entry)?;\n'
+  '        self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;\n'
+  '        let inventory = self.inventory_native_amx_evidence_files_locked(&namespace, true)?;\n'
+  '        self.require_native_amx_completed_repair_receipt_with_inventory_locked(\n'
+  '            entry, receipt, recovery, &namespace, &inventory,\n'
+  '        )\n'
+  '    }'),
+ ('crates/iroha_core/src/kura/native_amx_publication_index.rs',
+  'method',
+  'Kura::require_native_amx_completed_repair_receipt_with_inventory_locked',
+  (),
+  '    fn require_native_amx_completed_repair_receipt_with_inventory_locked(\n'
+  '        &self,\n'
+  '        entry: &impl LaneArtifactStorageView,\n'
+  '        receipt: &NativeAmxParticipantApplicationReceiptArtifact,\n'
+  '        recovery: Option<(\n'
+  '            &NativeAmxPublicationIndexRecord,\n'
+  '            &NativeAmxParticipantApplicationManifestArtifactV1,\n'
+  '        )>,\n'
+  '        namespace: &BoundProgressNamespace,\n'
+  '        inventory: &NativeAmxEvidenceInventory,\n'
+  '    ) -> Result<()> {\n'
+  '        let descriptor = &receipt.participant_proposal.descriptor;\n'
+  '        let file = inventory.receipts.get(&descriptor.lane_block_height)\n'
+  '            .ok_or_else(|| Error::PruneIntentConflict("Native unfinished publication lacks its '
+  'exact pending index and retained receipt".to_owned()))?;\n'
+  '        if self.decode_native_amx_receipt_file_locked(entry, &namespace, file)? != *receipt {\n'
+  '            return Err(Error::PruneIntentConflict(\n'
+  '                "Native completed repair lacks exact stable receipt custody".to_owned(),\n'
+  '            ));\n'
+  '        }\n'
+  '        if !inventory.temporaries.is_empty() {\n'
+  '            let Some((record, manifest)) = recovery else {\n'
+  '                return Err(Error::PruneIntentConflict(\n'
+  '                    "Native new completed repair cannot adopt unowned publication temporaries"\n'
+  '                        .to_owned(),\n'
+  '                ));\n'
+  '            };\n'
+  '            record\n'
+  '                .validate()\n'
+  '                .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;\n'
+  '            if record.origin != NativeAmxPublicationIndexOriginV1::CompletedRepair\n'
+  '                || record.carrier.height != manifest.leaf.application_block_height\n'
+  '                || record.carrier.block_hash != manifest.leaf.application_block_hash\n'
+  '                || record.carrier.executed_wire_hash != manifest.leaf.executed_block_wire_hash\n'
+  '                || HashOf::new(manifest) != receipt.manifest_artifact_hash\n'
+  '                || manifest.finality_artifact_hash != receipt.finality_artifact_hash\n'
+  '                || !Self::native_amx_participant_receipt_matches_manifest_leaf(\n'
+  '                    receipt,\n'
+  '                    &manifest.leaf,\n'
+  '                )\n'
+  '            {\n'
+  '                return Err(Error::PruneIntentConflict(\n'
+  '                    "Native repair temporary lacks its exact retained index and artifact join"\n'
+  '                        .to_owned(),\n'
+  '                ));\n'
+  '            }\n'
+  '            for temporary in inventory.temporaries.values() {\n'
+  '                let expected = match temporary.kind {\n'
+  '                    NativeAmxEvidenceKind::Manifest => manifest.encode_framed()?,\n'
+  '                    NativeAmxEvidenceKind::Receipt => receipt.encode_framed()?,\n'
+  '                };\n'
+  '                // Inventory binds canonical filename, route and physical identity;\n'
+  '                // this read rechecks that same object, not a path-only replacement.\n'
+  '                if temporary.participant_height != descriptor.lane_block_height\n'
+  '                    || self.read_native_amx_evidence_file_bytes_locked(&namespace, temporary)?\n'
+  '                        != expected\n'
+  '                {\n'
+  '                    return Err(Error::PruneIntentConflict(\n'
+  '                        "Native repair temporary differs from its exact authenticated canonical '
+  'artifact".to_owned(),\n'
+  '                    ));\n'
+  '                }\n'
+  '            }\n'
+  '        }\n'
+  '        let latest_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(\n'
+  '            entry,\n'
+  '            &self.store_root,\n'
+  '        );\n'
+  '        self.require_native_amx_latest_index_temp_absent_locked(&namespace)?;\n'
+  '        let latest = self.decode_bound_native_amx_participant_receipt_latest_index_locked(\n'
+  '            entry,\n'
+  '            &latest_path,\n'
+  '            &namespace,\n'
+  '        )?;\n'
+  '        if latest\n'
+  '            != Some(NativeAmxParticipantReceiptLatestIndexV2::from_receipt(\n'
+  '                receipt,\n'
+  '            ))\n'
+  '        {\n'
+  '            return Err(Error::PruneIntentConflict(\n'
+  '                "Native completed repair lacks its exact published receipt '
+  'pointer".to_owned(),\n'
+  '            ));\n'
+  '        }\n'
+  '        Ok(())\n'
+  '    }'),
+ ('crates/iroha_core/src/kura/native_amx_publication_index.rs',
+  'method',
+  'Kura::native_amx_completed_repair_artifacts_under_prune_and_canonical_guards',
+  (),
+  '    fn native_amx_completed_repair_artifacts_under_prune_and_canonical_guards(\n'
+  '        &self,\n'
+  '        block: &SignedBlock,\n'
+  '        merge: Option<&MergeLedgerEntry>,\n'
+  '        record: &NativeAmxPublicationIndexRecord,\n'
+  '    ) -> Result<\n'
+  '        Vec<(\n'
+  '            NativeAmxParticipantApplicationManifestArtifactV1,\n'
+  '            NativeAmxParticipantApplicationReceiptArtifact,\n'
+  '        )>,\n'
+  '    > {\n'
+  '        let carrier = Self::native_amx_publication_carrier(block)?;\n'
+  '        record\n'
+  '            .validate()\n'
+  '            .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;\n'
+  '        if record.origin != NativeAmxPublicationIndexOriginV1::CompletedRepair\n'
+  '            || record.carrier != carrier\n'
+  '            || record.merge_entry_hash != merge.map(MergeLedgerEntry::canonical_hash)\n'
+  '        {\n'
+  '            return Err(Error::PruneIntentConflict(\n'
+  '                "Native completed repair startup differs from its retained index".to_owned(),\n'
+  '            ));\n'
+  '        }\n'
+  '        let height = NonZeroUsize::new(usize::try_from(carrier.height)?).ok_or_else(|| {\n'
+  '            Error::PruneIntentConflict("Native completed repair has zero startup '
+  'height".to_owned())\n'
+  '        })?;\n'
+  '        let selected = self\n'
+  '            .read_block_body_under_prune_and_canonical_guards(height)?\n'
+  '            .ok_or_else(|| {\n'
+  '                Error::PruneIntentConflict(\n'
+  '                    "Native completed repair startup lacks its authenticated canonical body"\n'
+  '                        .to_owned(),\n'
+  '                )\n'
+  '            })?;\n'
+  '        if Self::native_amx_publication_carrier(&selected)? != carrier {\n'
+  '            return Err(Error::PruneIntentConflict(\n'
+  '                "Native completed repair startup changed canonical executed wire".to_owned(),\n'
+  '            ));\n'
+  '        }\n'
+  '        let (_, finality, _) = self\n'
+  '            '
+  '.v2_finality_artifact_with_archive_under_prune_and_canonical_guards(carrier.height)?\n'
+  '            .ok_or(Error::MissingV2FinalityArtifact {\n'
+  '                height: carrier.height,\n'
+  '            })?;\n'
+  '        let manifest = '
+  'crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(block, '
+  'merge)\n'
+  '            .map_err(|error| Error::PruneIntentConflict(format!("Native completed repair '
+  'startup manifest: {error}")))?;\n'
+  '        let artifacts =\n'
+  '            native_amx_participant_application_artifacts(&manifest, HashOf::new(&finality))\n'
+  '                .filter(|artifacts| !artifacts.is_empty())\n'
+  '                .ok_or_else(|| {\n'
+  '                    Error::PruneIntentConflict(\n'
+  '                        "Native completed repair startup has no exact artifact '
+  'plan".to_owned(),\n'
+  '                    )\n'
+  '                })?;\n'
+  '        Ok(artifacts)\n'
+  '    }'),
+ ('crates/iroha_core/src/kura/native_amx_publication_index.rs',
+  'method',
+  'Kura::authenticate_native_amx_completed_repair_on_startup',
+  (),
+  '    fn authenticate_native_amx_completed_repair_on_startup(\n'
+  '        &self,\n'
+  '        block: &SignedBlock,\n'
+  '        merge: Option<&MergeLedgerEntry>,\n'
+  '        record: &NativeAmxPublicationIndexRecord,\n'
+  '    ) -> Result<()> {\n'
+  '        let artifacts = self\n'
+  '            .native_amx_completed_repair_artifacts_under_prune_and_canonical_guards(\n'
+  '                block, merge, record,\n'
+  '            )?;\n'
+  '        let _geometry = self.lane_geometry_lock.lock();\n'
+  '        let _sidecar = self.sidecar_lock.lock();\n'
+  '        for (manifest, receipt) in artifacts {\n'
+  '            if !self.native_amx_publication_wsv_join_is_complete_locked(&manifest, &receipt)? '
+  '{\n'
+  '                return Err(Error::PruneIntentConflict(\n'
+  '                    "Native completed repair startup lost its finalized WSV join".to_owned(),\n'
+  '                ));\n'
+  '            }\n'
+  '            let target = self.native_amx_reservation_physical_target_from_journal(\n'
+  '                &receipt.participant_proposal.descriptor,\n'
+  '            )?;\n'
+  '            // An independently authenticated later completed pointer is an\n'
+  '            // existing terminal proof, not authority to republish old evidence.\n'
+  '            if self\n'
+  '                .native_amx_route_publication_capacity_at_target_locked(\n'
+  '                    &target, &manifest, &receipt,\n'
+  '                )?\n'
+  '                .is_some()\n'
+  '            {\n'
+  '                self.require_native_amx_completed_repair_receipt_at_target_locked(\n'
+  '                    &target,\n'
+  '                    &receipt,\n'
+  '                    Some((record, &manifest)),\n'
+  '                )?;\n'
+  '            }\n'
+  '            self.require_native_amx_reservation_physical_target(&target)?;\n'
+  '        }\n'
+  '        Ok(())\n'
+  '    }'),
+ ('crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'struct',
+  'NativeAmxCompletedRepairPrefix',
+  (),
+  'struct NativeAmxCompletedRepairPrefix {\n'
+  '    target: lane_geometry::NativeAmxReservationPhysicalTarget,\n'
+  '    namespace: BoundProgressNamespace,\n'
+  '    temporary: NativeAmxEvidenceFile,\n'
+  '    opened: std::fs::File,\n'
+  '    prefix: Vec<u8>,\n'
+  '}'),
+ ('crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::recover_native_amx_completed_repair_prefixes_under_publication_guard',
+  (),
+  '    fn recover_native_amx_completed_repair_prefixes_under_publication_guard(\n'
+  '        &self,\n'
+  '        block: &SignedBlock,\n'
+  '    ) -> Result<()> {\n'
+  '        let _canonical = self.canonical_chain_lock.lock();\n'
+  '        self.recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards(&[\n'
+  '            Self::native_amx_publication_carrier(block)?,\n'
+  '        ])\n'
+  '    }'),
+ ('crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards',
+  (),
+  '    fn recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards(\n'
+  '        &self,\n'
+  '        carriers: &[NativeAmxPublicationCarrier],\n'
+  '    ) -> Result<()> {\n'
+  '        let index = Self::read_native_amx_publication_index_for_store(&self.store_root)?;\n'
+  '        let selected_marker = {\n'
+  '            let mut store = self.block_store.lock();\n'
+  '            let count = store.read_exact_durable_index_count()?;\n'
+  '            store.commit_marker_for_count(count)?\n'
+  '        };\n'
+  '        let mut authenticated = Vec::new();\n'
+  '        for carrier in carriers.iter().copied().collect::<BTreeSet<_>>() {\n'
+  '            let Some(record) = index.records.get(&carrier).filter(|record| {\n'
+  '                record.origin == NativeAmxPublicationIndexOriginV1::CompletedRepair\n'
+  '            }) else {\n'
+  '                continue;\n'
+  '            };\n'
+  '            let height = NonZeroUsize::new(usize::try_from(carrier.height)?).ok_or_else(|| {\n'
+  '                Error::PruneIntentConflict(\n'
+  '                    "Native repair prefix has zero carrier height".to_owned(),\n'
+  '                )\n'
+  '            })?;\n'
+  '            let block = self\n'
+  '                .read_block_body_under_prune_and_canonical_guards(height)?\n'
+  '                .ok_or_else(|| {\n'
+  '                    Error::PruneIntentConflict(\n'
+  '                        "Native repair prefix lost its canonical carrier".to_owned(),\n'
+  '                    )\n'
+  '                })?;\n'
+  '            if record.classify_resolved_carrier(\n'
+  '                &selected_marker,\n'
+  '                Some(Self::native_amx_publication_carrier(&block)?),\n'
+  '            )? != NativeAmxPublicationIndexResolution::Committed\n'
+  '            {\n'
+  '                return Err(Error::PruneIntentConflict(\n'
+  '                    "Native repair prefix lacks committed selected-wire authority".to_owned(),\n'
+  '                ));\n'
+  '            }\n'
+  '            let merge =\n'
+  '                '
+  'self.native_amx_capacity_merge_entry_under_prune_and_canonical_guards(&block)?;\n'
+  '            let artifacts = self\n'
+  '                .native_amx_completed_repair_artifacts_under_prune_and_canonical_guards(\n'
+  '                    &block,\n'
+  '                    merge.as_ref(),\n'
+  '                    record,\n'
+  '                )?;\n'
+  '            authenticated.push((record, artifacts));\n'
+  '        }\n'
+  '        if authenticated.is_empty() {\n'
+  '            return Ok(());\n'
+  '        }\n'
+  '        let _geometry = self.lane_geometry_lock.lock();\n'
+  '        let _sidecar = self.sidecar_lock.lock();\n'
+  '        let mut prefixes = Vec::new();\n'
+  '        for (record, artifacts) in authenticated {\n'
+  '            for (manifest, receipt) in artifacts {\n'
+  '                if !self.native_amx_publication_wsv_join_is_complete_locked(&manifest, '
+  '&receipt)? {\n'
+  '                    return Err(Error::PruneIntentConflict(\n'
+  '                        "Native repair prefix lacks its finalized WSV join".to_owned(),\n'
+  '                    ));\n'
+  '                }\n'
+  '                if !self.native_amx_participant_evidence_pair_fits_stable_bytes(\n'
+  '                    manifest.encode_framed()?.len(),\n'
+  '                    receipt.encode_framed()?.len(),\n'
+  '                ) {\n'
+  '                    return Err(Error::PruneIntentConflict(\n'
+  '                        "Native repair prefix exceeds the authenticated pair byte '
+  'bound".to_owned(),\n'
+  '                    ));\n'
+  '                }\n'
+  '                let target = self.native_amx_reservation_physical_target_from_journal(\n'
+  '                    &receipt.participant_proposal.descriptor,\n'
+  '                )?;\n'
+  '                let namespace = self.native_amx_evidence_namespace_for_entry(&target)?;\n'
+  '                self.require_active_lane_artifact(\n'
+  '                    &target,\n'
+  '                    &receipt.participant_proposal.descriptor,\n'
+  '                )?;\n'
+  '                self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;\n'
+  '                let prefix = self.open_native_amx_completed_repair_prefix_locked(\n'
+  '                    &target, &namespace, &manifest,\n'
+  '                )?;\n'
+  '                let mut inventory = '
+  'self.inventory_native_amx_evidence_with_repair_prefix_locked(\n'
+  '                    &namespace,\n'
+  '                    true,\n'
+  '                    prefix.as_ref().map(|(temporary, _, _)| temporary),\n'
+  '                )?;\n'
+  '                // The full original inventory (including actual prefix bytes) has\n'
+  '                // passed every size/count bound. Validate the existing recovery\n'
+  '                // plan with only the independently proven incomplete object absent.\n'
+  '                if let Some((temporary, _, _)) = &prefix {\n'
+  '                    let removed = inventory\n'
+  '                        .temporaries\n'
+  '                        .remove(&NativeAmxEvidenceKind::Manifest);\n'
+  '                    if !removed.as_ref().is_some_and(|file| {\n'
+  '                        file.path == temporary.path\n'
+  '                            && Self::stable_sidecar_metadata_unchanged(\n'
+  '                                &file.metadata,\n'
+  '                                &temporary.metadata,\n'
+  '                            )\n'
+  '                    }) {\n'
+  '                        return Err(Error::PruneIntentConflict(\n'
+  '                            "Native repair prefix differs from its bounded '
+  'inventory".to_owned(),\n'
+  '                        ));\n'
+  '                    }\n'
+  '                }\n'
+  '                if self\n'
+  '                    .native_amx_route_publication_capacity_with_inventory_locked(\n'
+  '                        &target,\n'
+  '                        &manifest,\n'
+  '                        &receipt,\n'
+  '                        Some((&namespace, &inventory)),\n'
+  '                    )?\n'
+  '                    .is_some()\n'
+  '                {\n'
+  '                    self.require_native_amx_completed_repair_receipt_with_inventory_locked(\n'
+  '                        &target,\n'
+  '                        &receipt,\n'
+  '                        Some((record, &manifest)),\n'
+  '                        &namespace,\n'
+  '                        &inventory,\n'
+  '                    )?;\n'
+  '                } else if prefix.is_some() {\n'
+  '                    return Err(Error::PruneIntentConflict(\n'
+  '                        "Native repair prefix cannot rewrite a later published '
+  'frontier".to_owned(),\n'
+  '                    ));\n'
+  '                }\n'
+  '                self.require_native_amx_reservation_physical_target(&target)?;\n'
+  '                if let Some((temporary, opened, prefix)) = prefix {\n'
+  '                    prefixes.push(NativeAmxCompletedRepairPrefix {\n'
+  '                        target,\n'
+  '                        namespace,\n'
+  '                        temporary,\n'
+  '                        opened,\n'
+  '                        prefix,\n'
+  '                    });\n'
+  '                }\n'
+  '            }\n'
+  '        }\n'
+  '        // No mutation occurred in the preceding all-route pass. Recheck every\n'
+  '        // retained descriptor before beginning the exact physical cleanup batch.\n'
+  '        for prefix in &mut prefixes {\n'
+  '            self.require_native_amx_reservation_physical_target(&prefix.target)?;\n'
+  '            self.verify_bound_open_regular_file_exact_bytes_locked(\n'
+  '                &prefix.namespace,\n'
+  '                &prefix.temporary.path,\n'
+  '                &mut prefix.opened,\n'
+  '                &prefix.temporary.metadata,\n'
+  '                &prefix.prefix,\n'
+  '                prefix.prefix.len(),\n'
+  '                "Native completed-repair manifest prefix",\n'
+  '            )?;\n'
+  '        }\n'
+  '        if prefixes.is_empty() {\n'
+  '            return Ok(());\n'
+  '        }\n'
+  '        self.durable_mutation_authorized()?;\n'
+  '        let resources = self.begin_total_disk_usage_mutation().with_resource_paths(\n'
+  '            prefixes\n'
+  '                .iter()\n'
+  '                .map(|prefix| prefix.temporary.path.clone())\n'
+  '                .collect(),\n'
+  '        );\n'
+  '        for prefix in &mut prefixes {\n'
+  '            // Previous unlinks can change a shared parent timestamp. Retain the\n'
+  '            // original directory object and the exact file identity and bytes.\n'
+  '            self.verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(\n'
+  '                &prefix.namespace,\n'
+  '                &prefix.temporary.path,\n'
+  '                &mut prefix.opened,\n'
+  '                &prefix.temporary.metadata,\n'
+  '                &prefix.prefix,\n'
+  '                prefix.prefix.len(),\n'
+  '                "Native completed-repair manifest prefix",\n'
+  '            )?;\n'
+  '            Self::remove_bound_progress_file_if_matches(\n'
+  '                &prefix.namespace,\n'
+  '                &prefix.temporary.path,\n'
+  '                &prefix.opened,\n'
+  '                &prefix.temporary.metadata,\n'
+  '            )\n'
+  '            .map_err(|error| Error::IO(error, prefix.temporary.path.clone()))?;\n'
+  '            self.sync_native_amx_evidence_namespace(\n'
+  '                &prefix.namespace,\n'
+  '                "Native completed-repair prefix removal",\n'
+  '            )?;\n'
+  '            self.require_native_amx_reservation_physical_target(&prefix.target)?;\n'
+  '        }\n'
+  '        // The failed original write may have invalidated cached physical usage.\n'
+  '        // Publish the actual removal and require its normal bounded rescan.\n'
+  '        resources.finish_resources_before_disk_rescan();\n'
+  '        Ok(())\n'
+  '    }'),
+ ('crates/iroha_core/src/kura/native_amx_repair_prefix.rs',
+  'method',
+  'Kura::open_native_amx_completed_repair_prefix_locked',
+  (),
+  '    fn open_native_amx_completed_repair_prefix_locked(\n'
+  '        &self,\n'
+  '        entry: &impl LaneArtifactStorageView,\n'
+  '        namespace: &BoundProgressNamespace,\n'
+  '        manifest: &NativeAmxParticipantApplicationManifestArtifactV1,\n'
+  '    ) -> Result<Option<(NativeAmxEvidenceFile, std::fs::File, Vec<u8>)>> {\n'
+  '        let stable = Self::native_amx_application_manifest_path_for_entry(\n'
+  '            entry,\n'
+  '            &self.store_root,\n'
+  '            manifest.leaf.participant_height,\n'
+  '        );\n'
+  '        let path = stable.with_extension("norito.tmp");\n'
+  '        let directory = path.parent().ok_or_else(|| {\n'
+  '            Error::PruneIntentConflict("Native repair prefix has no parent".to_owned())\n'
+  '        })?;\n'
+  '        let Some(metadata) =\n'
+  '            Self::regular_sidecar_metadata_for(&self.store_root, &path, directory)?\n'
+  '        else {\n'
+  '            return Ok(None);\n'
+  '        };\n'
+  '        let expected = manifest.encode_framed()?;\n'
+  '        let len = usize::try_from(metadata.file.len())?;\n'
+  '        if len >= expected.len() {\n'
+  '            return Ok(None); // Existing full-frame validation retains its strict rejection.\n'
+  '        }\n'
+  '        if metadata.file.len() > STRICT_INIT_MAX_BLOCK_BYTES\n'
+  '            || metadata.file.len() > self.native_amx_participant_evidence_file_bytes()\n'
+  '            || Self::regular_sidecar_metadata_for(&self.store_root, &stable, '
+  'directory)?.is_some()\n'
+  '        {\n'
+  '            return Err(Self::invalid_lane_artifact_error(\n'
+  '                path,\n'
+  '                "Native repair prefix is oversized or has a stable manifest",\n'
+  '            ));\n'
+  '        }\n'
+  '        let mut opened = Self::open_bound_progress_file(namespace, &path, &metadata)?;\n'
+  '        let mut prefix = Vec::new();\n'
+  '        prefix.try_reserve_exact(len)?;\n'
+  '        prefix.resize(len, 0);\n'
+  '        opened\n'
+  '            .read_exact(&mut prefix)\n'
+  '            .map_err(|error| Error::IO(error, path.clone()))?;\n'
+  '        if !expected.starts_with(&prefix) {\n'
+  '            return Err(Self::invalid_lane_artifact_error(\n'
+  '                path,\n'
+  '                "Native repair temporary is not an exact canonical manifest prefix",\n'
+  '            ));\n'
+  '        }\n'
+  '        self.verify_bound_open_regular_file_exact_bytes_locked(\n'
+  '            namespace,\n'
+  '            &path,\n'
+  '            &mut opened,\n'
+  '            &metadata,\n'
+  '            &prefix,\n'
+  '            len,\n'
+  '            "Native completed-repair manifest prefix",\n'
+  '        )?;\n'
+  '        Ok(Some((\n'
+  '            NativeAmxEvidenceFile {\n'
+  '                kind: NativeAmxEvidenceKind::Manifest,\n'
+  '                participant_height: manifest.leaf.participant_height,\n'
+  '                path,\n'
+  '                metadata,\n'
+  '            },\n'
+  '            opened,\n'
+  '            prefix,\n'
+  '        )))\n'
+  '    }'))
+
+REPAIR_PREFIX_INTEGRATION_BINDINGS = (('crates/iroha_core/src/kura.rs',
+  'fn',
+  'persist_native_amx_participant_application_evidence_under_publication_guard',
+  ('get_durable_block_hash',
+   'plan.application_block_height',
+   'plan.application_block_hash',
+   'plan.manifest_leaf_count',
+   'mode.permits_retention_cleanup()',
+   'preflight_native_amx_participant_application_plan_under_publication_guard',
+   'write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard',
+   'read_back_native_amx_plan_manifests_under_publication_guard',
+   'manifest_readback.authenticates',
+   'write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard',
+   'write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard',
+   'authenticate_native_amx_participant_application_prepublication_under_publication_guard',
+   'mode.requires_post_apply_metadata()',
+   'NativeAmxParticipantApplicationPrepublicationToken::from_plan',
+   'if permit_cleanup',
+   'cleanup_native_amx_participant_application_evidence_under_publication_guard',
+   'self.recover_native_amx_completed_repair_prefixes_under_publication_guard(block)?;')),
+ ('crates/iroha_core/src/kura.rs',
+  'fn',
+  'persist_native_amx_participant_application_repair_targets_under_publication_guard',
+  ('preflight_native_amx_participant_application_repair_targets_under_publication_guard',
+   'write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard',
+   'read_back_native_amx_repair_target_manifests_under_publication_guard',
+   'write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard',
+   'write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard',
+   'authenticate_native_amx_participant_application_prepublication_under_publication_guard',
+   'cleanup_native_amx_participant_application_evidence_under_publication_guard',
+   'self.recover_native_amx_completed_repair_prefixes_under_publication_guard(block)?;')),
+ ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+  'method',
+  'Kura::rebuild_native_amx_publication_capacity_on_startup',
+  ('record.classify_resolved_carrier(&selected_marker, selected)?',
+   'let incomplete_carriers = committed_index_carriers;',
+   'self.recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards(',
+   '&incomplete_carriers.iter().copied().collect::<Vec<_>>()',
+   'self.inventory_native_amx_evidence_files_locked(&namespace, true)?')))
+
+REPAIR_PREFIX_EXACT = tuple(
+    (path, kind, symbol, body)
+    for path, kind, symbol, _, body in REPAIR_PREFIX_OWNERS
+)
+REPAIR_PREFIX_BINDINGS = tuple(
+    (path, kind, symbol, (*tokens, body))
+    for path, kind, symbol, tokens, body in REPAIR_PREFIX_OWNERS
+) + REPAIR_PREFIX_INTEGRATION_BINDINGS
+BINDINGS += REPAIR_PREFIX_BINDINGS
+
+REPAIR_PREFIX_ORDER = (('crates/iroha_core/src/kura.rs',
+  'fn',
+  'persist_native_amx_participant_application_evidence_under_publication_guard',
+  ('self.recover_native_amx_completed_repair_prefixes_under_publication_guard(block)?;',
+   'self.preflight_native_amx_participant_application_plan_under_publication_guard(plan)?;',
+   'self.ensure_native_amx_publication_capacity_under_publication_guard(')),
+ ('crates/iroha_core/src/kura.rs',
+  'fn',
+  'persist_native_amx_participant_application_repair_targets_under_publication_guard',
+  ('self.recover_native_amx_completed_repair_prefixes_under_publication_guard(block)?;',
+   'self.preflight_native_amx_participant_application_repair_targets_under_publication_guard(plan, '
+   'target_indices,)?;',
+   'self.ensure_native_amx_publication_capacity_under_publication_guard(')),
+ ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+  'method',
+  'Kura::rebuild_native_amx_publication_capacity_on_startup',
+  ('record.classify_resolved_carrier(&selected_marker, selected)?',
+   'self.recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards(&incomplete_carriers.iter().copied().collect::<Vec<_>>(),)?;',
+   'self.inventory_native_amx_evidence_files_locked(&namespace, true)?;')),
+ ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+  'method',
+  'Kura::ensure_native_amx_publication_capacity_under_publication_guard',
+  ('self.ensure_durable_block_at_height(block.header().height().get(), block.hash())?;',
+   'self.recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards(&[Self::native_amx_publication_carrier(block)?],)?;',
+   'self.native_amx_capacity_plan_from_evidence_under_prune_and_canonical_guards(')))

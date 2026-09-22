@@ -115,6 +115,8 @@ MUTATIONS = (
 @pytest.mark.parametrize("symbol,before_token,after_token", MUTATIONS)
 def test_moved_semantic_guard_rejects_full_source_drift(tmp_path, symbol, before_token, after_token):
     key = next(k for k in KEYS if k[2] == symbol)
+    if symbol == "Kura::native_amx_route_publication_capacity_at_target_locked":
+        key = key[:2] + ("Kura::native_amx_route_publication_capacity_with_inventory_locked",)
     errors = []
     item = actual_item(ROOT, *key, "negative preimage", errors)
     assert errors == [] and item is not None and before_token in item

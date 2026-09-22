@@ -158,16 +158,10 @@ impl<Admission> DetachedWorld<Admission> {
 trait RetainedWorldField: Send + Sync {
     fn summary(&self) -> FieldSummary;
     fn matches_current(&self, target: &World) -> bool;
-    fn try_prepare<'target>(
+    fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
-    ) -> Result<
-        Box<dyn publication::PreparedWorldField + 'target>,
-        (
-            Box<dyn publication::PreparedWorldField + 'target>,
-            publication::FieldRefusal,
-        ),
-    >;
+    ) -> Box<dyn publication::PreparedWorldField + 'target>;
 }
 
 trait CaptureWorldField: Sized {
@@ -177,6 +171,20 @@ trait CaptureWorldField: Sized {
 
     fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>>;
     fn into_capture(self) -> Self::Capture;
+}
+
+impl<B: CaptureWorldField + super::block_field::OriginalPublicationBlock> CaptureWorldField
+    for super::block_field::BlockField<B>
+{
+    type Target = B::Target;
+    type Retained = B::Retained;
+    type Capture = B::Capture;
+    fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>> {
+        std::ops::Deref::deref(self).capture_mode()
+    }
+    fn into_capture(self) -> Self::Capture {
+        self.into_executing().into_capture()
+    }
 }
 
 trait WorldCaptureSlot: Sized {
@@ -211,17 +219,11 @@ impl<K: Key, V: Value> RetainedWorldField for RetainedStorage<K, V> {
             .expect("retained original journal")
             .matches_current((self.target)(target))
     }
-    fn try_prepare<'target>(
+    fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
-    ) -> Result<
-        Box<dyn publication::PreparedWorldField + 'target>,
-        (
-            Box<dyn publication::PreparedWorldField + 'target>,
-            publication::FieldRefusal,
-        ),
-    > {
-        publication::prepare_storage(self, target)
+    ) -> Box<dyn publication::PreparedWorldField + 'target> {
+        publication::storage_slot(self, target)
     }
 }
 
@@ -283,17 +285,11 @@ impl<V: Value> RetainedWorldField for RetainedCell<V> {
             .expect("retained original journal")
             .matches_current((self.target)(target))
     }
-    fn try_prepare<'target>(
+    fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
-    ) -> Result<
-        Box<dyn publication::PreparedWorldField + 'target>,
-        (
-            Box<dyn publication::PreparedWorldField + 'target>,
-            publication::FieldRefusal,
-        ),
-    > {
-        publication::prepare_cell(self, target)
+    ) -> Box<dyn publication::PreparedWorldField + 'target> {
+        publication::cell_slot(self, target)
     }
 }
 
@@ -370,17 +366,11 @@ impl RetainedWorldField for RetainedTriggers {
             .expect("retained original journal")
             .matches_current((self.target)(target))
     }
-    fn try_prepare<'target>(
+    fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
-    ) -> Result<
-        Box<dyn publication::PreparedWorldField + 'target>,
-        (
-            Box<dyn publication::PreparedWorldField + 'target>,
-            publication::FieldRefusal,
-        ),
-    > {
-        publication::prepare_triggers(self, target)
+    ) -> Box<dyn publication::PreparedWorldField + 'target> {
+        publication::triggers_slot(self, target)
     }
 }
 
@@ -418,21 +408,70 @@ impl WorldCaptureSlot for SetBlockCapture<'_, ()> {
     }
 }
 
+/// Opaque original World capture retained by an enclosing State owner.
+/// Capture and retirement borrow this caller-owned slot; materialization is
+/// allowed only after every enclosing writer has been released.
+pub(in crate::state) trait WorldJournalCapture {
+    /// Capture every original while the slot remains in its caller.
+    fn capture(&mut self) -> Result<(), CaptureError<Infallible>>;
+    /// Terminally unlock every field and retain its original cleanup.
+    fn release(&mut self);
+    /// Move the completed originals after all enclosing writers are free.
+    fn into_journals<Admission>(self, admission: Admission) -> DetachedWorld<Admission>;
+}
+
 macro_rules! declare_world_capture {
     (; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {
         #[allow(non_camel_case_types)]
         struct WorldCapture<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*> {
-            $($prefix: Option<$prefix>,)* $($privacy: Option<$privacy>,)* $($suffix: Option<$suffix>,)*
+            $($prefix: Option<($prefix, fn(&World) -> &<$prefix as WorldCaptureSlot>::Target)>,)* $($privacy: Option<($privacy, fn(&World) -> &<$privacy as WorldCaptureSlot>::Target)>,)* $($suffix: Option<($suffix, fn(&World) -> &<$suffix as WorldCaptureSlot>::Target)>,)*
+            extras: Option<(DataSpaceCatalog, Vec<EventBox>)>,
+            mode: BlockMode,
+            refusal: Option<CaptureError<Infallible>>,
+            started: bool,
+            complete: bool,
         }
         #[allow(non_camel_case_types)]
         impl<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*>
-            WorldCapture<$($prefix,)* $($privacy,)* $($suffix,)*>
+            WorldJournalCapture for WorldCapture<$($prefix,)* $($privacy,)* $($suffix,)*>
         {
             fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {
-                $(self.$prefix.as_mut().expect("original World capture slot").capture()?;)*
-                $(self.$privacy.as_mut().expect("original World capture slot").capture()?;)*
-                $(self.$suffix.as_mut().expect("original World capture slot").capture()?;)*
+                assert!(!self.started, "original World capture is one-shot");
+                self.started = true;
+                if let Some(error) = self.refusal.take() {
+                    return Err(error);
+                }
+                $(self.$prefix.as_mut().expect("original World capture slot").0.capture()?;)*
+                $(self.$privacy.as_mut().expect("original World capture slot").0.capture()?;)*
+                $(self.$suffix.as_mut().expect("original World capture slot").0.capture()?;)*
+                self.complete = true;
                 Ok(())
+            }
+            fn release(&mut self) {
+                self.started = true;
+                self.complete = false;
+                $(if let Some((field, _)) = self.$prefix.as_mut() { field.release(); })*
+                $(if let Some((field, _)) = self.$privacy.as_mut() { field.release(); })*
+                $(if let Some((field, _)) = self.$suffix.as_mut() { field.release(); })*
+            }
+            fn into_journals<Admission>(self, admission: Admission) -> DetachedWorld<Admission> {
+                // Original payloads/notifications retire before this reservation,
+                // including a wake panic during wrapper materialization.
+                let admission = admission;
+                let mut pending = self;
+                assert!(pending.complete, "original World capture did not complete");
+                const FIELD_COUNT: usize = [
+                    $(stringify!($prefix),)* $(stringify!($privacy),)* $(stringify!($suffix),)*
+                ].len();
+                let fields = finish_world_capture(|| {
+                    let mut fields: Vec<Box<dyn RetainedWorldField>> = Vec::with_capacity(FIELD_COUNT);
+                    $(retain_field!(fields, pending, $prefix);)*
+                    $(retain_field!(fields, pending, $privacy);)*
+                    $(retain_field!(fields, pending, $suffix);)*
+                    fields
+                });
+                let (dataspace_catalog, external_event_buf) = pending.extras.take().expect("original World extras");
+                DetachedWorld { mode: pending.mode, fields, dataspace_catalog, external_event_buf, admission }
             }
         }
         #[allow(non_camel_case_types)]
@@ -440,15 +479,11 @@ macro_rules! declare_world_capture {
             Drop for WorldCapture<$($prefix,)* $($privacy,)* $($suffix,)*>
         {
             fn drop(&mut self) {
-                $(if let Some(field) = self.$prefix.as_mut() { field.release(); })*
-                $(if let Some(field) = self.$privacy.as_mut() { field.release(); })*
-                $(if let Some(field) = self.$suffix.as_mut() { field.release(); })*
+                self.release();
             }
         }
     };
 }
-
-with_world_overlay_fields!(declare_world_capture);
 
 // Borrow the original block and caller slots rather than passing another
 // complete World owner by value through a deep retained-validation call stack.
@@ -463,49 +498,39 @@ fn finish_world_capture<R>(finish: impl FnOnce() -> R) -> R {
     finish()
 }
 
-macro_rules! capture_world_fields {
-    ($original:ident, $admit:ident;
-        [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {{
+macro_rules! world_capture_mode {
+    ($original:ident; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {{
         let mode = $original.parameters.mode();
         $(check_mode!($original, mode, $prefix);)*
         $(check_mode!($original, mode, $privacy);)*
         $(check_mode!($original, mode, $suffix);)*
-        // No wrapper/vector/delta allocation or value copy precedes this call.
-        let admission = $admit(&$original).map_err(CaptureError::Admission)?;
-        // These payloads and their admission outlive the capture aggregate on
-        // unwind: release every original writer before either can be destroyed.
-        let mut extras = None;
+        Ok(mode)
+    }};
+}
+
+macro_rules! capture_world_fields {
+    ($original:ident;
+        [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {{
+        // These concrete metadata reads neither allocate nor run payload code.
+        // Keep any inconsistent-mode verdict in the returned caller-owned slot.
+        let mode = $original.parameters.mode();
+        let refusal = $original.capture_mode().err();
         let mut pending = WorldCapture {
             $($prefix: None,)* $($privacy: None,)* $($suffix: None,)*
+            extras: None, mode, refusal, started: false, complete: false,
         };
         fill_world_capture(|| {
-            // Inert moves only after extraction. The closure borrows both
-            // original owners; its transfer temporaries leave before capture.
             let WorldBlockFields {
                 dataspace_catalog,
                 $($prefix,)* $($privacy,)* $($suffix,)*
                 external_event_buf,
-            } = $original.fields.take().expect("original World block fields");
-            $(pending.$prefix = Some($prefix.into_capture());)*
-            $(pending.$privacy = Some($privacy.into_capture());)*
-            $(pending.$suffix = Some($suffix.into_capture());)*
-            extras = Some((dataspace_catalog, external_event_buf));
+            } = *$original.fields.take().expect("original World block fields");
+            $(pending.$prefix = Some(($prefix.into_capture(), |target: &World| &target.$prefix));)*
+            $(pending.$privacy = Some(($privacy.into_capture(), |target: &World| &target.$privacy));)*
+            $(pending.$suffix = Some(($suffix.into_capture(), |target: &World| &target.$suffix));)*
+            pending.extras = Some((dataspace_catalog, external_event_buf));
         });
-        pending.capture().map_err(widen_error)?;
-        // All sibling writers are now free. Original notifications can be
-        // retired while materializing the admitted journal wrappers.
-        const FIELD_COUNT: usize = [
-            $(stringify!($prefix),)* $(stringify!($privacy),)* $(stringify!($suffix),)*
-        ].len();
-        let fields = finish_world_capture(|| {
-            let mut fields: Vec<Box<dyn RetainedWorldField>> = Vec::with_capacity(FIELD_COUNT);
-            $(retain_field!(fields, pending, $prefix);)*
-            $(retain_field!(fields, pending, $privacy);)*
-            $(retain_field!(fields, pending, $suffix);)*
-            fields
-        });
-        let (dataspace_catalog, external_event_buf) = extras.take().expect("original World extras");
-        Ok(DetachedWorld { mode, fields, dataspace_catalog, external_event_buf, admission })
+        pending
     }};
 }
 
@@ -523,18 +548,15 @@ macro_rules! check_mode {
 }
 
 macro_rules! retain_field {
-    ($fields:ident, $pending:ident, $field:ident) => {
-        $fields.push(Box::new(
-            $pending
-                .$field
-                .take()
-                .expect("original World capture slot")
-                .retain(stringify!($field), |target: &World| &target.$field),
-        ));
-    };
+    ($fields:ident, $pending:ident, $field:ident) => {{
+        let (slot, target) = $pending.$field.take().expect("original World capture slot");
+        $fields.push(Box::new(slot.retain(stringify!($field), target)));
+    }};
 }
 
-impl WorldBlock<'_> {
+with_world_overlay_fields!(declare_world_capture);
+
+impl<'world> WorldBlock<'world> {
     /// Admit and capture every original journal, then release all concrete writers.
     ///
     /// Mode checks inspect the actual original owners before the callback. The
@@ -543,13 +565,32 @@ impl WorldBlock<'_> {
     /// Refusal drops all original writers without publication. Success moves
     /// extras and the original MV current/undo allocations without cloning them.
     pub(in crate::state) fn try_detach_journals<Admission, E>(
-        mut self,
+        self,
         admit: impl FnOnce(&Self) -> Result<Admission, E>,
     ) -> Result<DetachedWorld<Admission>, CaptureError<E>> {
-        with_world_overlay_fields!(capture_world_fields, self, admit)
+        self.capture_mode().map_err(widen_error)?;
+        let admission = admit(&self).map_err(CaptureError::Admission)?;
+        let mut pending = self.capture_slot();
+        pending.capture().map_err(widen_error)?;
+        Ok(pending.into_journals(admission))
+    }
+
+    /// Read the complete original mode verdict without releasing any writer.
+    pub(in crate::state) fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>> {
+        with_world_overlay_fields!(world_capture_mode, self)
+    }
+
+    /// Move every original field into one opaque caller-owned capture slot.
+    /// Only concrete metadata reads and inert moves occur before returning.
+    pub(in crate::state) fn capture_slot(mut self) -> impl WorldJournalCapture + 'world {
+        with_world_overlay_fields!(capture_world_fields, self)
     }
 }
 
 #[cfg(test)]
 #[path = "world_journals_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "world_preparation_tests.rs"]
+pub(in crate::state) mod preparation_tests;

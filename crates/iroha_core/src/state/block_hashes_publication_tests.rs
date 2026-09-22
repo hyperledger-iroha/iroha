@@ -555,3 +555,6 @@ fn stale_hash_refusal_retains_release_and_installation_until_outer_unlock() {
         );
     }
 }
+
+#[path = "retained_hash_slot_tests.rs"]
+mod retained_hash_slot_tests;

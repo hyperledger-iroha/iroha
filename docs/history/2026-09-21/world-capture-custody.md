@@ -44,7 +44,9 @@ review regressions and default-stack retained-validation controls remain require
 ## Remaining boundary
 
 This change addresses Cell/Storage and World/TriggerSet capture ownership.
-Consuming commit, enclosing State/runtime acquisition and capture, complete
-resource admission, the production retained Validate/Apply cutover and unchanged
+The subsequent [State capture correction](state-capture-custody.md) composes
+World, runtime and membership; its qualification is separate. Consuming commit,
+enclosing State acquisition, complete resource admission, the production retained
+Validate/Apply cutover and unchanged
 four/seven-validator qualification remain open. Callback-local destructors remain
 the callback's responsibility. All L1–L6 remain active.

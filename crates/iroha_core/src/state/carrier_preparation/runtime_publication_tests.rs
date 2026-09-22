@@ -653,3 +653,9 @@ fn runtime_abandonment_releases_every_component_before_callbacks_and_capacity() 
         }
     }
 }
+
+#[path = "runtime_capture_tests.rs"]
+mod capture_tests;
+
+#[path = "runtime_publication_slot_tests.rs"]
+mod slot_tests;

@@ -23,6 +23,10 @@ use crate::state::{
 use crate::sumeragi::v2_apply::carrier_queue_retirement::OriginalCarrierQueue;
 use std::convert::Infallible;
 
+#[path = "participant_preparation.rs"]
+mod participant_preparation;
+use participant_preparation::CarrierPreparation;
+
 /// Exact local acquisition refusal; this never invalidates a consensus decision.
 pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparationError<E> {
     /// Complete installation capacity was refused before any physical acquisition.
@@ -303,6 +307,7 @@ pub(in crate::state::carrier_preparation::journals) struct AcquiredCarrierPartic
     runtime: PreparedRuntimeJournals<'target, (), ()>,
     transactions: PreparedDetachedTransactionsBlock<'target, ()>,
     block_hashes: PreparedBlockHashes<'target, ()>,
+    effect_locks: crate::state::effect_publication::StateEffectLocks<'target>,
     _fences: CarrierFences<'target>,
 }
 
@@ -339,19 +344,24 @@ impl AcquiredCarrierParticipants<'_> {
     fn abort(self) -> DetachedCarrierComponents {
         // Reverse local drop order also keeps fences behind all components if
         // abort bookkeeping unwinds before the explicit release below.
+        let mut effect_cleanup;
         let fences;
         let Self {
             world,
             runtime,
             transactions,
             block_hashes,
+            effect_locks: original_effect_locks,
             _fences: original_fences,
         } = self;
         fences = original_fences;
+        effect_cleanup = original_effect_locks;
+        let mut effect_locks = effect_cleanup.physical_scope();
         let (world, world_retirement) = world.abort();
         let (runtime, runtime_retirement) = runtime.abort();
         let (transactions, transactions_retirement) = transactions.abort();
         let (block_hashes, block_hashes_retirement) = block_hashes.abort();
+        effect_locks.release_writers();
         drop(fences.release_for_completion());
         drop((
             world_retirement,
@@ -640,115 +650,15 @@ impl<Admission, BindingAdmission>
         } = original;
         binding_admission = original_binding_admission;
         let prepared = journals.try_map_components(|original| {
-            let DetachedCarrierComponents {
-                world,
-                runtime,
-                transactions,
-                block_hashes,
-            } = original;
-            // Private execution has already released its hash writer. Acquire the
-            // exact hash predecessor first, then every remaining component.
-            let block_hashes = match block_hashes
-                .try_prepare_publication(&target.block_hashes, |_, _| Ok::<_, Infallible>(()))
-            {
-                Ok(prepared) => prepared,
-                Err((block_hashes, cause, hash_retirement)) => {
-                    drop(fences.release_for_completion());
-                    drop(hash_retirement);
-                    return Err((
-                        DetachedCarrierComponents {
-                            world,
-                            runtime,
-                            transactions,
-                            block_hashes,
-                        },
-                        CarrierPhysicalPreparationError::Component {
-                            field: "block_hashes",
-                            cause,
-                        },
-                    ));
+            let mut preparation = CarrierPreparation::new(original, target, fences);
+            match preparation.try_prepare::<E>() {
+                Ok(()) => Ok(preparation.into_prepared()),
+                Err(error) => {
+                    let original = preparation.recover_original();
+                    drop(preparation);
+                    Err((original, error))
                 }
-            };
-            let transactions = match transactions
-                .try_prepare_publication(&target.transactions, |_, _| Ok::<_, Infallible>(()))
-            {
-                Ok(prepared) => prepared,
-                Err((transactions, cause)) => {
-                    let (block_hashes, block_hashes_retirement) = block_hashes.abort();
-                    drop(fences.release_for_completion());
-                    drop(block_hashes_retirement);
-                    return Err((
-                        DetachedCarrierComponents {
-                            world,
-                            runtime,
-                            transactions,
-                            block_hashes,
-                        },
-                        CarrierPhysicalPreparationError::Component {
-                            field: "transactions",
-                            cause,
-                        },
-                    ));
-                }
-            };
-            let runtime =
-                match runtime.try_prepare_publication(target, |_, _| Ok::<_, Infallible>(())) {
-                    Ok(prepared) => prepared,
-                    Err((runtime, error, runtime_retirement)) => {
-                        let (transactions, transactions_retirement) = transactions.abort();
-                        let (block_hashes, block_hashes_retirement) = block_hashes.abort();
-                        drop(fences.release_for_completion());
-                        drop((
-                            runtime_retirement,
-                            transactions_retirement,
-                            block_hashes_retirement,
-                        ));
-                        return Err((
-                            DetachedCarrierComponents {
-                                world,
-                                runtime,
-                                transactions,
-                                block_hashes,
-                            },
-                            CarrierPhysicalPreparationError::Runtime(error),
-                        ));
-                    }
-                };
-            let world = match world
-                .try_prepare_publication(&target.world, |_, _| Ok::<_, Infallible>(()))
-            {
-                Ok(prepared) => prepared,
-                Err((world, error, world_retirement)) => {
-                    let (runtime, runtime_retirement) = runtime.abort();
-                    let (transactions, transactions_retirement) = transactions.abort();
-                    let (block_hashes, block_hashes_retirement) = block_hashes.abort();
-                    drop(fences.release_for_completion());
-                    drop((
-                        world_retirement,
-                        runtime_retirement,
-                        transactions_retirement,
-                        block_hashes_retirement,
-                    ));
-                    return Err((
-                        DetachedCarrierComponents {
-                            world,
-                            runtime,
-                            transactions,
-                            block_hashes,
-                        },
-                        CarrierPhysicalPreparationError::World(error),
-                    ));
-                }
-            };
-            Ok(AcquiredCarrierComponents {
-                original: Some(AcquiredCarrierParticipants {
-                    world,
-                    runtime,
-                    transactions,
-                    block_hashes,
-                    _fences: fences,
-                }),
-            })
+            }
         });
         macro_rules! retain {
             ($journals:expr) => {

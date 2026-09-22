@@ -24,7 +24,9 @@ pub(crate) use capture::SetBlockCapture;
 
 #[path = "set_publication.rs"]
 mod publication;
-pub(crate) use publication::{AbortedSet, PreparedSet, PublishedSet, SetPublicationError};
+pub(crate) use publication::{
+    AbortedSet, DetachedSetPublicationSlot, PreparedSet, PublishedSet, SetPublicationError,
+};
 
 /// Capture refusal leaves every original trigger writer unpublished and released.
 #[derive(Debug, thiserror::Error)]

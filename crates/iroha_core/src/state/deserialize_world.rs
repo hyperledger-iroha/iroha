@@ -8906,8 +8906,8 @@ fn build_state(
         ))
     })?;
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
-    let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
-    let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
+    let da_receipt_cursors = PublicationRwLock::new(DaReceiptCursorIndex::default());
+    let da_shard_cursors = PublicationRwLock::new(DaShardCursorIndex::default());
     let restored_height = u64::try_from(block_hashes.committed_height()).map_err(|error| {
         MergeLedgerCommitError::ExecutionStatePublication(format!(
             "restored committed height does not fit the Parliament height domain: {error}"
@@ -9024,16 +9024,16 @@ fn build_state(
     let mut state = Box::new(State {
         world,
         block_hashes,
-        latest_block_header: parking_lot::RwLock::new(latest_block_header),
+        latest_block_header: PublicationRwLock::new(latest_block_header),
         merge_ledger: MergeLedgerStore::with_default_capacity(),
-        merge_admission: parking_lot::RwLock::new(MergeAdmissionState::default()),
+        merge_admission: PublicationRwLock::new(MergeAdmissionState::default()),
         replay_merge_carriers: parking_lot::RwLock::new(BTreeMap::new()),
         transactions,
         commit_topology,
         prev_commit_topology,
         lane_consensus_contexts,
-        da_commitments: parking_lot::RwLock::new(DaCommitmentStore::default()),
-        da_confidential_compute: parking_lot::RwLock::new(ConfidentialComputeStore::default()),
+        da_commitments: PublicationRwLock::new(DaCommitmentStore::default()),
+        da_confidential_compute: PublicationRwLock::new(ConfidentialComputeStore::default()),
         da_receipt_cursors,
         da_shard_cursors,
         da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
@@ -9043,13 +9043,13 @@ fn build_state(
             query_projection_checkpoint_journal,
         ),
         query_projection_checkpoint_journal_persistence_lock: parking_lot::Mutex::new(()),
-        da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
-        lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
-        lane_manifests: parking_lot::RwLock::new(lane_manifests),
-        lane_privacy_registry: parking_lot::RwLock::new(Arc::new(LanePrivacyRegistry::empty())),
+        da_pin_intents: PublicationRwLock::new(DaPinStore::default()),
+        lane_relays: PublicationRwLock::new(LaneRelayStore::default()),
+        lane_manifests: PublicationRwLock::new(lane_manifests),
+        lane_privacy_registry: PublicationRwLock::new(Arc::new(LanePrivacyRegistry::empty())),
         lane_compliance: parking_lot::RwLock::new(None),
         da_index_hydration_fence: parking_lot::Mutex::new(()),
-        da_indexes_hydrated: parking_lot::RwLock::new(None),
+        da_indexes_hydrated: PublicationRwLock::new(None),
         ivm,
         kura,
         query_handle,
@@ -9101,7 +9101,7 @@ fn build_state(
         publication_notify: tokio::sync::Notify::new(),
         view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
         sumeragi_v2_pending_evidence: parking_lot::Mutex::new(BTreeMap::new()),
-        sccp_registry_cache: parking_lot::Mutex::new(SccpRegistryCache::default()),
+        sccp_registry_cache: PublicationMutex::new(SccpRegistryCache::default()),
     });
     if !emergency_fast {
         // Restore effective manifests from the caller's frozen startup sources before

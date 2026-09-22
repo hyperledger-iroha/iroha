@@ -17,6 +17,9 @@ pub(crate) struct Record {
 thread_local! {
     static RECORDS: Cell<[Option<Record>; 128]> = const { Cell::new([None; 128]) };
     static EXPECTED: Cell<Option<(usize, Layout)>> = const { Cell::new(None) };
+    // Control-shell constructors prepay several layouts before allocating them.
+    // Keep that explicit witness separate from the strict next-allocation mode.
+    static EXPECTED_BATCH: Cell<[Option<(usize, Layout)>; 8]> = const { Cell::new([None; 8]) };
     static LIVE: Cell<usize> = const { Cell::new(0) };
     static CLONES: Cell<usize> = const { Cell::new(0) };
     static PANIC_CLONE: Cell<usize> = const { Cell::new(0) };
@@ -39,6 +42,26 @@ unsafe impl GlobalAlloc for ObservedAllocator {
             let _ = EXPECTED.try_with(|expected| {
                 if let Some((id, exact)) = expected.get().filter(|(_, exact)| *exact == layout) {
                     expected.set(None);
+                    let _ = RECORDS.try_with(|records| {
+                        let mut all = records.get();
+                        all[id] = Some(Record {
+                            pointer: pointer as usize,
+                            layout: exact,
+                            freed: false,
+                            refunded: false,
+                        });
+                        records.set(all);
+                    });
+                }
+            });
+            let _ = EXPECTED_BATCH.try_with(|pending| {
+                let mut batch = pending.get();
+                if let Some(slot) = batch
+                    .iter_mut()
+                    .find(|entry| entry.is_some_and(|(_, exact)| exact == layout))
+                {
+                    let (id, exact) = slot.take().expect("matched pending layout");
+                    pending.set(batch);
                     let _ = RECORDS.try_with(|records| {
                         let mut all = records.get();
                         all[id] = Some(Record {
@@ -124,6 +147,17 @@ impl<K: Clone, V: Clone> NodeCloning<K, V> for Prepaid {
 impl Prepaid {
     /// Observe one original admitted node or tracking-buffer allocation.
     pub(crate) fn take_allocation_charge(&mut self, layout: Layout) -> Charge {
+        EXPECTED_BATCH.with(|pending| assert!(pending.get().iter().all(Option::is_none)));
+        self.take_charge(layout, false)
+    }
+
+    /// Observe original control shells prepaid together before their allocations.
+    pub(crate) fn take_batch_allocation_charge(&mut self, layout: Layout) -> Charge {
+        EXPECTED.with(|expected| assert!(expected.get().is_none()));
+        self.take_charge(layout, true)
+    }
+
+    fn take_charge(&mut self, layout: Layout, batch: bool) -> Charge {
         assert!(self.remaining > 0, "operation exceeded original admission");
         self.remaining -= 1;
         let id = self.next;
@@ -142,6 +176,15 @@ impl Prepaid {
                 });
                 records.set(all);
             });
+        } else if batch {
+            EXPECTED_BATCH.with(|pending| {
+                let mut entries = pending.get();
+                *entries
+                    .iter_mut()
+                    .find(|entry| entry.is_none())
+                    .expect("bounded pending shell layouts") = Some((id, layout));
+                pending.set(entries);
+            });
         } else {
             EXPECTED.with(|expected| assert!(expected.replace(Some((id, layout))).is_none()));
         }
@@ -157,6 +200,7 @@ pub(crate) fn prepaid() -> Prepaid {
     assert_eq!(LIVE.with(Cell::get), 0);
     RECORDS.with(|records| records.set([None; 128]));
     EXPECTED.with(|expected| expected.set(None));
+    EXPECTED_BATCH.with(|pending| pending.set([None; 8]));
     CLONES.with(|count| count.set(0));
     PANIC_CLONE.with(|at| at.set(0));
     PANIC_COMPARE.with(|value| value.set(false));
@@ -173,6 +217,7 @@ pub(crate) fn record(id: usize) -> Record {
 
 pub(crate) fn all_refunded(funding: &Prepaid) {
     assert!(EXPECTED.with(Cell::get).is_none());
+    EXPECTED_BATCH.with(|pending| assert!(pending.get().iter().all(Option::is_none)));
     for id in 0..funding.next {
         assert!(record(id).refunded);
     }

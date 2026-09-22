@@ -3,30 +3,55 @@
 use super::*;
 use crate::publication::{IdentityRetirement, PreparedIdentity};
 use concread::{
-    ebrcell::{EbrCellPreparedCommit, EbrCellRetirement},
+    ebrcell::{EbrCellCommitSlot, EbrCellRetirement},
     release::DeferredRelease,
 };
 
 enum CellStage<'a, V: Value, C: Send + Sync + 'static> {
-    Writer(CellWriter<'a, V, C>),
-    Prepared(ReleaseGuard<'a, EbrCellPreparedCommit<'a, V, C>>),
+    Held(ReleaseGuard<'a, EbrCellCommitSlot<'a, V, C>>),
+    Released {
+        _owner: EbrCellOwned<V, C>,
+        _release: DeferredRelease,
+    },
 }
 
 impl<'a, V: Value, C: Send + Sync + 'static> CellStage<'a, V, C> {
-    fn prepare(self) -> Self {
-        let Self::Writer(writer) = self else {
-            unreachable!("original cell prepares once")
+    fn new(writer: CellWriter<'a, V, C>) -> Self {
+        Self::Held(writer.map_preserving_release(|writer| writer.commit_slot()))
+    }
+
+    fn prepare(&mut self) {
+        let Self::Held(slot) = self else {
+            panic!("original cell was released")
         };
-        Self::Prepared(writer.map_preserving_release(|writer| writer.prepare_commit()))
+        slot.prepare();
+    }
+
+    fn is_prepared(&self) -> bool {
+        matches!(self, Self::Held(slot) if slot.is_prepared())
+    }
+
+    fn into_held(self) -> ReleaseGuard<'a, EbrCellCommitSlot<'a, V, C>> {
+        match self {
+            Self::Held(slot) => slot,
+            Self::Released { .. } => panic!("terminal release grants no publication"),
+        }
     }
 
     fn abort(self) -> (EbrCellOwned<V, C>, DeferredRelease) {
-        match self {
-            Self::Writer(writer) => writer.release_deferred(|writer| writer.detach()),
-            Self::Prepared(prepared) => {
-                prepared.release_deferred(|prepared| prepared.abort().detach())
-            }
+        self.into_held()
+            .release_deferred(|slot| slot.abort().detach())
+    }
+
+    fn release(phase: &mut Option<Self>) {
+        if !matches!(phase, Some(Self::Held(_))) {
+            return;
         }
+        let (owner, release) = phase.take().expect("original held cell").abort();
+        *phase = Some(Self::Released {
+            _owner: owner,
+            _release: release,
+        });
     }
 }
 
@@ -36,6 +61,9 @@ pub(super) struct PreparedCellWriters<'a, V: Value, C: Send + Sync + 'static> {
     identity: Option<PreparedIdentity<'a>>,
     probe: Option<IdentityRetirement>,
     refused_identity: Option<IdentityRetirement>,
+    complete: bool,
+    started: bool,
+    released: bool,
 }
 
 /// Published EBR generations and their original capture/installation resources.
@@ -65,11 +93,14 @@ impl<'a, V: Value, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
         probe: Option<IdentityRetirement>,
     ) -> Self {
         Self {
-            revert: Some(CellStage::Writer(revert)),
-            blocks: Some(CellStage::Writer(blocks)),
+            revert: Some(CellStage::new(revert)),
+            blocks: Some(CellStage::new(blocks)),
             identity: None,
             probe,
             refused_identity: None,
+            complete: false,
+            started: false,
+            released: false,
         }
     }
 
@@ -79,9 +110,14 @@ impl<'a, V: Value, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
         predecessor: &CapturedPublication,
         dirty: bool,
     ) -> Result<(), PublicationPreparationError<E>> {
-        self.revert = Some(self.revert.take().expect("original undo").prepare());
+        assert!(
+            !self.started && !self.released,
+            "original pair prepares once"
+        );
+        self.started = true;
+        self.revert.as_mut().expect("original undo").prepare();
         if dirty {
-            self.blocks = Some(self.blocks.take().expect("original current").prepare());
+            self.blocks.as_mut().expect("original current").prepare();
         }
         match predecessor.try_prepare_current(&target.publication) {
             Ok(identity) => self.identity = Some(identity),
@@ -90,7 +126,48 @@ impl<'a, V: Value, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
                 return Err(error);
             }
         }
+        self.complete = true;
         Ok(())
+    }
+
+    /// Prepare the same originals with ordinary blocking identity acquisition.
+    pub(super) fn prepare_attached(
+        &mut self,
+        publication: &'a Publication,
+        predecessor: &CapturedPublication,
+        dirty: bool,
+    ) {
+        assert!(
+            !self.started && !self.released,
+            "original pair prepares once"
+        );
+        self.started = true;
+        self.revert.as_mut().expect("original undo").prepare();
+        if dirty {
+            self.blocks.as_mut().expect("original current").prepare();
+        }
+        predecessor.prepare_current_in(publication, &mut self.identity);
+        self.complete = true;
+    }
+
+    pub(super) fn is_prepared(&self) -> bool {
+        self.complete && !self.released
+    }
+
+    /// Release physical ownership but keep exact cleanup in this caller-owned pair.
+    /// This terminal transition grants no journal or publication authority.
+    pub(super) fn release(&mut self) {
+        if self.released {
+            return;
+        }
+        CellStage::release(&mut self.blocks);
+        CellStage::release(&mut self.revert);
+        if let Some(identity) = self.identity.take() {
+            debug_assert!(self.refused_identity.is_none());
+            self.refused_identity = Some(identity.abort());
+        }
+        self.complete = false;
+        self.released = true;
     }
 
     pub(super) fn abort<I>(
@@ -101,6 +178,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
         EbrCellOwned<Option<V>, C>,
         PublicationCleanup<I>,
     ) {
+        assert!(!self.released, "terminal release grants no journal");
         let (blocks, blocks_release) = self.blocks.take().expect("original current").abort();
         let (revert, revert_release) = self.revert.take().expect("original undo").abort();
         let identity = self
@@ -113,7 +191,8 @@ impl<'a, V: Value, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
             revert,
             PublicationCleanup {
                 _readers: [None, None],
-                writers: [Some(blocks_release), Some(revert_release)],
+                _writers: [Some(blocks_release), Some(revert_release)],
+                writer_batches: [None, None],
                 identities: [self.probe.take(), identity],
                 installation: Some(installation),
             },
@@ -126,24 +205,37 @@ impl<'a, V: Value, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
         admission: A,
         installation: I,
     ) -> PublishedPublication<V, A, I, C> {
-        let blocks = self.blocks.take().expect("original current");
-        let CellStage::Prepared(revert) = self.revert.take().expect("original undo") else {
-            unreachable!("original undo prepared")
-        };
+        assert!(
+            self.complete && !self.released,
+            "original pair preparation must complete"
+        );
+        let blocks_prepared = self
+            .blocks
+            .as_ref()
+            .expect("original current")
+            .is_prepared();
+        assert!(self.revert.as_ref().expect("original undo").is_prepared());
+        let blocks = self.blocks.take().expect("original current").into_held();
+        let revert = self.revert.take().expect("original undo").into_held();
         let identity = self.identity.take().expect("original identity prepared");
         let ((blocks, revert, unchanged, blocks_release, revert_release), identity) = identity
             .publish_retaining(
                 next,
                 || {
-                    let (blocks, unchanged) = match blocks {
-                        CellStage::Prepared(blocks) => {
-                            (Some(blocks.map_preserving_release(|p| p.publish())), None)
-                        }
-                        CellStage::Writer(blocks) => (None, Some(blocks)),
+                    let (blocks, unchanged) = if blocks_prepared {
+                        (
+                            Some(
+                                blocks
+                                    .map_preserving_release(|slot| slot.into_prepared().publish()),
+                            ),
+                            None,
+                        )
+                    } else {
+                        (None, Some(blocks))
                     };
                     (
                         blocks,
-                        revert.map_preserving_release(|p| p.publish()),
+                        revert.map_preserving_release(|slot| slot.into_prepared().publish()),
                         unchanged,
                     )
                 },
@@ -154,7 +246,8 @@ impl<'a, V: Value, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
                             (Some(retirement), None, release)
                         }
                         (None, Some(unchanged)) => {
-                            let (owner, release) = unchanged.release_deferred(|w| w.detach());
+                            let (owner, release) =
+                                unchanged.release_deferred(|slot| slot.abort().detach());
                             (None, Some(owner), release)
                         }
                         _ => unreachable!("one original current owner"),
@@ -179,13 +272,6 @@ impl<'a, V: Value, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
 
 impl<V: Value, C: Send + Sync + 'static> Drop for PreparedCellWriters<'_, V, C> {
     fn drop(&mut self) {
-        let blocks = self.blocks.take().map(CellStage::abort);
-        let revert = self.revert.take().map(CellStage::abort);
-        let identity = self
-            .identity
-            .take()
-            .map(PreparedIdentity::abort)
-            .or(self.refused_identity.take());
-        drop((blocks, revert, identity, self.probe.take()));
+        self.release();
     }
 }

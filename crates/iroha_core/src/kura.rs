@@ -19519,6 +19519,20 @@ impl Kura {
         namespace: &BoundProgressNamespace,
         allow_transient: bool,
     ) -> Result<NativeAmxEvidenceInventory> {
+        self.inventory_native_amx_evidence_with_repair_prefix_locked(
+            namespace,
+            allow_transient,
+            None,
+        )
+    }
+    // Only the authenticated CompletedRepair preflight supplies an exact manifest
+    // object here. Its actual bytes still count toward every inventory bound.
+    fn inventory_native_amx_evidence_with_repair_prefix_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+        allow_transient: bool,
+        repair_prefix: Option<&NativeAmxEvidenceFile>,
+    ) -> Result<NativeAmxEvidenceInventory> {
         if !Self::progress_mutation_namespace_unchanged(namespace) {
             return Err(Self::invalid_lane_artifact_error(
                 namespace.data_path.clone(),
@@ -19550,7 +19564,15 @@ impl Kura {
                     )
                 })?;
             let len = metadata.file.len();
-            if len == 0
+            let owned_prefix = repair_prefix.is_some_and(|candidate| {
+                allow_transient
+                    && temporary
+                    && kind == NativeAmxEvidenceKind::Manifest
+                    && candidate.path == path
+                    && candidate.participant_height == participant_height
+                    && Self::stable_sidecar_metadata_unchanged(&candidate.metadata, &metadata)
+            });
+            if (len == 0 && !owned_prefix)
                 || len > STRICT_INIT_MAX_BLOCK_BYTES
                 || len > self.native_amx_participant_evidence_file_bytes()
             {
@@ -20274,6 +20296,26 @@ impl Kura {
         }
         let mut temporary = Self::create_new_bound_progress_temp(namespace, temp_path)
             .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+        #[cfg(test)]
+        if let Some(prefix_len) =
+            FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_PREFIX.with(|flag| flag.take())
+        {
+            assert!(
+                prefix_len < bytes.len(),
+                "crash cut must precede the complete artifact"
+            );
+            temporary
+                .write_all(&bytes[..prefix_len])
+                .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+            // Keep this original exclusive-create descriptor's actual bytes, as
+            // process loss before write_all completion would. No fabricated file.
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "injected Native evidence interruption during temporary write",
+                ),
+                temp_path.to_path_buf(),
+            ));
+        }
         if let Err(error) = temporary
             .write_all(bytes)
             .and_then(|_| temporary.flush())
@@ -24499,6 +24541,7 @@ impl Kura {
 include!("kura/lane_artifact_budget.rs");
 include!("kura/native_amx_publication_capacity.rs");
 include!("kura/native_amx_publication_index.rs");
+include!("kura/native_amx_repair_prefix.rs");
 include!("kura/native_amx_publication_startup_pins.rs");
 impl Kura {
     fn persist_lane_payload_ownership_artifacts_for_block(
@@ -38031,6 +38074,7 @@ impl Kura {
                 "Native AMX startup repair carrier or manifest changed before publication",
             ));
         }
+        self.recover_native_amx_completed_repair_prefixes_under_publication_guard(block)?;
         let route_preflights = self
             .preflight_native_amx_participant_application_repair_targets_under_publication_guard(
                 plan,
@@ -38142,6 +38186,7 @@ impl Kura {
             ));
         }
         let permit_cleanup = mode.permits_retention_cleanup();
+        self.recover_native_amx_completed_repair_prefixes_under_publication_guard(block)?;
         let route_preflights =
             self.preflight_native_amx_participant_application_plan_under_publication_guard(plan)?;
         let all_targets = (0..plan.artifacts.len()).collect::<Vec<_>>();

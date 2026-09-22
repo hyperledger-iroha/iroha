@@ -122,15 +122,18 @@ state_test! { sync native_observation_preserves_stable_bad_source_but_retries_ch
             assert_eq!(result.is_err(), fail);
             // Exercise the actual publication fence after a real source observation.
             // This is a no-op publication, not fabricated carrier execution.
-            let publication = state.begin_state_view_write();
+            let mut publication_notice = state.state_view_publication();
+            let publication = publication_notice.begin();
             drop(publication);
+            drop(publication_notice);
             result
         });
         assert!(matches!(result, Err(MergeLedgerCommitError::ExecutionObservationChanged)));
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
     }
     let called = std::cell::Cell::new(false);
-    let publication = state.begin_state_view_write();
+    let mut publication_notice = state.state_view_publication();
+    let publication = publication_notice.begin();
     let result: core::result::Result<(), MergeLedgerCommitError> = with_stable_observation(state, || {
         called.set(true);
         Ok(())
@@ -138,6 +141,7 @@ state_test! { sync native_observation_preserves_stable_bad_source_but_retries_ch
     assert!(matches!(result, Err(MergeLedgerCommitError::ExecutionObservationChanged)));
     assert!(!called.get(), "busy observations do not begin source work");
     drop(publication);
+    drop(publication_notice);
 }
 
 state_test! { sync native_economic_batch_preserves_merge_ledger_query_metadata
@@ -150,8 +154,8 @@ state_test! { sync native_economic_batch_preserves_merge_ledger_query_metadata
     let global = crate::merge::reduce_merge_hint_roots(&roots);
     {
         let mut world = state.world.block();
-        *world.merge_hint_roots = roots.clone();
-        *world.merge_global_state_root = Some(global);
+        *world.merge_hint_roots.get_mut() = roots.clone();
+        *world.merge_global_state_root.get_mut() = Some(global);
         world.commit();
     }
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
@@ -163,7 +167,7 @@ state_test! { sync native_economic_batch_preserves_merge_ledger_query_metadata
     assert_eq!(prepared.overlay().world.assets.get(&fixture.source).unwrap().0, Quantity::from(75_u32));
     assert_eq!(prepared.overlay().world.merge_hint_roots.as_slice(), roots.as_slice(),
         "native Decisions do not replace the latest relay merge-ledger hints");
-    assert_eq!(*prepared.overlay().world.merge_global_state_root, Some(global),
+    assert_eq!(*prepared.overlay().world.merge_global_state_root.get(), Some(global),
         "native Decisions do not replace the latest relay merge-ledger root");
     drop(prepared);
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
@@ -203,12 +207,12 @@ fn merge_recovery_validates_latest_entry_without_rewriting_world_impl() {
     for mutate_hints in [false, true] {
         {
             let mut world = state.world.block();
-            *world.merge_hint_roots = entry.merge_hint_roots();
-            *world.merge_global_state_root = Some(entry.global_state_root);
+            *world.merge_hint_roots.get_mut() = entry.merge_hint_roots();
+            *world.merge_global_state_root.get_mut() = Some(entry.global_state_root);
             if mutate_hints {
-                *world.merge_hint_roots = vec![Hash::new(b"foreign relay hints")];
+                *world.merge_hint_roots.get_mut() = vec![Hash::new(b"foreign relay hints")];
             } else {
-                *world.merge_global_state_root = None;
+                *world.merge_global_state_root.get_mut() = None;
             }
             world.commit();
         }

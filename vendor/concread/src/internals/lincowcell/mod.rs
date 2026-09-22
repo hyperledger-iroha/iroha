@@ -281,6 +281,128 @@ pub struct LinCowCellPreparedCommit<'a, T, R, U, Charge = Untracked> {
     base: Shared<LinCowCellInner<R, Charge>, Charge>,
 }
 
+/// Caller-owned original writer throughout physical preparation and validation.
+///
+/// Creation only moves existing ownership. Preparation borrows this slot, so a
+/// validation panic leaves both physical guards and private work with the caller.
+/// The caller must release every sibling before destroying this slot's payloads
+/// or original release notifications. No generation can publish before validation.
+#[must_use = "retain original preparation custody through aggregate cleanup"]
+pub struct LinCowCellCommitSlot<'a, T, R, U, Charge = Untracked> {
+    phase: Option<LinCowCellCommitPhase<'a, T, R, U, Charge>>,
+    ready: bool,
+}
+
+enum LinCowCellCommitPhase<'a, T, R, U, Charge> {
+    Writer(LinCowCellWriteTxn<'a, T, R, U, Charge>),
+    Prepared(LinCowCellPreparedCommit<'a, T, R, U, Charge>),
+}
+
+impl<'a, T, R, U, Charge> LinCowCellCommitSlot<'a, T, R, U, Charge>
+where
+    T: LinCowCellRetainedCommit<R, U>,
+{
+    /// Prepare while keeping the original owner in the caller on poison or panic.
+    pub fn prepare(&mut self) {
+        let Some(LinCowCellCommitPhase::Writer(writer)) = self.phase.as_ref() else {
+            panic!("original writer prepares once");
+        };
+        let active = writer.caller.lock_active();
+        self.install_active(active);
+        self.validate();
+    }
+
+    /// Try the original active-reader lock without releasing this writer on error.
+    pub fn try_prepare(&mut self) -> Result<(), OwnedWriteError> {
+        let Some(LinCowCellCommitPhase::Writer(writer)) = self.phase.as_ref() else {
+            panic!("original writer prepares once");
+        };
+        let active = writer.caller.try_lock_active()?;
+        self.install_active(active);
+        self.validate();
+        Ok(())
+    }
+
+    fn install_active(&mut self, active: ActiveGuard<'a, R, Charge>) {
+        let Some(LinCowCellCommitPhase::Writer(LinCowCellWriteTxn {
+            caller,
+            guard,
+            work,
+            next,
+            base,
+        })) = self.phase.take()
+        else {
+            unreachable!("borrowed original writer checked before acquisition");
+        };
+        // Only inert moves occur between taking the writer and installing it.
+        // All assertions and cursor validation happen after caller custody resumes.
+        self.phase = Some(LinCowCellCommitPhase::Prepared(LinCowCellPreparedCommit {
+            caller,
+            guard,
+            active,
+            work,
+            next,
+            base,
+        }));
+    }
+
+    fn validate(&mut self) {
+        let Some(LinCowCellCommitPhase::Prepared(prepared)) = self.phase.as_mut() else {
+            unreachable!("original reader and writer installed before validation");
+        };
+        assert!(Shared::ptr_eq(&prepared.base, &prepared.guard.current));
+        assert!(Shared::ptr_eq(&prepared.base, &prepared.active));
+        assert!(prepared.base.pin.get().is_none());
+        let original = Shared::get_mut(&mut prepared.work).expect("original cursor must be unique");
+        prepared
+            .guard
+            .data
+            .validate_commit(original, &prepared.base.data);
+        self.ready = true;
+    }
+
+    /// Whether this original pair completed validation without an intervening edit.
+    pub fn is_prepared(&self) -> bool {
+        self.ready
+    }
+
+    /// Transfer the checked original without additional locking or callbacks.
+    pub fn into_prepared(mut self) -> LinCowCellPreparedCommit<'a, T, R, U, Charge> {
+        assert!(self.ready, "original preparation must complete");
+        let Some(LinCowCellCommitPhase::Prepared(prepared)) = self.phase.take() else {
+            unreachable!("ready preparation retains original physical guards");
+        };
+        prepared
+    }
+
+    /// Return the original unpublished writer and retain any actual reader release.
+    /// This is also valid after failed validation; callers must use cleanup-only
+    /// retirement for a failed cursor, never promote it to journal authority.
+    pub fn abort_retaining(
+        mut self,
+    ) -> (
+        LinCowCellWriteTxn<'a, T, R, U, Charge>,
+        Option<crate::release::DeferredRelease>,
+    ) {
+        match self.phase.take().expect("original commit slot") {
+            LinCowCellCommitPhase::Writer(writer) => (writer, None),
+            LinCowCellCommitPhase::Prepared(prepared) => {
+                let (writer, release) = prepared.abort_retaining();
+                (writer, Some(release))
+            }
+        }
+    }
+}
+
+impl<T, R, U, Charge> AsRef<U> for LinCowCellCommitSlot<'_, T, R, U, Charge> {
+    fn as_ref(&self) -> &U {
+        match self.phase.as_ref().expect("original commit slot") {
+            LinCowCellCommitPhase::Writer(writer) => writer.as_ref(),
+            LinCowCellCommitPhase::Prepared(prepared) => &prepared.work,
+        }
+    }
+}
+
 /// Cleanup custody after original node ownership has been published.
 /// It carries no publication authority; free it after every physical unlock.
 pub struct LinCowCellCommitRetirement<R, Retirement, Charge = Untracked> {
@@ -804,12 +926,20 @@ impl<'a, T, R, U, Charge> LinCowCellWriteTxn<'a, T, R, U, Charge>
 where
     T: LinCowCellRetainedCommit<R, U>,
 {
+    /// Move this original writer into caller-owned preparation without callbacks.
+    pub fn commit_slot(self) -> LinCowCellCommitSlot<'a, T, R, U, Charge> {
+        LinCowCellCommitSlot {
+            phase: Some(LinCowCellCommitPhase::Writer(self)),
+            ready: false,
+        }
+    }
+
     /// Acquire and validate all physical owners before the first transfer.
-    /// No allocation or user cleanup occurs on successful preparation.
+    /// Aggregate callers retain `commit_slot()` before preparing it in place.
     pub fn prepare_commit(self) -> LinCowCellPreparedCommit<'a, T, R, U, Charge> {
-        let caller = self.caller;
-        let active = caller.lock_active();
-        self.prepare_with_active(active)
+        let mut slot = self.commit_slot();
+        slot.prepare();
+        slot.into_prepared()
     }
 
     /// Prepare without waiting for the short active-reader lock.
@@ -817,44 +947,13 @@ where
     pub fn try_prepare_commit(
         self,
     ) -> Result<LinCowCellPreparedCommit<'a, T, R, U, Charge>, (Self, OwnedWriteError)> {
-        let caller = self.caller;
-        let active = match caller.try_lock_active() {
-            Ok(active) => active,
-            Err(error) => return Err((self, error)),
-        };
-        Ok(self.prepare_with_active(active))
-    }
-
-    fn prepare_with_active(
-        self,
-        active: ActiveGuard<'a, R, Charge>,
-    ) -> LinCowCellPreparedCommit<'a, T, R, U, Charge> {
-        // Keep both guards before all cleanup owners if validation unwinds.
-        let Self {
-            caller,
-            guard,
-            work,
-            next,
-            base,
-        } = self;
-        let mut prepared = LinCowCellPreparedCommit {
-            caller,
-            guard,
-            active,
-            work,
-            next,
-            base,
-        };
-
-        assert!(Shared::ptr_eq(&prepared.base, &prepared.guard.current));
-        assert!(Shared::ptr_eq(&prepared.base, &prepared.active));
-        assert!(prepared.base.pin.get().is_none());
-        let original = Shared::get_mut(&mut prepared.work).expect("original cursor must be unique");
-        prepared
-            .guard
-            .data
-            .validate_commit(original, &prepared.base.data);
-        prepared
+        let mut slot = self.commit_slot();
+        if let Err(error) = slot.try_prepare() {
+            let (writer, release) = slot.abort_retaining();
+            debug_assert!(release.is_none(), "failed acquisition owned no reader");
+            return Err((writer, error));
+        }
+        Ok(slot.into_prepared())
     }
 }
 
@@ -1018,11 +1117,26 @@ impl<T, R, U, Charge> LinCowCellOwned<T, R, U, Charge> {
         &self,
         target: &LinCowCell<T, R, U, Charge>,
     ) -> Result<bool, OwnedWriteError> {
+        let (matches, release) = self.try_matches_current_retaining(target)?;
+        drop(release);
+        Ok(matches)
+    }
+
+    /// Compare the original predecessor and physically release the reader lock,
+    /// retaining only that actual acquisition's notification for an outer owner.
+    /// Foreign families and unsuccessful probes return no fabricated release.
+    /// The observation is advisory and never grants publication authority.
+    pub fn try_matches_current_retaining(
+        &self,
+        target: &LinCowCell<T, R, U, Charge>,
+    ) -> Result<(bool, Option<crate::release::DeferredRelease>), OwnedWriteError> {
         if !Shared::ptr_eq(&self.root, &target.write) {
-            return Ok(false);
+            return Ok((false, None));
         }
         let active = target.try_lock_active()?;
-        Ok(Shared::ptr_eq(&self.base, &active))
+        let matches = Shared::ptr_eq(&self.base, &active);
+        let ((), release) = active.release_deferred(drop);
+        Ok((matches, Some(release)))
     }
 }
 
@@ -1726,6 +1840,69 @@ mod identity_preparation_tests {
     }
 
     #[test]
+    fn retained_predecessor_observation_defers_only_the_original_acquired_reader() {
+        use std::{
+            future::Future,
+            pin::Pin,
+            task::{Context, Waker},
+        };
+        let cell = tree();
+        let foreign = tree();
+        let owned = cell.write().detach();
+        let mut wait = cell.observe_reader_release().wait_for_release();
+        assert!(Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending());
+        let (matches, release) =
+            without_allocations(|| owned.try_matches_current_retaining(&cell).unwrap());
+        assert!(matches);
+        assert!(release.is_some());
+        assert!(
+            cell.active.try_lock().is_ok(),
+            "actual reader already unlocked"
+        );
+        assert!(Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending());
+        let (matches, foreign_release) =
+            without_allocations(|| owned.try_matches_current_retaining(&foreign).unwrap());
+        assert!(!matches && foreign_release.is_none());
+        {
+            let _active = cell.active.lock().unwrap();
+            assert!(matches!(
+                without_allocations(|| owned.try_matches_current_retaining(&cell)),
+                Err(OwnedWriteError::Busy)
+            ));
+        }
+        assert!(Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending());
+        without_allocations(|| drop(release));
+        assert!(Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready());
+        cell.write().commit();
+        let (matches, stale_release) =
+            without_allocations(|| owned.try_matches_current_retaining(&cell).unwrap());
+        assert!(
+            !matches && stale_release.is_some(),
+            "stale base still acquired the original reader"
+        );
+        drop(stale_release);
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            let _active = cell.active.lock().unwrap();
+            panic!("actual reader poison");
+        }))
+        .is_err());
+        assert!(matches!(
+            owned.try_matches_current_retaining(&cell),
+            Err(OwnedWriteError::Poisoned)
+        ));
+        drop((owned, cell, foreign));
+        assert_released();
+    }
+
+    #[test]
     fn reader_wait_survives_refused_writer_release_and_registration_races() {
         use std::{
             future::Future,
@@ -2149,3 +2326,6 @@ mod identity_preparation_tests {
         assert_released();
     }
 }
+
+#[cfg(test)]
+mod commit_slot_tests;

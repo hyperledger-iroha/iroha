@@ -1,4 +1,4 @@
-//! Actual allocator controls for MV's prepaid fixed byte buffer.
+//! Actual allocator controls for MV's prepaid fixed typed buffer.
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -12,20 +12,21 @@ use std::{
     task::{Context, Poll, Wake, Waker},
 };
 
-use mv::allocation::{
-    AllocationBudget, AllocationRefusal, ChargedByteBuffer, ChargedByteBufferError,
-};
+use mv::allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedBufferError};
 
 struct ObservedAllocator;
 
 thread_local! {
     static OBSERVE_ALLOCATIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static OBSERVED_BUDGET: std::cell::RefCell<Option<AllocationBudget>> = const { std::cell::RefCell::new(None) };
 }
 
 static SERIAL: Mutex<()> = Mutex::new(());
 static NEXT_SIZE: AtomicUsize = AtomicUsize::new(usize::MAX);
 static FAIL_NEXT: AtomicBool = AtomicBool::new(false);
 static POINTER: AtomicUsize = AtomicUsize::new(0);
+static OBSERVED_COUNT: AtomicUsize = AtomicUsize::new(0);
+static RESERVED_AT_ALLOCATION: AtomicUsize = AtomicUsize::new(0);
 static REQUESTED_SIZE: AtomicUsize = AtomicUsize::new(0);
 static REQUESTED_ALIGN: AtomicUsize = AtomicUsize::new(0);
 static FREED_SIZE: AtomicUsize = AtomicUsize::new(0);
@@ -34,13 +35,26 @@ static FREED: AtomicBool = AtomicBool::new(false);
 
 unsafe impl GlobalAlloc for ObservedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let observed = OBSERVE_ALLOCATIONS
+        let enabled = OBSERVE_ALLOCATIONS
             .try_with(|enabled| enabled.get())
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if enabled {
+            OBSERVED_COUNT.fetch_add(1, SeqCst);
+        }
+        let observed = enabled
             && NEXT_SIZE
                 .compare_exchange(layout.size(), usize::MAX, SeqCst, SeqCst)
                 .is_ok();
         if observed {
+            let reserved = OBSERVED_BUDGET
+                .try_with(|budget| {
+                    budget
+                        .borrow()
+                        .as_ref()
+                        .map_or(0, AllocationBudget::reserved_bytes)
+                })
+                .unwrap_or(0);
+            RESERVED_AT_ALLOCATION.store(reserved, SeqCst);
             REQUESTED_SIZE.store(layout.size(), SeqCst);
             REQUESTED_ALIGN.store(layout.align(), SeqCst);
             if FAIL_NEXT.swap(false, SeqCst) {
@@ -72,7 +86,11 @@ unsafe impl GlobalAlloc for ObservedAllocator {
 #[global_allocator]
 static ALLOCATOR: ObservedAllocator = ObservedAllocator;
 
-fn observe_next(size: usize, fail: bool) {
+fn observe_next(size: usize, fail: bool, budget: &AllocationBudget) {
+    OBSERVE_ALLOCATIONS.with(|enabled| enabled.set(false));
+    OBSERVED_BUDGET.with(|observed| *observed.borrow_mut() = Some(budget.clone()));
+    OBSERVED_COUNT.store(0, SeqCst);
+    RESERVED_AT_ALLOCATION.store(0, SeqCst);
     OBSERVE_ALLOCATIONS.with(|enabled| enabled.set(true));
     POINTER.store(0, SeqCst);
     REQUESTED_SIZE.store(0, SeqCst);
@@ -111,9 +129,10 @@ impl Wake for AfterFree {
 fn exact_backing_layout_and_charge_survive_fill_until_actual_deallocation() {
     let _serial = SERIAL.lock().unwrap();
     let budget = AllocationBudget::new(257);
-    observe_next(257, false);
-    let mut bytes = ChargedByteBuffer::new(257, &budget).unwrap();
+    observe_next(257, false, &budget);
+    let mut bytes = ChargedBuffer::<u8>::new(257, &budget).unwrap();
     assert_eq!(REQUESTED_SIZE.load(SeqCst), 257);
+    assert_eq!(RESERVED_AT_ALLOCATION.load(SeqCst), 257);
     assert_eq!(REQUESTED_ALIGN.load(SeqCst), 1);
     let pointer = bytes.as_slice().as_ptr();
     assert_eq!(pointer as usize, POINTER.load(SeqCst));
@@ -155,13 +174,13 @@ fn capacity_refusal_precedes_allocation_and_original_wait_allows_retry() {
     let _serial = SERIAL.lock().unwrap();
     let budget = AllocationBudget::new(79);
     let occupied = budget.try_reserve_bytes(79).unwrap();
-    observe_next(79, false);
-    let Err(ChargedByteBufferError::Admission(AllocationRefusal::Capacity {
+    observe_next(79, false, &budget);
+    let Err(ChargedBufferError::Admission(AllocationRefusal::Capacity {
         requested_bytes,
         reserved_bytes,
         limit_bytes,
         release,
-    })) = ChargedByteBuffer::new(79, &budget)
+    })) = ChargedBuffer::<u8>::new(79, &budget)
     else {
         panic!("capacity must return its original typed refusal");
     };
@@ -176,7 +195,7 @@ fn capacity_refusal_precedes_allocation_and_original_wait_allows_retry() {
     assert_eq!(released.as_mut().poll(&mut context), Poll::Pending);
     drop(occupied);
     assert_eq!(released.as_mut().poll(&mut context), Poll::Ready(()));
-    let bytes = ChargedByteBuffer::new(79, &budget).unwrap();
+    let bytes = ChargedBuffer::<u8>::new(79, &budget).unwrap();
     assert_eq!(REQUESTED_SIZE.load(SeqCst), 79);
     drop(bytes);
     assert!(FREED.load(SeqCst));
@@ -187,20 +206,20 @@ fn capacity_refusal_precedes_allocation_and_original_wait_allows_retry() {
 fn allocator_failure_returns_unused_charge_without_constructing_a_vec() {
     let _serial = SERIAL.lock().unwrap();
     let budget = AllocationBudget::new(113);
-    observe_next(113, true);
-    let error = match ChargedByteBuffer::new(113, &budget) {
+    observe_next(113, true, &budget);
+    let error = match ChargedBuffer::<u8>::new(113, &budget) {
         Err(error) => error,
         Ok(_) => panic!("the observed allocator must refuse this allocation"),
     };
     assert!(matches!(
         error,
-        ChargedByteBufferError::Allocator {
+        ChargedBufferError::Allocator {
             requested_bytes: 113
         }
     ));
     assert_eq!(
         error.to_string(),
-        "failed to allocate 113 admitted byte-buffer bytes"
+        "failed to allocate 113 admitted buffer bytes"
     );
     assert!(std::error::Error::source(&error).is_none());
     assert_eq!(REQUESTED_SIZE.load(SeqCst), 113);
@@ -213,21 +232,21 @@ fn allocator_failure_returns_unused_charge_without_constructing_a_vec() {
 fn zero_and_unrepresentable_layouts_never_request_backing_storage() {
     let _serial = SERIAL.lock().unwrap();
     let budget = AllocationBudget::new(0);
-    observe_next(0, false);
-    let mut bytes = ChargedByteBuffer::new(0, &budget).unwrap();
+    observe_next(0, false, &budget);
+    let mut bytes = ChargedBuffer::<u8>::new(0, &budget).unwrap();
     bytes.append(&[]).unwrap();
     assert!(bytes.as_slice().is_empty());
     assert!(bytes.append(&[1]).is_err());
     drop(bytes);
     assert_eq!(NEXT_SIZE.load(SeqCst), 0);
     NEXT_SIZE.store(usize::MAX, SeqCst);
-    let error = match ChargedByteBuffer::new(usize::MAX, &budget) {
+    let error = match ChargedBuffer::<u8>::new(usize::MAX, &budget) {
         Err(error) => error,
         Ok(_) => panic!("the unrepresentable layout must be refused"),
     };
     assert!(matches!(
         error,
-        ChargedByteBufferError::Admission(AllocationRefusal::DemandOverflow)
+        ChargedBufferError::Admission(AllocationRefusal::DemandOverflow)
     ));
     assert_eq!(
         error.to_string(),
@@ -246,9 +265,9 @@ fn zero_and_unrepresentable_layouts_never_request_backing_storage() {
 fn unwind_frees_the_original_initialized_buffer_before_refund() {
     let _serial = SERIAL.lock().unwrap();
     let budget = AllocationBudget::new(191);
-    observe_next(191, false);
+    observe_next(191, false, &budget);
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut bytes = ChargedByteBuffer::new(191, &budget).unwrap();
+        let mut bytes = ChargedBuffer::<u8>::new(191, &budget).unwrap();
         bytes.append(&[9; 87]).unwrap();
         assert_eq!(budget.reserved_bytes(), 191);
         panic!("injected snapshot decode unwind");
@@ -266,13 +285,13 @@ fn unwind_frees_the_original_initialized_buffer_before_refund() {
 fn simultaneous_buffers_share_capacity_until_their_actual_owners_drop() {
     let _serial = SERIAL.lock().unwrap();
     let budget = AllocationBudget::new(128);
-    let mut first = ChargedByteBuffer::new(64, &budget).unwrap();
+    let mut first = ChargedBuffer::<u8>::new(64, &budget).unwrap();
     first.append(&[13; 64]).unwrap();
-    let second = ChargedByteBuffer::new(64, &budget).unwrap();
+    let second = ChargedBuffer::<u8>::new(64, &budget).unwrap();
     assert_eq!(budget.reserved_bytes(), 128);
     assert!(matches!(
-        ChargedByteBuffer::new(1, &budget),
-        Err(ChargedByteBufferError::Admission(
+        ChargedBuffer::<u8>::new(1, &budget),
+        Err(ChargedBufferError::Admission(
             AllocationRefusal::Capacity { .. }
         ))
     ));
@@ -283,8 +302,151 @@ fn simultaneous_buffers_share_capacity_until_their_actual_owners_drop() {
     .join()
     .unwrap();
     assert_eq!(budget.reserved_bytes(), 64);
-    let retry = ChargedByteBuffer::new(64, &budget).unwrap();
+    let retry = ChargedBuffer::<u8>::new(64, &budget).unwrap();
     assert_eq!(budget.reserved_bytes(), 128);
     drop((retry, second));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn aligned_copy_elements_use_exact_typed_layout_before_allocation() {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[repr(align(128))]
+    struct Entry([u8; 33]);
+
+    let _serial = SERIAL.lock().unwrap();
+    let layout = Layout::array::<Entry>(3).unwrap();
+    let budget = AllocationBudget::new(layout.size());
+    observe_next(layout.size(), false, &budget);
+    let mut entries = ChargedBuffer::<Entry>::new(3, &budget).unwrap();
+    assert_eq!(REQUESTED_SIZE.load(SeqCst), layout.size());
+    assert_eq!(REQUESTED_ALIGN.load(SeqCst), layout.align());
+    assert_eq!(RESERVED_AT_ALLOCATION.load(SeqCst), layout.size());
+    assert_eq!(entries.as_slice().as_ptr() as usize % layout.align(), 0);
+    assert_eq!(entries.capacity(), 3);
+    let pointer = entries.as_slice().as_ptr();
+    let allocations = OBSERVED_COUNT.load(SeqCst);
+    entries.append(&[Entry([9; 33]), Entry([4; 33])]).unwrap();
+    entries.as_mut_slice()[0] = Entry([3; 33]);
+    assert!(entries.append(&[Entry([1; 33]); 2]).is_err());
+    assert_eq!(entries.as_slice(), &[Entry([3; 33]), Entry([4; 33])]);
+    entries.append(&[Entry([1; 33])]).unwrap();
+    assert_eq!(entries.as_slice().as_ptr(), pointer);
+    assert_eq!(OBSERVED_COUNT.load(SeqCst), allocations);
+    assert_eq!(budget.reserved_bytes(), layout.size());
+    drop(entries);
+    assert!(FREED.load(SeqCst));
+    assert_eq!(FREED_SIZE.load(SeqCst), layout.size());
+    assert_eq!(FREED_ALIGN.load(SeqCst), layout.align());
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn canonical_hash_batch_sort_and_prefix_compaction_preserve_original_allocation() {
+    let _serial = SERIAL.lock().unwrap();
+    let layout = Layout::array::<[u8; 32]>(8).unwrap();
+    let budget = AllocationBudget::new(layout.size());
+    observe_next(layout.size(), false, &budget);
+    let mut hashes = ChargedBuffer::<[u8; 32]>::new(8, &budget).unwrap();
+    let pointer = hashes.as_slice().as_ptr();
+    let allocations = OBSERVED_COUNT.load(SeqCst);
+    hashes
+        .append(&[[9; 32], [1; 32], [9; 32], [4; 32], [1; 32]])
+        .unwrap();
+    hashes.as_mut_slice().sort_unstable();
+    let mut unique = 0;
+    for index in 0..hashes.as_slice().len() {
+        let hash = hashes.as_slice()[index];
+        if unique == 0 || hashes.as_slice()[unique - 1] != hash {
+            hashes.as_mut_slice()[unique] = hash;
+            unique += 1;
+        }
+    }
+    hashes.truncate(unique);
+    hashes.truncate(usize::MAX);
+    assert_eq!(hashes.as_slice(), &[[1; 32], [4; 32], [9; 32]]);
+    assert_eq!(hashes.capacity(), 8);
+    assert_eq!(hashes.as_slice().as_ptr(), pointer);
+    assert_eq!(budget.reserved_bytes(), layout.size());
+    assert_eq!(OBSERVED_COUNT.load(SeqCst), allocations);
+    hashes.truncate(0);
+    hashes.append(&[[7; 32]; 8]).unwrap();
+    assert!(hashes.append(&[[8; 32]]).is_err());
+    assert_eq!(hashes.as_slice(), &[[7; 32]; 8]);
+    assert_eq!(hashes.as_slice().as_ptr(), pointer);
+    assert_eq!(budget.reserved_bytes(), layout.size());
+    drop(hashes);
+    assert!(FREED.load(SeqCst));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn zero_sized_elements_obey_logical_capacity_without_allocation() {
+    #[derive(Clone, Copy)]
+    #[repr(align(256))]
+    struct Entry;
+
+    let _serial = SERIAL.lock().unwrap();
+    let budget = AllocationBudget::new(0);
+    observe_next(0, false, &budget);
+    let allocations = OBSERVED_COUNT.load(SeqCst);
+    let mut entries = ChargedBuffer::<Entry>::new(2, &budget).unwrap();
+    assert_eq!(entries.capacity(), 2);
+    assert_eq!(entries.as_slice().as_ptr() as usize % 256, 0);
+    entries.append(&[Entry; 2]).unwrap();
+    assert!(entries.append(&[Entry]).is_err());
+    assert_eq!(entries.as_slice().len(), 2);
+    entries.truncate(1);
+    entries.append(&[Entry]).unwrap();
+    entries.as_mut_slice()[0] = Entry;
+    assert_eq!(entries.as_slice().len(), 2);
+    drop(entries);
+    assert_eq!(NEXT_SIZE.load(SeqCst), 0);
+    assert_eq!(OBSERVED_COUNT.load(SeqCst), allocations);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn typed_layout_overflow_is_refused_before_reservation_or_allocation() {
+    let _serial = SERIAL.lock().unwrap();
+    let budget = AllocationBudget::new(usize::MAX);
+    observe_next(1, false, &budget);
+    let allocations = OBSERVED_COUNT.load(SeqCst);
+    let result = ChargedBuffer::<[u64; 4]>::new(usize::MAX / 16, &budget);
+    assert!(matches!(
+        result,
+        Err(ChargedBufferError::Admission(
+            AllocationRefusal::DemandOverflow
+        ))
+    ));
+    assert_eq!(NEXT_SIZE.load(SeqCst), 1);
+    assert_eq!(OBSERVED_COUNT.load(SeqCst), allocations);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn appending_copy_elements_never_invokes_payload_clone() {
+    #[derive(Copy, Debug, PartialEq, Eq)]
+    struct Entry(u64);
+
+    #[expect(
+        clippy::non_canonical_clone_impl,
+        reason = "prove the Copy append never invokes user Clone code"
+    )]
+    impl Clone for Entry {
+        fn clone(&self) -> Self {
+            panic!("a fixed Copy append must not call user Clone code");
+        }
+    }
+
+    let _serial = SERIAL.lock().unwrap();
+    let budget = AllocationBudget::new(16);
+    let mut entries = ChargedBuffer::<Entry>::new(2, &budget).unwrap();
+    entries.append(&[Entry(4), Entry(8)]).unwrap();
+    assert_eq!(entries.as_slice(), &[Entry(4), Entry(8)]);
+    entries.truncate(1);
+    entries.append(&[Entry(9)]).unwrap();
+    assert_eq!(entries.as_slice(), &[Entry(4), Entry(9)]);
+    drop(entries);
     assert_eq!(budget.reserved_bytes(), 0);
 }

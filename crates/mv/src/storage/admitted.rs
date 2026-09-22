@@ -392,8 +392,11 @@ where
             for (key, value) in snapshot.revert_map().iter() {
                 insert_copy(revert, key, value, &budget)?;
             }
-            let OriginalWriters { revert, blocks } = writers.into_original();
-            publish_pair(blocks, revert, &restored.publication, next, true);
+            let predecessor = restored.publication.capture();
+            writers.prepare_publication(&predecessor, true);
+            let mut next = Some(next);
+            writers.publish_prepared(&mut next);
+            drop(writers);
             Ok(restored)
         })
     }
@@ -520,7 +523,7 @@ where
             dirty: mode == BlockMode::Replace,
             failed: false,
             predecessor,
-            next,
+            next: Some(next),
             mode,
         })
     }
@@ -785,10 +788,98 @@ where
     }
 }
 
+/// Caller-owned retained preparation confined to the original refund scope.
+///
+/// Construction consumes a detached journal, never an executing mutable borrow.
+/// All callbacks and cleanup remain in the slot until its aggregate has released
+/// every writer. Terminal release or a caught preparation panic forbids recovery.
+/// The slot cannot escape its original allocation scope:
+/// ```compile_fail
+/// use concread::bptree::{ClonePlanning, Prepaid};
+/// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy,
+///     AdmittedDetachedPublicationSlot, Detached, Storage}};
+/// fn escape<'a, P>(budget: &'a AllocationBudget, target: &'a Storage<u64,u64,Prepaid<P>>,
+///     original: Detached<u64,u64,(),Prepaid<P>>) -> AdmittedDetachedPublicationSlot<'a,'a,u64,u64,(),P>
+/// where P: AdmittedStoragePolicy + ClonePlanning<u64,u64> + ClonePlanning<u64,Option<u64>> {
+///     budget.with_deferred_refund_notifications(|scope| {
+///         original.try_publication_slot(scope, target).ok().expect("original pool")
+///     })
+/// }
+/// ```
+#[must_use = "retain the original slot and scope through all aggregate writers"]
+pub struct AdmittedDetachedPublicationSlot<'scope, 'target, K: Key, V: Value, Admission, P>
+where
+    P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    inner: DetachedPublicationSlotInner<'target, K, V, Admission, (), Prepaid<P>>,
+    scope: &'scope AllocationScope<'scope>,
+}
+impl<'scope, 'target, K: Key, V: Value, Admission, P>
+    AdmittedDetachedPublicationSlot<'scope, 'target, K, V, Admission, P>
+where
+    P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    /// Prepare the original prepaid pair by borrowing caller-owned custody.
+    /// No successor allocation, payload copy or replacement reservation occurs.
+    pub fn try_prepare(&mut self) -> Result<(), PublicationPreparationError<AdmittedStorageError>> {
+        self.inner.try_prepare(|_, _| Ok(()))
+    }
+    /// Release physical writers without reclaiming payloads or invoking callbacks.
+    /// This terminal transition cannot create a reusable journal.
+    pub fn release_writers(&mut self) {
+        self.inner.release_writers();
+    }
+    /// Return exact original journals after a normal refusal or complete abort.
+    /// The actual release cleanup stays in this scoped caller-owned slot.
+    pub fn recover_original(&mut self) -> Detached<K, V, Admission, Prepaid<P>> {
+        self.inner.recover_original()
+    }
+    /// Transfer the exact completed physical owner within the same pool scope.
+    pub fn into_prepared(self) -> AdmittedPreparedPublication<'scope, 'target, K, V, Admission, P> {
+        AdmittedPreparedPublication {
+            inner: self.inner.into_prepared(),
+            _scope: self.scope,
+        }
+    }
+    fn into_cleanup(self) -> AdmittedAbortedPublication<'scope> {
+        AdmittedAbortedPublication {
+            _inner: self.inner.into_cleanup(),
+            _scope: self.scope,
+        }
+    }
+}
+
 impl<K: Key, V: Value, Admission, P> Detached<K, V, Admission, Prepaid<P>>
 where
     P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
+    /// Install original retained custody within its authentic allocation scope.
+    /// A foreign scope refuses before any physical acquisition or callback.
+    pub fn try_publication_slot<'scope, 'target>(
+        self,
+        scope: &'scope AllocationScope<'scope>,
+        target: &'target Storage<K, V, Prepaid<P>>,
+    ) -> Result<
+        AdmittedDetachedPublicationSlot<'scope, 'target, K, V, Admission, P>,
+        (Self, PublicationPreparationError<AdmittedStorageError>),
+    > {
+        if !scope.belongs_to(
+            target
+                .allocation
+                .as_ref()
+                .expect("admitted Storage original pool"),
+        ) {
+            return Err((
+                self,
+                PublicationPreparationError::Admission(AdmittedStorageError::ScopeIdentity),
+            ));
+        }
+        Ok(AdmittedDetachedPublicationSlot {
+            inner: DetachedPublicationSlotInner::new(self, target),
+            scope,
+        })
+    }
+
     /// Prepare the exact retained pair without allocation or payload copying.
     ///
     /// The original pool scope must enclose every participating writer. Foreign,
@@ -806,35 +897,24 @@ where
             AdmittedAbortedPublication<'scope>,
         ),
     > {
-        if !scope.belongs_to(
-            target
-                .allocation
-                .as_ref()
-                .expect("admitted Storage original pool"),
-        ) {
-            return Err((
-                self,
-                PublicationPreparationError::Admission(AdmittedStorageError::ScopeIdentity),
-                AdmittedAbortedPublication {
-                    _inner: PublicationCleanup::empty(),
-                    _scope: scope,
-                },
-            ));
-        }
-        self.prepare_publication(target, |_, _| Ok::<(), AdmittedStorageError>(()))
-            .map(|inner| AdmittedPreparedPublication {
-                inner,
-                _scope: scope,
-            })
-            .map_err(|(journal, error, cleanup)| {
+        let mut slot = self
+            .try_publication_slot(scope, target)
+            .map_err(|(original, error)| {
                 (
-                    journal,
+                    original,
                     error,
                     AdmittedAbortedPublication {
-                        _inner: cleanup,
+                        _inner: PublicationCleanup::empty(),
                         _scope: scope,
                     },
                 )
-            })
+            })?;
+        match slot.try_prepare() {
+            Ok(()) => Ok(slot.into_prepared()),
+            Err(error) => {
+                let original = slot.recover_original();
+                Err((original, error, slot.into_cleanup()))
+            }
+        }
     }
 }

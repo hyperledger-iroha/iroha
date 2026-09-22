@@ -42,7 +42,8 @@ fn stage_membership(block: &mut StateBlock<'_>, source: Option<Hash>) {
             nonzero!(1_usize),
         )
         .unwrap();
-    block.block_hashes.push(block._curr_block.hash());
+    let block_hash = block._curr_block.hash();
+    block.block_hashes.push(block_hash);
 }
 
 fn take_all_captured_outputs(block: &mut StateBlock<'_>, with_transfer: bool) {

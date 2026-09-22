@@ -292,7 +292,7 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
     // A retained allocation can exceed its serialized contents. Admission must
     // inspect its actual capacity without reconstructing or shrinking the owner.
     assert!(!prepared._publication_events.is_empty());
-    prepared._publication_events.reserve(128);
+    prepared.parts_mut()._publication_events.reserve(128);
     let events_pointer = prepared._publication_events.as_ptr();
     let events_capacity = prepared._publication_events.capacity();
     assert!(events_capacity > prepared._publication_events.len());
@@ -649,13 +649,19 @@ fn prepared_journals_capture_dirty_telemetry_from_original_world() {
     };
     // Exercise the capture component with distinct dirty values. This fixture
     // does not publish or authorize the manually changed candidate journals.
-    *prepared.state.world.parliament_attempt_counts.get_mut() = counts;
+    *prepared
+        .parts_mut()
+        .state
+        .world
+        .parliament_attempt_counts
+        .get_mut() = counts;
     let citizen = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
-    prepared.state.world.citizens.insert(
+    prepared.parts_mut().state.world.citizens.insert(
         citizen.clone(),
         CitizenshipRecord::new(citizen, Quantity::from(10_u64), 1),
     );
     *prepared
+        .parts_mut()
         .state
         .world
         .musubi_replication_shortfall_releases
@@ -1254,7 +1260,7 @@ fn journal_resource_refusal_precedes_geometry_projection() {
         .unwrap_or_else(|(_, error)| panic!("actual candidate: {error}"));
     // Deliberate test-only projection drift would fail geometry capture. Whole
     // capture admission must nevertheless precede its allocating projections.
-    prepared.state.nexus.autoscale.enabled = !prepared.state.nexus.autoscale.enabled;
+    prepared.parts_mut().state.nexus.autoscale.enabled = !prepared.state.nexus.autoscale.enabled;
     assert!(prepared.state.prepare_carrier_geometry().is_err());
     let mut called = false;
     let error = prepared
@@ -1300,7 +1306,7 @@ fn geometry_refusal_drops_originals_before_capture_reservation() {
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let mut prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("actual candidate: {error}"));
-    prepared.state.nexus.autoscale.enabled = !prepared.state.nexus.autoscale.enabled;
+    prepared.parts_mut().state.nexus.autoscale.enabled = !prepared.state.nexus.autoscale.enabled;
     assert!(prepared.state.prepare_carrier_geometry().is_err());
     let released = Arc::new(AtomicUsize::new(0));
     let originals_released_first = Arc::new(AtomicBool::new(false));
@@ -1354,3 +1360,6 @@ fn carrier_journal_shell_plan_precedes_execution_and_survives_capture() {
         before
     );
 }
+
+#[path = "state_capture_tests.rs"]
+mod state_capture_tests;

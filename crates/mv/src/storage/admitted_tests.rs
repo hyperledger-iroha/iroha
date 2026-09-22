@@ -304,13 +304,11 @@ fn direct_and_reacquired_publication_install_whole_pair_before_charge_cleanup_pa
             };
             records.panic_on.store(target, SeqCst);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                publish_pair(
-                    blocks,
-                    revert,
-                    &storage.publication,
-                    NextPublication::new(),
-                    true,
-                );
+                let mut next = Some(NextPublication::new());
+                let mut writers = StorageWriters::new(&storage, revert, blocks);
+                writers.prepare_publication(&predecessor, true);
+                writers.publish_prepared(&mut next);
+                drop(writers);
             }));
             assert!(result.is_err());
             assert!(!records.live.lock().unwrap()[target].1);

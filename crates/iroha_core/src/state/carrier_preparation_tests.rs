@@ -251,7 +251,7 @@ fn candidate_preparation_retains_actual_prefix_and_context_without_publication()
     // Test-only field access proves preparation did not grant publication. The
     // production owner deliberately has no mutable or consuming State accessor.
     assert!(matches!(
-        (*prepared.state).commit().unwrap_err(),
+        (*prepared.into_state_for_test()).commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
     ));
     assert_eq!(
@@ -453,3 +453,9 @@ fn foreign_carrier_event_preparation_preserves_the_exact_buffer() {
     assert_eq!(staged.world.external_event_buf, events);
     assert_eq!(state.committed_height(), 0);
 }
+
+#[path = "state_acquisition_drop_tests.rs"]
+mod state_acquisition_drop_tests;
+
+#[path = "direct_commit_refusal_tests.rs"]
+mod direct_commit_refusal_tests;

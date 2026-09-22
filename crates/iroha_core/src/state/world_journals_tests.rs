@@ -411,7 +411,9 @@ fn mismatched_cell_or_trigger_mode_refuses_before_the_world_admission() {
         if trigger {
             original.triggers = foreign.triggers.block_and_revert();
         } else {
-            original.soradns_last_publish_ms = foreign.soradns_last_publish_ms.block_and_revert();
+            original.soradns_last_publish_ms = crate::state::block_field::BlockField::new(
+                foreign.soradns_last_publish_ms.block_and_revert(),
+            );
         }
         let calls = AtomicUsize::new(0);
         let result = original.try_detach_journals(|_| {

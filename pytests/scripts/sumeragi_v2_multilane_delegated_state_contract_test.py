@@ -248,3 +248,21 @@ def test_delegated_composed_events_reject_semantic_mutation(fixture, symbol, old
     errors = validate(fixture)
     assert any("missing executable relation" in e for e in errors), errors
     assert not any("digest" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("old,new", [
+    pytest.param("let mut this = self;", "let mut this = other;", id="commit-original-state"),
+    pytest.param("this.fields.as_mut()", "this.into_fields()", id="commit-retains-field-owner"),
+    pytest.param("canonical_wsv_merge_commit_authorization.as_ref()", "other_authorization.as_ref()", id="commit-retains-economic-authorization"),
+    pytest.param("canonical_carrier_commit_metadata_authorization.as_ref()", "other_metadata.as_ref()", id="commit-retains-finalized-metadata"),
+    pytest.param("transactions.try_prepare_publication()", "Ok(())", id="commit-prepares-original-membership"),
+    pytest.param("tx_validate_result?;", "let _ = tx_validate_result;", id="commit-rejects-failed-membership"),
+    pytest.param("transactions.publish_prepared()", "transactions.publish()", id="commit-publishes-prepared-membership"),
+])
+def test_delegated_commit_retains_original_fields_and_authority(fixture, old, new):
+    """Economic and finality checks stay attached to the same consumed State."""
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / checker.delegated_state_contract.STATE, "fn commit_inner(", old, new)
+    errors = validate(fixture)
+    assert any("missing executable relation" in error for error in errors), errors
+    assert not any("digest" in error for error in errors), errors

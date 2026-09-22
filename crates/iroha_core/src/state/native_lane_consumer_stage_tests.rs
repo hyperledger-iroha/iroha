@@ -201,7 +201,7 @@ state_test! { sync native_consumer_stage_cannot_publish_through_empty_old_merge_
     use std::sync::atomic::{AtomicBool,Ordering};
     struct EmptyOldMergeAuthorization(Arc<AtomicBool>);
     impl StateBlockCommitAuthorization for EmptyOldMergeAuthorization {
-        fn consume_for_state_commit(self: Box<Self>, _: HashOf<BlockHeader>, entry: Option<&MergeLedgerEntry>) -> Result<(),String> {
+        fn validate_for_state_commit(&self, _: HashOf<BlockHeader>, entry: Option<&MergeLedgerEntry>) -> Result<(),String> {
             assert!(entry.is_none()); self.0.store(true,Ordering::SeqCst); Ok(())
         }
     }
@@ -432,8 +432,10 @@ state_test! { sync native_consumer_source_custody_refusal_keeps_state_and_storag
         .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
         else { panic!("current authenticated source"); };
     assert!(!source.groups_for_test().is_empty());
-    let publication = state.begin_state_view_write();
+    let mut publication_notice = state.state_view_publication();
+    let publication = publication_notice.begin();
     drop(publication);
+    drop(publication_notice);
     assert!(matches!(source.stage_with_start_hooks().unwrap(), NativeLaneBatchReplayV1::ObservationChanged));
     drop(state.block(carrier.header()));
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);

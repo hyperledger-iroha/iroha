@@ -1,6 +1,46 @@
 //! Atomic reconstruction and publication of the State DA query projections.
 
 use super::*;
+use crate::publication_rwlock::DeferredPublicationRwLock;
+
+/// Original index notifications outlive every hydration and State write guard.
+struct DaHydrationReleases<'state> {
+    commitments: DeferredPublicationRwLock<'state, DaCommitmentStore>,
+    confidential_compute: DeferredPublicationRwLock<'state, ConfidentialComputeStore>,
+    receipt_cursors: DeferredPublicationRwLock<'state, DaReceiptCursorIndex>,
+    shard_cursors: DeferredPublicationRwLock<'state, DaShardCursorIndex>,
+    pin_intents: DeferredPublicationRwLock<'state, DaPinStore>,
+    hydrated: DeferredPublicationRwLock<'state, Option<Result<(), DaIndexHydrationError>>>,
+}
+
+impl<'state> DaHydrationReleases<'state> {
+    fn new(state: &'state State) -> Self {
+        Self {
+            commitments: state.da_commitments.defer_notifications(),
+            confidential_compute: state.da_confidential_compute.defer_notifications(),
+            receipt_cursors: state.da_receipt_cursors.defer_notifications(),
+            shard_cursors: state.da_shard_cursors.defer_notifications(),
+            pin_intents: state.da_pin_intents.defer_notifications(),
+            hydrated: state.da_indexes_hydrated.defer_notifications(),
+        }
+    }
+}
+
+/// Original replacement-rewind notifications retained by the executing owner.
+/// Physical hydration guards remain short; their notices outlive every MV writer.
+pub(super) struct DaRewindReleases<'state> {
+    indexes: DaHydrationReleases<'state>,
+    write_fence: crate::publication_lock::DeferredPublicationFence<'state, ()>,
+}
+
+impl<'state> DaRewindReleases<'state> {
+    pub(super) fn new(state: &'state State) -> Self {
+        Self {
+            indexes: DaHydrationReleases::new(state),
+            write_fence: state.state_write_lock.defer_notifications(),
+        }
+    }
+}
 
 /// Errors surfaced while rebuilding DA indexes from the committed block log.
 #[derive(Copy, Clone, Debug, ThisError, PartialEq, Eq)]
@@ -70,7 +110,11 @@ impl HydratedDaIndexes {
 
 impl State {
     /// Publish one successfully rebuilt DA projection while every component is write-locked.
-    fn publish_hydrated_da_indexes(&self, hydrated: HydratedDaIndexes) {
+    fn publish_hydrated_da_indexes(
+        &self,
+        hydrated: HydratedDaIndexes,
+        releases: &mut DaHydrationReleases<'_>,
+    ) {
         let HydratedDaIndexes {
             commitments,
             confidential_compute,
@@ -80,16 +124,29 @@ impl State {
         } = hydrated;
         // Keep this acquisition order aligned with snapshot/test readers that hold more than
         // one DA guard. No published field changes until all five write guards are owned.
-        let mut published_commitments = self.da_commitments.write();
-        let mut published_confidential_compute = self.da_confidential_compute.write();
-        let mut published_receipt_cursors = self.da_receipt_cursors.write();
-        let mut published_shard_cursors = self.da_shard_cursors.write();
-        let mut published_pin_intents = self.da_pin_intents.write();
+        let mut published_commitments = releases.commitments.write();
+        let mut published_confidential_compute = releases.confidential_compute.write();
+        let mut published_receipt_cursors = releases.receipt_cursors.write();
+        let mut published_shard_cursors = releases.shard_cursors.write();
+        let mut published_pin_intents = releases.pin_intents.write();
         *published_commitments = commitments;
         *published_confidential_compute = confidential_compute;
         *published_receipt_cursors = receipt_cursors;
         *published_shard_cursors = shard_cursors;
         *published_pin_intents = pin_intents;
+    }
+
+    fn persist_hydrated_da_shard_cursor_journal(&self, releases: &mut DaHydrationReleases<'_>) {
+        let path = self.da_shard_cursor_journal_path();
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let lane_config = self.nexus_ownership_projection().lane_config.clone();
+        let snapshot =
+            DaShardCursorJournal::from_index(&lane_config, &releases.shard_cursors.read(), &path);
+        if let Err(err) = snapshot.persist() {
+            warn!(?err, path = %path.display(), "failed to persist DA shard cursor journal");
+        }
     }
 
     pub(crate) fn ensure_da_indexes_hydrated(&self) -> Result<(), DaIndexHydrationError> {
@@ -115,45 +172,62 @@ impl State {
                 return *result;
             }
         }
+        let mut releases = DaHydrationReleases::new(self);
+        let mut write_fence = self.state_write_lock.defer_notifications();
         let _hydration_guard = self.da_index_hydration_fence.lock();
-        if let Some(result) = self.da_indexes_hydrated.read().as_ref() {
+        if let Some(result) = releases.hydrated.read().as_ref() {
             return *result;
         }
-        let _state_write_guard = self.state_write_lock.lock();
+        let _state_write_guard = write_fence.lock();
         let result = self.build_da_indexes_from_kura(None).map(|mut hydrated| {
             hydrated.pin_intents = self.da_pin_cache_from_world();
-            self.publish_hydrated_da_indexes(hydrated);
+            self.publish_hydrated_da_indexes(hydrated, &mut releases);
             if persist_journal {
-                self.persist_da_shard_cursor_journal();
+                self.persist_hydrated_da_shard_cursor_journal(&mut releases);
             }
         });
         if let Err(err) = &result {
             warn!(?err, "failed to hydrate DA indexes from Kura");
         }
-        *self.da_indexes_hydrated.write() = Some(result);
+        *releases.hydrated.write() = Some(result);
         result
     }
 
     /// Force a rebuild of DA indexes from the Kura block log, truncating at `target_height` when provided.
+    #[cfg(test)]
     pub(crate) fn rewind_da_indexes_to_height(
         &self,
         target_height: u64,
     ) -> Result<(), DaIndexHydrationError> {
+        let mut releases = DaRewindReleases::new(self);
+        self.rewind_da_indexes_to_height_with_releases(target_height, &mut releases)
+    }
+
+    /// Use the caller's exact notification owner while replacement MV writers remain held.
+    pub(super) fn rewind_da_indexes_to_height_with_releases(
+        &self,
+        target_height: u64,
+        releases: &mut DaRewindReleases<'_>,
+    ) -> Result<(), DaIndexHydrationError> {
+        let DaRewindReleases {
+            indexes: releases,
+            write_fence,
+        } = releases;
         let _hydration_guard = self.da_index_hydration_fence.lock();
         // Make concurrent accessors join this fenced rebuild instead of observing the
         // previous cached success while the committed projection is being rewound.
-        *self.da_indexes_hydrated.write() = None;
-        let _state_write_guard = self.state_write_lock.lock();
+        *releases.hydrated.write() = None;
+        let _state_write_guard = write_fence.lock();
         let result = self
             .build_da_indexes_from_kura(Some(target_height))
             .map(|hydrated| {
-                self.publish_hydrated_da_indexes(hydrated);
-                self.persist_da_shard_cursor_journal();
+                self.publish_hydrated_da_indexes(hydrated, releases);
+                self.persist_hydrated_da_shard_cursor_journal(releases);
             });
         if let Err(err) = &result {
             warn!(?err, target_height, "failed to rewind DA indexes from Kura");
         }
-        *self.da_indexes_hydrated.write() = Some(result);
+        *releases.hydrated.write() = Some(result);
         result
     }
 
@@ -445,3 +519,7 @@ impl State {
         Ok(hydrated)
     }
 }
+
+#[cfg(test)]
+#[path = "da_hydration_release_tests.rs"]
+mod release_tests;

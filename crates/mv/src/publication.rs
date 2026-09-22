@@ -47,7 +47,8 @@ pub type PublicationPreparationResult<Prepared, Journal, E, Installation> = Resu
 #[must_use = "retain original cleanup through the enclosing publication fences"]
 pub struct PublicationCleanup<Installation> {
     pub(crate) _readers: [Option<concread::release::DeferredRelease>; 2],
-    pub(crate) writers: [Option<concread::release::DeferredRelease>; 2],
+    pub(crate) _writers: [Option<concread::release::DeferredRelease>; 2],
+    pub(crate) writer_batches: [Option<concread::release::DeferredReleaseBatch>; 2],
     pub(crate) identities: [Option<IdentityRetirement>; 2],
     pub(crate) installation: Option<Installation>,
 }
@@ -56,7 +57,8 @@ impl<I> PublicationCleanup<I> {
     pub(crate) fn empty() -> Self {
         Self {
             _readers: [None, None],
-            writers: [None, None],
+            _writers: [None, None],
+            writer_batches: [None, None],
             identities: [None, None],
             installation: None,
         }
@@ -283,6 +285,28 @@ impl CapturedPublication {
         }
     }
 
+    /// Acquire the original identity with ordinary blocking behavior, then check
+    /// it only after the aggregate's slot retains the actual physical guard.
+    pub(crate) fn prepare_current_in<'a>(
+        &self,
+        publication: &'a Publication,
+        slot: &mut Option<PreparedIdentity<'a>>,
+    ) {
+        assert!(slot.is_none(), "original identity prepares once");
+        *slot = Some(PreparedIdentity {
+            version: publication.lock_version(),
+        });
+        let held = slot.as_ref().expect("original identity retained by caller");
+        assert!(
+            Shared::ptr_eq(&self.owner, &publication.owner),
+            "original publication owner"
+        );
+        assert!(
+            Shared::ptr_eq(&self.version, &held.version),
+            "original publication predecessor"
+        );
+    }
+
     /// Retain the exact identity after a nonblocking predecessor authentication.
     pub(crate) fn try_prepare_current<'a, E>(
         &self,
@@ -372,3 +396,7 @@ mod tests {
         assert!(!original.matches(&cell.publication));
     }
 }
+
+#[cfg(test)]
+#[path = "detached_publication_tests.rs"]
+mod detached_publication_tests;

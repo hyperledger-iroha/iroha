@@ -5,9 +5,15 @@
 
 use super::*;
 
+#[path = "runtime_capture.rs"]
+mod capture;
+pub(super) use capture::RuntimeCapture;
+
 #[path = "runtime_publication.rs"]
 mod publication;
-pub(super) use publication::{PreparedRuntimeJournals, RuntimePublicationError};
+pub(super) use publication::{
+    PreparedRuntimeJournals, RuntimePublicationError, RuntimePublicationSlot,
+};
 
 #[cfg(test)]
 #[path = "runtime_publication_tests.rs"]
@@ -66,25 +72,14 @@ impl<Admission> RuntimeJournals<Admission> {
         lane_consensus_contexts: CellBlock<'state, LaneConsensusContextsV1>,
         admit: impl FnOnce(RuntimeJournalInputs<'_, 'state>) -> Result<Admission, E>,
     ) -> Result<Self, E> {
-        let admission = admit(RuntimeJournalInputs {
-            canonical_runtime: &canonical_runtime,
-            commit_topology: &commit_topology,
-            prev_commit_topology: &prev_commit_topology,
-            lane_consensus_contexts: &lane_consensus_contexts,
-        })?;
-        fn capture_admitted<V: mv::Value>(original: CellBlock<'_, V>) -> mv::cell::Detached<V, ()> {
-            match original.try_detach(|_| Ok::<(), std::convert::Infallible>(())) {
-                Ok(owned) => owned,
-                Err(impossible) => match impossible {},
-            }
-        }
-        Ok(Self {
-            canonical_runtime: capture_admitted(canonical_runtime),
-            commit_topology: capture_admitted(commit_topology),
-            prev_commit_topology: capture_admitted(prev_commit_topology),
-            lane_consensus_contexts: capture_admitted(lane_consensus_contexts),
-            admission,
-        })
+        let mut pending = RuntimeCapture::new(
+            canonical_runtime,
+            commit_topology,
+            prev_commit_topology,
+            lane_consensus_contexts,
+        );
+        pending.try_capture(admit)?;
+        Ok(pending.into_journals())
     }
 
     /// Momentarily inspect all original identities; this grants no publication lease.

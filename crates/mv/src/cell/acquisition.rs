@@ -292,6 +292,13 @@ pub(super) struct OriginalCellWriters<'a, V: Value, C: Send + Sync + 'static> {
 
 enum CellWriterState<'a, V: Value, C: Send + Sync + 'static> {
     Attached(OriginalCellWriters<'a, V, C>),
+    Preparing {
+        writers: PreparedCellWriters<'a, V, C>,
+        next: NextPublication,
+    },
+    Published {
+        _retirement: physical::PublishedPublication<V, (), (), C>,
+    },
     Released {
         _undo: EbrCellOwned<Option<V>, C>,
         _current: EbrCellOwned<V, C>,
@@ -344,7 +351,49 @@ impl<'a, V: Value, C: Send + Sync + 'static> CellWriters<'a, V, C> {
         }
     }
 
+    pub(super) fn prepare_publication(
+        &mut self,
+        publication: &'a Publication,
+        predecessor: &CapturedPublication,
+        dirty: bool,
+    ) {
+        // Check the complete original phase before allocating the one identity
+        // that ordinary Cell::commit already requires. No owner is taken yet.
+        self.as_ref();
+        let next = NextPublication::new();
+        let Some(CellWriterState::Attached(OriginalCellWriters { revert, blocks })) =
+            self.state.take()
+        else {
+            unreachable!("original attached pair checked above");
+        };
+        self.state = Some(CellWriterState::Preparing {
+            writers: PreparedCellWriters::new(revert, blocks, None),
+            next,
+        });
+        let Some(CellWriterState::Preparing { writers, .. }) = self.state.as_mut() else {
+            unreachable!("original publication phase installed before preparation");
+        };
+        writers.prepare_attached(publication, predecessor, dirty);
+    }
+
+    pub(super) fn publish_prepared(&mut self) {
+        assert!(
+            matches!(&self.state, Some(CellWriterState::Preparing { writers, .. }) if writers.is_prepared()),
+            "original pair preparation must complete"
+        );
+        let Some(CellWriterState::Preparing { writers, next }) = self.state.take() else {
+            unreachable!("checked original publication phase");
+        };
+        self.state = Some(CellWriterState::Published {
+            _retirement: writers.publish(next, (), ()),
+        });
+    }
+
     pub(super) fn release(&mut self) {
+        if let Some(CellWriterState::Preparing { writers, .. }) = self.state.as_mut() {
+            writers.release();
+            return;
+        }
         let Some(CellWriterState::Attached(original)) = self.state.as_ref() else {
             return;
         };

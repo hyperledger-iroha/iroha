@@ -25,9 +25,9 @@ use crate::{ReleaseNotification, ReleaseWait};
 /// Original-budget owners around the existing charged map engine.
 pub mod map;
 
-mod byte_buffer;
+mod buffer;
 
-pub use byte_buffer::{ChargedByteBuffer, ChargedByteBufferError};
+pub use buffer::{ChargedBuffer, ChargedBufferError};
 
 thread_local! {
     // Scope records live on this thread's stack; registration allocates nothing.

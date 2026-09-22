@@ -225,86 +225,9 @@ AUTHORITY_RECOVERY_BINDINGS = (('SumeragiV2NativeApplicationEvidence',
    '            proposal_height,\n'
    '        )',),
   ()),
- ('SumeragiV2AutoscaleLifecycle',
- 'crates/iroha_core/src/state.rs',
- 'fn',
- 'lane_has_drain_blocking_evidence',
- ('Result<bool, MergeLedgerCommitError>',
-  '.unmerged_merge_admissible_relay_progress(lane_id, dataspace_id)',
-  '.unapplied_lane_block_artifact_heights_snapshot_cached()?',
-  '.unapplied_certified_lane_block_heights_snapshot_cached()?',
-  '.native_amx_participant_frontiers_pending_durable_evidence_snapshot()?',
-  'marker.lane_id == lane_id',
-  'marker.dataspace_id == dataspace_id',
-  'marker.lane_incarnation == lane_incarnation',
-  'self.pending_queue_plan_admission_blocks_lane_drain(',
-  'self.queue_plan_pending_route_obligation_blocks_lane_drain(',
-  'self.kura.pending_certified_merge_work_for_lane('),
- ()),
- ('SumeragiV2NativeApplicationEvidence',
-  'crates/iroha_core/src/state.rs',
-  'fn',
-  'native_amx_participant_application_snapshot',
-  ('for lane in lifecycle.nexus.lane_catalog.lanes()',
-   '.read_native_amx_participant_application_history(lane.id),',
-   '.map_err(MergeLedgerCommitError::Persistence)?;',
-   'Self::canonical_native_amx_participant_frontier_from_world(',
-   'Self::validate_native_amx_participant_shared_frontier(&world, &marker)?;',
-   'observed_lane != lane.id',
-   'observed_dataspace != lane.dataspace_id',
-   'observed_incarnation != incarnation',
-   'if !marker_matches {',
-   ') || marker.is_none_or(|marker| height > marker.lane_block_height)',
-   'snapshot.applied_slots.insert((',
-   'snapshot.repair.push(marker);',
-   'Some(NativeAmxParticipantApplicationObservation::Applied(_))',
-   '                if !matches!(\n'
-   '                    observation,\n'
-   '                    NativeAmxParticipantApplicationObservation::Applied(_)\n'
-   '                ) || marker.is_none_or(|marker| height > marker.lane_block_height)\n'
-   '                {\n'
-   '                    snapshot\n'
-   '                        .blocked\n'
-   '                        .entry(route)\n'
-   '                        .and_modify(|blocked| *blocked = (*blocked).max(height))\n'
-   '                        .or_insert(height);\n'
-   '                } else {\n'
-   '                    snapshot.applied_slots.insert((\n'
-   '                        lane.id,\n'
-   '                        lane.dataspace_id,\n'
-   '                        incarnation,\n'
-   '                        height,\n'
-   '                    ));\n'
-   '                }',
-   '            if matches!(\n'
-   '                history.get(marker.lane_block_height),\n'
-   '                Some(NativeAmxParticipantApplicationObservation::Applied(_))\n'
-   '            ) {\n'
-   '                snapshot.applied.push(marker);\n'
-   '            } else {\n'
-   '                snapshot.repair.push(marker);\n'
-   '                snapshot\n'
-   '                    .blocked\n'
-   '                    .entry(route)\n'
-   '                    .and_modify(|blocked| *blocked = '
-   '(*blocked).max(marker.lane_block_height))\n'
-   '                    .or_insert(marker.lane_block_height);\n'
-   '            }'),
-  ('for lane in lifecycle.nexus.lane_catalog.lanes()',
-   '.read_native_amx_participant_application_history(lane.id),',
-   'Self::canonical_native_amx_participant_frontier_from_world(',
-   'for (height, observation) in history.entries()',
-   'if !marker_matches {',
-   'snapshot.applied_slots.insert((',
-   'let Some(marker) = marker else {',
-   'snapshot.repair.push(marker);',
-   'Ok(snapshot)')),
- ('SumeragiV2NativeApplicationEvidence',
-  'crates/iroha_core/src/state.rs',
-  'fn',
-  'native_amx_participant_frontiers_pending_durable_evidence_snapshot',
-  ('Ok(self.native_amx_participant_application_snapshot()?.repair)',),
-  ()),
+ ('SumeragiV2AutoscaleLifecycle', 'crates/iroha_core/src/state.rs', 'fn', 'lane_has_drain_blocking_evidence', ('    pub(crate) fn lane_has_drain_blocking_evidence(\n        &self,\n        lane_id: LaneId,\n        dataspace_id: DataSpaceId,\n        lane_incarnation: Hash,\n    ) -> Result<bool, MergeLedgerCommitError> {\n        let mut releases = LaneLifecycleReleases::new(self);\n        self.lane_has_drain_blocking_evidence_with_releases(\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n            &mut releases,\n        )\n    }',), ()),
+ ('SumeragiV2NativeApplicationEvidence', 'crates/iroha_core/src/state.rs', 'fn', 'native_amx_participant_application_snapshot', ('    fn native_amx_participant_application_snapshot(\n        &self,\n    ) -> Result<NativeAmxParticipantApplicationSnapshot, MergeLedgerCommitError> {\n        let lifecycle = self.lane_consensus_lifecycle_snapshot();\n        self.native_amx_participant_application_snapshot_with_lifecycle(&lifecycle)\n    }',), ()),
+ ('SumeragiV2NativeApplicationEvidence', 'crates/iroha_core/src/state.rs', 'fn', 'native_amx_participant_frontiers_pending_durable_evidence_snapshot', ('    pub(crate) fn native_amx_participant_frontiers_pending_durable_evidence_snapshot(\n        &self,\n    ) -> Result<Vec<AppliedNativeAmxParticipantFrontierMarker>, MergeLedgerCommitError> {\n        let lifecycle = self.lane_consensus_lifecycle_snapshot();\n        self.native_amx_participant_frontiers_pending_durable_evidence_snapshot_with_lifecycle(\n            &lifecycle,\n        )\n    }',), ()),
  ('SumeragiV2NativeApplicationEvidence',
   'crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs',
   'fn',
@@ -758,15 +681,7 @@ AUTHORITY_RECOVERY_BINDINGS += (('SumeragiV2AutoscaleLifecycle',
    'Self::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(',
    'if blocked {\n            return Err(MergeLedgerCommitError::ExecutionBatchInvalid('),
   ()),
- ('SumeragiV2AutoscaleLifecycle',
-  'crates/iroha_core/src/state.rs',
-  'fn',
-  'validate_committed_autoscale_lane_lifecycle',
-  ('commitment.carrier_height >= block_height',
-   '.lane_has_drain_blocking_evidence(',
-   '.map_err(LaneLifecycleError::DrainObservation)?',
-   'frontier != commitment.frontier'),
-  ()),
+ ('SumeragiV2AutoscaleLifecycle', 'crates/iroha_core/src/state.rs', 'fn', 'validate_committed_autoscale_lane_lifecycle', ('commitment.carrier_height >= block_height', '.lane_has_drain_blocking_evidence_with_releases(', '.map_err(LaneLifecycleError::DrainObservation)?', 'frontier != commitment.frontier'), ()),
  ('SumeragiV2AutoscaleLifecycle',
   'crates/iroha_core/src/block.rs',
   'method',
@@ -827,67 +742,16 @@ AUTHORITY_RECOVERY_BINDINGS += (('SumeragiV2AutoscaleLifecycle',
    'transition: pending.transition.clone()',
    'transition_height: pending.transition_height'),
   ()),
- ('SumeragiV2AutoscaleLifecycle',
-  'crates/iroha_core/src/state/carrier_lifecycle_effects.rs',
-  'method',
-  'PreparedLaneLifecycleEffects::publish',
-  ('self,',
-   "publication: &StateViewGenerationWriteGuard<'_>",
-   'state.install_prepared_lane_manifests_in_publication(',
-   'self.manifests,',
-   'self.privacy,',
-   'publication,',
-   'state.reset_lane_scoped_runtime_indexes(&self.lanes_to_reset);',
-   'if publish_process_runtime {',
-   'state.publish_lane_scoped_runtime_reset(&self.lanes_to_reset);',
-   'let records_reset = !self.active_reset_lanes.is_empty() && self.transition_height != 0;',
-   '.mark_lanes_canonically_reset(&self.active_reset_lanes, self.transition_height);',
-   'let persist_cursor_journal = publish_process_runtime',
-   '|| (!self.lanes_to_reset.is_empty() && state.da_indexes_hydrated.read().is_some())',
-   'LaneLifecyclePostPublication {',
-   'lane_config: self.lane_config,',
-   'persist_cursor_journal,'),
-  ('state.install_prepared_lane_manifests_in_publication(',
-   'state.reset_lane_scoped_runtime_indexes(',
-   'state.publish_lane_scoped_runtime_reset(',
-   '.mark_lanes_canonically_reset(',
-   'LaneLifecyclePostPublication {')),
- ('SumeragiV2AutoscaleLifecycle',
-  'crates/iroha_core/src/state/carrier_lifecycle_effects.rs',
-  'method',
-  'LaneLifecyclePostPublication::publish',
-  ('fn publish(self, state: &State)',
-   'if self.persist_cursor_journal {',
-   'state.persist_da_shard_cursor_journal_with_config(&self.lane_config);',
-   'self.transition.log(self.transition_height);'),
-  ()),
+ ('SumeragiV2AutoscaleLifecycle', 'crates/iroha_core/src/state/carrier_lifecycle_effects.rs', 'method', 'PreparedLaneLifecycleEffects::publish', ('self,', "indexes: &mut effect_publication::StateEffectLocks<'_>", "_publication: &StateViewGenerationWriteGuard<'_>", 'indexes.install_registries(self.manifests, self.privacy);', '        if !self.lanes_to_reset.is_empty() {\n            indexes\n                .merge_admission\n                .as_mut()\n                .expect("prepared merge admission")\n                .prune_lane_progress(&self.lanes_to_reset);\n            indexes\n                .lane_relays\n                .as_mut()\n                .expect("prepared relays")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_commitments\n                .as_mut()\n                .expect("prepared commitments")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_confidential_compute\n                .as_mut()\n                .expect("prepared confidential compute")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_pin_intents\n                .as_mut()\n                .expect("prepared pins")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_receipt_cursors\n                .as_mut()\n                .expect("prepared receipt cursors")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_shard_cursors\n                .as_mut()\n                .expect("prepared shard cursors")\n                .prune_lanes(&self.lanes_to_reset);\n        }\n', 'if publish_process_runtime {', 'state.publish_lane_scoped_runtime_reset(&self.lanes_to_reset);', 'let records_reset = !self.active_reset_lanes.is_empty() && self.transition_height != 0;', '        if records_reset {\n            indexes\n                .da_shard_cursors\n                .as_mut()\n                .expect("prepared shard cursors")\n                .mark_lanes_canonically_reset(&self.active_reset_lanes, self.transition_height);\n        }\n', '        let persist_cursor_journal = publish_process_runtime\n            && (records_reset\n                || (!self.lanes_to_reset.is_empty()\n                    && indexes\n                        .da_indexes_hydrated\n                        .as_ref()\n                        .expect("prepared hydration status")\n                        .is_some()));\n', 'LaneLifecyclePostPublication {', 'lane_config: self.lane_config,', 'persist_cursor_journal,', 'snapshot: None,', 'captured: false,'), ('indexes.install_registries(', '        if !self.lanes_to_reset.is_empty() {\n            indexes\n                .merge_admission\n                .as_mut()\n                .expect("prepared merge admission")\n                .prune_lane_progress(&self.lanes_to_reset);\n            indexes\n                .lane_relays\n                .as_mut()\n                .expect("prepared relays")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_commitments\n                .as_mut()\n                .expect("prepared commitments")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_confidential_compute\n                .as_mut()\n                .expect("prepared confidential compute")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_pin_intents\n                .as_mut()\n                .expect("prepared pins")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_receipt_cursors\n                .as_mut()\n                .expect("prepared receipt cursors")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_shard_cursors\n                .as_mut()\n                .expect("prepared shard cursors")\n                .prune_lanes(&self.lanes_to_reset);\n        }\n', 'state.publish_lane_scoped_runtime_reset(', '.mark_lanes_canonically_reset(', 'LaneLifecyclePostPublication {')),
+ ('SumeragiV2AutoscaleLifecycle', 'crates/iroha_core/src/state/carrier_lifecycle_effects.rs', 'method', 'LaneLifecyclePostPublication::publish', ('fn publish(self, state: &State)', 'self.captured', 'if let Some(snapshot) = self.snapshot', 'snapshot.persist()', 'self.transition.log(self.transition_height);'), ()),
  ('SumeragiV2AutoscaleLifecycle',
   'crates/iroha_core/src/state.rs',
   'fn',
   'active_reset_lanes',
   ('.filter(|lane_id| lane_config.entry(*lane_id).is_some())',),
   ()),
- ('SumeragiV2AutoscaleLifecycle',
-  'crates/iroha_core/src/state.rs',
-  'fn',
-  'install_prepared_lane_manifests_in_publication',
-  ("_publication: &StateViewGenerationWriteGuard<'_>",
-   '*guard = manifests;',
-   '*privacy_guard = privacy;'),
-  ()),
- ('SumeragiV2AutoscaleLifecycle',
-  'crates/iroha_core/src/state.rs',
-  'fn',
-  'reset_lane_scoped_runtime_indexes',
-  ('self.prune_merge_admission_lane_progress(lanes_to_reset);',
-   'self.lane_relays.write().prune_lanes(lanes_to_reset);',
-   'self.da_commitments.write().prune_lanes(lanes_to_reset);',
-   'self.da_confidential_compute\n            .write()\n            .prune_lanes(lanes_to_reset);',
-   'self.da_pin_intents.write().prune_lanes(lanes_to_reset);',
-   'self.da_receipt_cursors.write().prune_lanes(lanes_to_reset);',
-   'let mut cursors = self.da_shard_cursors.write();',
-   'cursors.prune_lanes(lanes_to_reset);'),
-  ()),
+ ('SumeragiV2AutoscaleLifecycle', 'crates/iroha_core/src/state.rs', 'fn', 'install_prepared_lane_manifests_in_publication', ("_publication: &StateViewGenerationWriteGuard<'_>", '*guard = manifests;', '*privacy_guard = privacy;', "releases: &mut LaneLifecycleReleases<'_>", 'let mut guard = releases.manifests.write();', 'let mut privacy_guard = releases.privacy.write();'), ()),
+ ('SumeragiV2AutoscaleLifecycle', 'crates/iroha_core/src/state.rs', 'fn', 'reset_lane_scoped_runtime_indexes', ('self.prune_merge_admission_lane_progress(lanes_to_reset, releases);', 'releases.relays.write().prune_lanes(lanes_to_reset);', 'releases.commitments.write().prune_lanes(lanes_to_reset);', 'releases\n            .confidential_compute\n            .write()\n            .prune_lanes(lanes_to_reset);', 'releases.pin_intents.write().prune_lanes(lanes_to_reset);', 'releases.receipt_cursors.write().prune_lanes(lanes_to_reset);', 'let mut cursors = releases.shard_cursors.write();', 'cursors.prune_lanes(lanes_to_reset);'), ()),
  ('SumeragiV2AutoscaleLifecycle',
   'crates/iroha_core/src/state.rs',
   'fn',
@@ -896,32 +760,18 @@ AUTHORITY_RECOVERY_BINDINGS += (('SumeragiV2AutoscaleLifecycle',
    'DaShardCursorJournal::from_index(lane_config, &cursors, &path)',
    'snapshot.persist()'),
   ()),
- ('SumeragiV2AutoscaleLifecycle',
-  'crates/iroha_core/src/state.rs',
-  'method',
-  'StateBlock::commit_inner',
-  ('let _state_commit_lock = state_ref.state_commit_lock.lock();',
-   'Some(state_ref.lane_lifecycle_lock.lock())',
-   'carrier_lifecycle_effects::PreparedLaneLifecycleEffects::prepare(pending, &nexus)',
-   'let _view_generation = state_ref.begin_state_view_write();',
-   'canonical_runtime.commit();',
-   'Some(prepared.publish(state_ref, &_view_generation, !replay_prevalidation))',
-   'if let Some(post) = lifecycle_post_publication {\n'
-   '            post.publish(state_ref);\n'
-   '        }',
-   'drop(autoscale_lifecycle_guard);'),
-  ('let _state_commit_lock =',
-   'Some(state_ref.lane_lifecycle_lock.lock())',
-   'carrier_lifecycle_effects::PreparedLaneLifecycleEffects::prepare(',
-   'let mut lifecycle_post_publication = None;',
-   'canonical_runtime.commit();',
-   'Some(prepared.publish(state_ref, &_view_generation, !replay_prevalidation))',
-   'world.commit();',
-   'hash_retirement = block_hashes.publish();',
-   'if let Some(post) = lifecycle_post_publication {',
-   'drop(autoscale_lifecycle_guard);',
-   'drop(_state_commit_lock);',
-   'drop(hash_retirement);')))
+ ('SumeragiV2AutoscaleLifecycle', 'crates/iroha_core/src/state.rs', 'method', 'StateBlock::commit_inner', ('let _state_commit_lock = commit_fence.lock();', 'Some(lifecycle_fence.lock())', 'carrier_lifecycle_effects::PreparedLaneLifecycleEffects::prepare(pending, &nexus)', 'let _view_generation = publication_notice.begin();', 'canonical_runtime.publish_prepared();', 'Some(prepared.publish(state_ref, &mut effect_locks, &_view_generation, !*replay_prevalidation))', 'if let Some(post) = lifecycle_post_publication.take() {\n            post.publish(state_ref);\n        }', 'drop(autoscale_lifecycle_guard);', 'effect_locks.prepare_blocking();', 'effect_locks.release_writers();'), ('let mut effect_cleanup =', 'let mut lifecycle_post_publication = None;', 'let mut commit_fence =', 'let mut write_fence =', 'let mut lifecycle_fence =', 'hash_budget.with_deferred_refund_notifications(', 'let mut this = self;', 'let _state_commit_lock =', 'Some(lifecycle_fence.lock())', 'carrier_lifecycle_effects::PreparedLaneLifecycleEffects::prepare(', 'canonical_runtime.publish_prepared();', 'world.publish_prepared();', 'block_hashes.publish_prepared();', 'Some(prepared.publish(state_ref, &mut effect_locks, &_view_generation, !*replay_prevalidation))', 'if let Some(post) = lifecycle_post_publication.take() {', 'drop(autoscale_lifecycle_guard);', 'drop(_state_commit_lock);')))
+
+AUTHORITY_RECOVERY_BINDINGS += (
+    ('SumeragiV2AutoscaleLifecycle', 'crates/iroha_core/src/state/carrier_lifecycle_effects.rs', 'method', 'LaneLifecyclePostPublication::capture_snapshot', ('!self.captured', 'self.captured = true;', 'if self.persist_cursor_journal {', 'state.da_shard_cursor_journal_path()', 'if !path.as_os_str().is_empty()', 'DaShardCursorJournal::from_index(\n                    &self.lane_config,\n                    cursors,\n                    &path,\n                )'), ('!self.captured', 'self.captured = true;', 'if self.persist_cursor_journal {', 'DaShardCursorJournal::from_index(')),
+)
+
+# Original wrappers stay bound; these are their sole defining evidence kernels.
+AUTHORITY_RECOVERY_BINDINGS += (
+    ('SumeragiV2AutoscaleLifecycle', 'crates/iroha_core/src/state.rs', 'fn', 'lane_has_drain_blocking_evidence_with_releases', ('Result<bool, MergeLedgerCommitError>', '.unmerged_merge_admissible_relay_progress_with_releases(lane_id, dataspace_id, releases)', '.unapplied_lane_block_artifact_heights_snapshot_cached_with_lifecycle(&lifecycle)?', '.unapplied_certified_lane_block_heights_snapshot_cached_with_lifecycle(&lifecycle)?', '.native_amx_participant_frontiers_pending_durable_evidence_snapshot_with_lifecycle(\n                    &lifecycle,\n                )?', 'marker.lane_id == lane_id', 'marker.dataspace_id == dataspace_id', 'marker.lane_incarnation == lane_incarnation', 'self.pending_queue_plan_admission_blocks_lane_drain_with_releases(', 'self.queue_plan_pending_route_obligation_blocks_lane_drain(', 'self.kura.pending_certified_merge_work_for_lane('), ()),
+    ('SumeragiV2NativeApplicationEvidence', 'crates/iroha_core/src/state.rs', 'fn', 'native_amx_participant_application_snapshot_with_lifecycle', ('for lane in lifecycle.nexus.lane_catalog.lanes()', '.read_native_amx_participant_application_history(lane.id),', '.map_err(MergeLedgerCommitError::Persistence)?;', 'Self::canonical_native_amx_participant_frontier_from_world(', 'Self::validate_native_amx_participant_shared_frontier(&world, &marker)?;', 'observed_lane != lane.id', 'observed_dataspace != lane.dataspace_id', 'observed_incarnation != incarnation', 'if !marker_matches {', ') || marker.is_none_or(|marker| height > marker.lane_block_height)', 'snapshot.applied_slots.insert((', 'snapshot.repair.push(marker);', 'Some(NativeAmxParticipantApplicationObservation::Applied(_))', '                if !matches!(\n                    observation,\n                    NativeAmxParticipantApplicationObservation::Applied(_)\n                ) || marker.is_none_or(|marker| height > marker.lane_block_height)\n                {\n                    snapshot\n                        .blocked\n                        .entry(route)\n                        .and_modify(|blocked| *blocked = (*blocked).max(height))\n                        .or_insert(height);\n                } else {\n                    snapshot.applied_slots.insert((\n                        lane.id,\n                        lane.dataspace_id,\n                        incarnation,\n                        height,\n                    ));\n                }', '            if matches!(\n                history.get(marker.lane_block_height),\n                Some(NativeAmxParticipantApplicationObservation::Applied(_))\n            ) {\n                snapshot.applied.push(marker);\n            } else {\n                snapshot.repair.push(marker);\n                snapshot\n                    .blocked\n                    .entry(route)\n                    .and_modify(|blocked| *blocked = (*blocked).max(marker.lane_block_height))\n                    .or_insert(marker.lane_block_height);\n            }'), ('for lane in lifecycle.nexus.lane_catalog.lanes()', '.read_native_amx_participant_application_history(lane.id),', 'Self::canonical_native_amx_participant_frontier_from_world(', 'for (height, observation) in history.entries()', 'if !marker_matches {', 'snapshot.applied_slots.insert((', 'let Some(marker) = marker else {', 'snapshot.repair.push(marker);', 'Ok(snapshot)')),
+    ('SumeragiV2NativeApplicationEvidence', 'crates/iroha_core/src/state.rs', 'fn', 'native_amx_participant_frontiers_pending_durable_evidence_snapshot_with_lifecycle', ('Ok(self\n            .native_amx_participant_application_snapshot_with_lifecycle(lifecycle)?\n            .repair)',), ()),
+)
 
 def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str]) -> None:
     """Require the reviewed predicates and their authority-before-use order."""
@@ -943,9 +793,9 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
         if _code(relation) not in code:
             errors.append(f"authority/recovery item {symbol} loses executable relation {relation!r}")
 
-    if symbol == "lane_has_drain_blocking_evidence":
-        for call in ("self.pending_queue_plan_admission_blocks_lane_drain",
-                     "self.queue_plan_pending_route_obligation_blocks_lane_drain",
+    if symbol == "lane_has_drain_blocking_evidence_with_releases":
+        require("self.pending_queue_plan_admission_blocks_lane_drain_with_releases(lane_id, dataspace_id, lane_incarnation, releases,)?")
+        for call in ("self.queue_plan_pending_route_obligation_blocks_lane_drain",
                      "self.kura.pending_certified_merge_work_for_lane"):
             require(f"{call}(lane_id, dataspace_id, lane_incarnation,)?")
         if any(token in code for token in (".unwrap_or(", ".unwrap_or_default(", ".map_or(")):
@@ -966,8 +816,8 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
         require("""Self::evidence_aware_lane_drain_frontier_from_world(
             &self.world.view(), &self.kura, *lane, previous_lane.dataspace_id, incarnation,
         ).map_err(LaneLifecycleError::DrainObservation)?""")
-        require(""".lane_has_drain_blocking_evidence(
-            *lane, previous_lane.dataspace_id, incarnation,
+        require(""".lane_has_drain_blocking_evidence_with_releases(
+            *lane, previous_lane.dataspace_id, incarnation, releases,
         ).map_err(LaneLifecycleError::DrainObservation)?""")
     if symbol == "BlockValidationError::from_autoscale_lifecycle_error":
         require("""LaneLifecycleError::DrainObservation(_)
@@ -1011,27 +861,23 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
         require("""if publish_process_runtime {
             state.publish_lane_scoped_runtime_reset(&self.lanes_to_reset);
         }""")
-        require("""if records_reset {
-            state.da_shard_cursors.write()
-                .mark_lanes_canonically_reset(&self.active_reset_lanes, self.transition_height);
-        }""")
-        require("""let persist_cursor_journal = publish_process_runtime
-            && (records_reset
-                || (!self.lanes_to_reset.is_empty() && state.da_indexes_hydrated.read().is_some()));""")
-        if "persist_da_shard_cursor_journal" in code:
-            errors.append("authority/recovery item lifecycle must defer cursor disk work past generation")
+        require('        if records_reset {\n            indexes\n                .da_shard_cursors\n                .as_mut()\n                .expect("prepared shard cursors")\n                .mark_lanes_canonically_reset(&self.active_reset_lanes, self.transition_height);\n        }\n')
+        require('        let persist_cursor_journal = publish_process_runtime\n            && (records_reset\n                || (!self.lanes_to_reset.is_empty()\n                    && indexes\n                        .da_indexes_hydrated\n                        .as_ref()\n                        .expect("prepared hydration status")\n                        .is_some()));\n')
+        if "persist_da_shard_cursor_journal" in code or ".write()" in code or ".read()" in code:
+            errors.append("authority/recovery item lifecycle must use acquired indexes and defer disk work")
+    if symbol == "LaneLifecyclePostPublication::capture_snapshot":
+        require("if self.persist_cursor_journal {")
+        require("DaShardCursorJournal::from_index(&self.lane_config, cursors, &path)")
     if symbol == "LaneLifecyclePostPublication::publish":
-        require("""if self.persist_cursor_journal {
-            state.persist_da_shard_cursor_journal_with_config(&self.lane_config);
-        }""")
-        if any(token in code for token in ("nexus_snapshot(", "reset_lane_scoped_runtime", "mark_lanes_canonically_reset(")):
+        require("if let Some(snapshot) = self.snapshot {")
+        require("snapshot.persist()")
+        if any(token in code for token in ("nexus_snapshot(", "reset_lane_scoped_runtime", "mark_lanes_canonically_reset(", ".read()", ".write()", "persist_da_shard_cursor_journal_with_config")):
             errors.append("authority/recovery item lifecycle post work retargets or repeats published reset")
     if symbol == "StateBlock::commit_inner":
-        # Follow the real lexical generation scope, not a later occurrence of
-        # the same publish token. Both physical State writer and generation
-        # must be gone before disk work; the original outer fences remain.
-        opening = code.find(_code("let mut lifecycle_post_publication = None; {"))
-        first = code.find("{", opening) if opening >= 0 else -1
+        # Locate the actual final publication block after geometry admission.
+        # The preflight membership writer is a separate earlier lexical scope.
+        opening = code.find(_code("let autoscale_storage_hold ="))
+        first = code.find(_code("{ let state_write_lock_wait_start = Instant::now(); let _state_write_lock = write_fence.lock();"), opening)
         depth = 0
         last = -1
         if first >= 0:
@@ -1042,28 +888,36 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
                     break
         publication = code[first:last + 1] if last >= 0 else ""
         operations = tuple(map(_code, (
-            "let _state_write_lock = state_write_lock.lock();",
-            "block_hashes.detach().try_prepare_publication(",
-            ".map_err(|(_, _, cleanup)| {\n                    hash_refusal_cleanup = Some(cleanup);\n                    TransactionsBlockError::SnapshotObservationChanged\n                })?;",
-            "let _view_generation = state_ref.begin_state_view_write();",
-            "canonical_runtime.commit();",
-            "Some(prepared.publish(state_ref, &_view_generation, !replay_prevalidation))",
-            "Some(effects.publish(state_ref, &_view_generation, !replay_prevalidation))",
-            "world.commit();", "hash_retirement = block_hashes.publish();",
+            "let _state_write_lock = write_fence.lock();",
+            "block_hashes.try_prepare_publication().map_err(|_| { TransactionsBlockError::SnapshotObservationChanged })?;",
+            "world.prepare_publication();", "canonical_runtime.prepare_publication();",
+            "lane_consensus_contexts.prepare_publication();", "prev_committed_topology.prepare_publication();",
+            "committed_topology.prepare_publication();", "effect_locks.prepare_blocking();", "let _view_generation = publication_notice.begin();",
+            "transactions.publish_prepared();", "canonical_runtime.publish_prepared();",
+            "world.publish_prepared();", "block_hashes.publish_prepared();",
+            "Some(prepared.publish(state_ref, &mut effect_locks, &_view_generation, !*replay_prevalidation))",
+            "Some(effects.publish(state_ref, &mut effect_locks, &_view_generation, !*replay_prevalidation))",
         )))
         positions = [publication.find(operation) for operation in operations]
-        post = _code("if let Some(post) = lifecycle_post_publication { post.publish(state_ref); }")
+        post = _code("if let Some(post) = lifecycle_post_publication.take() { post.publish(state_ref); }")
         if (not publication or any(index < 0 for index in positions)
                 or positions != sorted(positions) or post in publication
-                or not code[last + 1:].startswith(post)
+                or not code[last + 1:].startswith(_code("""if let Some(post) = lifecycle_post_publication.as_mut() {
+                    post.capture_snapshot(state_ref, effect_locks.da_shard_cursors.as_ref().expect("prepared shard cursors"));
+                }
+                if let Some(post) = da_post_publication.as_mut() {
+                    post.capture_snapshot(state_ref, effect_locks.da_shard_cursors.as_ref().expect("prepared shard cursors"));
+                }
+                effect_locks.release_writers();""") + post)
                 or "drop(_view_generation)" in publication
                 or "drop(_state_write_lock)" in publication
-                or "drop(hash_retirement)" in publication
                 or "drop(_state_commit_lock)" in publication
                 or code.count("drop(_state_commit_lock)") != 1
-                or code.count("drop(hash_retirement)") != 1
-                or not code[last + 1:].find("drop(hash_retirement)") > code[last + 1:].find("drop(_state_commit_lock)") >= 0
-                or not 0 <= code.find("lethash_retirement;") < code.find("let_state_commit_lock=")):
+                or any(_code(token) in code for token in (
+                    "drop(this)", "this.into_fields()", "block_hashes.release_writers()",
+                    "drop(write_fence)", "drop(commit_fence)", "drop(lifecycle_fence)",
+                ))
+                or not 0 <= code.find("letmutwrite_fence=") < code.find("letmutthis=self;") < code.find("let_state_commit_lock=")):
             errors.append("authority/recovery item lifecycle publication loses generation/outer-fence ordering")
     if symbol == "read_native_amx_participant_application_history":
         # The existing caller owns the ordinary locking path. A successful

@@ -29,23 +29,62 @@ pub(crate) struct PreparedSet<'target, Admission, Installation> {
     original: Option<AcquiredSet<'target, Admission, Installation>>,
 }
 
-/// Original physical components consumed only through their aggregate owner.
-struct AcquiredSet<'target, Admission, Installation> {
-    mode: mv::BlockMode,
-    data_triggers: PreparedPublication<'target, TriggerId, LoadedAction<DataEventFilter>, (), ()>,
-    pipeline_triggers:
-        PreparedPublication<'target, TriggerId, LoadedAction<PipelineEventFilterBox>, (), ()>,
-    time_triggers: PreparedPublication<'target, TriggerId, LoadedAction<TimeEventFilter>, (), ()>,
-    by_call_triggers:
-        PreparedPublication<'target, TriggerId, LoadedAction<ExecuteTriggerEventFilter>, (), ()>,
-    ids: PreparedPublication<'target, TriggerId, TriggeringEventType, (), ()>,
-    active_data_trigger_ids: PreparedPublication<'target, TriggerId, (), (), ()>,
-    active_pipeline_trigger_ids: PreparedPublication<'target, TriggerId, (), (), ()>,
-    active_time_trigger_ids: PreparedPublication<'target, TriggerId, (), (), ()>,
-    active_by_call_trigger_ids: PreparedPublication<'target, TriggerId, (), (), ()>,
-    contracts: PreparedPublication<'target, HashOf<IvmBytecode>, IvmBytecodeEntry, (), ()>,
-    admission: Admission,
-    installation: Installation,
+// One typed participant inventory defines the exclusive acquiring/prepared phases.
+macro_rules! define_set_publication_components {
+    ($($field:ident: ($($ty:ty),+)),+ $(,)?) => {
+        struct AcquiredSet<'target, Admission, Installation> {
+            mode: mv::BlockMode,
+            $($field: PreparedPublication<'target, $($ty,)+ (), ()>,)+
+            admission: Admission,
+            installation: Installation,
+        }
+        struct SetPublicationComponents<'target, Admission> {
+            mode: mv::BlockMode,
+            $($field: mv::storage::DetachedPublicationSlot<'target, $($ty,)+ (), ()>,)+
+            // Retain the original reservation after every component's cleanup.
+            admission: Option<Admission>,
+        }
+        impl<'target, Admission> SetPublicationComponents<'target, Admission> {
+            fn new(original: DetachedSet<Admission>, target: &'target Set) -> Self {
+                let DetachedSet { mode, $($field,)+ admission } = original;
+                // Every move below is inert: no readiness probe, admission or payload clone.
+                Self { mode, $($field: $field.publication_slot(&target.$field),)+ admission: Some(admission) }
+            }
+            fn try_prepare<E>(&mut self) -> Result<(), SetPublicationError<E>> {
+                $(self.$field.try_prepare(|_, _| Ok::<_, Infallible>(()))
+                    .map_err(|cause| SetPublicationError::Component { field: stringify!($field), cause })?;)+
+                Ok(())
+            }
+            fn release_writers(&mut self) { $(self.$field.release_writers();)+ }
+            fn recover_original(&mut self) -> DetachedSet<Admission> {
+                // Each lower method unlocks and returns its original journal; actual cleanup stays in its slot.
+                DetachedSet { mode: self.mode, $($field: self.$field.recover_original(),)+
+                    admission: self.admission.take().expect("original capture admission"), }
+            }
+            fn into_prepared<Installation>(self, installation: Installation) -> PreparedSet<'target, Admission, Installation> {
+                PreparedSet { original: Some(AcquiredSet { mode: self.mode,
+                    $($field: self.$field.into_prepared(),)+
+                    admission: self.admission.expect("original capture admission"), installation,
+                }) }
+            }
+            fn into_cleanup(self) -> [Option<mv::PublicationCleanup<()>>; 10] {
+                assert!(self.admission.is_none(), "original journals must first be recovered");
+                [$(Some(self.$field.into_cleanup()),)+]
+            }
+        }
+    };
+}
+define_set_publication_components! {
+    data_triggers: (TriggerId, LoadedAction<DataEventFilter>),
+    pipeline_triggers: (TriggerId, LoadedAction<PipelineEventFilterBox>),
+    time_triggers: (TriggerId, LoadedAction<TimeEventFilter>),
+    by_call_triggers: (TriggerId, LoadedAction<ExecuteTriggerEventFilter>),
+    ids: (TriggerId, TriggeringEventType),
+    active_data_trigger_ids: (TriggerId, ()),
+    active_pipeline_trigger_ids: (TriggerId, ()),
+    active_time_trigger_ids: (TriggerId, ()),
+    active_by_call_trigger_ids: (TriggerId, ()),
+    contracts: (HashOf<IvmBytecode>, IvmBytecodeEntry),
 }
 
 /// Original released trigger participants and their enclosing resource owners.
@@ -73,40 +112,48 @@ pub(crate) struct AbortedSet<Installation> {
     _installation: Option<Installation>,
 }
 
-// Each failure consumes earlier prepared writers back into their exact original
-// journals. No placeholder journal, mutable SetBlock, or reexecution is needed.
-macro_rules! prepare_components {
-    ($target:ident, $mode:ident, $admission:ident, $installation:ident;
-        [$($done:ident,)*]; [$next:ident, $($rest:ident,)*]) => {{
-        let $next = match $next.try_prepare_publication(&$target.$next, |_, _| Ok::<_, Infallible>(())) {
-            Ok(prepared) => prepared,
-            Err(($next, cause, refused)) => {
-                $(let $done = $done.abort();)*
-                // Release every acquired component before any original notification.
-                let retirement = AbortedSet {
-                    _components: [$(Some($done.1),)* Some(refused), $({ let _ = stringify!($rest); None },)*],
-                    _installation: Some($installation),
-                };
-                return Err((DetachedSet {
-                    mode: $mode, $($done: $done.0,)* $next, $($rest,)* admission: $admission,
-                }, SetPublicationError::Component { field: stringify!($next), cause }, retirement));
-            }
-        };
-        prepare_components!($target, $mode, $admission, $installation;
-            [$($done,)* $next,]; [$($rest,)*])
-    }};
-    ($target:ident, $mode:ident, $admission:ident, $installation:ident;
-        [$($done:ident,)*]; []) => {
-        Ok(PreparedSet { original: Some(AcquiredSet { mode: $mode, $($done,)* admission: $admission, installation: $installation }) })
-    };
+enum SetPublicationPhase<'target, Admission> {
+    Original(DetachedSet<Admission>),
+    Components(SetPublicationComponents<'target, Admission>),
+}
+
+/// Caller-owned original participant group, installed before any admission or readiness work.
+/// Normal refusal recovers exact journals while keeping every original deferred release here.
+/// Caught unwind and terminal release allow cleanup only; this grants no State authority.
+#[must_use = "retain this slot until every enclosing physical writer releases"]
+pub(crate) struct DetachedSetPublicationSlot<'target, Admission, Installation> {
+    target: &'target Set,
+    phase: Option<SetPublicationPhase<'target, Admission>>,
+    attempted: bool,
+    complete: bool,
+    retryable: bool,
+    released: bool,
+    recovered: bool,
+    // Must follow the complete original phase so reservation cleanup cannot precede it.
+    installation: Option<Installation>,
 }
 
 impl<Admission> DetachedSet<Admission> {
-    /// Admit all installation copies and then acquire every original component.
-    ///
-    /// The callback must cover all ten staging deltas, EBR retention and writer
-    /// installation costs before any MV component can copy its values. Refusal
-    /// releases all acquired writers and returns the complete original journal.
+    /// Inertly retain the original aggregate before any callback or physical acquisition.
+    pub(crate) fn publication_slot<Installation>(
+        self,
+        target: &Set,
+    ) -> DetachedSetPublicationSlot<'_, Admission, Installation> {
+        DetachedSetPublicationSlot {
+            target,
+            phase: Some(SetPublicationPhase::Original(self)),
+            attempted: false,
+            complete: false,
+            retryable: true,
+            released: false,
+            recovered: false,
+            installation: None,
+        }
+    }
+
+    /// Standalone preparation delegates to the same caller-owned slot engine.
+    /// An enclosing aggregate must retain its slot before calling the borrowed method
+    /// if its own physical siblings also need to survive a callee unwind.
     pub(crate) fn try_prepare_publication<'target, Installation, E>(
         self,
         target: &'target Set,
@@ -115,38 +162,124 @@ impl<Admission> DetachedSet<Admission> {
         PreparedSet<'target, Admission, Installation>,
         (Self, SetPublicationError<E>, AbortedSet<Installation>),
     > {
-        let installation = match admit(&self, target) {
-            Ok(installation) => installation,
+        let mut slot = self.publication_slot(target);
+        match slot.try_prepare(admit) {
+            Ok(()) => Ok(slot.into_prepared()),
             Err(error) => {
-                return Err((
-                    self,
-                    SetPublicationError::Admission(error),
-                    AbortedSet {
-                        _components: std::array::from_fn(|_| None),
-                        _installation: None,
-                    },
-                ));
+                let original = slot.recover_original();
+                Err((original, error, slot.into_cleanup()))
+            }
+        }
+    }
+}
+
+impl<'target, Admission, Installation>
+    DetachedSetPublicationSlot<'target, Admission, Installation>
+{
+    /// Borrow the original aggregate once, with every partial native owner remaining in this slot.
+    pub(crate) fn try_prepare<E>(
+        &mut self,
+        admit: impl FnOnce(&DetachedSet<Admission>, &Set) -> Result<Installation, E>,
+    ) -> Result<(), SetPublicationError<E>> {
+        assert!(
+            !self.attempted && !self.released,
+            "original aggregate preparation is one-shot"
+        );
+        self.attempted = true;
+        self.retryable = false;
+        let result = self.prepare_inner(admit);
+        // A caught callee panic never reaches this normal-return recovery grant.
+        self.retryable = true;
+        self.complete = result.is_ok();
+        result
+    }
+    fn prepare_inner<E>(
+        &mut self,
+        admit: impl FnOnce(&DetachedSet<Admission>, &Set) -> Result<Installation, E>,
+    ) -> Result<(), SetPublicationError<E>> {
+        let Some(SetPublicationPhase::Original(original)) = &self.phase else {
+            unreachable!("original group before preparation")
+        };
+        self.installation =
+            Some(admit(original, self.target).map_err(SetPublicationError::Admission)?);
+        let Some(SetPublicationPhase::Original(original)) = self.phase.take() else {
+            unreachable!()
+        };
+        self.phase = Some(SetPublicationPhase::Components(
+            SetPublicationComponents::new(original, self.target),
+        ));
+        let Some(SetPublicationPhase::Components(components)) = &mut self.phase else {
+            unreachable!()
+        };
+        components.try_prepare()
+    }
+    /// Terminal physical-only pass. Payloads, admission and all callbacks remain caller-owned.
+    pub(crate) fn release_writers(&mut self) {
+        self.released = true;
+        self.retryable = false;
+        self.complete = false;
+        if let Some(SetPublicationPhase::Components(components)) = &mut self.phase {
+            components.release_writers();
+        }
+    }
+    /// Return the same original journals after normal refusal or complete prepared abort.
+    /// The empty lower slots keep actual release events until this aggregate is retired.
+    pub(crate) fn recover_original(&mut self) -> DetachedSet<Admission> {
+        assert!(
+            self.retryable && !self.released,
+            "unwound/released group grants no journal"
+        );
+        self.released = true;
+        self.complete = false;
+        self.recovered = true;
+        match self.phase.as_mut().expect("original participant phase") {
+            SetPublicationPhase::Components(components) => components.recover_original(),
+            SetPublicationPhase::Original(_) => {
+                let Some(SetPublicationPhase::Original(original)) = self.phase.take() else {
+                    unreachable!()
+                };
+                original
+            }
+        }
+    }
+    /// Transfer actual released cleanup only after original journals have been recovered.
+    pub(crate) fn into_cleanup(mut self) -> AbortedSet<Installation> {
+        assert!(
+            self.released && self.recovered,
+            "normal original recovery required"
+        );
+        let components = match self.phase.take() {
+            Some(SetPublicationPhase::Components(components)) => components.into_cleanup(),
+            None => std::array::from_fn(|_| None),
+            Some(SetPublicationPhase::Original(_)) => {
+                unreachable!("original journal was recovered")
             }
         };
-        let Self {
-            mode,
-            data_triggers,
-            pipeline_triggers,
-            time_triggers,
-            by_call_triggers,
-            ids,
-            active_data_trigger_ids,
-            active_pipeline_trigger_ids,
-            active_time_trigger_ids,
-            active_by_call_trigger_ids,
-            contracts,
-            admission,
-        } = self;
-        prepare_components!(target, mode, admission, installation; []; [
-            data_triggers, pipeline_triggers, time_triggers, by_call_triggers, ids,
-            active_data_trigger_ids, active_pipeline_trigger_ids, active_time_trigger_ids,
-            active_by_call_trigger_ids, contracts,
-        ])
+        AbortedSet {
+            _components: components,
+            _installation: self.installation.take(),
+        }
+    }
+    /// Inertly transfer only a fully prepared original group to its existing publisher.
+    pub(crate) fn into_prepared(mut self) -> PreparedSet<'target, Admission, Installation> {
+        assert!(
+            self.complete && !self.released,
+            "all original components prepared"
+        );
+        self.released = true;
+        let Some(SetPublicationPhase::Components(components)) = self.phase.take() else {
+            unreachable!()
+        };
+        components.into_prepared(
+            self.installation
+                .take()
+                .expect("original installation admission"),
+        )
+    }
+}
+impl<Admission, Installation> Drop for DetachedSetPublicationSlot<'_, Admission, Installation> {
+    fn drop(&mut self) {
+        self.release_writers();
     }
 }
 

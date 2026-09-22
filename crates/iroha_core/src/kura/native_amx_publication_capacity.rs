@@ -244,6 +244,24 @@ impl Kura {
         manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
         receipt: &NativeAmxParticipantApplicationReceiptArtifact,
     ) -> Result<Option<(NativeAmxPublicationRoute, NativeAmxRoutePublicationCapacity)>> {
+        self.require_active_lane_artifact(entry, &receipt.participant_proposal.descriptor)?;
+        let inventory = self.native_amx_publication_inventory_locked(entry)?;
+        self.native_amx_route_publication_capacity_with_inventory_locked(
+            entry,
+            manifest,
+            receipt,
+            inventory
+                .as_ref()
+                .map(|(namespace, inventory)| (namespace, inventory)),
+        )
+    }
+    fn native_amx_route_publication_capacity_with_inventory_locked(
+        &self,
+        entry: &impl LaneArtifactStorageView,
+        manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
+        receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+        inventory: Option<(&BoundProgressNamespace, &NativeAmxEvidenceInventory)>,
+    ) -> Result<Option<(NativeAmxPublicationRoute, NativeAmxRoutePublicationCapacity)>> {
         let descriptor = &receipt.participant_proposal.descriptor;
         self.require_active_lane_artifact(entry, descriptor)?;
         let route = NativeAmxPublicationRoute {
@@ -258,9 +276,7 @@ impl Kura {
         let mut temporary_manifests = BTreeMap::new();
         let mut temporary_receipts = BTreeMap::new();
         let mut pending_prune = None;
-        if let Some((namespace, inventory)) =
-            self.native_amx_publication_inventory_locked(&entry)?
-        {
+        if let Some((namespace, inventory)) = inventory {
             for (height, file) in &inventory.manifests {
                 manifests.insert(
                     *height,
@@ -912,6 +928,9 @@ impl Kura {
     ) -> Result<bool> {
         let _canonical = self.canonical_chain_lock.lock();
         self.ensure_durable_block_at_height(block.header().height().get(), block.hash())?;
+        self.recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards(&[
+            Self::native_amx_publication_carrier(block)?,
+        ])?;
         let mut guard = match self
             .native_amx_capacity_plan_from_evidence_under_prune_and_canonical_guards(
                 block,
@@ -1245,7 +1264,8 @@ impl Kura {
         }
         Ok(())
     }
-    /// Reconstruct bounded operation ownership read-only, before any capacity-growing recovery.
+    /// Authenticate and discard owned incomplete repair prefixes, then reconstruct
+    /// bounded operation ownership before any capacity-growing recovery.
     /// The bounded durable pending index closes every store-before-publication crash window,
     /// including carriers below an ordinary tip. Retained route evidence supplies exact cleanup
     /// state; no unbounded canonical history scan or tip-only discovery is permitted.
@@ -1367,6 +1387,9 @@ impl Kura {
                 }
             }
             let incomplete_carriers = committed_index_carriers;
+            self.recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards(
+                &incomplete_carriers.iter().copied().collect::<Vec<_>>(),
+            )?;
             {
                 let _geometry = self.lane_geometry_lock.lock();
                 // State has not published its secondary live map yet. Inspect only

@@ -206,8 +206,10 @@ state_test! { sync native_candidate_stale_observation_waits_without_signing_or_c
     use crate::sumeragi::v2_candidate::{CandidateAssemblyOutcome, CandidateAttachments, CandidateWorkDeferral};
     let fixture = native_candidate_fixture(&[NativeEconomicCase::Transfer(25)], false);
     let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
-    let publication = fixture.state.begin_state_view_write();
+    let mut publication_notice = fixture.state.state_view_publication();
+    let publication = publication_notice.begin();
     drop(publication);
+    drop(publication_notice);
     assert!(matches!(assemble_native_candidate_for_test(&fixture, 16, 2 * 1024 * 1024,
         CandidateAttachments::default()).unwrap(), CandidateAssemblyOutcome::WorkDeferred {
             reason: CandidateWorkDeferral::NativeLaneSource, ..

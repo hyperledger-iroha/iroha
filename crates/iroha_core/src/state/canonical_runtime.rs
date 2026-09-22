@@ -54,17 +54,9 @@ impl CapturedRuntimePolicy {
     }
 }
 
-pub(super) struct AcquiredRuntimeBlock<'state> {
-    pub(super) world: WorldBlock<'state>,
-    pub(super) transactions: TransactionsBlock<'state>,
-    pub(super) commit_topology: CellBlock<'state, Vec<PeerId>>,
-    pub(super) prev_commit_topology: CellBlock<'state, Vec<PeerId>>,
-    pub(super) lane_consensus_contexts: CellBlock<'state, LaneConsensusContextsV1>,
-    pub(super) canonical_runtime: CellBlock<'state, SnapshotNexusRuntime>,
-    pub(super) projection: CanonicalRuntimeProjection,
-    pub(super) sccp_registry: Arc<ValidatedSccpRegistryV1>,
-    pub(super) block_hashes: BlockHashesBlock<'state>,
-}
+#[path = "canonical_runtime/acquisition.rs"]
+mod acquisition;
+pub(super) use acquisition::{AcquiredRuntimeBlock, AcquiredRuntimeBlockFields};
 
 impl SnapshotNexusRuntime {
     pub(super) fn nexus_projection(
@@ -371,9 +363,18 @@ impl State {
         record: &SnapshotNexusRuntime,
         world: &impl WorldReadOnly,
     ) -> Result<CanonicalRuntimeProjection, LaneLifecycleError> {
+        let baseline = self.lane_manifests.read().clone();
+        self.project_canonical_runtime_with_manifests(record, world, &baseline)
+    }
+
+    pub(super) fn project_canonical_runtime_with_manifests(
+        &self,
+        record: &SnapshotNexusRuntime,
+        world: &impl WorldReadOnly,
+        baseline: &LaneManifestRegistryHandle,
+    ) -> Result<CanonicalRuntimeProjection, LaneLifecycleError> {
         let catalog = runtime_catalog_from_world(world)?;
         let nexus = record.nexus_projection_with_catalog(&self.nexus.read(), catalog.as_ref())?;
-        let baseline = self.lane_manifests.read().clone();
         if let Some(catalog) = &catalog
             && catalog.baseline_manifests_hash
                 != Hash::prehashed(baseline.baseline_consensus_policy_digest())
@@ -433,67 +434,51 @@ impl State {
                 std::thread::yield_now();
                 continue;
             }
+            // Capture immutable index inputs before acquiring any native writer.
+            // Their release callbacks may retry those writers synchronously. The
+            // final generation check joins the manifest baseline to the acquired
+            // World; SCCP still validates that World's exact current/undo wire.
+            let baseline = self.lane_manifests.read().clone();
+            let mut registry_cache = self.sccp_registry_cache.lock().clone();
             // All constructors use the same order. Every guard is dropped before
             // retry; a World-only generation check cannot bind the predecessor.
             // Hash construction detaches its private tree before waiting for World.
             let block_hashes = self.block_hashes.try_next_block(replacement)?;
-            let mut world = if replacement {
-                self.world.block_and_revert()
-            } else {
-                self.world.block()
-            };
-            let transactions = if replacement {
-                self.transactions.block_and_revert()
-            } else {
-                self.transactions.block()
-            };
-            let commit_topology = if replacement {
-                self.commit_topology.block_and_revert()
-            } else {
-                self.commit_topology.block()
-            };
-            let prev_commit_topology = if replacement {
-                self.prev_commit_topology.block_and_revert()
-            } else {
-                self.prev_commit_topology.block()
-            };
-            let lane_consensus_contexts = if replacement {
-                self.lane_consensus_contexts.block_and_revert()
-            } else {
-                self.lane_consensus_contexts.block()
-            };
-            let canonical_runtime = if replacement {
-                self.canonical_runtime.block_and_revert()
-            } else {
-                self.canonical_runtime.block()
-            };
-            let projection = self.project_canonical_runtime(canonical_runtime.get(), &world);
-            let sccp_registry = self.sccp_registry_snapshot_from_world(world.sccp_registry.get());
+            // Projection payloads outlive joint physical retirement on refusal
+            // and unwind. Every Cell slot remains in this caller while initializing.
+            let projection_result;
+            let mut projection;
+            let mut sccp_registry;
+            let mut pending = acquisition::RuntimeBlockAcquisition::new(self, block_hashes);
+            pending.initialize(replacement);
+            projection_result = self.project_canonical_runtime_with_manifests(
+                pending.canonical_runtime().get(),
+                pending.world(),
+                &baseline,
+            );
+            sccp_registry = Some(Self::sccp_registry_snapshot_from_cache(
+                pending.world().sccp_registry.get(),
+                &mut registry_cache,
+            ));
             if !is_stable_state_view_generation(generation, self.state_view_generation()) {
-                drop(canonical_runtime);
-                drop(lane_consensus_contexts);
-                drop(prev_commit_topology);
-                drop(commit_topology);
-                drop(transactions);
-                drop(world);
-                drop(block_hashes);
+                // One owner unlocks all physical siblings before any native wake,
+                // payload cleanup, or original hash-budget refund can run.
+                drop(pending);
+                drop(sccp_registry);
+                drop(projection_result);
                 std::thread::yield_now();
                 continue;
             }
-            let projection =
-                projection.expect("persisted canonical runtime projection must be valid");
-            world.dataspace_catalog = projection.nexus.dataspace_catalog.clone();
-            return Ok(AcquiredRuntimeBlock {
-                world,
-                block_hashes,
-                transactions,
-                commit_topology,
-                prev_commit_topology,
-                lane_consensus_contexts,
-                canonical_runtime,
-                projection,
-                sccp_registry,
-            });
+            projection = Some(
+                projection_result.expect("persisted canonical runtime projection must be valid"),
+            );
+            pending.world_mut().dataspace_catalog = projection
+                .as_ref()
+                .expect("original prepared runtime projection")
+                .nexus
+                .dataspace_catalog
+                .clone();
+            return Ok(pending.finish(&mut projection, &mut sccp_registry));
         }
     }
 }

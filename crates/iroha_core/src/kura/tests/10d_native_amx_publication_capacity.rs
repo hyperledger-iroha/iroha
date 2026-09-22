@@ -2256,13 +2256,32 @@ struct NativeAmxCompletedRepairTempFixture {
     index: NativeAmxPublicationIndexRecord,
 }
 
-// This cut uses the real repair writer: its exact index is already durable,
-// and the actual descriptor-bound temporary is written and fsynced, but not renamed.
+#[derive(Clone, Copy, Debug)]
+enum NativeAmxRepairTempCut {
+    Synced,
+    Empty,
+    Partial,
+}
+
 fn native_amx_completed_repair_after_actual_temp_sync() -> NativeAmxCompletedRepairTempFixture {
+    native_amx_completed_repair_after_actual_temp_cut(NativeAmxRepairTempCut::Synced)
+}
+
+// These cuts use the real repair writer after its exact index is durable:
+// exclusive creation, a proper prefix write, or complete fsync before rename.
+fn native_amx_completed_repair_after_actual_temp_cut(
+    cut: NativeAmxRepairTempCut,
+) -> NativeAmxCompletedRepairTempFixture {
     let source = native_amx_publication_capacity_fixture();
     let kura = &source.kura;
     native_amx_complete_exact_fixture_carrier(kura, &source.block, &source.finality, 3);
-    let leaf = &source.manifest.entries().last().unwrap().leaf;
+    let leaf = &match cut {
+        NativeAmxRepairTempCut::Synced => source.manifest.entries().last().unwrap(),
+        NativeAmxRepairTempCut::Empty | NativeAmxRepairTempCut::Partial => {
+            source.manifest.entries().first().unwrap()
+        }
+    }
+    .leaf;
     let entry = kura.lane_storage_entry(leaf.lane_id).unwrap();
     let manifest_path = Kura::native_amx_application_manifest_path_for_entry(
         &entry,
@@ -2312,24 +2331,34 @@ fn native_amx_completed_repair_after_actual_temp_sync() -> NativeAmxCompletedRep
         .native_amx_publication_capacity_reserved_bytes()
         .unwrap();
     assert!(reserved_before_write >= u64::try_from(manifest_bytes.len()).unwrap());
-    fail_after_next_native_amx_evidence_temp_sync_for_tests();
+    let (temporary_len, expected_error) = match cut {
+        NativeAmxRepairTempCut::Synced => {
+            fail_after_next_native_amx_evidence_temp_sync_for_tests();
+            (manifest_bytes.len(), "interruption after temporary fsync")
+        }
+        NativeAmxRepairTempCut::Empty | NativeAmxRepairTempCut::Partial => {
+            let bytes = match cut {
+                NativeAmxRepairTempCut::Empty => 0,
+                _ => manifest_bytes.len() / 2,
+            };
+            assert!(bytes < manifest_bytes.len());
+            fail_after_next_native_amx_evidence_temp_prefix_for_tests(bytes);
+            (bytes, "interruption during temporary write")
+        }
+    };
     let error = kura
         .repair_native_amx_participant_application_evidence(&source.block)
-        .expect_err("actual repair stops after fsync, before rename");
+        .expect_err("actual repair stops at the selected physical writer crash cut");
+    assert!(error.to_string().contains(expected_error), "{error}");
     assert!(
-        error
-            .to_string()
-            .contains("injected Native evidence interruption after temporary fsync"),
-        "{error}"
-    );
-    assert!(
-        !FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_SYNC.with(|flag| flag.get()),
+        !FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_SYNC.with(|flag| flag.get())
+            && FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_PREFIX.with(|flag| flag.get().is_none()),
         "the real physical writer consumed the crash cut"
     );
     assert!(!manifest_path.exists());
     assert_eq!(
         fs::read(manifest_path.with_extension("norito.tmp")).unwrap(),
-        manifest_bytes
+        manifest_bytes[..temporary_len]
     );
     assert_eq!(fs::read(&receipt_path).unwrap(), receipt_bytes);
     assert_eq!(fs::read(&latest_path).unwrap(), latest_bytes);
@@ -2510,6 +2539,232 @@ fn native_amx_completed_repair_retries_actual_synced_temporary_with_original_ind
             .unwrap(),
         0
     );
+}
+
+#[test]
+fn native_amx_completed_repair_recovers_actual_empty_and_partial_temporaries_on_restart() {
+    for crash_cut in [
+        NativeAmxRepairTempCut::Empty,
+        NativeAmxRepairTempCut::Partial,
+    ] {
+        let cut = native_amx_completed_repair_after_actual_temp_cut(crash_cut);
+        let NativeAmxPublicationCapacityFixture {
+            _temp_dir,
+            kura,
+            block,
+            lane_config,
+            ..
+        } = cut.source;
+        let network_id = kura.bound_lane_storage_network().unwrap();
+        let (incarnations, activations) = active_fixture_geometry_maps(&kura, &lane_config);
+        let temp_path = cut.manifest_path.with_extension("norito.tmp");
+        let mut expected_recovered = snapshot_regular_files_recursively(&kura.store_root);
+        assert!(
+            expected_recovered
+                .remove(temp_path.strip_prefix(&kura.store_root).unwrap())
+                .is_some()
+        );
+        let mut expected_completed = expected_recovered.clone();
+        assert!(
+            expected_completed
+                .remove(
+                    &PathBuf::from(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY)
+                        .join(cut.index.file_name().unwrap())
+                )
+                .is_some()
+        );
+        assert!(
+            expected_completed
+                .insert(
+                    cut.manifest_path
+                        .strip_prefix(&kura.store_root)
+                        .unwrap()
+                        .to_path_buf(),
+                    cut.manifest_bytes.clone(),
+                )
+                .is_none()
+        );
+        drop(kura);
+        let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+        let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("Strict restart authenticates and removes only the owned incomplete manifest");
+        assert!(reopened.lane_storage_entries.lock().is_empty());
+        assert_eq!(
+            snapshot_regular_files_recursively(&reopened.store_root),
+            expected_recovered
+        );
+        assert!(!cut.manifest_path.exists());
+        assert!(!temp_path.exists());
+        assert_eq!(
+            Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+                .unwrap()
+                .records[&cut.index.carrier],
+            cut.index,
+            "prefix cleanup retains the exact original durable repair locator; cut={crash_cut:?}"
+        );
+        assert_eq!(
+            reopened
+                .native_amx_publication_capacity_reserved_bytes()
+                .unwrap(),
+            cut.reserved_before_write
+        );
+        assert_eq!(fs::read(&cut.receipt_path).unwrap(), cut.receipt_bytes);
+        assert_eq!(fs::read(&cut.latest_path).unwrap(), cut.latest_bytes);
+        reopened.bind_lane_storage_network(network_id).unwrap();
+        reopened
+            .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+            .unwrap();
+        reopened
+            .finish_restored_lane_segments_with_geometry(&lane_config)
+            .unwrap();
+        assert_eq!(
+            reopened
+                .repair_native_amx_participant_application_evidence(&block)
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(&reopened.store_root),
+            expected_completed
+        );
+        assert!(
+            Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+                .unwrap()
+                .records
+                .is_empty()
+        );
+        assert_eq!(
+            reopened
+                .native_amx_publication_capacity_reserved_bytes()
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            reopened
+                .repair_native_amx_participant_application_evidence(&block)
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(&reopened.store_root),
+            expected_completed
+        );
+    }
+}
+
+#[test]
+fn native_amx_completed_repair_retries_actual_empty_and_partial_temporaries() {
+    for crash_cut in [
+        NativeAmxRepairTempCut::Empty,
+        NativeAmxRepairTempCut::Partial,
+    ] {
+        let cut = native_amx_completed_repair_after_actual_temp_cut(crash_cut);
+        let kura = &cut.source.kura;
+        assert_eq!(
+            kura.repair_native_amx_participant_application_evidence(&cut.source.block)
+                .unwrap(),
+            3
+        );
+        assert_eq!(fs::read(&cut.manifest_path).unwrap(), cut.manifest_bytes);
+        assert!(!cut.manifest_path.with_extension("norito.tmp").exists());
+        assert_eq!(fs::read(&cut.receipt_path).unwrap(), cut.receipt_bytes);
+        assert_eq!(fs::read(&cut.latest_path).unwrap(), cut.latest_bytes);
+        assert!(
+            Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+                .unwrap()
+                .records
+                .is_empty()
+        );
+        assert_eq!(
+            kura.native_amx_publication_capacity_reserved_bytes()
+                .unwrap(),
+            0
+        );
+        let completed = snapshot_regular_files_recursively(&kura.store_root);
+        assert_eq!(
+            kura.repair_native_amx_participant_application_evidence(&cut.source.block)
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(&kura.store_root),
+            completed
+        );
+    }
+}
+
+#[test]
+fn native_amx_completed_repair_rejects_unowned_and_mixed_invalid_prefixes_without_cleanup() {
+    for fault in 0..3 {
+        for crash_cut in [
+            NativeAmxRepairTempCut::Empty,
+            NativeAmxRepairTempCut::Partial,
+        ] {
+            let cut = native_amx_completed_repair_after_actual_temp_cut(crash_cut);
+            let kura = &cut.source.kura;
+            let temp_path = cut.manifest_path.with_extension("norito.tmp");
+            match fault {
+                0 => {
+                    // The valid prefix belongs to the first route. An invalid
+                    // later route must prevent cleanup of either physical object.
+                    let other = &cut.source.manifest.entries().last().unwrap().leaf;
+                    let entry = kura.lane_storage_entry(other.lane_id).unwrap();
+                    let foreign = Kura::native_amx_application_manifest_path_for_entry(
+                        &entry,
+                        &kura.store_root,
+                        other.participant_height,
+                    )
+                    .with_extension("norito.tmp");
+                    assert_ne!(foreign, temp_path);
+                    write_synced_native_amx_test_file(&foreign, &[0]);
+                }
+                1 => {
+                    let inventory =
+                        Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+                            .unwrap();
+                    assert_eq!(inventory.files.len(), 1);
+                    fs::remove_file(&inventory.files[0].path).unwrap();
+                }
+                _ => {
+                    // Still short, but not a prefix of the authenticated manifest.
+                    write_synced_native_amx_test_file(&temp_path, &[cut.manifest_bytes[0] ^ 0xff]);
+                }
+            }
+            let before = snapshot_regular_files_recursively(&kura.store_root);
+            let reserved = kura
+                .native_amx_publication_capacity_reserved_bytes()
+                .unwrap();
+            assert!(
+                kura.repair_native_amx_participant_application_evidence(&cut.source.block)
+                    .is_err(),
+                "fault={fault}, cut={crash_cut:?}"
+            );
+            assert_eq!(snapshot_regular_files_recursively(&kura.store_root), before);
+            assert_eq!(
+                kura.native_amx_publication_capacity_reserved_bytes()
+                    .unwrap(),
+                reserved
+            );
+            let store_root = kura.store_root.clone();
+            let NativeAmxPublicationCapacityFixture {
+                _temp_dir,
+                kura,
+                lane_config,
+                ..
+            } = cut.source;
+            drop(kura);
+            let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+            assert!(
+                Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
+                "fault={fault}, cut={crash_cut:?}"
+            );
+            assert_eq!(
+                snapshot_regular_files_recursively(&store_root),
+                before,
+                "invalid sibling or absent authority prevents every prefix unlink"
+            );
+        }
+    }
 }
 
 #[test]

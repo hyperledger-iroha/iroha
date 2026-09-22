@@ -184,7 +184,8 @@ mod tests {
         HashOf::from_untyped_unchecked(Hash::new([value]))
     }
     fn append(state: &State, hashes: impl IntoIterator<Item = HashOf<BlockHeader>>) {
-        let _publication = state.begin_state_view_write();
+        let mut _publication_notice = state.state_view_publication();
+        let _publication = _publication_notice.begin();
         let mut journal = state.block_hashes.block();
         for hash in hashes {
             journal.push(hash);
@@ -198,7 +199,8 @@ mod tests {
         let state = state();
         append(&state, [hash(1)]);
         let target = state.telemetry_status_target().expect("first target");
-        let publication = state.begin_state_view_write();
+        let mut publication_notice = state.state_view_publication();
+        let publication = publication_notice.begin();
         assert!(matches!(
             state
                 .telemetry_status_target()
@@ -212,6 +214,7 @@ mod tests {
             Err(StatusSnapshotError::StateBusy)
         ));
         drop(publication);
+        drop(publication_notice);
         let recovered = state
             .telemetry_status_target()
             .expect("publication released");
@@ -266,7 +269,8 @@ mod tests {
         let state = state();
         append(&state, [hash(1)]);
         let old = state.telemetry_status_target().expect("first target");
-        let publication = state.begin_state_view_write();
+        let mut publication_notice = state.state_view_publication();
+        let publication = publication_notice.begin();
         assert!(matches!(
             state.telemetry_status_target(),
             Err(TelemetryStatusSourceError::Busy)
@@ -286,6 +290,7 @@ mod tests {
         journal.push(hash(2));
         journal.commit();
         drop(publication);
+        drop(publication_notice);
         let new = state.telemetry_status_target().expect("new target");
         assert_eq!((old.height, old.tip), (1, Some(hash(1))));
         assert!(old.routing_policy.rules.is_empty());

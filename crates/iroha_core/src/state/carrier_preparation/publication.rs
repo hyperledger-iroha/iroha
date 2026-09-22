@@ -197,7 +197,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
     /// outside their physical fences while retaining Apply serialization.
     /// No fallible/refusal branch exists after the first component is visible.
     pub(in crate::state::carrier_preparation::journals) fn publish(
-        mut self,
+        self,
     ) -> Result<
         PublishedCarrier<A, B, I>,
         (
@@ -205,7 +205,9 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             CarrierPublicationError,
         ),
     > {
-        let journals = &self.decision.journals;
+        let mut publication_notice = self.target.state_view_publication();
+        let mut this = self;
+        let journals = &this.decision.journals;
         let error = if let Some(error) = journals
             .components
             ._fences
@@ -225,12 +227,12 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             Some(CarrierPublicationError::Source)
         } else if !journals
             .geometry
-            .matches_publication_target(self.target, journals.effects.header)
+            .matches_publication_target(this.target, journals.effects.header)
             || journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()
         {
             Some(CarrierPublicationError::Geometry)
         } else if !journals.geometry.has_queue_custody(
-            self.target,
+            this.target,
             journals.effects.header,
             journals.components._fences._queue.as_ref(),
         ) {
@@ -241,18 +243,18 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             None
         };
         if let Some(error) = error {
-            return Err((self.abort(), error));
+            return Err((this.abort(), error));
         }
 
         // Only this terminal consumer may advance the exact storage operation,
         // after every source/retirement/participant refusal above. The held Kura
         // lease continues through State publication; a failed attempt returns
         // the same raw/tiered descriptors with all physical writers released.
-        let update_da_mapping = match self.try_complete_geometry() {
+        let update_da_mapping = match this.try_complete_geometry() {
             Ok(update) => update,
             Err(error) => {
                 return Err((
-                    self.abort(),
+                    this.abort(),
                     CarrierPublicationError::GeometryStorage(error),
                 ));
             }
@@ -261,7 +263,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         // Storage completion may take time while an independent writer latches
         // a sticky Queue recovery fault. Preserve the completed geometry owner
         // but refuse State visibility if that happened during this attempt.
-        if let Some(error) = self
+        if let Some(error) = this
             .decision
             .journals
             .components
@@ -271,7 +273,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             .and_then(|queue| queue.ensure_available().err())
         {
             return Err((
-                self.abort(),
+                this.abort(),
                 CarrierPublicationError::QueueRetirement(error),
             ));
         }
@@ -285,7 +287,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             target,
             decision,
             installation: retained_installation,
-        } = self;
+        } = this;
         installation = retained_installation;
         let DecisionBoundCarrierJournals {
             checkpoint,
@@ -314,6 +316,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             admission: retained_admission,
         } = journals;
         admission = retained_admission;
+        let mut effect_cleanup;
         let hash_retirement;
         let membership_retirement;
         let world_retirement;
@@ -323,35 +326,67 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             runtime,
             transactions,
             block_hashes,
+            effect_locks: original_effect_locks,
             _fences: fences,
         } = components.into_original();
 
+        effect_cleanup = original_effect_locks;
+        let mut effect_locks = effect_cleanup.physical_scope();
         let state_owner = block_hashes.state_owner();
-        let generation = target.begin_state_view_write();
+        let generation = publication_notice.begin();
         membership_retirement = transactions.publish();
         runtime_retirement = runtime.publish();
         if update_da_mapping {
-            target
+            effect_locks
                 .da_shard_cursors
-                .write()
+                .as_mut()
+                .expect("prepared shard cursors")
                 .sync_mapping(&effects.nexus.lane_config);
         }
         // Canonical resets precede this same carrier's DA observations.
-        let lifecycle_post_publication = effects
+        let mut lifecycle_post_publication = effects
             .lifecycle
             .take()
-            .map(|effects| effects.publish(target, &generation, true));
+            .map(|effects| effects.publish(target, &mut effect_locks, &generation, true));
         let (_, mut extra_events, retirement, (), ()) = world.publish();
         world_retirement = retirement;
-        world_effects.publish(target);
-        let da_post_publication = effects
+        world_effects.publish(
+            target,
+            effect_locks
+                .da_pin_intents
+                .as_mut()
+                .expect("prepared pin cache"),
+        );
+        let mut da_post_publication = effects
             .da_commitments
             .take()
-            .map(|effects| effects.publish(target, &generation, true));
-        target.install_sccp_registry_cache(std::sync::Arc::clone(&effects.sccp_registry));
+            .map(|effects| effects.publish(target, &mut effect_locks, &generation, true));
+        effect_locks.install_sccp(std::sync::Arc::clone(&effects.sccp_registry));
         hash_retirement = block_hashes.publish();
-        target.update_latest_block_header_cache(effects.header);
+        **effect_locks
+            .latest_block_header
+            .as_mut()
+            .expect("prepared header") = Some(effects.header);
         drop(generation);
+        if let Some(post) = da_post_publication.as_mut() {
+            post.capture_snapshot(
+                target,
+                effect_locks
+                    .da_shard_cursors
+                    .as_ref()
+                    .expect("prepared shard cursors"),
+            );
+        }
+        if let Some(post) = lifecycle_post_publication.as_mut() {
+            post.capture_snapshot(
+                target,
+                effect_locks
+                    .da_shard_cursors
+                    .as_ref()
+                    .expect("prepared shard cursors"),
+            );
+        }
+        effect_locks.release_writers();
         // Capture the final cursor projection under these same physical fences,
         // with the applying carrier's retained lane configuration.
         if let Some(post) = da_post_publication {
@@ -365,9 +400,6 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         // Every authoritative component is now visible. Remaining operations
         // materialize derived indexes/persistence and cannot return a pre-write retry.
         effects.publish_observability(target);
-        if !effects.verified_lane_relay_records.is_empty() {
-            target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records);
-        }
         tiered_snapshot.publish(target, false);
         let height = effects.header.height().get();
         target.enforce_nexus_storage_budget(height);
@@ -378,6 +410,9 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         }
         publication_events.append(&mut extra_events);
         drop(commit);
+        if !effects.verified_lane_relay_records.is_empty() {
+            target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records);
+        }
         drop(membership_retirement);
         drop(runtime_retirement);
         drop(world_retirement);

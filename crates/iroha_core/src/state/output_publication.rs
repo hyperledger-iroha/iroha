@@ -633,18 +633,21 @@ mod tests {
         let surface = FinalizedPublicationSurface::capture(&block).unwrap();
         let original = std::mem::replace(
             &mut block.world.smart_contract_state,
-            foreign_state.world.smart_contract_state.block(),
+            super::block_field::BlockField::new(foreign_state.world.smart_contract_state.block()),
         );
-        original.commit();
-        block.world.smart_contract_state = state.world.smart_contract_state.block();
+        original.into_executing().commit();
+        block.world.smart_contract_state =
+            super::block_field::BlockField::new(state.world.smart_contract_state.block());
         assert_eq!(semantic_delta, block.world.net_state_delta().unwrap());
         assert!(surface.verify(&block).is_err());
         let ordinary = std::mem::replace(
             &mut block.world.smart_contract_state,
-            foreign_state.world.smart_contract_state.block(),
+            super::block_field::BlockField::new(foreign_state.world.smart_contract_state.block()),
         );
         drop(ordinary);
-        block.world.smart_contract_state = state.world.smart_contract_state.block_and_revert();
+        block.world.smart_contract_state = super::block_field::BlockField::new(
+            state.world.smart_contract_state.block_and_revert(),
+        );
         assert!(FinalizedPublicationSurface::capture(&block).is_err());
     }
 

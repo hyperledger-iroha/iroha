@@ -989,16 +989,18 @@ fn state_with_exact_pending_sccp_snapshot_fixture(
         .verify()
         .expect("completed snapshot SCCP artifact is cryptographically valid");
     let block = Arc::new(block);
+    // Authenticate and provision the configured H0 lane before persisting its first block.
+    let mut state = state_factory_with_kura_and_chain(
+        Arc::clone(&kura),
+        ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
+    );
     kura.persist_block_with_retained_archive_for_tests(&block)
         .expect("persist exact SCCP block and archive");
     let _ = kura
         .store_v2_finality_artifact(&finality.finality_artifact)
         .expect("persist exact SCCP finality artifact");
-    let mut state = state_factory_with_kura_and_chain(
-        Arc::clone(&kura),
-        ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
-    );
     state.push_block_hash_for_testing(block.hash());
+    state.update_latest_block_header_cache_for_tests(block.header());
     seed_snapshot_genesis_resolver_checkpoint(&state);
     let (_, source_identity, trust_anchor) =
         iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();

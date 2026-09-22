@@ -34,7 +34,7 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::state_path::StatePath;
 use iroha_model_base::topology::LaneId;
 use mv::{
-    allocation::{AllocationBudget, ChargedByteBuffer, ChargedByteBufferError},
+    allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError},
     cell::Cell,
     storage::{Storage, StorageReadOnly},
 };
@@ -1140,15 +1140,15 @@ fn bind_snapshot_file_handle_with_digest(
 fn read_bound_snapshot_payload(
     binding: &BoundSnapshotFile,
     read_buffer_budget: &AllocationBudget,
-) -> Result<(ChargedByteBuffer, [u8; 32]), TryReadError> {
+) -> Result<(ChargedBuffer<u8>, [u8; 32]), TryReadError> {
     #[cfg(test)]
     SNAPSHOT_PAYLOAD_DIGEST_PASSES.with(|passes| passes.set(passes.get() + 1));
     let capacity = bounded_snapshot_read_capacity(binding.len, binding.max_bytes)
         .map_err(|error| TryReadError::IO(error, binding.path.clone()))?;
     let mut bytes =
-        ChargedByteBuffer::new(capacity, read_buffer_budget).map_err(|error| match error {
-            ChargedByteBufferError::Admission(refusal) => TryReadError::PayloadAllocation(refusal),
-            ChargedByteBufferError::Allocator { requested_bytes } => {
+        ChargedBuffer::new(capacity, read_buffer_budget).map_err(|error| match error {
+            ChargedBufferError::Admission(refusal) => TryReadError::PayloadAllocation(refusal),
+            ChargedBufferError::Allocator { requested_bytes } => {
                 TryReadError::PayloadAllocatorFailure { requested_bytes }
             }
         })?;

@@ -257,6 +257,69 @@ def test_block_start_phase_helpers_preserve_original_order_and_custody() -> None
     assert calls.count("require_block_start_enactment_phases") == 1
 
 
+CONSTRUCTION_PATH = "crates/iroha_core/src/state/state_block_construction.rs"
+
+
+@pytest.mark.parametrize("target,original,replacement", (
+    ("state", "construct_acquired_block(acquired, curr_block, Box::new)",
+     "construct_acquired_block(other, curr_block, Box::new)"),
+    ("state", "construct_acquired_block(acquired, curr_block, Box::new)",
+     "construct_acquired_block(acquired, other_header, Box::new)"),
+    ("state", "construct_acquired_block(acquired, curr_block, Box::new)",
+     "construct_acquired_block(acquired, curr_block, discard_original)"),
+    ("state", '#[path = "state/state_block_construction.rs"]',
+     '#[path = "state/other_construction.rs"]'),
+    ("helper", "let mut original = Some(acquired);", "let mut original = Some(other);"),
+    ("helper", "finish_state_block_construction(|| {", "finish_state_block_construction(move || {"),
+    ("fields", "                world,", "                world: World::default().block(),"),
+    ("fields", "                transactions,", "                transactions: other_transactions,"),
+    ("fields", "_curr_block: curr_block,", "_curr_block: other_header,"),
+    ("fields", "start_of_block_effects_applied: false,", "start_of_block_effects_applied: true,"),
+    ("fields", "pending_parliament_telemetry_events\n                    .take()",
+     "other_parliament_events\n                    .take()"),
+    ("helper", "let block = StateBlock::from_fields(StateBlockFields {",
+     "let block = StateBlockFields {"),
+    ("helper", 'finish.take().expect("original State finish continuation")(block)',
+     'finish.take().expect("original State finish continuation")(other_block)'),
+    ("helper", "    finish()\n}", "    unreachable!()\n}"),
+    ("state", "            fields: Some(fields),", "            fields: None,"),
+    ("state", "        mv::BlockRetirement::release_writers(self);", "        // discarded original writers"),
+), ids=(
+    "foreign-acquisition", "foreign-header", "substitute-continuation", "foreign-helper-module",
+    "substitute-held-owner", "move-owned-finish", "substitute-world", "substitute-membership",
+    "substitute-carrier-header", "premature-start-flag", "substitute-parliament-buffer",
+    "unarmed-final-handoff", "discard-final-original", "disconnected-outlined-finish",
+    "empty-executing-owner", "lost-executing-retirement",
+))
+def test_shared_start_construction_retains_exact_original_owner(
+    target: str, original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The defining helper, original fields and armed continuation must all join."""
+    source = guard.read(STATE_PATH)
+    helper = guard.read(CONSTRUCTION_PATH)
+    guard.require_block_start_enactment_phases(source)
+    text = source if target == "state" else helper
+    if target == "fields":
+        fields = guard.section(text, "let block = StateBlock::from_fields(StateBlockFields {",
+                               'finish.take().expect("original State finish continuation")(block)',
+                               CONSTRUCTION_PATH)
+        assert fields.count(original) == 1
+        mutated = text.replace(fields, fields.replace(original, replacement, 1), 1)
+    else:
+        assert text.count(original) == 1
+        mutated = text.replace(original, replacement, 1)
+    # A disconnected intact spelling in a comment is not an original owner.
+    mutated += "\n/* " + original + " */\n"
+    if target == "state":
+        source = mutated
+    else:
+        original_read = guard.read
+        monkeypatch.setattr(guard, "read", lambda path:
+                            mutated if path == CONSTRUCTION_PATH else original_read(path))
+    with pytest.raises(RuntimeError, match="start (construction|phases)"):
+        guard.require_block_start_enactment_phases(source)
+
+
 @pytest.mark.parametrize("mutation", (
     "missing_expiry", "missing_enactment", "duplicate", "swapped",
     "wrong_height", "conditional", "late_before_flag", "late_after_execution",
@@ -437,7 +500,7 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(mutat
         if mutation == "writer_removed":
             replacement = publication.replace("let _state_write_lock = state_write_lock.lock();", "", 1)
         elif mutation == "generation_removed":
-            replacement = publication.replace("let _view_generation = state_ref.begin_state_view_write();", "", 1)
+            replacement = publication.replace("let _view_generation = publication_notice.begin();", "", 1)
         elif mutation == "writer_early_drop":
             replacement = publication.replace("transactions.publish();",
                 "drop(_state_write_lock);\n            transactions.publish();", 1)

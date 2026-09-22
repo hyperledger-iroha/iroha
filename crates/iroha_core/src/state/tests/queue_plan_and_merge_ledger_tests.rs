@@ -505,8 +505,9 @@ fn queue_plan_staging_reuses_pristine_block_snapshot_during_state_write_generati
     let (release_writer_tx, release_writer_rx) = std::sync::mpsc::channel();
     let writer_state = Arc::clone(&state);
     let writer = std::thread::spawn(move || {
+        let mut generation_notice = writer_state.state_view_publication();
         let _state_write_lock = writer_state.state_write_lock.lock();
-        let generation = writer_state.begin_state_view_write();
+        let generation = generation_notice.begin();
         writer_ready_tx
             .send(())
             .expect("signal active State write generation");
@@ -514,6 +515,8 @@ fn queue_plan_staging_reuses_pristine_block_snapshot_during_state_write_generati
             .recv_timeout(Duration::from_secs(3))
             .is_ok();
         drop(generation);
+        drop(_state_write_lock);
+        drop(generation_notice);
         released_before_timeout
     });
     writer_ready_rx
@@ -557,9 +560,10 @@ fn queue_plan_live_validation_holds_no_block_hash_guard_while_waiting_for_snapsh
         .height()
         .get();
     *state.view_lock_contention_log.lock() = ViewLockContentionLog::default();
+    let mut generation_notice = state.state_view_publication();
 
     let state_write_lock = state.state_write_lock.lock();
-    let generation = state.begin_state_view_write();
+    let generation = generation_notice.begin();
     let validator_state = Arc::clone(&state);
     let validator = std::thread::spawn(move || {
         validator_state.validate_queue_plan_admissions_for_carrier(&[certificate], carrier_height)
@@ -576,6 +580,7 @@ fn queue_plan_live_validation_holds_no_block_hash_guard_while_waiting_for_snapsh
 
     drop(generation);
     drop(state_write_lock);
+    drop(generation_notice);
     let validated = validator
         .join()
         .expect("QueuePlan validator must not panic");
@@ -832,9 +837,11 @@ state_test! { sync merge_lane_authority_catalog_uses_one_immutable_state_view
     assert!(!consensus.is_current(&state), "manifest publication invalidates in-flight candidate snapshots");
     let fresh_consensus = state.merge_consensus_snapshot();
     {
-        let publication = state.begin_state_view_write();
+        let mut publication_notice = state.state_view_publication();
+        let publication = publication_notice.begin();
         assert!(!fresh_consensus.is_current(&state), "an active publication is never a stable candidate parent");
         drop(publication);
+        drop(publication_notice);
     }
     assert!(!fresh_consensus.is_current(&state), "a completed intervening publication must remain stale");
     assert_eq!(
@@ -2996,7 +3003,7 @@ fn assert_carrier_merge_metadata_uses_world_history(replacement: bool) {
         apply_empty_test_block_metadata(&state, &mut overlay, &carrier);
         assert_eq!(overlay.world.merge_hint_roots.as_slice(), expected);
         assert_eq!(
-            *overlay.world.merge_global_state_root,
+            *overlay.world.merge_global_state_root.get(),
             Some(crate::merge::reduce_merge_hint_roots(expected))
         );
         let bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(&overlay);
@@ -3053,11 +3060,11 @@ state_test! { sync certified_merge_stage_updates_world_metadata_through_its_owne
         .expect("the exact certified merge owner stages its actual metadata");
     assert_eq!(staged.staged_merge_entry(), Some(&entry));
     assert_eq!(staged.world.merge_hint_roots.as_slice(), entry.merge_hint_roots());
-    assert_eq!(*staged.world.merge_global_state_root, Some(entry.global_state_root));
+    assert_eq!(*staged.world.merge_global_state_root.get(), Some(entry.global_state_root));
     state.merge_ledger.replace(Vec::<MergeLedgerEntry>::new());
     apply_empty_test_block_metadata(&state, &mut staged, &carrier);
     assert_eq!(staged.world.merge_hint_roots.as_slice(), entry.merge_hint_roots());
-    assert_eq!(*staged.world.merge_global_state_root, Some(entry.global_state_root));
+    assert_eq!(*staged.world.merge_global_state_root.get(), Some(entry.global_state_root));
     drop(staged);
     assert_eq!(*state.world.merge_hint_roots.view(), before_roots);
     assert_eq!(*state.world.merge_global_state_root.view(), before_global);

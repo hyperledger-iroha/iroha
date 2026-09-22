@@ -844,6 +844,63 @@ where
     }
 }
 
+impl<K, V, P> BptreeMapOwned<K, V, Prepaid<P>>
+where
+    K: Copy + Ord + Debug + Send + Sync + 'static,
+    V: Copy + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
+    /// Observe a checked required-reservation floor for this fixed-size owner.
+    ///
+    /// Counts the exact requested layouts of its original root, retained base
+    /// reader and reachable base nodes, private cursor and next-reader shells,
+    /// every still-owned private node, and both current tracking capacities.
+    /// Nodes retired by a later private edit remain included until actually
+    /// freed; retirement entries are never subtracted from the retained base.
+    ///
+    /// This allocates nothing and takes no lock. It scans only this cursor's
+    /// private allocation list, so request it for refusal diagnostics rather
+    /// than adding a cumulative scan to every edit. The base counts were
+    /// captured from the actual original root at writer construction.
+    ///
+    /// Adding the next edit's complete demand gives a necessary reservation,
+    /// not a shared-pool fit guarantee. It excludes other owners, refundable
+    /// older readers, caller storage and opaque native mutex/runtime storage.
+    /// A stale base can additionally pin a successor chain: that chain is also
+    /// excluded, so this remains only a lower bound even after other readers
+    /// drop. This observation grants no retry/publication authority; validate
+    /// the original predecessor and handle `Changed` separately. A caught edit
+    /// panic leaves the cursor unusable and this method panics just as edits do.
+    pub fn required_allocation_floor(&self) -> Result<AllocationDemand, PlanningError> {
+        let cursor = self.inner.as_ref();
+        let (leaves, branches) = cursor
+            .admitted_node_custody_counts()
+            .ok_or(PlanningError::Overflow)?;
+        let mut required = AllocationDemand::new();
+        let initial = MapCell::<K, V, Prepaid<P>>::initial_allocation_layouts();
+        let writer = MapCell::<K, V, Prepaid<P>>::writer_allocation_layouts();
+        for layout in [initial.root, initial.reader, writer.cursor, writer.reader] {
+            required.add_layout(layout)?;
+        }
+        let mut leaf = AllocationDemand::new();
+        leaf.add_layout(Layout::new::<CachePadded<Leaf<K, V, P::Charge>>>())?;
+        let mut branch = AllocationDemand::new();
+        branch.add_layout(Layout::new::<CachePadded<Branch<K, V, P::Charge>>>())?;
+        required.add(leaf, leaves)?;
+        required.add(branch, branches)?;
+        for (_, capacity) in cursor.admitted_tracking() {
+            required.add_layout(
+                crate::internals::bptree::tracking::FixedTrackingBuffer::<
+                    *mut Node<K, V, P::Charge>,
+                    P::Charge,
+                >::allocation_layout(capacity)
+                .map_err(|_| PlanningError::Overflow)?,
+            )?;
+        }
+        Ok(required)
+    }
+}
+
 impl<K, V, P> BptreeMap<K, V, Prepaid<P>>
 where
     K: Copy + Ord + Debug + Send + Sync + 'static,
@@ -1689,6 +1746,10 @@ where
 #[cfg(all(test, not(feature = "dhat-heap"), not(miri)))]
 #[path = "admission_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(feature = "dhat-heap"), not(miri)))]
+#[path = "owned_footprint_tests.rs"]
+mod owned_footprint_tests;
 
 impl<'a, K, V, P> BptreeMapWriterAcquisition<'a, K, V, Prepaid<P>>
 where

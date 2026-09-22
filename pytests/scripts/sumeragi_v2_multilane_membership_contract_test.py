@@ -36,7 +36,7 @@ def fixture(tmp_path):
     checker = helper.load_checker()
     contract = checker.membership_contract
     helper.copy_reviewed_source_fixture_with_includes(
-        tmp_path, checker, {Path(contract.STATE), Path(contract.STORAGE)},
+        tmp_path, checker, {Path(contract.STATE), Path(contract.STORAGE), Path(contract.CAPTURE), Path(contract.DETACHED)},
     )
     result = tmp_path, helper, checker, helper.canonical_models()
     assert validate(result) == ()
@@ -149,30 +149,30 @@ def test_membership_rejects_weakened_ledger(fixture):
 
 
 @pytest.mark.parametrize("owner,old,new,diagnostic", [
-    ("STORAGE", "        block: TransactionsBlock<'storage>,", "        pub(crate) block: TransactionsBlock<'storage>,", "mutable authority"),
-    ("STORAGE", "        pub(super) _guard:", "        pub(super) guard_removed:", "executable relation"),
-    ("STORAGE", "            self,\n        ) -> Result<PreparedTransactionsBlock", "            &self,\n        ) -> Result<PreparedTransactionsBlock", "executable relation"),
-    ("STORAGE", "let publication = self.admit_publication()?;", "let publication = MembershipPublication::Repeated; // let publication = self.admit_publication()?;", "executable relation"),
-    ("STORAGE", "                block: self,", "                block: replacement,", "executable relation"),
-    ("STORAGE", "previous_block.transactions == current_block.transactions", "previous_block.transactions != current_block.transactions", "executable relation"),
-    ("STORAGE", "if expected_current_height != current_height", "if expected_current_height == current_height", "executable relation"),
-    ("STORAGE", "previous: previous_block,", "previous: None,", "executable relation"),
-    ("STORAGE", "fn publish(self)", "fn publish(&self)", "executable relation"),
-    ("STORAGE", "MembershipPublication::Repeated => None", "MembershipPublication::Repeated => block.latest_block_ref.swap(None)", "executable relation"),
-    ("STORAGE", "*height < current.height", "*height <= current.height", "executable relation"),
-    ("STORAGE", "block.blocks_ref.insert(transaction, previous.height)", "block.blocks_ref.insert(transaction, current.height)", "executable relation"),
-    ("STORAGE", "let changes_identity = !matches!", "block.validate_commit()?; let changes_identity = !matches!", "repeats admission"),
-    ("STORAGE", "        predecessor_identity: Arc<()>,", "        pub(crate) predecessor_identity: Arc<()>,", "mutable authority"),
-    ("STORAGE", "predecessor_identity: Arc::clone(&block._guard)", "predecessor_identity: Arc::new(())", "executable relation"),
-    ("STORAGE", "Arc::ptr_eq(&guard, &self.predecessor_identity)", "true", "executable relation"),
-    ("STORAGE", "storage.write_lock.try_lock()", "storage.write_lock.lock()", "executable relation"),
-    ("STORAGE", "std::mem::replace(&mut **block._guard, next_identity)", "next_identity", "executable relation"),
-    ("STORAGE", "_guard.release_deferred(drop)", "other.release_deferred(drop)", "executable relation"),
-    ("STORAGE", "_tip: tip,", "_tip: None,", "executable relation"),
-    ("STORAGE", "_identity: identity,", "_identity: Arc::new(()),", "executable relation"),
-    ("STORAGE", "_retirement: prepared.publish(),", "_retirement: replacement,", "executable relation"),
-    ("STATE", "let tx_validate_result = transactions.prepare_commit();", "let tx_validate_result = transactions.validate_commit();", "misses or reorders"),
-    ("STATE", "            membership_retirement = transactions.publish();", "            transactions.publish();", "misses or reorders"),
+    pytest.param('STORAGE', "        block: TransactionsBlock<'storage>,", "        pub(crate) block: TransactionsBlock<'storage>,", 'mutable authority', id="STORAGE-        block: TransactionsBlock<'storage>,-        pub(crate) block: TransactionsBlock<'storage>,-mutable authority"),
+    pytest.param('STORAGE', '        pub(super) _guard:', '        pub(super) guard_removed:', 'executable relation', id='STORAGE-        pub(super) _guard:-        pub(super) guard_removed:-executable relation'),
+    pytest.param('STORAGE', '            self,\n        ) -> Result<PreparedTransactionsBlock', '            &self,\n        ) -> Result<PreparedTransactionsBlock', 'executable relation', id='STORAGE-            self,\n        ) -> Result<PreparedTransactionsBlock-            &self,\n        ) -> Result<PreparedTransactionsBlock-executable relation'),
+    pytest.param('CAPTURE', 'let publication = block.admit_publication()?;', 'let publication = MembershipPublication::Repeated; // let publication = block.admit_publication()?;', 'executable relation', id='CAPTURE-let publication = block.admit_publication()?;-let publication = MembershipPublication::Repeated; // let publication = block.admit_publication()?;-executable relation'),
+    pytest.param('CAPTURE', '            block,\n            publication,\n            next_identity,', '            replacement,\n            publication,\n            next_identity,', 'executable relation', id='CAPTURE-            block,\n            publication,\n            next_identity,-            block: replacement,\n            publication,\n            next_identity,-executable relation'),
+    pytest.param('STORAGE', 'previous_block.transactions == current_block.transactions', 'previous_block.transactions != current_block.transactions', 'executable relation', id='STORAGE-previous_block.transactions == current_block.transactions-previous_block.transactions != current_block.transactions-executable relation'),
+    pytest.param('STORAGE', 'if expected_current_height != current_height', 'if expected_current_height == current_height', 'executable relation', id='STORAGE-if expected_current_height != current_height-if expected_current_height == current_height-executable relation'),
+    pytest.param('STORAGE', 'previous: previous_block,', 'previous: None,', 'executable relation', id='STORAGE-previous: previous_block,-previous: None,-executable relation'),
+    pytest.param('STORAGE', 'fn publish(mut self)', 'fn publish(&self)', 'executable relation', id='STORAGE-fn publish(self)-fn publish(&self)-executable relation'),
+    pytest.param('STORAGE', 'MembershipPublication::Repeated => {}', 'MembershipPublication::Repeated => { self.block.latest_block_ref.swap(None); }', 'executable relation', id='STORAGE-MembershipPublication::Repeated => None-MembershipPublication::Repeated => block.latest_block_ref.swap(None)-executable relation'),
+    pytest.param('STORAGE', '*height < current.height', '*height <= current.height', 'executable relation', id='STORAGE-*height < current.height-*height <= current.height-executable relation'),
+    pytest.param('STORAGE', 'block.blocks_ref.insert(transaction, previous.height)', 'block.blocks_ref.insert(transaction, current.height)', 'executable relation', id='STORAGE-block.blocks_ref.insert(transaction, previous.height)-block.blocks_ref.insert(transaction, current.height)-executable relation'),
+    pytest.param('STORAGE', 'if !matches!(&self.publication', 'self.block.validate_commit()?; if !matches!(&self.publication', 'repeats admission', id='STORAGE-let changes_identity = !matches!-block.validate_commit()?; let changes_identity = !matches!-repeats admission'),
+    pytest.param('STORAGE', '        predecessor_identity: Arc<()>,', '        pub(crate) predecessor_identity: Arc<()>,', 'mutable authority', id='STORAGE-        predecessor_identity: Arc<()>,-        pub(crate) predecessor_identity: Arc<()>,-mutable authority'),
+    pytest.param('STORAGE', 'predecessor_identity: Arc::clone(block._guard.identity())', 'predecessor_identity: Arc::new(())', 'executable relation', id='STORAGE-predecessor_identity: Arc::clone(block._guard.identity())-predecessor_identity: Arc::new(())-executable relation'),
+    pytest.param('STORAGE', 'Arc::ptr_eq(&guard, &self.predecessor_identity)', 'true', 'executable relation', id='STORAGE-Arc::ptr_eq(&guard, &self.predecessor_identity)-true-executable relation'),
+    pytest.param('STORAGE', 'storage.write_lock.try_lock()', 'storage.write_lock.lock()', 'executable relation', id='STORAGE-storage.write_lock.try_lock()-storage.write_lock.lock()-executable relation'),
+    pytest.param('STORAGE', 'std::mem::swap(self.block._guard.identity_mut(), &mut self.next_identity)', 'std::mem::drop(Arc::clone(&self.next_identity))', 'executable relation', id='STORAGE-std::mem::replace(block._guard.identity_mut(), next_identity)-next_identity-executable relation'),
+    pytest.param('STORAGE', '_guard.into_release()', 'other.into_release()', 'executable relation', id='STORAGE-_guard.into_release()-other.into_release()-executable relation'),
+    pytest.param('STORAGE', '_tip: retired_tip,', '_tip: None,', 'executable relation', id='STORAGE-_tip: tip,-_tip: None,-executable relation'),
+    pytest.param('STORAGE', '_identity: next_identity,', '_identity: Arc::new(()),', 'executable relation', id='STORAGE-_identity: identity,-_identity: Arc::new(()),-executable relation'),
+    pytest.param('STORAGE', '_retirement: prepared.publish(),', '_retirement: replacement,', 'executable relation', id='STORAGE-_retirement: prepared.publish(),-_retirement: replacement,-executable relation'),
+    pytest.param('STATE', 'let tx_validate_result = transactions.try_prepare_publication();', 'let tx_validate_result = transactions.validate_commit();', 'misses or reorders', id='STATE-let tx_validate_result = transactions.prepare_commit();-let tx_validate_result = transactions.validate_commit();-misses or reorders'),
+    pytest.param('STATE', '} = this.fields.as_mut().expect("original executing State");', '} = this.fields.take().expect("original executing State");', 'misses or reorders', id='STATE-            membership_retirement = transactions.publish();-            transactions.publish();-misses or reorders'),
 ])
 def test_membership_rejects_semantic_mutation(fixture, owner, old, new, diagnostic):
     root, helper, checker, _ = fixture
@@ -183,10 +183,10 @@ def test_membership_rejects_semantic_mutation(fixture, owner, old, new, diagnost
 
 
 @pytest.mark.parametrize("earlier,later", [
-    ("let tx_validate_result = transactions.prepare_commit();", "state_ref.apply_committed_autoscale_lane_geometry("),
-    ("state_ref.apply_committed_autoscale_lane_geometry(", "transactions.publish();"),
-    ("transactions.publish();", "canonical_runtime.commit();"),
-    ("drop(_state_commit_lock);", "drop(membership_retirement);"),
+    pytest.param('let tx_validate_result = transactions.try_prepare_publication();', 'state_ref.apply_committed_autoscale_lane_geometry(', id='let tx_validate_result = transactions.prepare_commit();-state_ref.apply_committed_autoscale_lane_geometry('),
+    pytest.param('state_ref.apply_committed_autoscale_lane_geometry(', 'transactions.publish_prepared();', id='state_ref.apply_committed_autoscale_lane_geometry(-transactions.publish();'),
+    pytest.param('transactions.publish_prepared();', 'canonical_runtime.publish_prepared();', id='transactions.publish();-canonical_runtime.commit();'),
+    pytest.param('let mut commit_fence = self.state_ref.state_commit_lock.defer_notifications();', 'let mut this = self;', id='drop(_state_commit_lock);-drop(membership_retirement);'),
 ])
 def test_membership_rejects_publication_order_drift(fixture, earlier, later):
     root, helper, checker, _ = fixture
@@ -195,21 +195,165 @@ def test_membership_rejects_publication_order_drift(fixture, earlier, later):
     assert any("misses or reorders" in e for e in validate(fixture))
 
 
-@pytest.mark.parametrize("anchor,old,new", [
-    ("fn block_impl(", "self.released.guard(self.write_lock.lock())", "self.write_lock.lock()"),
-    ("fn block_impl(", "_guard: guard", "_guard: replacement"),
-    ("pub(crate) fn observe_predecessor(", "storage.released.guard(guard)", "guard"),
-    ("pub(crate) fn observe_predecessor(", "storage.released.guard(guard)", "storage.released.poisoning_guard(guard)"),
-    ("pub(crate) fn try_prepare_publication<", "let wait = storage.released.observe();", "let wait = other.released.observe();"),
-    ("let installation = match admit(&self, storage)", "let wait = storage.released.observe();", "let wait = other.released.observe();"),
-    ("pub(crate) fn try_prepare_publication<", "storage.released.guard(guard)", "guard"),
-    ("pub(crate) fn try_prepare_publication<", "storage.released.guard(guard)", "storage.released.poisoning_guard(guard)"),
-    ("pub(crate) fn try_prepare_publication<", "_guard: guard", "_guard: replacement"),
+@pytest.mark.parametrize("owner,anchor,old,new", [
+    pytest.param('STORAGE', 'fn block_impl(', 'self.released.guard(self.write_lock.lock())', 'self.write_lock.lock()', id='fn block_impl(-self.released.guard(self.write_lock.lock())-self.write_lock.lock()'),
+    pytest.param('STORAGE', 'fn block_impl(', '_guard: block::MembershipWriter::new(guard)', '_guard: block::MembershipWriter::new(replacement)', id='fn block_impl(-_guard: block::MembershipWriter::new(guard)-_guard: block::MembershipWriter::new(replacement)'),
+    pytest.param('STORAGE', 'pub(crate) fn observe_predecessor(', 'storage.released.guard(guard)', 'guard', id='pub(crate) fn observe_predecessor(-storage.released.guard(guard)-guard'),
+    pytest.param('STORAGE', 'pub(crate) fn observe_predecessor(', 'storage.released.guard(guard)', 'storage.released.poisoning_guard(guard)', id='pub(crate) fn observe_predecessor(-storage.released.guard(guard)-storage.released.poisoning_guard(guard)'),
+    pytest.param('DETACHED', 'pub(crate) fn try_prepare<E>', 'let wait = target.released.observe();', 'let wait = other.released.observe();', id='pub(crate) fn try_prepare_publication<-let wait = storage.released.observe();-let wait = other.released.observe();'),
+    pytest.param('DETACHED', 'let installation = match admit(self.original(), target)', 'let wait = target.released.observe();', 'let wait = other.released.observe();', id='let installation = match admit(&self, storage)-let wait = storage.released.observe();-let wait = other.released.observe();'),
+    pytest.param('DETACHED', 'pub(crate) fn try_prepare<E>', 'target.released.guard(guard)', 'guard', id='pub(crate) fn try_prepare_publication<-storage.released.guard(guard)-guard'),
+    pytest.param('DETACHED', 'pub(crate) fn try_prepare<E>', 'target.released.guard(guard)', 'target.released.poisoning_guard(guard)', id='pub(crate) fn try_prepare_publication<-storage.released.guard(guard)-storage.released.poisoning_guard(guard)'),
+    pytest.param('DETACHED', 'pub(crate) fn try_prepare<E>', '_guard: self\n                    .writer\n                    .take()\n                    .expect("checked original publication writer")', '_guard: replacement', id='pub(crate) fn try_prepare_publication<-_guard: MembershipWriter::new(guard)-_guard: MembershipWriter::new(replacement)'),
 ])
-def test_membership_rejects_detached_or_misdirected_release(fixture, anchor, old, new):
+def test_membership_rejects_detached_or_misdirected_release(fixture, owner, anchor, old, new):
     """Both advisory probes and retained writers must use their actual source."""
     root, helper, checker, _ = fixture
-    helper.replace_once_after(root / checker.membership_contract.STORAGE, anchor, old, new)
+    helper.replace_once_after(root / getattr(checker.membership_contract, owner), anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    pytest.param('MembershipWriter::new', 'MembershipWriterPhase::Attached(guard)', 'MembershipWriterPhase::Attached(replacement)', id='MembershipWriter::new-MembershipWriterPhase::Attached(guard)-MembershipWriterPhase::Attached(replacement)'),
+    pytest.param('MembershipWriter::identity', 'MembershipWriterPhase::Attached(guard)', 'MembershipWriterPhase::Released(guard)', id='MembershipWriter::identity-MembershipWriterPhase::Attached(guard)-MembershipWriterPhase::Released(guard)'),
+    pytest.param('MembershipWriter::identity_mut', 'MembershipWriterPhase::Attached(guard)', 'MembershipWriterPhase::Released(guard)', id='MembershipWriter::identity_mut-MembershipWriterPhase::Attached(guard)-MembershipWriterPhase::Released(guard)'),
+    pytest.param('MembershipWriter::release', 'guard.release_deferred(drop)', 'other.release_deferred(drop)', id='MembershipWriter::release-guard.release_deferred(drop)-other.release_deferred(drop)'),
+    pytest.param('MembershipWriter::release', 'self.phase = Some(MembershipWriterPhase::Released(release));', 'drop(release);', id='MembershipWriter::release-self.phase = Some(MembershipWriterPhase::Released(release));-drop(release);'),
+    pytest.param('MembershipWriter::release', 'other => self.phase = other,', 'other => drop(other),', id='MembershipWriter::release-other => self.phase = other,-other => drop(other),'),
+    pytest.param('MembershipWriter::take_release', 'self.release();', '// self.release();', id='MembershipWriter::into_release-self.release();-// self.release();'),
+    pytest.param('MembershipWriter::drop', 'self.release();', '// self.release();', id='MembershipWriter::drop-self.release();-// self.release();'),
+    pytest.param('TransactionsBlock::capture_slot', 'MembershipCapturePhase::Attached(self)', 'MembershipCapturePhase::Empty', id='TransactionsBlock::capture_slot-MembershipCapturePhase::Attached(self)-MembershipCapturePhase::Empty'),
+    pytest.param('TransactionsBlock::release_writers', 'self._guard.release();', '// self._guard.release();', id='TransactionsBlock::release_writers-self._guard.release();-// self._guard.release();'),
+    pytest.param('TransactionsCaptureSlot::try_prepare', '!self.attempted && !self.released', '!self.attempted || !self.released', id='TransactionsCaptureSlot::try_prepare-!self.attempted && !self.released-!self.attempted || !self.released'),
+    pytest.param('TransactionsCaptureSlot::try_prepare', 'self.attempted = true;', 'self.attempted = false;', id='TransactionsCaptureSlot::try_prepare-self.attempted = true;-self.attempted = false;'),
+    pytest.param('TransactionsCaptureSlot::try_prepare', 'let publication = block.admit_publication()?;', 'let unused_identity = Arc::new(()); let publication = block.admit_publication()?;', id='TransactionsCaptureSlot::try_prepare-let publication = block.admit_publication()?;-let unused_identity = Arc::new(()); let publication = block.admit_publication()?;'),
+    pytest.param('TransactionsCaptureSlot::try_capture', 'self.try_prepare()?;', 'let _ = self.try_prepare();', id='TransactionsCaptureSlot::try_capture-self.try_prepare()?;-let _ = self.try_prepare();'),
+    pytest.param('TransactionsCaptureSlot::try_capture', 'prepared.block._guard.identity();', '// prepared.block._guard.identity();', id='TransactionsCaptureSlot::try_capture-prepared.block._guard.identity();-// prepared.block._guard.identity();'),
+    pytest.param('TransactionsCaptureSlot::try_capture', 'prepared.detach_retaining()', 'other.detach_retaining()', id='TransactionsCaptureSlot::try_capture-prepared.detach_retaining()-other.detach_retaining()'),
+    pytest.param('TransactionsCaptureSlot::try_capture', 'self.cleanup = Some(release);', 'drop(release);', id='TransactionsCaptureSlot::try_capture-self.cleanup = Some(release);-drop(release);'),
+    pytest.param('TransactionsCaptureSlot::release', 'self.released = true;', 'self.released = false;', id='TransactionsCaptureSlot::release-self.released = true;-self.released = false;'),
+    pytest.param('TransactionsCaptureSlot::release', 'MembershipCapturePhase::Attached(block) => Some(block),', 'MembershipCapturePhase::Attached(block) => None,', id='TransactionsCaptureSlot::release-MembershipCapturePhase::Attached(block) => block.release_writers(),-MembershipCapturePhase::Attached(block) => {},'),
+    pytest.param('TransactionsCaptureSlot::release', '| MembershipCapturePhase::Published(prepared) => Some(&mut prepared.block),', '| MembershipCapturePhase::Published(prepared) => None,', id='TransactionsCaptureSlot::release-MembershipCapturePhase::Prepared(prepared) => prepared.block.release_writers(),-MembershipCapturePhase::Prepared(prepared) => {},'),
+    pytest.param('TransactionsCaptureSlot::into_prepared', 'assert!(!self.released, "membership capture was terminally released");', '', id='TransactionsCaptureSlot::into_prepared-assert!(!self.released, "membership capture was terminally released");-'),
+    pytest.param('TransactionsCaptureSlot::into_detached', 'assert!(!self.released, "membership capture was terminally released");', '', id='TransactionsCaptureSlot::into_detached-assert!(!self.released, "membership capture was terminally released");-'),
+    pytest.param('TransactionsCaptureSlot::into_detached', 'self.phase = original;', 'drop(original);', id='TransactionsCaptureSlot::into_detached-self.phase = original;-drop(original);'),
+    pytest.param('TransactionsCaptureSlot::drop', 'self.release();', '// self.release();', id='TransactionsCaptureSlot::drop-self.release();-// self.release();'),
+])
+def test_membership_capture_requires_original_caller_custody(fixture, symbol, old, new):
+    """Admission/refusal and original physical retirement stay in the caller slot."""
+    root, helper, checker, _ = fixture
+    errors = []
+    with checker._reviewed_rust_source_cache():
+        item = checker._rust_binding_item(
+            root, checker.membership_contract.CAPTURE, "method", symbol,
+            "membership capture mutation", errors,
+        )
+    assert not errors, errors
+    assert item is not None and item.count(old) == 1, (symbol, old)
+    helper.replace_once(root / checker.membership_contract.CAPTURE, item, item.replace(old, new, 1))
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,symbol,old,new", [
+    pytest.param("STORAGE", "PreparedTransactionsBlock::new", "publication_started: false", "publication_started: true", id="original-unstarted-owner"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::assert_unpublished", "!self.publication_started && !self.published", "!self.published", id="started-unwind-cannot-retry"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::publish", "self.publish_in_place();", "replacement.publish_in_place();", id="consuming-delegates-original-kernel"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "self.assert_unpublished();", "", id="reject-repeat-before-mutation"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "self.block._guard.identity();", "", id="original-writer-before-publication"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "self.publication_started = true;", "self.publication_started = false;", id="attempt-armed-before-map-work"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "match &self.publication", "match &replacement.publication", id="borrow-exact-admitted-action"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "if let Some(previous) = previous", "if let Some(previous) = &None", id="advance-exact-previous-membership"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "std::mem::swap(self.block._guard.identity_mut(), &mut self.next_identity)", "*self.block._guard.identity_mut() = Arc::new(())", id="rotate-original-prepaid-identity"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "self.block.release_writers();", "", id="physical-release-with-retirement-retained"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "self.published = true;", "self.published = false;", id="complete-only-after-native-release"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::into_retirement", "self.published,", "true,", id="no-incomplete-retirement"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::into_retirement", "_publication: publication,", "_publication: MembershipPublication::Repeated,", id="retirement-retains-original-action"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::detach_retaining", "self.assert_unpublished();", "", id="no-journal-after-publication-attempt"),
+    pytest.param("CAPTURE", "MembershipWriter::into_release", "self.take_release()", "replacement.take_release()", id="original-release-kernel"),
+    pytest.param("CAPTURE", "TransactionsCaptureSlot::publish_prepared", "prepared.publish_in_place();", "replacement.publish_in_place();", id="publish-under-original-caller"),
+    pytest.param("CAPTURE", "TransactionsCaptureSlot::publish_prepared", "self.cleanup = Some(prepared.block._guard.take_release());", "drop(prepared.block._guard.take_release());", id="retain-exact-notification"),
+    pytest.param("CAPTURE", "TransactionsCaptureSlot::publish_prepared", "self.phase = MembershipCapturePhase::Published(prepared);", "drop(prepared);", id="retain-published-action-payload"),
+    pytest.param("CAPTURE", "TransactionsCaptureSlot::release", "if self.cleanup.is_none()", "if self.cleanup.is_some()", id="release-once-without-overwrite"),
+    pytest.param("CAPTURE", "TransactionsCaptureSlot::executing", "!self.attempted && !self.released", "!self.released", id="no-read-after-attempt"),
+    pytest.param("CAPTURE", "TransactionsCaptureSlot::executing_mut", "!self.attempted && !self.released", "!self.released", id="no-mutation-after-attempt"),
+    pytest.param("CAPTURE", "TransactionsCaptureSlot::into_executing", "self.executing();", "", id="no-recovered-execution-authority"),
+    pytest.param("CAPTURE", "TransactionsBlockField::new", "slot: block.capture_slot()", "slot: replacement.capture_slot()", id="wrap-only-original-block"),
+    pytest.param("CAPTURE", "TransactionsBlockField::try_prepare_publication", "self.slot.try_prepare()", "replacement.slot.try_prepare()", id="prepare-original-slot"),
+    pytest.param("CAPTURE", "TransactionsBlockField::into_capture", "self.slot.executing();", "", id="capture-transfer-rejects-attempted-owner"),
+    pytest.param("CAPTURE", "TransactionsBlockField::deref_mut", "self.slot.executing_mut()", "replacement.slot.executing_mut()", id="original-execution-borrow"),
+])
+def test_membership_attached_publication_keeps_original_caller(fixture, owner, symbol, old, new):
+    """Publication, partial panic and cleanup all remain in the original slot."""
+    root, helper, checker, _ = fixture
+    errors = []
+    path = getattr(checker.membership_contract, owner)
+    with checker._reviewed_rust_source_cache():
+        item = checker._rust_binding_item(root, path, "method", symbol, "membership attached mutation", errors)
+    assert not errors and item is not None and item.count(old) == 1, (errors, symbol, old)
+    helper.replace_once(root / path, item, item.replace(old, new, 1))
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("index", [0, 1], ids=["inherent", "retirement-trait"])
+def test_membership_attached_release_delegates_exact_original_slot(fixture, index):
+    root, helper, checker, _ = fixture
+    path = root / checker.membership_contract.CAPTURE
+    items = checker._extract_rust_binding_items(path.read_text(), "method", "TransactionsBlockField::release_writers")
+    assert len(items) == 2
+    original = items[index]
+    helper.replace_once(path, original, original.replace("self.slot.release();", "other.slot.release();"))
+    assert any("terminal release delegates" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("method", ["publish_in_place", "publish_prepared"])
+def test_membership_attached_rejects_borrowed_executing_publication(fixture, method):
+    root, _, checker, _ = fixture
+    path = root / checker.membership_contract.CAPTURE
+    with path.open("a") as handle:
+        handle.write(f"\nimpl TransactionsBlock<'_> {{\n    pub fn {method}(&mut self) {{}}\n}}\n")
+    assert any("executing block exposes borrowed publication" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("owner,symbol,old,new", [
+    pytest.param("DETACHED", "DetachedTransactionsBlock::publication_slot", "phase: Some(Phase::Original(self))", "phase: None", id="inert-original-installation"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::try_prepare", "!self.attempted && !self.released", "!self.released", id="one-attempt-only"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::try_prepare", "self.retryable = false;", "self.retryable = true;", id="panic-revokes-retry"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::try_prepare", "self.preflight_release = Some(", "drop(Some(", id="retain-actual-advisory-release"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::try_prepare", "admit(self.original(), target)", "admit(replacement, target)", id="admit-borrowed-original"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::try_prepare", "self.installation = Some(installation);", "drop(installation);", id="retain-original-installation"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::try_prepare", 'self.writer\n                .as_ref()\n                .expect("original publication writer")\n                .identity()', "replacement.identity()", id="final-identity-under-original-writer"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::try_prepare", "            current,\n            revert,\n            publication,\n            next_identity,", "            current,\n            revert,\n            publication,\n            next_identity: _,", id="reuse-exact-next-identity"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::try_prepare", "            publication,\n            next_identity,\n        )));", "            MembershipPublication::Repeated,\n            Arc::new(()),\n        )));", id="reuse-exact-pre-admitted-action"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::recover_original", "self.retryable && !self.released", "!self.released", id="no-retry-after-caught-panic"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::recover_original", "prepared.assert_unpublished();", "", id="no-recovery-after-publication-attempt"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::recover_original", "self.writer_release = Some(writer.into_release());", "drop(writer.into_release());", id="normal-refusal-retains-final-release"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::recover_original", "self.writer_release = Some(release);", "drop(release);", id="normal-abort-retains-prepared-release"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::release_writers", "self.retryable = false;", "self.retryable = true;", id="terminal-release-revokes-authority"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::release_writers", "self.writer_release = Some(writer.into_release());", "drop(writer.into_release());", id="terminal-release-retains-notification"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::release_writers", "prepared.block.release_writers();", "", id="terminal-release-frees-prepared-physical-writer"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::into_prepared", "self.complete && !self.released", "self.complete || !self.released", id="complete-live-original-transfer"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::into_prepared", "preflight_release: self.preflight_release.take()", "preflight_release: None", id="transfer-actual-preflight-event"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::into_cleanup", "self.released && self.phase.is_none()", "self.released", id="cleanup-only-after-original-recovery"),
+    pytest.param("DETACHED", "DetachedTransactionsPublicationSlot::drop", "self.release_writers();", "", id="drop-physical-first"),
+    pytest.param("STORAGE", "PreparedDetachedTransactionsBlock::abort", "_preflight_release: preflight_release", "_preflight_release: None", id="abort-retains-observation-event"),
+    pytest.param("STORAGE", "PreparedDetachedTransactionsBlock::publish", "_preflight_release: preflight_release", "_preflight_release: None", id="publish-retains-observation-event"),
+    pytest.param("STORAGE", "DetachedTransactionsBlock::try_prepare_publication", "Err((original, error, slot.into_cleanup()))", "Err((original, error, Default::default()))", id="consuming-adapter-preserves-refusal-cleanup"),
+])
+def test_membership_detached_preparation_keeps_original_caller(fixture, owner, symbol, old, new):
+    """Real acquisition, ordinary retry and terminal retirement have one owner."""
+    root, helper, checker, _ = fixture
+    path = getattr(checker.membership_contract, owner)
+    errors = []
+    with checker._reviewed_rust_source_cache():
+        item = checker._rust_binding_item(root, path, "method", symbol, "membership retained mutation", errors)
+    assert not errors and item is not None and item.count(old) == 1, (errors, symbol, old)
+    helper.replace_once(root / path, item, item.replace(old, new, 1))
     errors = validate(fixture)
     assert any("executable relation" in error for error in errors), errors
     assert not any("digest" in error or "must have one" in error for error in errors), errors

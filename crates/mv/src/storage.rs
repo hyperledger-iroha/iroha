@@ -10,8 +10,12 @@ use concread::bptree::{
 };
 use std::{borrow::Borrow, collections::BTreeSet, ops::RangeBounds};
 
+#[path = "storage/detached_publication.rs"]
+mod detached_publication;
 #[path = "storage/physical.rs"]
 mod physical;
+pub use detached_publication::DetachedPublicationSlot;
+use detached_publication::DetachedPublicationSlotInner;
 use physical::PreparedStorageWriters;
 #[path = "storage/acquisition.rs"]
 mod acquisition;
@@ -144,8 +148,9 @@ mod admitted;
 #[path = "storage/admitted_tests.rs"]
 mod admitted_tests;
 pub use admitted::{
-    AdmittedAbortedPublication, AdmittedBlockError, AdmittedPreparedPublication,
-    AdmittedPublishedPublication, AdmittedStorageError, AdmittedStoragePolicy, StorageRole,
+    AdmittedAbortedPublication, AdmittedBlockError, AdmittedDetachedPublicationSlot,
+    AdmittedPreparedPublication, AdmittedPublishedPublication, AdmittedStorageError,
+    AdmittedStoragePolicy, StorageRole,
 };
 
 impl<K: Key, V: Value> Default for Storage<K, V> {
@@ -411,97 +416,29 @@ impl<K: Key, V: Value, Admission, M: StorageMode<K, V>> Detached<K, V, Admission
         E,
         Installation,
     > {
-        let mut cleanup = PublicationCleanup::empty();
-        let (checked, probe) = self
-            .metadata
-            .predecessor
-            .try_check_current(&target.publication);
-        cleanup.identities[0] = probe;
-        if let Err(error) = checked {
-            return Err((self, error, cleanup));
-        }
-        let installation = match admit(&self, target) {
-            Ok(installation) => installation,
+        let mut slot = DetachedPublicationSlotInner::new(self, target);
+        match slot.try_prepare(admit) {
+            Ok(()) => Ok(slot.into_prepared()),
             Err(error) => {
-                return Err((self, PublicationPreparationError::Admission(error), cleanup));
+                let original = slot.recover_original();
+                Err((original, error, slot.into_cleanup()))
             }
-        };
-        cleanup.installation = Some(installation);
-        let Self {
-            revert,
-            blocks,
-            metadata,
-        } = self;
-        let wait = target.revert_released.observe();
-        let revert =
-            match physical::acquire_owned_writer(&target.revert, &target.revert_released, revert) {
-                Ok(writer) => writer,
-                Err((revert, error, released)) => {
-                    cleanup.writers[1] = released;
-                    let error = match error {
-                        OwnedWriteError::Busy => {
-                            PublicationPreparationError::after_failed_acquisition(wait)
-                        }
-                        OwnedWriteError::Poisoned => PublicationPreparationError::Poisoned,
-                        OwnedWriteError::Changed => PublicationPreparationError::Changed,
-                    };
-                    return Err((
-                        Self {
-                            revert,
-                            blocks,
-                            metadata,
-                        },
-                        error,
-                        cleanup,
-                    ));
-                }
-            };
-        let wait = target.blocks_released.observe();
-        let blocks =
-            match physical::acquire_owned_writer(&target.blocks, &target.blocks_released, blocks) {
-                Ok(writer) => writer,
-                Err((blocks, error, released)) => {
-                    cleanup.writers[0] = released;
-                    let error = match error {
-                        OwnedWriteError::Busy => {
-                            PublicationPreparationError::after_failed_acquisition(wait)
-                        }
-                        OwnedWriteError::Poisoned => PublicationPreparationError::Poisoned,
-                        OwnedWriteError::Changed => PublicationPreparationError::Changed,
-                    };
-                    let (revert, released) = revert.release_deferred(|writer| writer.detach());
-                    cleanup.writers[1] = Some(released);
-                    return Err((
-                        Self {
-                            revert,
-                            blocks,
-                            metadata,
-                        },
-                        error,
-                        cleanup,
-                    ));
-                }
-            };
-        let mut prepared = PreparedPublication {
-            writers: PreparedStorageWriters::new(
-                StorageWriters::new(target, revert, blocks),
-                cleanup.identities[0].take(),
-            ),
-            metadata,
-            installation: cleanup.installation.take().expect("original installation"),
-        };
-        if let Err(error) = prepared
-            .writers
-            .prepare(&prepared.metadata.predecessor, prepared.metadata.dirty)
-        {
-            let (journal, cleanup) = prepared.abort();
-            return Err((journal, error, cleanup));
         }
-        Ok(prepared)
     }
 }
 
 impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
+    /// Inertly install the original untracked journal in caller-owned custody.
+    /// Preparation must borrow this slot while the aggregate retains siblings.
+    pub fn publication_slot<'target, Installation>(
+        self,
+        target: &'target Storage<K, V>,
+    ) -> DetachedPublicationSlot<'target, K, V, Admission, Installation> {
+        DetachedPublicationSlot {
+            inner: DetachedPublicationSlotInner::new(self, target),
+        }
+    }
+
     /// Reacquire the exact original untracked pair, returning custody on refusal.
     /// No successor allocation or payload copy occurs. The caller prepares every
     /// aggregate component before publication and owns separate resource admission.
@@ -543,6 +480,10 @@ struct OriginalWriters<'target, K: Key, V: Value, M: StorageMode<K, V>> {
 
 enum StorageWriterState<'a, K: Key, V: Value, M: StorageMode<K, V>> {
     Attached(OriginalWriters<'a, K, V, M>),
+    Preparing(PreparedStorageWriters<'a, K, V, M>),
+    Published {
+        _retirement: PublicationRetirement<K, V, M>,
+    },
     Released {
         _blocks: BptreeMapAbandonment<K, V, M>,
         _revert: BptreeMapAbandonment<K, Option<V>, M>,
@@ -596,7 +537,43 @@ impl<'target, K: Key, V: Value, M: StorageMode<K, V>> StorageWriters<'target, K,
         }
     }
 
+    fn prepare_publication(&mut self, predecessor: &CapturedPublication, dirty: bool) {
+        self.as_ref();
+        let Some(StorageWriterState::Attached(original)) = self.state.take() else {
+            unreachable!("original attached pair checked above");
+        };
+        self.state = Some(StorageWriterState::Preparing(
+            PreparedStorageWriters::from_original(self.target, original, None),
+        ));
+        let Some(StorageWriterState::Preparing(writers)) = self.state.as_mut() else {
+            unreachable!("original publication phase installed before preparation");
+        };
+        writers.prepare_attached(predecessor, dirty);
+    }
+
+    fn publish_prepared(&mut self, next: &mut Option<NextPublication>) {
+        assert!(
+            matches!(&self.state, Some(StorageWriterState::Preparing(writers)) if writers.is_prepared()),
+            "original pair preparation must complete"
+        );
+        assert!(
+            next.is_some(),
+            "original successor identity retained until publication"
+        );
+        let Some(StorageWriterState::Preparing(writers)) = self.state.take() else {
+            unreachable!("checked original publication phase");
+        };
+        let next = next.take().expect("checked original successor identity");
+        self.state = Some(StorageWriterState::Published {
+            _retirement: writers.publish(next),
+        });
+    }
+
     fn release(&mut self) {
+        if let Some(StorageWriterState::Preparing(writers)) = self.state.as_mut() {
+            writers.release();
+            return;
+        }
         if !matches!(&self.state, Some(StorageWriterState::Attached(_))) {
             return;
         }
@@ -700,45 +677,6 @@ fn detach_pair_retaining<K: Key, V: Value, M: StorageMode<K, V>>(
     )
 }
 
-// Prepare every fallible lock/invariant check before the first map transfers
-// node custody. Both physical writers survive through the pair identity change;
-// charged cursor, old-reader and notification cleanup run only after unlocking.
-fn publish_pair<'a, K: Key, V: Value, M: StorageMode<K, V>>(
-    blocks: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>,
-    revert: ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, Option<V>, M>>,
-    publication: &Publication,
-    next: NextPublication,
-    dirty: bool,
-) {
-    let (blocks, unchanged) = if dirty {
-        (
-            Some(blocks.map_preserving_release(|writer| writer.prepare_commit())),
-            None,
-        )
-    } else {
-        (None, Some(blocks))
-    };
-    let revert = revert.map_preserving_release(|writer| writer.prepare_commit());
-    let retirement = publication.publish_retaining(
-        next,
-        || {
-            let blocks =
-                blocks.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));
-            let revert = revert.map_preserving_release(|prepared| prepared.publish());
-            (blocks, revert)
-        },
-        |(blocks, revert)| {
-            let blocks =
-                blocks.map(|writer| writer.release_retaining(|published| published.release()));
-            let revert = revert.release_retaining(|published| published.release());
-            let unchanged =
-                unchanged.map(|writer| writer.release_retaining(|writer| writer.detach()));
-            (blocks, revert, unchanged)
-        },
-    );
-    drop(retirement);
-}
-
 #[cfg(test)]
 #[path = "storage/publication_tests.rs"]
 mod publication_tests;
@@ -752,7 +690,7 @@ mod block {
         pub(super) dirty: bool,
         pub(super) failed: bool,
         pub(super) predecessor: CapturedPublication,
-        pub(super) next: NextPublication,
+        pub(super) next: Option<NextPublication>,
         pub(super) mode: BlockMode,
     }
     impl<'store, K: Key, V: Value, M: StorageMode<K, V>> Block<'store, K, V, M> {
@@ -775,17 +713,9 @@ mod block {
             journal
         }
 
-        pub(super) fn publish(self) {
-            self.assert_operable();
-            let Self {
-                writers,
-                dirty,
-                next,
-                ..
-            } = self;
-            let publication = &writers.target.publication;
-            let OriginalWriters { revert, blocks } = writers.into_original();
-            publish_pair(blocks, revert, publication, next, dirty);
+        pub(super) fn publish(mut self) {
+            self.prepare_attached_publication();
+            self.publish_attached_prepared();
         }
 
         /// Observe this block's original owner, current/undo predecessor and mode.
@@ -865,7 +795,7 @@ mod block {
                 dirty,
                 failed: false,
                 predecessor,
-                next: NextPublication::new(),
+                next: Some(NextPublication::new()),
                 mode,
             }
         }
@@ -1823,3 +1753,19 @@ impl<K: Key, V: Value, M: StorageMode<K, V>> crate::BlockRetirement for Block<'_
 #[cfg(test)]
 #[path = "storage/aggregate_acquisition_tests.rs"]
 mod aggregate_acquisition_tests;
+
+impl<K: Key, V: Value, M: StorageMode<K, V>> Block<'_, K, V, M> {
+    pub(super) fn prepare_attached_publication(&mut self) {
+        self.assert_operable();
+        self.writers
+            .prepare_publication(&self.predecessor, self.dirty);
+    }
+
+    pub(super) fn publish_attached_prepared(&mut self) {
+        self.writers.publish_prepared(&mut self.next);
+    }
+}
+
+#[path = "storage/publication_slot.rs"]
+mod publication_slot;
+pub use publication_slot::BlockPublicationSlot;

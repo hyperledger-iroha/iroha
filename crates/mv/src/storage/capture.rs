@@ -81,7 +81,7 @@ impl<'a, K: Key, V: Value, Admission, M: StorageMode<K, V>>
                 predecessor,
                 mode,
                 dirty,
-                next,
+                next: next.expect("attached block retained original successor identity"),
                 admission,
             },
         });

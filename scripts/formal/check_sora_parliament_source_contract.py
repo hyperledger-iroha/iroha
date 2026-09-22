@@ -473,6 +473,100 @@ def require_sortition_registration_guards(world: str) -> None:
         )
 
 
+def require_block_start_construction(state: str) -> None:
+    """Follow the actual constructor into its original-writer, armed-owner handoff."""
+    state_path = "crates/iroha_core/src/state.rs"
+    path = "crates/iroha_core/src/state/state_block_construction.rs"
+
+    def compact(text: str) -> str:
+        return re.sub(r"\s+", "", re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S))
+
+    state_code = compact(state)
+    declaration = '#[path="state/state_block_construction.rs"]modstate_block_construction;'
+    if state_code.count(declaration) != 1:
+        raise RuntimeError(f"{state_path}: start construction must use its defining module")
+    code = compact(read(path))
+    signature = (
+        "implState{pub(super)fnconstruct_acquired_block<'state,R>("
+        "&'stateself,acquired:canonical_runtime::AcquiredRuntimeBlock<'state>,"
+        "curr_block:BlockHeader,finish:implFnOnce(StateBlock<'state>)->R,)->R{"
+    )
+    if not code.startswith("usesuper::*;" + signature):
+        raise RuntimeError(f"{path}: start construction must consume the original acquisition")
+    ordered = (
+        "letmutfinish=Some(finish);",
+        "letmutoriginal=Some(acquired);",
+        'letacquired=original.as_ref().expect("originalacquiredStateblock").fields();',
+        "gas_limit_per_block=Some(gas_limit_from_parameters(acquired.world.parameters()));",
+        "runtime_policy=Some(canonical_runtime::CapturedRuntimePolicy::capture(",
+        "finish_state_block_construction(||{",
+    )
+    positions = [code.find(token) for token in ordered]
+    if any(code.count(token) != 1 for token in ordered) or positions != sorted(positions):
+        raise RuntimeError(f"{path}: start construction must retain original writers through metadata")
+    handoff = section(code, "finish_state_block_construction(||{", "})}}#[inline(never)]", path)
+    prefix = (
+        "letcanonical_runtime::AcquiredRuntimeBlockFields{world,transactions,"
+        "commit_topology,prev_commit_topology,lane_consensus_contexts,canonical_runtime,"
+        "projection,sccp_registry,block_hashes,}=original.take()"
+        '.expect("originalacquiredStateblock").into_fields();'
+        "letblock=StateBlock::from_fields(StateBlockFields{"
+    )
+    suffix = '});finish.take().expect("originalStatefinishcontinuation")(block)'
+    if not handoff.startswith(prefix) or not handoff.endswith(suffix):
+        raise RuntimeError(f"{path}: start construction must arm the original block before its continuation")
+    fields = handoff[len(prefix):-len(suffix)]
+    # Split only top-level field separators; nested calls, attributes and strings
+    # cannot forge a second shorthand writer or substitute a commented binding.
+    parts, start, depth, quoted, escaped = [], 0, 0, False, False
+    for index, char in enumerate(fields):
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(fields[start:index])
+            start = index + 1
+    if fields[start:] or depth != 0 or quoted:
+        raise RuntimeError(f"{path}: start construction has an incomplete original field handoff")
+    bindings = {}
+    for field in parts:
+        field = re.sub(r'^#\[cfg\(feature="[^"]+"\)\]', "", field)
+        name, separator, value = field.partition(":")
+        if name in bindings or re.fullmatch(r"[a-z_][a-z_0-9]*", name) is None:
+            raise RuntimeError(f"{path}: start construction has duplicate or invalid original fields")
+        bindings[name] = value if separator else name
+    expected = {name: name for name in (
+        "world", "transactions", "commit_topology", "prev_commit_topology",
+        "lane_consensus_contexts", "canonical_runtime", "sccp_registry", "block_hashes",
+    )}
+    expected.update({
+        "state_ref": "self", "_curr_block": "curr_block",
+        "nexus": "projection.nexus", "start_of_block_effects_applied": "false",
+        "pending_parliament_telemetry_events":
+            'pending_parliament_telemetry_events.take().expect("preparedStateinput")',
+    })
+    if any(bindings.get(name) != value for name, value in expected.items()):
+        raise RuntimeError(f"{path}: start construction substituted original writers or Parliament inputs")
+    if not code.endswith("#[inline(never)]fnfinish_state_block_construction<R>(finish:implFnOnce()->R)->R{finish()}"):
+        raise RuntimeError(f"{path}: start construction must retain its bounded borrowed finish")
+    for owner in (
+        "impl<'state>StateBlock<'state>{fnfrom_fields(fields:StateBlockFields<'state>)->Self{Self{fields:Some(fields),}}",
+        "implDropforStateBlock<'_>{fndrop(&mutself){mv::BlockRetirement::release_writers(self);}}",
+    ):
+        if state_code.count(owner) != 1:
+            raise RuntimeError(f"{state_path}: start construction must install the original armed State owner")
+
+
 def require_block_start_enactment_phases(state: str) -> None:
     """Bind original ordered start ownership to bounded borrowed phase helpers."""
     state_path = "crates/iroha_core/src/state.rs"
@@ -501,8 +595,8 @@ def require_block_start_enactment_phases(state: str) -> None:
         raise RuntimeError(f"{state_path}: start phases must use the original block and height in order")
     compact = re.sub(r"\s+", "", constructor)
     ordered = (
-        "self.acquire_canonical_runtime_block(false)?;",
-        "letmutsb=Box::new(StateBlock{",
+        "letacquired=self.acquire_canonical_runtime_block(false)?;",
+        "letmutsb=self.construct_acquired_block(acquired,curr_block,Box::new);",
         "letcontinuation=before_start(&mutsb).map_err(StateBlockStartError::Stage)?;",
         "Self::apply_block_start_private_settlement_expiry(&mutsb,now_h);",
         "Self::apply_block_start_parliament_enactments(&mutsb,now_h);",
@@ -513,6 +607,7 @@ def require_block_start_enactment_phases(state: str) -> None:
     positions = [compact.find(token) for token in ordered]
     if any(compact.count(token) != 1 for token in ordered) or positions != sorted(positions):
         raise RuntimeError(f"{state_path}: start phases must finish before the original continuation")
+    require_block_start_construction(state)
     expiry = section(
         state,
         "    fn apply_block_start_private_settlement_expiry(",
@@ -650,7 +745,7 @@ def require_parliament_commit_publication(state: str) -> None:
         "let_state_write_lock=state_write_lock.lock();",
         "letblock_hashes=block_hashes.detach().try_prepare_publication(",
         ".map_err(|(_,_,cleanup)|{hash_refusal_cleanup=Some(cleanup);TransactionsBlockError::SnapshotObservationChanged})?;",
-        "let_view_generation=state_ref.begin_state_view_write();",
+        "let_view_generation=publication_notice.begin();",
         "transactions.publish();", "world.commit();", "hash_retirement=block_hashes.publish();",
     )
     writer_positions = [publication.find(token) for token in writer_order]

@@ -682,6 +682,22 @@ impl Kura {
         let namespace = self.native_amx_evidence_namespace_for_entry(entry)?;
         self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;
         let inventory = self.inventory_native_amx_evidence_files_locked(&namespace, true)?;
+        self.require_native_amx_completed_repair_receipt_with_inventory_locked(
+            entry, receipt, recovery, &namespace, &inventory,
+        )
+    }
+    fn require_native_amx_completed_repair_receipt_with_inventory_locked(
+        &self,
+        entry: &impl LaneArtifactStorageView,
+        receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+        recovery: Option<(
+            &NativeAmxPublicationIndexRecord,
+            &NativeAmxParticipantApplicationManifestArtifactV1,
+        )>,
+        namespace: &BoundProgressNamespace,
+        inventory: &NativeAmxEvidenceInventory,
+    ) -> Result<()> {
+        let descriptor = &receipt.participant_proposal.descriptor;
         let file = inventory.receipts.get(&descriptor.lane_block_height)
             .ok_or_else(|| Error::PruneIntentConflict("Native unfinished publication lacks its exact pending index and retained receipt".to_owned()))?;
         if self.decode_native_amx_receipt_file_locked(entry, &namespace, file)? != *receipt {
@@ -754,15 +770,20 @@ impl Kura {
         Ok(())
     }
 
-    /// Recheck a completed-repair locator after restart before installing any
-    /// reconstructed capacity. Physical targets come from the authenticated
-    /// geometry journal; this must not publish or require live secondary State.
-    fn authenticate_native_amx_completed_repair_on_startup(
+    /// Reconstruct exact repair artifacts from the retained locator, selected
+    /// canonical full wire, merge association and available finality. Neither
+    /// temporary payloads nor live secondary State provide reconstruction authority.
+    fn native_amx_completed_repair_artifacts_under_prune_and_canonical_guards(
         &self,
         block: &SignedBlock,
         merge: Option<&MergeLedgerEntry>,
         record: &NativeAmxPublicationIndexRecord,
-    ) -> Result<()> {
+    ) -> Result<
+        Vec<(
+            NativeAmxParticipantApplicationManifestArtifactV1,
+            NativeAmxParticipantApplicationReceiptArtifact,
+        )>,
+    > {
         let carrier = Self::native_amx_publication_carrier(block)?;
         record
             .validate()
@@ -806,6 +827,18 @@ impl Kura {
                         "Native completed repair startup has no exact artifact plan".to_owned(),
                     )
                 })?;
+        Ok(artifacts)
+    }
+    fn authenticate_native_amx_completed_repair_on_startup(
+        &self,
+        block: &SignedBlock,
+        merge: Option<&MergeLedgerEntry>,
+        record: &NativeAmxPublicationIndexRecord,
+    ) -> Result<()> {
+        let artifacts = self
+            .native_amx_completed_repair_artifacts_under_prune_and_canonical_guards(
+                block, merge, record,
+            )?;
         let _geometry = self.lane_geometry_lock.lock();
         let _sidecar = self.sidecar_lock.lock();
         for (manifest, receipt) in artifacts {

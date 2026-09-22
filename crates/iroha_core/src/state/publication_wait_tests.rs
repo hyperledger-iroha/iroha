@@ -35,7 +35,9 @@ async fn all_waiters_observe_only_the_complete_publication() {
     assert!(state.state_commit_lock.try_lock().is_some());
     assert!(state.state_write_lock.try_lock().is_some());
 
-    let publication = state.begin_state_view_write();
+    let mut publication_notice = state.state_view_publication();
+
+    let publication = publication_notice.begin();
     let mut hashes = state.block_hashes.block();
     hashes.push_for_tests(header(1).hash());
     hashes.commit_for_tests();
@@ -46,6 +48,7 @@ async fn all_waiters_observe_only_the_complete_publication() {
     );
     assert!(poll!(second.as_mut()).is_pending());
     drop(publication);
+    drop(publication_notice);
     assert_eq!(poll!(first.as_mut()), Poll::Ready(()));
     assert_eq!(poll!(second.as_mut()), Poll::Ready(()));
 }
@@ -56,7 +59,10 @@ async fn a_wakeup_below_the_required_height_cannot_authorize_progress() {
     let wait = state.wait_for_committed_height(2);
     tokio::pin!(wait);
     assert!(poll!(wait.as_mut()).is_pending());
-    drop(state.begin_state_view_write());
+    {
+        let mut publication_notice = state.state_view_publication();
+        drop(publication_notice.begin());
+    }
     assert!(poll!(wait.as_mut()).is_pending());
     state.append_committed_block_header_for_tests(header(1));
     assert!(poll!(wait.as_mut()).is_pending());
