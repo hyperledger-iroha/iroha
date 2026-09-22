@@ -5867,7 +5867,11 @@ impl V2ApplyService {
         artifact: &wire::finality::V2FinalityArtifact,
     ) -> Result<(), V2ApplyError> {
         let block_hash = subject.block_hash;
-        let checkpoint = crate::snapshot::canonical_state_snapshot_hash(self.state.as_ref())?;
+        // Publication released its commit guard before this repair. Join the
+        // actual immutable capture to the decided boundary before writing any
+        // metadata; a later live State must not supply an earlier height's hash.
+        let checkpoint = crate::snapshot::CapturedStateSnapshot::capture(self.state.as_ref())?
+            .canonical_hash_for_block(context.network_id, context.height, block_hash)?;
         self.kura
             .store_wsv_checkpoint(context.height, block_hash, checkpoint)?;
         let manifest =

@@ -441,6 +441,8 @@ def test_native_preparation_rejects_each_owner_ledger_mutation(fixture, mutation
     ("CAPACITY", "admit_native_amx_publication_capacity_plan", "old.component_bytes != new.component_bytes", "old.component_bytes == new.component_bytes"),
     ("CAPACITY", "admit_native_amx_publication_capacity_plan", "new.prune_journal_bytes > old.prune_journal_bytes", "new.prune_journal_bytes < old.prune_journal_bytes"),
     ("CAPACITY", "lane_publication_budget_reserved_bytes", "merge.checked_add(native)", "merge.checked_add(0)"),
+    ("MEMBERSHIP_STORAGE", "all_publication_budget_reserved_bytes", ".checked_add(self.membership_storage.pending_bytes())", ".checked_add(0)"),
+    ("MEMBERSHIP_STORAGE", "all_publication_budget_reserved_bytes", "self.lane_publication_budget_reserved_bytes()?", "0_u64"),
     ("ORDINARY", "lane_artifact_required_bytes_for_block", "Ok(total)", "Ok(total.saturating_add(self.native_amx_publication_capacity_reserved_bytes()?))"),
     ("KURA", "check_storage_budget", ".saturating_add(lane_publication_reservations)", ".saturating_add(0)"),
 ])
@@ -478,7 +480,7 @@ def test_native_preparation_rejects_component_or_index_charge_loss(fixture, owne
 
 
 @pytest.mark.parametrize("old,new", [
-    ("self.lane_publication_budget_reserved_bytes()?", "self.post_wsv_lane_artifact_budget_reserved_bytes()?"),
+    ("self.all_publication_budget_reserved_bytes()?", "self.post_wsv_lane_artifact_budget_reserved_bytes()?"),
     ("self.certified_bundle_capacity_reserved_bytes()?", "0"),
     (".checked_add(pending_canonical_bytes)", ".checked_add(0)"),
     ("bytes.checked_add(additional_unreserved_stable_bytes)", "bytes.checked_add(0)"),

@@ -1,7 +1,7 @@
 const OPENAPI_STATIC_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
-const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 98_409;
+const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 98_224;
 const OPENAPI_STATIC_CONTRACT_ASSET_SHA256: &str =
-    "5a51030f6b632967a3a7ab9c062a66edac23321c6c9ea4a5ca7f93b74a700f13";
+    "97265294f02d5718ef00a5b6a14ff9f49f455056fa6ec3d4e029958c69a35cbc";
 const OPENAPI_STATIC_CONTRACT_ASSET: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/src/openapi/tests/openapi_static_contracts_v1.txt"
@@ -2438,6 +2438,7 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
         .get("paths")
         .and_then(Value::as_object)
         .expect("OpenAPI paths");
+    assert!(!paths.contains_key("/v1/da/proof-policies/snapshot"));
     assert_eq!(
         operation_schema_ref(paths, "/v1/da/commitments", true),
         "#/components/schemas/DaCommitmentListRequest"
@@ -2524,6 +2525,44 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
         "pin-intent proof errors must document the alias byte limit"
     );
     let schemas = component_schemas(&document);
+    assert!(paths.contains_key("/v1/da/proof-policies"));
+    assert!(!paths.contains_key("/v1/da/proof-policies/snapshot"));
+    for (request, expected_selectors) in [
+        (
+            "DaCommitmentProofRequest",
+            vec![vec!["manifest_hash"], vec!["lane_id", "epoch", "sequence"]],
+        ),
+        (
+            "DaPinIntentQueryRequest",
+            vec![
+                vec!["manifest_hash"],
+                vec!["storage_ticket"],
+                vec!["alias"],
+                vec!["lane_id", "epoch", "sequence"],
+            ],
+        ),
+    ] {
+        let alternatives = schemas
+            .get(request)
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("anyOf"))
+            .and_then(Value::as_array)
+            .expect("proof requests need a complete selector");
+        assert_eq!(alternatives.len(), expected_selectors.len());
+        for (alternative, fields) in alternatives.iter().zip(expected_selectors) {
+            assert_eq!(
+                alternative["required"],
+                norito::json::to_value(&fields).unwrap()
+            );
+            for field in fields {
+                assert_eq!(
+                    alternative["properties"][field]["not"]["type"].as_str(),
+                    Some("null")
+                );
+            }
+        }
+    }
+
     assert!(
         !schemas.contains_key("DaPagination"),
         "offset pagination must not remain in the first-release DA list contract"
@@ -2559,22 +2598,27 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             .and_then(Value::as_object)
             .unwrap_or_else(|| panic!("missing `{request}.limit` schema"));
         assert_eq!(limit.get("minimum").and_then(Value::as_u64), Some(1));
-        assert!(
-            !limit.contains_key("maximum"),
-            "{request}.limit accepts the full nonzero u64 range before server capping"
+        assert_eq!(
+            limit.get("maximum").and_then(Value::as_u64),
+            Some(1_000),
+            "{request}.limit must reject an excessive raw-row scan budget"
         );
         assert_eq!(limit.get("default").and_then(Value::as_u64), Some(100));
         assert!(
             limit
                 .get("description")
                 .and_then(Value::as_str)
-                .is_some_and(|description| description.contains("capped at 1,000")),
+                .is_some_and(|description| description.contains("values above 1,000 are rejected")),
             "{request}.limit must document the raw-row cap"
         );
         let expected_cursor_ref = format!("#/components/schemas/{cursor}");
         assert_eq!(
             properties
                 .get("cursor")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("anyOf"))
+                .and_then(Value::as_array)
+                .and_then(|choices| choices.first())
                 .and_then(Value::as_object)
                 .and_then(|schema| schema.get("$ref"))
                 .and_then(Value::as_str),

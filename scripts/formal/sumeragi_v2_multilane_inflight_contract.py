@@ -1860,7 +1860,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "stable_terminal_reservations",
             "shared_terminal_transient",
             "consumes_terminal_cas_transient",
-            "self.lane_publication_budget_reserved_bytes()?",
+            "self.all_publication_budget_reserved_bytes()?",
             ".kura_disk_usage_bytes()?",
             "bytes.checked_add(stable_terminal_reservations)",
             "bytes.checked_add(lane_publication_reservations)",

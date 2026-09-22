@@ -5842,6 +5842,7 @@ fn strict_kura_config_for_testing(store_root: std::path::PathBuf) -> KuraConfig 
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
@@ -31937,7 +31938,8 @@ state_test! { sync missing_insert_block_does_not_hydrate_staged_verified_lane_re
 fn state_journal_test_kura(store_root: &std::path::Path) -> Arc<Kura> {
     let_row! { catalog = LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
+    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+    membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
     Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
         .expect("initialize journal test Kura")
         .0

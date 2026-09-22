@@ -1032,6 +1032,7 @@ mod tests {
             replica_advert: defaults::REPLICA_ADVERT_POLICY,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: policy,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::MERGE_LEDGER_CACHE_CAPACITY,

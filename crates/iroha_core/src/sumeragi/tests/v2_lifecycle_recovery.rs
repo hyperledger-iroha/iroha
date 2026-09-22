@@ -112,6 +112,7 @@ fn lifecycle_kura_config(dir: &TempDir) -> KuraConfig {
         lane_history_retention: LANE_HISTORY_RETENTION,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }

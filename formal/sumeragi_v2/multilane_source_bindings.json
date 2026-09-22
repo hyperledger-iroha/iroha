@@ -2062,7 +2062,7 @@
           "stable_terminal_reservations",
           "shared_terminal_transient",
           "consumes_terminal_cas_transient",
-          "self.lane_publication_budget_reserved_bytes()?",
+          "self.all_publication_budget_reserved_bytes()?",
           ".kura_disk_usage_bytes()?",
           "bytes.checked_add(stable_terminal_reservations)",
           "bytes.checked_add(lane_publication_reservations)",
@@ -11283,6 +11283,16 @@
           ]
         },
         {
+          "path": "crates/iroha_core/src/kura/membership_storage.rs",
+          "kind": "method",
+          "symbol": "Kura::all_publication_budget_reserved_bytes",
+          "required_tokens": [
+            "self.lane_publication_budget_reserved_bytes()?",
+            ".checked_add(self.membership_storage.pending_bytes())",
+            ".ok_or_else("
+          ]
+        },
+        {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "method",
           "symbol": "Kura::check_storage_budget",
@@ -11290,7 +11300,7 @@
             ".post_wsv_prepend_admission_extra_under_prune_and_canonical_guards(",
             ".block_required_bytes_for_budget(block, merge_entry, limit)?",
             ".checked_add(prepend_extra)",
-            "self.lane_publication_budget_reserved_bytes()?",
+            "self.all_publication_budget_reserved_bytes()?",
             ".saturating_add(lane_publication_reservations)",
             "if required > limit",
             "Error::StorageBudgetExceeded"
@@ -11363,7 +11373,7 @@
           "symbol": "Kura::check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards",
           "required_tokens": [
             "let used = self.kura_disk_usage_bytes()?;",
-            "let lane = self.lane_publication_budget_reserved_bytes()?;",
+            "let lane = self.all_publication_budget_reserved_bytes()?;",
             "let required = [\n            pending,\n            lane,\n            certified,\n            terminal,",
             ".try_fold(used, |total, bytes| total.checked_add(bytes))",
             "if required > self.max_disk_usage_bytes"
@@ -11431,7 +11441,7 @@
           "kind": "method",
           "symbol": "Kura::check_replace_storage_budget",
           "required_tokens": [
-            "let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;",
+            "let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;",
             ".saturating_add(lane_publication_reservations)"
           ]
         },
@@ -11569,7 +11579,7 @@
             "stable_terminal_reservations",
             "shared_terminal_transient",
             "consumes_terminal_cas_transient",
-            "self.lane_publication_budget_reserved_bytes()?",
+            "self.all_publication_budget_reserved_bytes()?",
             ".kura_disk_usage_bytes()?",
             "bytes.checked_add(stable_terminal_reservations)",
             "bytes.checked_add(lane_publication_reservations)",
@@ -20753,7 +20763,7 @@
             "stable_terminal_reservations",
             "shared_terminal_transient",
             "consumes_terminal_cas_transient",
-            "self.lane_publication_budget_reserved_bytes()?",
+            "self.all_publication_budget_reserved_bytes()?",
             ".kura_disk_usage_bytes()?",
             "bytes.checked_add(stable_terminal_reservations)",
             "bytes.checked_add(lane_publication_reservations)",

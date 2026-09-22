@@ -46,10 +46,11 @@ NATIVE_FINALIZED = "crates/iroha_core/src/kura/native_lane_batch_source.rs"
 BODY_STORE = "crates/iroha_core/src/sumeragi/v2_body_store.rs"
 ORDINARY = "crates/iroha_core/src/kura/lane_artifact_budget.rs"
 CAPACITY = "crates/iroha_core/src/kura/native_amx_publication_capacity.rs"
+MEMBERSHIP_STORAGE = "crates/iroha_core/src/kura/membership_storage.rs"
 DURABLE = "crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs"
 KURA = "crates/iroha_core/src/kura.rs"
 AUTONOMOUS = "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs"
-AUTONOMOUS_TOKENS = ('additional_unreserved_stable_bytes: u64', 'additional_missing_terminal_identities: usize', 'additional_incomplete_terminal_identities: usize', 'allowed_view_temp: Option<&Path>', 'autonomous_global_terminal_reservation_counts_with_allowed_view_temp_locked(', 'allowed_view_temp', 'AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES', 'resulting_missing', 'resulting_incomplete', 'MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES', 'stable_terminal_reservations', 'shared_terminal_transient', 'consumes_terminal_cas_transient', 'self.lane_publication_budget_reserved_bytes()?', '.kura_disk_usage_bytes()?', 'bytes.checked_add(stable_terminal_reservations)', 'bytes.checked_add(lane_publication_reservations)', 'self.certified_bundle_capacity_reserved_bytes()?', 'bytes.checked_add(certified_bundle_reservations)', 'required > self.max_disk_usage_bytes')
+AUTONOMOUS_TOKENS = ('additional_unreserved_stable_bytes: u64', 'additional_missing_terminal_identities: usize', 'additional_incomplete_terminal_identities: usize', 'allowed_view_temp: Option<&Path>', 'autonomous_global_terminal_reservation_counts_with_allowed_view_temp_locked(', 'allowed_view_temp', 'AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES', 'resulting_missing', 'resulting_incomplete', 'MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES', 'stable_terminal_reservations', 'shared_terminal_transient', 'consumes_terminal_cas_transient', 'self.all_publication_budget_reserved_bytes()?', '.kura_disk_usage_bytes()?', 'bytes.checked_add(stable_terminal_reservations)', 'bytes.checked_add(lane_publication_reservations)', 'self.certified_bundle_capacity_reserved_bytes()?', 'bytes.checked_add(certified_bundle_reservations)', 'required > self.max_disk_usage_bytes')
 CANDIDATE_TOKENS = (
     "ValidBlock::validate_and_prepare_sumeragi_v2_candidate_keep_voting_block(",
     "SumeragiV2ValidationContext::from_height_context(context)",
@@ -522,11 +523,16 @@ PREPARATION_OWNER_BINDINGS = (
         "let native = self.native_amx_publication_capacity_reserved_bytes()?",
         "merge.checked_add(native).ok_or_else(",
     )),
+    (MEMBERSHIP_STORAGE, "method", "Kura::all_publication_budget_reserved_bytes", (
+        "self.lane_publication_budget_reserved_bytes()?",
+        ".checked_add(self.membership_storage.pending_bytes())",
+        ".ok_or_else(",
+    )),
     (KURA, "method", "Kura::check_storage_budget", (
         ".post_wsv_prepend_admission_extra_under_prune_and_canonical_guards(",
         ".block_required_bytes_for_budget(block, merge_entry, limit)?",
         ".checked_add(prepend_extra)",
-        "self.lane_publication_budget_reserved_bytes()?",
+        "self.all_publication_budget_reserved_bytes()?",
         ".saturating_add(lane_publication_reservations)",
         "if required > limit", "Error::StorageBudgetExceeded",
     )),
@@ -3339,7 +3345,7 @@ def validate_native_preparation_contract(
     # reservations. Keep the original post-WSV obligation at its actual sum owner.
     terminal = "Kura::validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked"
     require(terminal,
-            'let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;',
+            'let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;',
             'let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;',
             'let required = self.kura_disk_usage_bytes()?.checked_add(pending_canonical_bytes).and_then(|bytes| bytes.checked_add(additional_unreserved_stable_bytes)).and_then(|bytes| bytes.checked_add(physical_and_transient)).and_then(|bytes| bytes.checked_add(stable_terminal_reservations)).and_then(|bytes| bytes.checked_add(lane_publication_reservations)).and_then(|bytes| bytes.checked_add(certified_bundle_reservations)).and_then(|bytes| { bytes.checked_add(Self::canonical_prune_intent_maintenance_headroom_bytes()) }).ok_or_else(|| { Self::invalid_lane_artifact_error(path.to_path_buf(), "autonomous mutation configured disk accounting overflowed",) })?;',
             'if required > self.max_disk_usage_bytes { return Err(Self::invalid_lane_artifact_error(path.to_path_buf(), "autonomous mutation would consume globally reserved terminal or carrier capacity",)); } Ok(())',
@@ -3352,6 +3358,6 @@ def validate_native_preparation_contract(
     ):
         errors.append("Native preparation terminal capacity has an early success or replaced total")
     ordinary = items.get("lane_artifact_required_bytes_for_block", "")
-    for forbidden in ("native_amx", "NativeAmx", "lane_publication_budget_reserved_bytes"):
+    for forbidden in ("native_amx", "NativeAmx", "lane_publication_budget_reserved_bytes", "all_publication_budget_reserved_bytes"):
         if forbidden in ordinary:
             errors.append(f"Native preparation ordinary accounting duplicates Native reservation via {forbidden}")

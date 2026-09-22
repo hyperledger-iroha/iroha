@@ -26,6 +26,9 @@ pub struct Kura {
     /// Zero is invalid; this policy has no environment override.
     #[config(default = "defaults::kura::BLOCK_HASH_HISTORY_BYTES")]
     pub block_hash_history_bytes: Bytes,
+    /// Finite membership segment and workspace limits, without an environment override.
+    #[config(nested)]
+    pub membership_storage: KuraMembershipStorage,
     /// Number of recent lane-history entries retained alongside the block store.
     #[config(
         env = "KURA_LANE_HISTORY_RETENTION",
@@ -87,6 +90,7 @@ impl Kura {
             max_disk_usage_bytes,
             blocks_in_memory,
             block_hash_history_bytes,
+            membership_storage,
             lane_history_retention,
             fastpq_artifacts,
             eviction_required_replicas,
@@ -131,6 +135,10 @@ impl Kura {
             max_disk_usage_bytes,
             blocks_in_memory,
             block_hash_history_bytes,
+            membership_storage: actual::KuraMembershipStoragePolicy {
+                max_bytes: membership_storage.max_bytes,
+                memory_bytes: membership_storage.memory_bytes,
+            },
             lane_history_retention,
             fastpq_artifacts,
             replica_advert,
@@ -140,6 +148,16 @@ impl Kura {
             fsync_interval: fsync_interval_ms.0,
         }
     }
+}
+/// File-configured finite limits for the single retained membership segment.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct KuraMembershipStorage {
+    /// Segment bytes, including incomplete append reservations; zero is invalid.
+    #[config(default = "defaults::kura::MEMBERSHIP_STORAGE_MAX_BYTES")]
+    pub max_bytes: NonZeroU64,
+    /// Original controls and append workspace allocation bytes; zero is invalid.
+    #[config(default = "defaults::kura::MEMBERSHIP_STORAGE_MEMORY_BYTES")]
+    pub memory_bytes: NonZeroUsize,
 }
 /// File-configured FASTPQ content-store policy with explicit byte/count units.
 #[derive(Debug, Clone, Copy, ReadConfig)]

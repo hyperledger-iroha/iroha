@@ -44,6 +44,10 @@ const HEADER_IROHA_ACCOUNT: &str = "x-iroha-account";
 const HEADER_IROHA_SIGNATURE: &str = "x-iroha-signature";
 const HEADER_IROHA_TIMESTAMP_MS: &str = "x-iroha-timestamp-ms";
 const HEADER_IROHA_NONCE: &str = "x-iroha-nonce";
+
+#[cfg(test)]
+mod manifest_tests;
+
 /// Blocking Torii publisher for `/v1/da/ingest`.
 pub(super) struct DaPublisher {
     client: HttpClient,
@@ -71,20 +75,9 @@ struct DaIngestResponsePayload {
     receipt: Option<DaIngestReceipt>,
     pin_scope: Option<DaPinScopeV1>,
 }
-/// Blocking Torii fetcher for `/v1/da/manifests/{ticket}`.
+/// Blocking manifest adapter using the SDK's shared asynchronous transport.
 pub(super) struct DaManifestFetcher {
-    client: HttpClient,
-    endpoint: Url,
-    basic_auth: Option<(String, String)>,
-}
-/// Response bundle returned by [`DaManifestFetcher`].
-pub(super) struct DaManifestFetchBundle {
-    pub(super) manifest_bytes: Vec<u8>,
-    pub(super) manifest_json: Value,
-    pub(super) chunk_plan: Value,
-    pub(super) storage_ticket_hex: String,
-    pub(super) manifest_hash_hex: String,
-    pub(super) blob_hash_hex: String,
+    client: iroha::blocking::Client,
 }
 impl DaPublisher {
     /// Build a publisher using CLI config (Torii URL + basic auth).
@@ -351,73 +344,26 @@ fn parse_header_value(value: &HeaderValue) -> Result<String> {
         .map_err(|err| eyre!("invalid {HEADER_SORA_PDP_COMMITMENT} header: {err}"))
 }
 impl DaManifestFetcher {
-    pub(super) fn new(config: &Config, endpoint_override: Option<&str>) -> Result<Self> {
-        let endpoint = if let Some(url) = endpoint_override {
-            Url::parse(url).map_err(|err| eyre!("invalid DA manifest endpoint `{url}`: {err}"))?
-        } else {
-            config
-                .torii_api_url
-                .join("v1/da/manifests/")
-                .wrap_err("failed to derive /v1/da/manifests from torii_api_url")?
-        };
-        let client = HttpClient::builder()
-            .build()
-            .wrap_err("failed to build HTTP client for DA manifest fetch")?;
-        let basic_auth = config.basic_auth.as_ref().map(|auth| {
-            (
-                auth.web_login.as_str().to_owned(),
-                auth.password.expose_secret().to_owned(),
-            )
-        });
+    pub(super) fn new(config: &Config, torii_url: Option<&str>) -> Result<Self> {
+        let mut config = config.clone();
+        if let Some(url) = torii_url {
+            config.torii_api_url =
+                Url::parse(url).wrap_err("invalid Torii base URL for DA manifest fetch")?;
+        }
         Ok(Self {
-            client,
-            endpoint,
-            basic_auth,
+            client: iroha::blocking::Client::new(config)?,
         })
     }
-    pub(super) fn fetch(&self, ticket_hex: &str) -> Result<DaManifestFetchBundle> {
-        let url = self
-            .endpoint
-            .join(ticket_hex)
-            .wrap_err("failed to build DA manifest fetch URL")?;
-        let mut request = self.client.get(url).header(ACCEPT, "application/json");
-        if let Some((ref login, ref password)) = self.basic_auth {
-            request = request.basic_auth(login, Some(password));
-        }
-        let response = request
-            .send()
-            .wrap_err("failed to fetch DA manifest from Torii")?;
-        let status = response.status();
-        let bytes = response
-            .bytes()
-            .wrap_err("failed to read DA manifest response body")?
-            .to_vec();
-        if !status.is_success() {
-            let preview = String::from_utf8_lossy(&bytes);
-            return Err(eyre!(
-                "Torii /v1/da/manifests responded with {}: {}",
-                status,
-                preview
-            ));
-        }
-        let value: Value = norito::json::from_slice(&bytes)
-            .map_err(|err| eyre!("failed to parse DA manifest response: {err}"))?;
-        let parsed = DaManifestBundle::from_json(&value)
-            .map_err(|err| eyre!("failed to decode DA manifest bundle: {err}"))?;
-        let manifest_bytes = parsed.manifest_bytes.clone();
-        let manifest_json = parsed.manifest_json.clone();
-        let chunk_plan = parsed.chunk_plan.clone();
-        let storage_ticket_hex = parsed.storage_ticket_hex;
-        let manifest_hash_hex = parsed.manifest_hash_hex;
-        let blob_hash_hex = parsed.blob_hash_hex;
-        Ok(DaManifestFetchBundle {
-            manifest_bytes,
-            manifest_json,
-            chunk_plan,
-            storage_ticket_hex,
-            manifest_hash_hex,
-            blob_hash_hex,
-        })
+
+    pub(super) fn fetch(&self, ticket_hex: &str) -> Result<DaManifestBundle> {
+        let mut ticket = [0; 32];
+        hex::decode_to_slice(ticket_hex, &mut ticket)
+            .wrap_err("storage ticket must be a 32-byte hex string")?;
+        let response = self
+            .client
+            .da()
+            .manifest(&iroha_data_model::da::types::StorageTicketId::new(ticket))?;
+        DaManifestBundle::try_from(response)
     }
 }
 /// Convert a JSON metadata map into the Norito `ExtraMetadata` structure.

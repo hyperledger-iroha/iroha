@@ -10,164 +10,19 @@ use iroha_core::da::{
     ActiveLaneProofPolicyContext, active_proof_policy_bundle_at_height, build_da_commitment_proof,
     commitment_store::DaCommitmentStore, verify_da_commitment_proof,
 };
-use iroha_crypto::HashOf;
-use iroha_data_model::{
-    block::BlockHeader,
-    da::commitment::{
-        DaCommitmentKey, DaCommitmentProof, DaCommitmentWithLocation, DaProofPolicyBundle,
-        DaProofScheme,
-    },
-    sorafs::pin_registry::ManifestDigest,
+use iroha_data_model::da::commitment::{
+    DaCommitmentKey, DaCommitmentProof, DaCommitmentWithLocation, DaProofPolicyBundle,
 };
-use std::num::{NonZeroU64, NonZeroUsize};
+use iroha_torii_shared::da::{
+    DaCommitmentListCursor, DaCommitmentListRequest, DaCommitmentListResponse,
+    DaCommitmentProofRequest, DaCommitmentProofResponse, DaCommitmentVerifyResponse,
+    DaListSnapshot, DaQueryValidationError,
+};
+use std::num::NonZeroUsize;
 const ENDPOINT_DA_COMMITMENTS: &str = "/v1/da/commitments";
 const ENDPOINT_DA_COMMITMENTS_PROVE: &str = "/v1/da/commitments/prove";
 const ENDPOINT_DA_COMMITMENTS_VERIFY: &str = "/v1/da/commitments/verify";
 const ENDPOINT_DA_PROOF_POLICIES: &str = "/v1/da/proof-policies";
-const ENDPOINT_DA_PROOF_POLICY_SNAPSHOT: &str = "/v1/da/proof-policies/snapshot";
-/// Maximum accepted body size for commitment list, prove, and verify requests.
-pub(crate) const DA_COMMITMENT_REQUEST_MAX_BYTES: usize = 64 * 1024;
-const DEFAULT_COMMITMENT_PAGE_SIZE: usize = 100;
-const MAX_COMMITMENT_PAGE_SIZE: usize = 1_000;
-/// Canonical ledger tip that binds a DA list cursor to one immutable view.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::commitments::DaListSnapshot")]
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
-pub struct DaListSnapshot {
-    /// Committed chain height observed while constructing the page.
-    pub block_height: u64,
-    /// Hash of the block at `block_height`, absent only for the empty chain.
-    #[norito(default)]
-    pub block_hash: Option<HashOf<BlockHeader>>,
-}
-impl DaListSnapshot {
-    pub(super) fn is_canonical(self) -> bool {
-        (self.block_height == 0) == self.block_hash.is_none()
-    }
-}
-/// Forward-only cursor for canonically ordered DA commitments.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentListCursor")]
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
-pub struct DaCommitmentListCursor {
-    /// Immutable ledger view this cursor was issued against.
-    pub snapshot: DaListSnapshot,
-    /// Last raw commitment examined in `(lane_id, epoch, sequence)` order.
-    pub after: DaCommitmentKey,
-}
-/// Request payload for bounded DA commitment traversal.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentListRequest")]
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
-
-pub struct DaCommitmentListRequest {
-    /// Maximum raw index rows to inspect; values above 1,000 are rejected.
-    #[norito(default)]
-    pub limit: Option<NonZeroU64>,
-    /// Server-issued continuation cursor from the preceding page.
-    #[norito(default)]
-    pub cursor: Option<DaCommitmentListCursor>,
-}
-/// Exact selector used to generate one DA commitment proof.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentProofRequest")]
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
-
-pub struct DaCommitmentProofRequest {
-    #[norito(default)]
-    pub manifest_hash: Option<ManifestDigest>,
-    #[norito(default)]
-    pub lane_id: Option<u32>,
-    #[norito(default)]
-    pub epoch: Option<u64>,
-    #[norito(default)]
-    pub sequence: Option<u64>,
-}
-/// Response surface for DA commitment listings.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentListResponse")]
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
-pub struct DaCommitmentListResponse {
-    pub policies: DaProofPolicyBundle,
-    pub commitments: Vec<DaCommitmentWithLocation>,
-    /// Cursor for the next bounded scan, or `None` when the ordered index is exhausted.
-    #[norito(default)]
-    pub next_cursor: Option<DaCommitmentListCursor>,
-}
-/// Response surface for DA commitment proofs.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentProofResponse")]
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
-pub struct DaCommitmentProofResponse {
-    pub policies: DaProofPolicyBundle,
-    pub proof: DaCommitmentProof,
-}
-/// Verification response for a DA commitment Merkle proof.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentVerifyResponse")]
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
-pub struct DaCommitmentVerifyResponse {
-    pub valid: bool,
-    #[norito(default)]
-    pub error: Option<String>,
-}
 /// HTTP handler for `/v1/da/commitments`.
 pub async fn handler_list_commitments(
     State(app): State<SharedAppState>,
@@ -197,6 +52,12 @@ pub async fn handler_prove_commitment(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<DaCommitmentProofRequest>,
 ) -> Result<JsonBody<Option<DaCommitmentProofResponse>>, Error> {
+    request
+        .validate()
+        .map_err(|error| Error::AppQueryValidation {
+            code: "invalid_da_commitment_selector",
+            message: error.to_string(),
+        })?;
     let nexus = app.state.nexus_snapshot();
     let proof = build_active_proof_from_state(&request, &nexus, app.state.as_ref());
     proof.map_or_else(
@@ -225,14 +86,6 @@ pub async fn handler_list_proof_policies(
     let policies = active_proof_policy_bundle_for_state(&nexus, app.state.as_ref());
     Ok(JsonBody(policies))
 }
-/// HTTP handler for `/v1/da/proof-policies/snapshot`.
-pub async fn handler_proof_policy_bundle(
-    State(app): State<SharedAppState>,
-) -> Result<JsonBody<DaProofPolicyBundle>, Error> {
-    let nexus = app.state.nexus_snapshot();
-    let bundle = active_proof_policy_bundle_for_state(&nexus, app.state.as_ref());
-    Ok(JsonBody(bundle))
-}
 fn active_proof_policy_bundle_for_state(
     nexus: &Nexus,
     state: &iroha_core::state::State,
@@ -248,22 +101,19 @@ pub(super) fn list_snapshot_for_state(state: &iroha_core::state::State) -> DaLis
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DaCommitmentListError {
-    LimitOutOfRange { provided: u64 },
-    NonCanonicalSnapshot,
+    InvalidRequest(DaQueryValidationError),
     StaleSnapshot,
     UnknownKey,
 }
 fn commitment_list_error(error: DaCommitmentListError) -> Error {
     let (code, message) = match error {
-        DaCommitmentListError::LimitOutOfRange { provided } => (
-            "invalid_da_commitment_limit",
-            format!(
-                "DA commitment list limit is {provided}; maximum is {MAX_COMMITMENT_PAGE_SIZE}"
-            ),
-        ),
-        DaCommitmentListError::NonCanonicalSnapshot => (
-            "invalid_da_commitment_cursor",
-            "DA commitment cursor snapshot must contain no block hash at height 0 and exactly one block hash at non-zero height".to_owned(),
+        DaCommitmentListError::InvalidRequest(error) => (
+            if matches!(error, DaQueryValidationError::LimitOutOfRange { .. }) {
+                "invalid_da_commitment_limit"
+            } else {
+                "invalid_da_commitment_cursor"
+            },
+            error.to_string(),
         ),
         DaCommitmentListError::StaleSnapshot => (
             "stale_da_commitment_cursor",
@@ -299,18 +149,9 @@ fn list_page_from_store(
     mut is_visible: impl FnMut(&DaCommitmentWithLocation) -> bool,
 ) -> Result<DaCommitmentPage, DaCommitmentListError> {
     let limit = request
-        .limit
-        .map_or(Ok(DEFAULT_COMMITMENT_PAGE_SIZE), |limit| {
-            let provided = limit.get();
-            usize::try_from(provided)
-                .ok()
-                .filter(|&limit| limit <= MAX_COMMITMENT_PAGE_SIZE)
-                .ok_or(DaCommitmentListError::LimitOutOfRange { provided })
-        })?;
+        .page_size()
+        .map_err(DaCommitmentListError::InvalidRequest)?;
     let after = request.cursor.map(|cursor| {
-        if !cursor.snapshot.is_canonical() {
-            return Err(DaCommitmentListError::NonCanonicalSnapshot);
-        }
         if cursor.snapshot != snapshot {
             return Err(DaCommitmentListError::StaleSnapshot);
         }
@@ -495,9 +336,15 @@ mod tests {
             types::{BlobDigest, StorageTicketId},
         },
         nexus::{LaneCatalog, LaneConfig as ModelLaneConfig},
+        sorafs::pin_registry::ManifestDigest,
     };
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-    use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc};
+    use iroha_torii_shared::da::{DA_QUERY_REQUEST_MAX_BYTES, MAX_DA_QUERY_PAGE_SIZE};
+    use std::{
+        collections::BTreeMap,
+        num::{NonZeroU32, NonZeroU64},
+        sync::Arc,
+    };
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm, context: &str) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{context}: checked random {algorithm:?} key generation failed: {err}")
@@ -560,25 +407,24 @@ mod tests {
         }
     }
     fn install_stale_runtime_lane_geometry(app: &crate::SharedAppState, stale_lane: LaneId) {
-        let authoritative_catalog =
-            lane_catalog_with_entries(&[(LaneId::new(0), DaProofScheme::MerkleSha256)]);
+        assert!(
+            app.state.nexus_snapshot().lane_config.entry(stale_lane).is_none(),
+            "the removed lane must be absent from authoritative runtime state"
+        );
         let stale_geometry_catalog = lane_catalog_with_entries(&[
             (LaneId::new(0), DaProofScheme::MerkleSha256),
             (stale_lane, DaProofScheme::MerkleSha256),
         ]);
         let mut nexus = app.state.nexus.write();
-        nexus.lane_catalog = authoritative_catalog;
         nexus.lane_config = ConfigLaneConfig::from_catalog(&stale_geometry_catalog);
         assert!(
             nexus.lane_config.entry(stale_lane).is_some(),
             "fixture must keep stale runtime geometry for the removed lane"
         );
+        drop(nexus);
+        assert!(app.state.nexus_snapshot().lane_config.entry(stale_lane).is_none());
     }
-    fn install_future_created_autoscale_lane(
-        app: &crate::SharedAppState,
-        lane_id: LaneId,
-        created_height: u64,
-    ) {
+    fn future_created_autoscale_nexus(lane_id: LaneId, created_height: u64) -> Nexus {
         let mut elastic_lane = ModelLaneConfig {
             id: lane_id,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -598,15 +444,33 @@ mod tests {
             vec![ModelLaneConfig::default(), elastic_lane],
         )
         .expect("future-created autoscale lane catalog");
-        let mut nexus = app.state.nexus.write();
+        // A synthetic policy input, never admitted as committed State: real
+        // lifecycle admission rejects a future creation height at the current tip.
+        let mut nexus = Nexus::default();
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
         nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
         nexus.lane_config = ConfigLaneConfig::from_catalog(&lane_catalog);
         nexus.lane_catalog = lane_catalog;
+        nexus
     }
-    fn app_with_da_commitment_bundle(records: Vec<DaCommitmentRecord>) -> crate::SharedAppState {
-        let mut app = mk_app_state_for_tests();
+    fn install_uncommitted_autoscale_overlay(app: &crate::SharedAppState, lane_id: LaneId) {
+        let overlay = future_created_autoscale_nexus(lane_id, 7);
+        {
+            let mut nexus = app.state.nexus.write();
+            nexus.autoscale = overlay.autoscale;
+            nexus.lane_config = overlay.lane_config;
+            nexus.lane_catalog = overlay.lane_catalog;
+            assert!(nexus.lane_catalog.lanes().iter().any(|lane| {
+                lane.id == lane_id && lane.autoscale_created_height() == Some(7)
+            }));
+        }
+        let canonical = app.state.nexus_snapshot();
+        assert!(!canonical.autoscale.enabled);
+        assert!(canonical.lane_config.entry(lane_id).is_none());
+        assert!(!canonical.lane_catalog.lanes().iter().any(|lane| lane.id == lane_id));
+    }
+    fn nexus_for_records(records: &[DaCommitmentRecord]) -> Nexus {
         let mut lane_entries = BTreeMap::from([(LaneId::new(0), DaProofScheme::MerkleSha256)]);
         lane_entries.extend(
             records
@@ -614,15 +478,34 @@ mod tests {
                 .map(|record| (record.lane_id, record.proof_scheme)),
         );
         let lane_entries = lane_entries.into_iter().collect::<Vec<_>>();
-        {
-            let app = Arc::get_mut(&mut app).expect("unique app state");
-            let state = Arc::get_mut(&mut app.state).expect("unique core state");
-            let mut nexus_cfg = state.nexus_snapshot();
-            nexus_cfg.lane_catalog = lane_catalog_with_entries(&lane_entries);
-            state
-                .set_nexus(nexus_cfg)
-                .expect("seed Nexus DA lane policy for tests");
+        let lane_catalog = lane_catalog_with_entries(&lane_entries);
+        Nexus {
+            lane_config: ConfigLaneConfig::from_catalog(&lane_catalog),
+            configured_lane_catalog: lane_catalog.clone(),
+            lane_catalog,
+            ..Nexus::default()
         }
+    }
+    fn app_with_da_commitment_bundle(records: Vec<DaCommitmentRecord>) -> crate::SharedAppState {
+        let current_nexus = nexus_for_records(&records);
+        app_with_historical_commitments(records, current_nexus)
+    }
+    fn app_with_historical_commitments(
+        records: Vec<DaCommitmentRecord>,
+        current_nexus: Nexus,
+    ) -> crate::SharedAppState {
+        // Historical policy sidecars belong to their signed block, independently
+        // of whether a lane still exists in the current authoritative catalog.
+        let committed_policies = active_proof_policy_bundle_at_height(&nexus_for_records(&records), 1);
+        for record in &records {
+            assert!(committed_policies.policies.iter().any(|policy| policy.lane_id == record.lane_id));
+        }
+        // Kura and State must authenticate the intended catalog before any DA
+        // block is seeded; the configured baseline is immutable after startup.
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+            iroha_core::state::World::default(),
+            current_nexus,
+        );
         let bundle = DaCommitmentBundle::new(records);
         let bundle_for_store = bundle.clone();
         let keypair = checked_random_keypair_with_algorithm(
@@ -637,8 +520,6 @@ mod tests {
             0,
         );
         let mut builder = BlockBuilder::new(header);
-        let committed_policies =
-            active_proof_policy_bundle_at_height(&app.state.nexus_snapshot(), 1);
         builder.set_da_proof_policies(Some(committed_policies));
         builder.set_da_commitments(Some(bundle));
         let block = builder.build_with_signature(0, keypair.private_key());
@@ -737,13 +618,18 @@ mod tests {
             block_hash: None,
         };
         let examined = Cell::new(0_usize);
-        let provided = u64::try_from(MAX_COMMITMENT_PAGE_SIZE).expect("page limit fits u64") + 1;
+        let provided = u64::try_from(MAX_DA_QUERY_PAGE_SIZE).expect("page limit fits u64") + 1;
         let error = list_page_from_store(&store, &list_request(Some(provided)), snapshot, |_| {
             examined.set(examined.get() + 1);
             true
         })
         .expect_err("limit above the exact maximum must be rejected");
-        assert_eq!(error, DaCommitmentListError::LimitOutOfRange { provided });
+        assert_eq!(
+            error,
+            DaCommitmentListError::InvalidRequest(DaQueryValidationError::LimitOutOfRange {
+                provided
+            })
+        );
         assert_eq!(
             examined.get(),
             0,
@@ -753,7 +639,9 @@ mod tests {
         assert_eq!(
             list_page_from_store(&store, &list_request(Some(u64::MAX)), snapshot, |_| true)
                 .expect_err("unrepresentable or overlarge limits must be rejected"),
-            DaCommitmentListError::LimitOutOfRange { provided: u64::MAX }
+            DaCommitmentListError::InvalidRequest(DaQueryValidationError::LimitOutOfRange {
+                provided: u64::MAX
+            })
         );
     }
     #[test]
@@ -830,7 +718,7 @@ mod tests {
         assert_eq!(
             list_page_from_store(&store, &request, snapshot, |_| true)
                 .expect_err("malformed snapshot must fail closed"),
-            DaCommitmentListError::NonCanonicalSnapshot
+            DaCommitmentListError::InvalidRequest(DaQueryValidationError::NonCanonicalSnapshot)
         );
     }
     #[test]
@@ -947,6 +835,32 @@ mod tests {
         };
         assert!(build_proof_from_store(&store, &wrong_sequence).is_none());
     }
+
+    #[tokio::test]
+    async fn proof_handler_rejects_missing_or_partial_selectors() {
+        for request in [
+            DaCommitmentProofRequest::default(),
+            DaCommitmentProofRequest {
+                lane_id: Some(4),
+                epoch: Some(9),
+                ..DaCommitmentProofRequest::default()
+            },
+        ] {
+            let error = super::handler_prove_commitment(
+                State(crate::mk_app_state_for_tests()),
+                NoritoJson(request),
+            )
+            .await
+            .expect_err("incomplete selector must fail before index lookup");
+            assert!(matches!(
+                error,
+                Error::AppQueryValidation {
+                    code: "invalid_da_commitment_selector",
+                    ..
+                }
+            ));
+        }
+    }
     #[tokio::test]
     async fn list_handler_includes_policy_bundle() {
         let app = mk_app_state_for_tests();
@@ -960,7 +874,7 @@ mod tests {
     #[tokio::test]
     async fn list_handler_enforces_exact_limit_maximum() {
         let app = mk_app_state_for_tests();
-        let accepted = u64::try_from(MAX_COMMITMENT_PAGE_SIZE).expect("page limit fits u64");
+        let accepted = u64::try_from(MAX_DA_QUERY_PAGE_SIZE).expect("page limit fits u64");
         let JsonBody(page) = super::handler_list_commitments(
             State(app.clone()),
             NoritoJson(list_request(Some(accepted))),
@@ -1032,9 +946,9 @@ mod tests {
         assert_eq!(first.proof_scheme, primary.proof_scheme);
     }
     #[tokio::test]
-    async fn proof_policy_bundle_handler_exposes_hash() {
+    async fn proof_policy_handler_exposes_hash() {
         let app = mk_app_state_for_tests();
-        let JsonBody(bundle) = super::handler_proof_policy_bundle(State(app.clone()))
+        let JsonBody(bundle) = super::handler_list_proof_policies(State(app.clone()))
             .await
             .expect("handler should succeed");
         assert!(
@@ -1045,11 +959,11 @@ mod tests {
         assert_ne!(bundle.policy_hash, Hash::prehashed([0; 32]));
     }
     #[tokio::test]
-    async fn proof_policy_handlers_ignore_stale_runtime_lane_geometry() {
+    async fn proof_policy_handler_ignores_stale_runtime_lane_geometry() {
         let app = mk_app_state_for_tests();
         let stale_lane = LaneId::new(1);
         install_stale_runtime_lane_geometry(&app, stale_lane);
-        let JsonBody(bundle) = super::handler_proof_policy_bundle(State(app.clone()))
+        let JsonBody(bundle) = super::handler_list_proof_policies(State(app.clone()))
             .await
             .expect("handler should succeed");
         assert!(
@@ -1072,7 +986,7 @@ mod tests {
         let stale_lane = LaneId::new(1);
         let records = vec![sample_record(stale_lane.as_u32(), 1, 1)];
         let manifest = records[0].manifest_hash;
-        let app = app_with_da_commitment_bundle(records);
+        let app = app_with_historical_commitments(records, nexus_for_records(&[]));
         install_stale_runtime_lane_geometry(&app, stale_lane);
         let JsonBody(list_response) = super::handler_list_commitments(
             State(app.clone()),
@@ -1098,12 +1012,35 @@ mod tests {
             "stale runtime-only lane commitments must not produce proofs"
         );
     }
+    #[test]
+    fn synthetic_autoscale_policy_and_store_filter_by_creation_height() {
+        let lane = LaneId::new(1);
+        let nexus = future_created_autoscale_nexus(lane, 7);
+        let context = ActiveLaneProofPolicyContext::new(&nexus);
+        assert!(context.policy_at_height(lane, 6).is_err());
+        assert!(context.policy_at_height(lane, 7).is_ok());
+        let mut store = DaCommitmentStore::from_bundle_at_height(&[sample_record(1, 1, 1)], 6);
+        store.insert_bundle(7, DaCommitmentBundle::new(vec![sample_record(1, 2, 2)]));
+        let page = list_active_from_store(
+            &store,
+            &DaCommitmentListRequest::default(),
+            &nexus,
+            DaListSnapshot {
+                block_height: 7,
+                block_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed([0x71; 32]))),
+            },
+        ).expect("synthetic policy page");
+        assert_eq!(page.commitments.len(), 1);
+        assert_eq!(page.commitments[0].location.block_height, 7);
+        assert!(!active_proof_policy_bundle_at_height(&nexus, 6).policies.iter().any(|policy| policy.lane_id == lane));
+        assert!(active_proof_policy_bundle_at_height(&nexus, 7).policies.iter().any(|policy| policy.lane_id == lane));
+    }
     #[tokio::test]
-    async fn proof_policy_handlers_hide_future_created_autoscale_lane() {
+    async fn proof_policy_handler_ignores_uncommitted_autoscale_overlay() {
         let lane = LaneId::new(1);
         let app = app_with_da_commitment_bundle(vec![sample_record(0, 1, 1)]);
-        install_future_created_autoscale_lane(&app, lane, 7);
-        let JsonBody(bundle) = super::handler_proof_policy_bundle(State(app.clone()))
+        install_uncommitted_autoscale_overlay(&app, lane);
+        let JsonBody(bundle) = super::handler_list_proof_policies(State(app.clone()))
             .await
             .expect("handler should succeed");
         assert!(
@@ -1115,16 +1052,16 @@ mod tests {
         );
         assert!(
             !bundle.policies.iter().any(|policy| policy.lane_id == lane),
-            "future-created autoscale lane must not appear before its creation height"
+            "an uncommitted autoscale overlay must not introduce an authoritative policy"
         );
     }
     #[tokio::test]
-    async fn commitment_handlers_hide_future_created_autoscale_lane_records() {
+    async fn commitment_handlers_ignore_uncommitted_autoscale_overlay() {
         let lane = LaneId::new(1);
         let records = vec![sample_record(lane.as_u32(), 1, 1)];
         let manifest = records[0].manifest_hash;
-        let app = app_with_da_commitment_bundle(records);
-        install_future_created_autoscale_lane(&app, lane, 7);
+        let app = app_with_historical_commitments(records, nexus_for_records(&[]));
+        install_uncommitted_autoscale_overlay(&app, lane);
         let JsonBody(list_response) = super::handler_list_commitments(
             State(app.clone()),
             NoritoJson(DaCommitmentListRequest::default()),
@@ -1133,7 +1070,7 @@ mod tests {
         .expect("list handler should succeed");
         assert!(
             list_response.commitments.is_empty(),
-            "future-created autoscale lane commitments must not be listed before creation height"
+            "an uncommitted overlay must not expose a historical lane's commitments"
         );
         assert!(
             !list_response
@@ -1141,19 +1078,19 @@ mod tests {
                 .policies
                 .iter()
                 .any(|policy| policy.lane_id == lane),
-            "list response policies must also hide the future-created lane"
+            "list response policies must also ignore the uncommitted lane"
         );
         let request = DaCommitmentProofRequest {
             manifest_hash: Some(manifest),
             ..DaCommitmentProofRequest::default()
         };
         let JsonBody(proof_response) =
-            super::handler_prove_commitment(State(app.clone()), NoritoJson(request.clone()))
+            super::handler_prove_commitment(State(app.clone()), NoritoJson(request))
                 .await
                 .expect("proof handler should succeed");
         assert!(
             proof_response.is_none(),
-            "future-created autoscale lane commitments must not produce public proofs"
+            "an uncommitted overlay must not authorize public proofs for a historical lane"
         );
         let proof = {
             let store = app.state.da_commitments();
@@ -1383,15 +1320,21 @@ mod tests {
         let mut proof = prove_for_manifest(app.clone(), manifest).await;
         proof.bundle_hash =
             HashOf::<DaCommitmentBundle>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
-        verify_invalid(app, proof, "DA commitment bundle hash mismatch").await;
+        verify_invalid(app, proof, "DA commitment tree descriptor mismatch").await;
     }
     #[tokio::test]
     async fn verify_handler_uses_historical_policy_after_lane_removal() {
         let stale_lane = LaneId::new(1);
         let records = vec![sample_record(stale_lane.as_u32(), 1, 1)];
         let manifest = records[0].manifest_hash;
-        let app = app_with_da_commitment_bundle(records);
-        let proof = prove_for_manifest(app.clone(), manifest).await;
+        let app = app_with_historical_commitments(records, nexus_for_records(&[]));
+        let proof = build_proof_from_store(
+            &app.state.da_commitments(),
+            &DaCommitmentProofRequest {
+                manifest_hash: Some(manifest),
+                ..DaCommitmentProofRequest::default()
+            },
+        ).expect("historical signed bundle must still have a proof after current lane removal");
         install_stale_runtime_lane_geometry(&app, stale_lane);
         let JsonBody(verification) =
             super::handler_verify_commitment(State(app), NoritoJson(proof))
@@ -1434,17 +1377,17 @@ mod tests {
             .route(
                 ENDPOINT_DA_COMMITMENTS,
                 post(super::handler_list_commitments)
-                    .layer(DefaultBodyLimit::max(DA_COMMITMENT_REQUEST_MAX_BYTES)),
+                    .layer(DefaultBodyLimit::max(DA_QUERY_REQUEST_MAX_BYTES)),
             )
             .route(
                 ENDPOINT_DA_COMMITMENTS_PROVE,
                 post(super::handler_prove_commitment)
-                    .layer(DefaultBodyLimit::max(DA_COMMITMENT_REQUEST_MAX_BYTES)),
+                    .layer(DefaultBodyLimit::max(DA_QUERY_REQUEST_MAX_BYTES)),
             )
             .route(
                 ENDPOINT_DA_COMMITMENTS_VERIFY,
                 post(super::handler_verify_commitment)
-                    .layer(DefaultBodyLimit::max(DA_COMMITMENT_REQUEST_MAX_BYTES)),
+                    .layer(DefaultBodyLimit::max(DA_QUERY_REQUEST_MAX_BYTES)),
             )
             .with_state(app);
         for path in [
@@ -1456,7 +1399,7 @@ mod tests {
                 .method(Method::POST)
                 .uri(path)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(vec![b' '; DA_COMMITMENT_REQUEST_MAX_BYTES + 1]))
+                .body(Body::from(vec![b' '; DA_QUERY_REQUEST_MAX_BYTES + 1]))
                 .expect("oversized request");
             let response = router.clone().oneshot(request).await.expect("response");
             assert_eq!(

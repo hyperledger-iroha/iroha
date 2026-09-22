@@ -7897,14 +7897,25 @@
         "additionalProperties": false,
         "properties": {
           "cursor": {
-            "$ref": "#/components/schemas/DaCommitmentListCursor"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DaCommitmentListCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "limit": {
             "default": 100,
-            "description": "Maximum raw index rows to inspect. Defaults to 100; larger values are capped at 1,000. Filtered rows still consume the bound.",
+            "description": "Maximum raw index rows to inspect. Defaults to 100; values above 1,000 are rejected. Filtered or inactive rows still consume the bound.",
             "format": "uint64",
+            "maximum": 1000,
             "minimum": 1,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -8024,21 +8035,76 @@
       },
       "DaCommitmentProofRequest": {
         "additionalProperties": false,
+        "anyOf": [
+          {
+            "properties": {
+              "manifest_hash": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "manifest_hash"
+            ]
+          },
+          {
+            "properties": {
+              "epoch": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "lane_id": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "sequence": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "lane_id",
+              "epoch",
+              "sequence"
+            ]
+          }
+        ],
+        "description": "Identifies one exact record using a named selector or a complete lane_id, epoch and sequence. All supplied non-null selectors constrain the same record.",
         "properties": {
           "epoch": {
             "format": "uint64",
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "lane_id": {
             "format": "uint32",
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "manifest_hash": {
-            "$ref": "#/components/schemas/DaDigest32"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DaDigest32"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sequence": {
             "format": "uint64",
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -8318,14 +8384,25 @@
         "additionalProperties": false,
         "properties": {
           "cursor": {
-            "$ref": "#/components/schemas/DaPinIntentListCursor"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DaPinIntentListCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "limit": {
             "default": 100,
-            "description": "Maximum raw index rows to inspect. Defaults to 100; larger values are capped at 1,000. Filtered or inactive rows still consume the bound.",
+            "description": "Maximum raw index rows to inspect. Defaults to 100; values above 1,000 are rejected. Filtered or inactive rows still consume the bound.",
             "format": "uint64",
+            "maximum": 1000,
             "minimum": 1,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -8412,30 +8489,119 @@
       },
       "DaPinIntentQueryRequest": {
         "additionalProperties": false,
+        "anyOf": [
+          {
+            "properties": {
+              "manifest_hash": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "manifest_hash"
+            ]
+          },
+          {
+            "properties": {
+              "storage_ticket": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "storage_ticket"
+            ]
+          },
+          {
+            "properties": {
+              "alias": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "alias"
+            ]
+          },
+          {
+            "properties": {
+              "epoch": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "lane_id": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "sequence": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "lane_id",
+              "epoch",
+              "sequence"
+            ]
+          }
+        ],
+        "description": "Identifies one exact record using a named selector or a complete lane_id, epoch and sequence. All supplied non-null selectors constrain the same record.",
         "properties": {
           "alias": {
             "description": "Pin-alias lookup key; at most 256 UTF-8 bytes.",
             "maxLength": 256,
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "x-iroha-maxUtf8Bytes": 256
           },
           "epoch": {
             "format": "uint64",
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "lane_id": {
             "format": "uint32",
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "manifest_hash": {
-            "$ref": "#/components/schemas/DaDigest32"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DaDigest32"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sequence": {
             "format": "uint64",
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "storage_ticket": {
-            "$ref": "#/components/schemas/DaDigest32"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DaDigest32"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"
@@ -64519,7 +64685,7 @@
     },
     "/v1/da/proof-policies": {
       "get": {
-        "description": "Return the configured DA proof policy set.",
+        "description": "Return the active DA proof-policy bundle with its canonical policy hash. Historical proof verification uses the policy sidecar committed by the referenced block.",
         "operationId": "daProofPoliciesList",
         "responses": {
           "200": {
@@ -64548,41 +64714,6 @@
           "authentication": "torii_default",
           "schemaVersion": 1,
           "stableRouteId": "data_availability.proof_policy.list"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/da/proof-policies/snapshot": {
-      "get": {
-        "description": "Return the active DA proof policy snapshot bundle.",
-        "operationId": "daProofPolicySnapshot",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DaProofPolicyBundle"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaApiToken": []
-          }
-        ],
-        "summary": "Fetch the DA proof policy snapshot.",
-        "tags": [
-          "DataAvailability"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
-          "schemaVersion": 1,
-          "stableRouteId": "data_availability.proof_policy.snapshot"
         },
         "x-iroha-tool-effect": "read"
       }

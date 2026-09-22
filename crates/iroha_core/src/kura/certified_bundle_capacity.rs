@@ -2509,7 +2509,7 @@ impl Kura {
         let (terminal_reserved_bytes, lane_publication_reserved_bytes) = if configured_capacity {
             (
                 self.autonomous_global_terminal_outcome_reserved_bytes_locked()?,
-                self.lane_publication_budget_reserved_bytes()?,
+                self.all_publication_budget_reserved_bytes()?,
             )
         } else {
             (0, 0)
@@ -2908,7 +2908,7 @@ impl Kura {
                 let pending_block_bytes =
                     self.pending_block_bytes(persisted_count, unindexed_bytes)?;
                 let terminal = self.autonomous_global_terminal_outcome_reserved_bytes()?;
-                let post_wsv = self.lane_publication_budget_reserved_bytes()?;
+                let post_wsv = self.all_publication_budget_reserved_bytes()?;
                 let required = used
                     .checked_add(pending_block_bytes)
                     .and_then(|bytes| bytes.checked_add(terminal))

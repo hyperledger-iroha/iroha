@@ -6,6 +6,7 @@ mod fastpq_artifact_store;
 mod kagemusha_finality_decode;
 mod lane_geometry;
 mod lane_storage;
+mod membership_storage;
 mod snapshot_hash_journal;
 use crate::lane_consensus::{
     CommittedLaneBlockSession, DurableLaneBlockNewViewCertificateV1,
@@ -166,6 +167,10 @@ pub(crate) use lane_geometry::{
 };
 use lane_storage::LaneStorageEntry;
 pub use lane_storage::LaneStorageIdentity;
+pub(crate) use membership_storage::MEMBERSHIP_RECORD_BYTES;
+pub use membership_storage::{
+    MembershipAppendCleanup, MembershipAppendRange, MembershipStorageError,
+};
 #[cfg(test)]
 use norito::core::{Header, MAGIC};
 use norito::{
@@ -637,6 +642,7 @@ pub(crate) use publication_lease::{
 pub struct Kura {
     /// One finite pool shared by every State hash generation using this store.
     block_hash_history_budget: mv::allocation::AllocationBudget,
+    membership_storage: membership_storage::MembershipStorage,
     /// Exact owner-published resident and physical resources; never consensus authority.
     resource_inventory: Arc<resource_inventory::Inventory>,
     /// Process-local identity shared with sealed lifecycle storage authority.
@@ -2603,6 +2609,15 @@ impl Kura {
                     configured_store_dir.clone(),
                 )
             })?;
+        let membership_storage = membership_storage::MembershipStorage::new(
+            config.membership_storage,
+        )
+        .map_err(|error| {
+            Error::IO(
+                std::io::Error::new(ErrorKind::InvalidInput, error),
+                configured_store_dir.clone(),
+            )
+        })?;
         config.fastpq_artifacts.validate().map_err(|error| {
             Error::IO(
                 std::io::Error::new(ErrorKind::InvalidInput, error.to_string()),
@@ -3024,6 +3039,7 @@ impl Kura {
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
         let kura = Arc::new(Self {
             block_hash_history_budget: mv::allocation::AllocationBudget::new(history_bytes),
+            membership_storage,
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
             #[cfg(test)]
@@ -3427,6 +3443,10 @@ impl Kura {
             .expect("default Native AMX prune-intent bound is valid");
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
         Arc::new(Self {
+            membership_storage: membership_storage::MembershipStorage::new(
+                iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
+            )
+            .expect("default finite membership control fits its original pool"),
             block_hash_history_budget: mv::allocation::AllocationBudget::new(
                 usize::try_from(
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES.get(),
@@ -18410,6 +18430,9 @@ impl Kura {
         let retired_geometry_root = retired_root.join("lane_geometry");
         let mut used = 0u64;
         used = used.saturating_add(Self::merge_root_bytes(&merge_root)?);
+        used = used.saturating_add(Self::file_len_or_zero(
+            &self.store_root.join(membership_storage::SEGMENT_NAME),
+        )?);
         used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(&retired_geometry_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(
@@ -18796,7 +18819,7 @@ impl Kura {
             })?;
         let association_stage_bytes =
             self.canonical_association_stage_additional_bytes(block, merge_entry)?;
-        let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;
+        let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;
         let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
         let autonomous_terminal_reservations =
             self.autonomous_global_terminal_outcome_reserved_bytes()?;
@@ -18899,7 +18922,7 @@ impl Kura {
         }
         pending_raw_after = pending_raw_after.saturating_add(new_bytes);
         let pending_current = pending_raw.saturating_sub(unindexed_bytes);
-        let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;
+        let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;
         let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
         let autonomous_terminal_reservations =
             self.autonomous_global_terminal_outcome_reserved_bytes()?;

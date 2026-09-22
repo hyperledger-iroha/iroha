@@ -44550,22 +44550,21 @@ impl Torii {
         mount_catalog_route_rows!(
             builder, data_availability;
             PROOF_POLICIES => public_get(da::commitments::handler_list_proof_policies);
-            PROOF_POLICY_SNAPSHOT => public_get(da::commitments::handler_proof_policy_bundle);
-            COMMITMENTS => limited_public_post(da::commitments::handler_list_commitments, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES);
-            COMMITMENTS_PROVE => limited_canonical_account_post(da::commitments::handler_prove_commitment, app_state, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES);
-            COMMITMENTS_VERIFY => limited_canonical_account_post(da::commitments::handler_verify_commitment, app_state, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES);
-            PIN_INTENTS => limited_public_post(da::pin_intents::handler_list_pin_intents, da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES);
-            PIN_INTENTS_PROVE => limited_canonical_account_post(da::pin_intents::handler_prove_pin_intent, app_state, da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES, da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES);
+            COMMITMENTS => limited_public_post(da::commitments::handler_list_commitments, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES);
+            COMMITMENTS_PROVE => limited_canonical_account_post(da::commitments::handler_prove_commitment, app_state, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES);
+            COMMITMENTS_VERIFY => limited_canonical_account_post(da::commitments::handler_verify_commitment, app_state, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES);
+            PIN_INTENTS => limited_public_post(da::pin_intents::handler_list_pin_intents, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES);
+            PIN_INTENTS_PROVE => limited_canonical_account_post(da::pin_intents::handler_prove_pin_intent, app_state, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES);
         );
         builder.route(
             &route_catalog::data_availability::PIN_INTENTS_VERIFY,
             catalog_post(da::pin_intents::handler_verify_pin_intent)
                 .layer(DefaultBodyLimit::max(
-                    da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
+                    iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES,
                 ))
                 .authenticated_canonical_account_body(
                     app_state,
-                    da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
+                    iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES,
                 ),
         );
     }

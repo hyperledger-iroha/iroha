@@ -5,6 +5,11 @@ mod capability_test_support;
 pub mod configuration;
 #[cfg(test)]
 mod configuration_http_tests;
+pub mod data_availability;
+#[cfg(test)]
+mod data_availability_http_tests;
+#[cfg(test)]
+mod data_availability_query_tests;
 mod dispatch;
 mod moderation;
 mod multisig_validation;
@@ -32,13 +37,7 @@ use crate::{
     Error as SdkError, TransactionPreparationError, TransactionSigningError,
     config::Config,
     crypto::{HashOf, KeyPair},
-    da::{
-        DaCommitmentListRequest, DaCommitmentListResponse, DaCommitmentProofRequest,
-        DaCommitmentProofResponse, DaCommitmentVerifyResponse, DaIngestParams,
-        DaPinIntentListRequest, DaPinIntentListResponse, DaPinIntentQueryRequest,
-        DaPinIntentVerifyResponse, PDP_COMMITMENT_HEADER, build_da_request,
-        decode_pdp_commitment_header,
-    },
+    da::{DaIngestParams, PDP_COMMITMENT_HEADER, build_da_request, decode_pdp_commitment_header},
     data_model::{
         block::{BlockHeader, SignedBlock},
         prelude::*,
@@ -81,9 +80,7 @@ use iroha_data_model::{
     block::consensus::SumeragiDiagnosticsStatus,
     block::consensus_v2::{SumeragiV2QcResponse, SumeragiV2Status},
     da::{
-        commitment::{DaCommitmentProof, DaProofPolicyBundle},
         ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeV1},
-        pin_intent::DaPinIntentProof,
         types::{BlobDigest, ExtraMetadata},
     },
     nexus::{
@@ -7034,20 +7031,6 @@ struct DaIngestResponsePayload {
     duplicate: bool,
     receipt: Option<DaIngestReceipt>,
     pin_scope: Option<DaPinScopeV1>,
-}
-fn normalize_storage_ticket_hex(value: &str) -> Result<String> {
-    let trimmed = value
-        .trim()
-        .trim_start_matches("0x")
-        .trim_start_matches("0X");
-    if trimmed.len() != 64 {
-        return Err(eyre!(
-            "storage ticket must contain 64 hexadecimal characters (got {})",
-            trimmed.len()
-        ));
-    }
-    hex::decode(trimmed).map_err(|err| eyre!("invalid storage ticket hex: {err}"))?;
-    Ok(trimmed.to_ascii_lowercase())
 }
 fn normalize_message_id_hex(value: &str) -> Result<String> {
     let value = value
@@ -19939,182 +19922,6 @@ impl Client {
             response_headers_json,
         })
     }
-    fn send_da_json_get(&self, path: &str) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, path);
-        self.default_request(HttpMethod::GET, url)
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send_blocking()
-    }
-    fn send_da_json_post(&self, path: &str, body: Vec<u8>) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, path);
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send_blocking()
-    }
-    fn decode_da_json_response<T: norito::json::JsonDeserialize>(
-        response: &Response<Vec<u8>>,
-        status_message: &'static str,
-        decode_message: &'static str,
-    ) -> Result<T> {
-        if response.status() != StatusCode::OK {
-            return Err(ResponseReport::with_msg(status_message, response)
-                .unwrap_or_else(core::convert::identity)
-                .into());
-        }
-        norito::json::from_slice(response.body()).wrap_err(decode_message)
-    }
-    /// Fetch the raw DA manifest response for a storage ticket.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the storage ticket is malformed, the HTTP request fails, or the response
-    /// payload cannot be decoded as JSON.
-    pub fn get_da_manifest_json(&self, storage_ticket_hex: &str) -> Result<JsonValue> {
-        let normalized = normalize_storage_ticket_hex(storage_ticket_hex)?;
-        let path = format!("v1/da/manifests/{normalized}");
-        let response = self.send_da_json_get(&path)?;
-        Self::decode_da_json_response(
-            &response,
-            "failed to fetch DA manifest",
-            "failed to parse DA manifest response",
-        )
-    }
-    /// Fetch the active DA commitment proof-policy bundle from `/v1/da/proof-policies`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the HTTP request fails or the response cannot be decoded.
-    pub fn get_da_proof_policies(&self) -> Result<DaProofPolicyBundle> {
-        let response = self.send_da_json_get("v1/da/proof-policies")?;
-        Self::decode_da_json_response(
-            &response,
-            "failed to fetch DA proof policies",
-            "failed to decode DA proof policies response",
-        )
-    }
-    /// Fetch a stable DA proof-policy snapshot from `/v1/da/proof-policies/snapshot`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the HTTP request fails or the response cannot be decoded.
-    pub fn get_da_proof_policy_snapshot(&self) -> Result<DaProofPolicyBundle> {
-        let response = self.send_da_json_get("v1/da/proof-policies/snapshot")?;
-        Self::decode_da_json_response(
-            &response,
-            "failed to fetch DA proof policy snapshot",
-            "failed to decode DA proof policy snapshot response",
-        )
-    }
-    /// Query commitment records from `/v1/da/commitments`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request is rejected or the response cannot be decoded.
-    pub fn list_da_commitments(
-        &self,
-        request: &DaCommitmentListRequest,
-    ) -> Result<DaCommitmentListResponse> {
-        let body =
-            norito::json::to_vec(request).wrap_err("failed to encode DA commitments request")?;
-        let response = self.send_da_json_post("v1/da/commitments", body)?;
-        Self::decode_da_json_response(
-            &response,
-            "failed to list DA commitments",
-            "failed to decode DA commitments response",
-        )
-    }
-    /// Build a commitment proof from `/v1/da/commitments/prove`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request is rejected or the response cannot be decoded.
-    pub fn prove_da_commitment(
-        &self,
-        request: &DaCommitmentProofRequest,
-    ) -> Result<Option<DaCommitmentProofResponse>> {
-        let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode DA commitment proof request")?;
-        let response = self.send_da_json_post("v1/da/commitments/prove", body)?;
-        Self::decode_da_json_response(
-            &response,
-            "failed to prove DA commitment",
-            "failed to decode DA commitment proof response",
-        )
-    }
-    /// Verify a commitment proof against `/v1/da/commitments/verify`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request is rejected or the response cannot be decoded.
-    pub fn verify_da_commitment(
-        &self,
-        proof: &DaCommitmentProof,
-    ) -> Result<DaCommitmentVerifyResponse> {
-        let body = norito::json::to_vec(proof).wrap_err("failed to encode DA commitment proof")?;
-        let response = self.send_da_json_post("v1/da/commitments/verify", body)?;
-        Self::decode_da_json_response(
-            &response,
-            "failed to verify DA commitment proof",
-            "failed to decode DA commitment verify response",
-        )
-    }
-    /// Query pin intent records from `/v1/da/pin-intents`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request is rejected or the response cannot be decoded.
-    pub fn list_da_pin_intents(
-        &self,
-        request: &DaPinIntentListRequest,
-    ) -> Result<DaPinIntentListResponse> {
-        let body =
-            norito::json::to_vec(request).wrap_err("failed to encode DA pin intent request")?;
-        let response = self.send_da_json_post("v1/da/pin-intents", body)?;
-        Self::decode_da_json_response(
-            &response,
-            "failed to list DA pin intents",
-            "failed to decode DA pin intent list response",
-        )
-    }
-    /// Build a pin intent proof from `/v1/da/pin-intents/prove`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request is rejected or the response cannot be decoded.
-    pub fn prove_da_pin_intent(
-        &self,
-        request: &DaPinIntentQueryRequest,
-    ) -> Result<Option<DaPinIntentProof>> {
-        let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode DA pin intent proof request")?;
-        let response = self.send_da_json_post("v1/da/pin-intents/prove", body)?;
-        Self::decode_da_json_response(
-            &response,
-            "failed to prove DA pin intent",
-            "failed to decode DA pin intent proof response",
-        )
-    }
-    /// Verify a pin intent proof against `/v1/da/pin-intents/verify`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request is rejected or the response cannot be decoded.
-    pub fn verify_da_pin_intent(
-        &self,
-        proof: &DaPinIntentProof,
-    ) -> Result<DaPinIntentVerifyResponse> {
-        let body = norito::json::to_vec(proof).wrap_err("failed to encode DA pin intent proof")?;
-        let response = self.send_da_json_post("v1/da/pin-intents/verify", body)?;
-        Self::decode_da_json_response(
-            &response,
-            "failed to verify DA pin intent proof",
-            "failed to decode DA pin intent verify response",
-        )
-    }
     fn validate_sorafs_pin_alias_segment(value: &str, field: &str) -> Result<()> {
         let bytes = value.as_bytes();
         if bytes.is_empty()
@@ -25774,15 +25581,8 @@ mod tests {
             },
         },
         da::{
-            commitment::{
-                DaCommitmentBundle, DaCommitmentLocation, DaCommitmentProof, DaCommitmentRecord,
-                DaCommitmentWithLocation, DaProofPolicyBundle, DaProofScheme,
-            },
-            ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1, DaStripeLayout},
-            pin_intent::{
-                DaPinIntent, DaPinIntentBundle, DaPinIntentProof, DaPinIntentWithLocation,
-            },
-            types::{BlobDigest, DaRentQuote, ExtraMetadata, RetentionPolicy, StorageTicketId},
+            ingest::DaStripeLayout,
+            types::{BlobDigest, DaRentQuote, ExtraMetadata, StorageTicketId},
         },
         isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
         nexus::{LaneCatalog, LaneLifecycleStatusV1, LaneRelayEnvelope},
@@ -32252,226 +32052,6 @@ mod tests {
         assert_eq!(store[1].url.path(), "/v1/da/ingest");
     }
     #[test]
-    fn get_da_manifest_json_fetches_without_query_parameters() {
-        let storage_ticket_hex = "ab".repeat(32);
-        let expected = JsonValue::Object(JsonMap::from_iter([(
-            "storage_ticket".into(),
-            JsonValue::from(storage_ticket_hex.clone()),
-        )]));
-        let client = client_with_base_url(base_url());
-        let (fetched, snapshot) = capture_request(
-            json_ok_response(&expected, "encode DA manifest response"),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_da_manifest_json(&storage_ticket_hex)
-            },
-        );
-        assert_eq!(fetched.expect("fetch manifest"), expected);
-        assert_eq!(
-            snapshot.url.path(),
-            format!("/v1/da/manifests/{storage_ticket_hex}")
-        );
-        assert_eq!(snapshot.url.query(), None);
-    }
-    #[test]
-    fn get_da_proof_policies_fetches_bundle() {
-        let client = client_with_base_url(base_url());
-        let expected = sample_da_proof_policy_bundle();
-        let (actual, snapshot) = capture_request(
-            json_ok_response(&expected, "encode proof policies"),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-
-                client.get_da_proof_policies()
-            },
-        );
-        let actual = actual.expect("fetch proof policies");
-        assert_eq!(actual, expected);
-        assert_request(&snapshot, &HttpMethod::GET, "/v1/da/proof-policies");
-    }
-    #[test]
-    fn get_da_proof_policy_snapshot_fetches_bundle() {
-        let client = client_with_base_url(base_url());
-        let expected = sample_da_proof_policy_bundle();
-        let (actual, snapshot) = capture_request(
-            json_ok_response(&expected, "encode proof policy snapshot"),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_da_proof_policy_snapshot()
-            },
-        );
-        let actual = actual.expect("fetch proof policy snapshot");
-        assert_eq!(actual, expected);
-        assert_request(
-            &snapshot,
-            &HttpMethod::GET,
-            "/v1/da/proof-policies/snapshot",
-        );
-    }
-    #[test]
-    fn list_da_commitments_posts_query() {
-        let client = client_with_base_url(base_url());
-        let request = DaCommitmentListRequest {
-            limit: std::num::NonZeroU64::new(3),
-            cursor: None,
-        };
-        let expected = DaCommitmentListResponse {
-            policies: sample_da_proof_policy_bundle(),
-            commitments: vec![sample_da_commitment_with_location()],
-            next_cursor: None,
-        };
-        let (actual, snapshot) = capture_request(
-            json_ok_response(&expected, "encode list response"),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-
-                client.list_da_commitments(&request)
-            },
-        );
-        let actual = actual.expect("list commitments");
-        assert_eq!(actual, expected);
-        assert_request(&snapshot, &HttpMethod::POST, "/v1/da/commitments");
-        let posted: DaCommitmentListRequest =
-            norito::json::from_slice(&snapshot.body).expect("decode posted request");
-        assert_eq!(posted, request);
-    }
-    #[test]
-    fn prove_da_commitment_posts_query() {
-        let client = client_with_base_url(base_url());
-        let request = DaCommitmentProofRequest {
-            manifest_hash: Some(ManifestDigest::new([0x20; 32])),
-            lane_id: None,
-            epoch: None,
-            sequence: None,
-        };
-        let expected = Some(DaCommitmentProofResponse {
-            policies: sample_da_proof_policy_bundle(),
-            proof: sample_da_commitment_proof(),
-        });
-        let (actual, snapshot) = capture_request(
-            json_ok_response(&expected, "encode prove response"),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-
-                client.prove_da_commitment(&request)
-            },
-        );
-        let actual = actual.expect("prove commitment");
-        assert_eq!(actual, expected);
-        assert_request(&snapshot, &HttpMethod::POST, "/v1/da/commitments/prove");
-    }
-    #[test]
-    fn verify_da_commitment_posts_proof() {
-        let client = client_with_base_url(base_url());
-        let proof = sample_da_commitment_proof();
-        let expected = DaCommitmentVerifyResponse {
-            valid: true,
-            error: None,
-        };
-        let (actual, snapshot) = capture_request(
-            json_ok_response(&expected, "encode verify response"),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.verify_da_commitment(&proof)
-            },
-        );
-        let actual = actual.expect("verify commitment");
-        assert!(actual.valid);
-        assert!(actual.error.is_none());
-        assert_request(&snapshot, &HttpMethod::POST, "/v1/da/commitments/verify");
-        let posted: DaCommitmentProof =
-            norito::json::from_slice(&snapshot.body).expect("decode posted proof");
-        assert_eq!(posted, proof);
-    }
-    #[test]
-    fn list_da_pin_intents_posts_query() {
-        let client = client_with_base_url(base_url());
-        let request = DaPinIntentListRequest {
-            limit: std::num::NonZeroU64::new(5),
-            cursor: None,
-        };
-        let expected = DaPinIntentListResponse {
-            intents: vec![sample_da_pin_intent_with_location()],
-            next_cursor: None,
-        };
-        let (actual, snapshot) = capture_request(
-            json_ok_response(&expected, "encode pin intent list"),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.list_da_pin_intents(&request)
-            },
-        );
-        let actual = actual.expect("list pin intents");
-        assert_eq!(actual, expected);
-        assert_request(&snapshot, &HttpMethod::POST, "/v1/da/pin-intents");
-        let posted: DaPinIntentListRequest =
-            norito::json::from_slice(&snapshot.body).expect("decode posted pin query");
-        assert_eq!(posted, request);
-    }
-    #[test]
-    fn prove_da_pin_intent_posts_query() {
-        let client = client_with_base_url(base_url());
-        let request = DaPinIntentQueryRequest {
-            manifest_hash: None,
-            storage_ticket: Some(StorageTicketId::new([0x42; 32])),
-            alias: None,
-            lane_id: None,
-            epoch: None,
-            sequence: None,
-        };
-        let expected = Some(sample_da_pin_intent_proof());
-        let (actual, snapshot) = capture_request(
-            json_ok_response(&expected, "encode prove pin intent"),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.prove_da_pin_intent(&request)
-            },
-        );
-        let actual = actual.expect("prove pin intent");
-        assert_eq!(actual, expected);
-        assert_request(&snapshot, &HttpMethod::POST, "/v1/da/pin-intents/prove");
-    }
-    #[test]
-    fn verify_da_pin_intent_posts_proof() {
-        let client = client_with_base_url(base_url());
-        let proof = sample_da_pin_intent_proof();
-        let expected = DaPinIntentVerifyResponse {
-            valid: true,
-            error: None,
-        };
-        let (actual, snapshot) = capture_request(
-            json_ok_response(&expected, "encode verify pin response"),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.verify_da_pin_intent(&proof)
-            },
-        );
-        let actual = actual.expect("verify pin intent");
-        assert!(actual.valid);
-        assert_request(&snapshot, &HttpMethod::POST, "/v1/da/pin-intents/verify");
-        let posted: DaPinIntentProof =
-            norito::json::from_slice(&snapshot.body).expect("decode posted pin proof");
-        assert_eq!(posted, proof);
-    }
-    #[test]
     fn decode_da_ingest_response_exposes_scope_without_receipt() {
         let client = client_with_base_url(base_url());
         let request = client
@@ -34732,16 +34312,6 @@ mod tests {
         assert_eq!(&snapshot.method, method);
         assert_eq!(snapshot.url.path(), path);
     }
-    fn json_ok_response<T: norito::json::JsonSerialize>(
-        value: &T,
-        context: &str,
-    ) -> HttpResponse<Vec<u8>> {
-        mk_response(
-            StatusCode::OK,
-            norito::json::to_vec(value).expect(context),
-            Some(APPLICATION_JSON),
-        )
-    }
     fn assert_sumeragi_json_request(snapshot: &RequestSnapshot, path: &str) {
         assert_request(snapshot, &HttpMethod::GET, path);
         assert_operator_signature_headers(snapshot);
@@ -36960,102 +36530,6 @@ mod tests {
                 .and_then(norito::json::Value::as_u64),
             Some(6)
         );
-    }
-    fn sample_da_proof_policy_bundle() -> DaProofPolicyBundle {
-        DaProofPolicyBundle::new(Vec::new())
-    }
-    fn sample_da_commitment_record() -> DaCommitmentRecord {
-        DaCommitmentRecord {
-            lane_id: LaneId::new(7),
-            epoch: 2,
-            sequence: 5,
-            client_blob_id: BlobDigest::new([0x61; 32]),
-            manifest_hash: ManifestDigest::new([0x62; 32]),
-            proof_scheme: DaProofScheme::MerkleSha256,
-            chunk_root: Hash::prehashed([0x63; Hash::LENGTH]),
-            proof_digest: None,
-            retention_class: RetentionPolicy::default(),
-            storage_ticket: StorageTicketId::new([0x64; 32]),
-            acknowledgement_sig: iroha_crypto::Signature::try_from_bytes(&[0x65; 64])
-                .expect("checked iroha client DA commitment acknowledgement signature fixture"),
-        }
-    }
-    fn sample_da_commitment_with_location() -> DaCommitmentWithLocation {
-        DaCommitmentWithLocation {
-            commitment: sample_da_commitment_record(),
-            location: DaCommitmentLocation {
-                block_height: 9,
-                index_in_bundle: 1,
-            },
-        }
-    }
-    fn sample_da_commitment_proof() -> DaCommitmentProof {
-        DaCommitmentProof {
-            commitment: sample_da_commitment_record(),
-            location: DaCommitmentLocation {
-                block_height: 9,
-                index_in_bundle: 1,
-            },
-            bundle_hash: HashOf::<DaCommitmentBundle>::from_untyped_unchecked(Hash::prehashed(
-                [0x66; Hash::LENGTH],
-            )),
-            bundle_len: 1,
-            root: Hash::prehashed([0x67; Hash::LENGTH]),
-            path: Vec::new(),
-        }
-    }
-    fn sample_da_pin_intent_with_location() -> DaPinIntentWithLocation {
-        let lane_id = LaneId::new(4);
-        let key_pair =
-            iroha_crypto::KeyPair::try_from_seed(vec![0xE5; 32], iroha_crypto::Algorithm::Ed25519)
-                .expect("valid deterministic client DA proof key");
-        let mut authorization = DaIngestAuthorizationV1 {
-            network_id: iroha_data_model::NetworkId::from_genesis_hash(
-                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE6; 32])),
-            ),
-            owner: AccountId::new(key_pair.public_key().clone()),
-            lane_id,
-            epoch: 6,
-            sequence: 8,
-            payload_hash: BlobDigest::new([0xE7; 32]),
-            payload_bytes: 1,
-            request_content_hash: Hash::prehashed([0xE8; 32]),
-            signatures: Vec::new(),
-        };
-        authorization.signatures.push(DaIngestSignatureV1 {
-            signer: key_pair.public_key().clone(),
-            signature: Signature::try_new(key_pair.private_key(), &authorization.signing_digest())
-                .expect("sign deterministic client DA proof authorization"),
-        });
-        let scope = DaPinScopeV1::new(
-            &authorization,
-            StorageTicketId::new([0x70; 32]),
-            ManifestDigest::new([0x71; 32]),
-            None,
-        );
-        let scope_authorization =
-            iroha_data_model::da::ingest::DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
-                .expect("sign deterministic client DA pin scope");
-        DaPinIntentWithLocation {
-            intent: DaPinIntent::new(authorization, scope_authorization),
-            location: DaCommitmentLocation {
-                block_height: 10,
-                index_in_bundle: 0,
-            },
-        }
-    }
-    fn sample_da_pin_intent_proof() -> DaPinIntentProof {
-        let located = sample_da_pin_intent_with_location();
-        DaPinIntentProof {
-            intent: located.intent,
-            location: located.location,
-            bundle_hash: HashOf::<DaPinIntentBundle>::from_untyped_unchecked(Hash::prehashed(
-                [0x72; Hash::LENGTH],
-            )),
-            bundle_len: 1,
-            root: Hash::prehashed([0x73; Hash::LENGTH]),
-            path: Vec::new(),
-        }
     }
     fn sccp_client_with_base_url(url: Url) -> Client {
         let mut client = client_with_base_url(url);
