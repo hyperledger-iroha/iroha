@@ -770,10 +770,10 @@ impl Kura {
         Ok(())
     }
 
-    /// Reconstruct exact repair artifacts from the retained locator, selected
+    /// Reconstruct exact indexed artifacts from the retained locator, selected
     /// canonical full wire, merge association and available finality. Neither
     /// temporary payloads nor live secondary State provide reconstruction authority.
-    fn native_amx_completed_repair_artifacts_under_prune_and_canonical_guards(
+    fn native_amx_indexed_publication_artifacts_under_prune_and_canonical_guards(
         &self,
         block: &SignedBlock,
         merge: Option<&MergeLedgerEntry>,
@@ -788,28 +788,29 @@ impl Kura {
         record
             .validate()
             .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
-        if record.origin != NativeAmxPublicationIndexOriginV1::CompletedRepair
-            || record.carrier != carrier
+        if record.carrier != carrier
             || record.merge_entry_hash != merge.map(MergeLedgerEntry::canonical_hash)
         {
             return Err(Error::PruneIntentConflict(
-                "Native completed repair startup differs from its retained index".to_owned(),
+                "Native indexed publication startup differs from its retained index".to_owned(),
             ));
         }
         let height = NonZeroUsize::new(usize::try_from(carrier.height)?).ok_or_else(|| {
-            Error::PruneIntentConflict("Native completed repair has zero startup height".to_owned())
+            Error::PruneIntentConflict(
+                "Native indexed publication has zero startup height".to_owned(),
+            )
         })?;
         let selected = self
             .read_block_body_under_prune_and_canonical_guards(height)?
             .ok_or_else(|| {
                 Error::PruneIntentConflict(
-                    "Native completed repair startup lacks its authenticated canonical body"
+                    "Native indexed publication startup lacks its authenticated canonical body"
                         .to_owned(),
                 )
             })?;
         if Self::native_amx_publication_carrier(&selected)? != carrier {
             return Err(Error::PruneIntentConflict(
-                "Native completed repair startup changed canonical executed wire".to_owned(),
+                "Native indexed publication startup changed canonical executed wire".to_owned(),
             ));
         }
         let (_, finality, _) = self
@@ -818,13 +819,13 @@ impl Kura {
                 height: carrier.height,
             })?;
         let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(block, merge)
-            .map_err(|error| Error::PruneIntentConflict(format!("Native completed repair startup manifest: {error}")))?;
+            .map_err(|error| Error::PruneIntentConflict(format!("Native indexed publication startup manifest: {error}")))?;
         let artifacts =
             native_amx_participant_application_artifacts(&manifest, HashOf::new(&finality))
                 .filter(|artifacts| !artifacts.is_empty())
                 .ok_or_else(|| {
                     Error::PruneIntentConflict(
-                        "Native completed repair startup has no exact artifact plan".to_owned(),
+                        "Native indexed publication startup has no exact artifact plan".to_owned(),
                     )
                 })?;
         Ok(artifacts)
@@ -835,8 +836,13 @@ impl Kura {
         merge: Option<&MergeLedgerEntry>,
         record: &NativeAmxPublicationIndexRecord,
     ) -> Result<()> {
+        if record.origin != NativeAmxPublicationIndexOriginV1::CompletedRepair {
+            return Err(Error::PruneIntentConflict(
+                "Native completed repair requires its original repair locator".to_owned(),
+            ));
+        }
         let artifacts = self
-            .native_amx_completed_repair_artifacts_under_prune_and_canonical_guards(
+            .native_amx_indexed_publication_artifacts_under_prune_and_canonical_guards(
                 block, merge, record,
             )?;
         let _geometry = self.lane_geometry_lock.lock();

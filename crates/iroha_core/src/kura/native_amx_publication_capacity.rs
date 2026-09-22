@@ -253,6 +253,7 @@ impl Kura {
             inventory
                 .as_ref()
                 .map(|(namespace, inventory)| (namespace, inventory)),
+            None,
         )
     }
     fn native_amx_route_publication_capacity_with_inventory_locked(
@@ -261,6 +262,7 @@ impl Kura {
         manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
         receipt: &NativeAmxParticipantApplicationReceiptArtifact,
         inventory: Option<(&BoundProgressNamespace, &NativeAmxEvidenceInventory)>,
+        latest_prefix: Option<&NativeAmxIndexedPrefixFile>,
     ) -> Result<Option<(NativeAmxPublicationRoute, NativeAmxRoutePublicationCapacity)>> {
         let descriptor = &receipt.participant_proposal.descriptor;
         self.require_active_lane_artifact(entry, descriptor)?;
@@ -312,7 +314,13 @@ impl Kura {
             latest = self.decode_bound_native_amx_participant_receipt_latest_index_locked(
                 &entry, &path, &namespace,
             )?;
-            if let Some(bytes) = self.native_amx_latest_index_temp_bytes_locked(&namespace)? {
+            if let Some(prefix) = latest_prefix {
+                self.require_native_amx_indexed_latest_prefix_locked(
+                    entry, namespace, inventory, manifest, receipt, prefix,
+                )?;
+            } else if let Some(bytes) =
+                self.native_amx_latest_index_temp_bytes_locked(&namespace)?
+            {
                 self.require_native_amx_latest_index_temp_recovery_unambiguous_locked(&namespace)?;
                 let path = namespace
                     .data_path
@@ -928,9 +936,10 @@ impl Kura {
     ) -> Result<bool> {
         let _canonical = self.canonical_chain_lock.lock();
         self.ensure_durable_block_at_height(block.header().height().get(), block.hash())?;
-        self.recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards(&[
-            Self::native_amx_publication_carrier(block)?,
-        ])?;
+        self.recover_native_amx_indexed_publication_prefixes_under_prune_and_canonical_guards(
+            &[Self::native_amx_publication_carrier(block)?],
+            NativeAmxPrefixRecoveryScope::Indexed,
+        )?;
         let mut guard = match self
             .native_amx_capacity_plan_from_evidence_under_prune_and_canonical_guards(
                 block,
@@ -1039,6 +1048,114 @@ impl Kura {
         // identical to a fresh exact plan, without reviving credit on retry.
         *allocation = 0;
         capacity.outstanding_components.remove(&component);
+        Ok(())
+    }
+    /// Retire only exact original component allocations after durable readback.
+    /// This grants no WSV, prune, route-completion or index-retirement authority.
+    fn consume_native_amx_startup_stable_components_locked(
+        &self,
+        entry: &impl LaneArtifactStorageView,
+        namespace: &BoundProgressNamespace,
+        manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
+        receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+    ) -> Result<()> {
+        let descriptor = &receipt.participant_proposal.descriptor;
+        let carrier = NativeAmxPublicationCarrier {
+            height: receipt.application_block_height,
+            block_hash: receipt.application_block_hash,
+            executed_wire_hash: receipt.executed_block_wire_hash,
+        };
+        let route = NativeAmxPublicationRoute {
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            incarnation: descriptor.lane_incarnation,
+        };
+        let Some(original_index) = self
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .get(&carrier)
+            .filter(|owner| owner.routes.contains_key(&route))
+            .map(|owner| owner.index_record.clone())
+        else {
+            return Ok(());
+        };
+        let index = Self::read_native_amx_publication_index_for_store(&self.store_root)?;
+        if let Some(original) = original_index.as_ref() {
+            original
+                .validate()
+                .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
+            if index.records.get(&carrier) != Some(original) {
+                return Err(Error::PruneIntentConflict(
+                    "Native startup component allocation lost or changed its original index"
+                        .to_owned(),
+                ));
+            }
+        } else if index.records.contains_key(&carrier) {
+            return Err(Error::PruneIntentConflict(
+                "Native startup maintenance acquired a foreign publication index".to_owned(),
+            ));
+        }
+        let latest_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
+            entry,
+            &self.store_root,
+        );
+        let expected = NativeAmxParticipantReceiptLatestIndexV2::from_receipt(receipt);
+        if self.decode_bound_native_amx_participant_receipt_latest_index_locked(
+            entry,
+            &latest_path,
+            namespace,
+        )? != Some(expected)
+        {
+            return Ok(()); // A later authoritative frontier is not this route's publication.
+        }
+        let height = descriptor.lane_block_height;
+        let inventory = self.inventory_native_amx_evidence_files_locked(namespace, true)?;
+        let manifest_file = inventory.manifests.get(&height).ok_or_else(|| {
+            Error::PruneIntentConflict("Native startup component lost stable manifest".to_owned())
+        })?;
+        let receipt_file = inventory.receipts.get(&height).ok_or_else(|| {
+            Error::PruneIntentConflict("Native startup component lost stable receipt".to_owned())
+        })?;
+        if self.decode_native_amx_manifest_file_locked(entry, namespace, manifest_file)?
+            != *manifest
+            || self.decode_native_amx_receipt_file_locked(entry, namespace, receipt_file)?
+                != *receipt
+            || !expected.matches_manifest(manifest)
+        {
+            return Err(Error::PruneIntentConflict(
+                "Native startup component readback differs from original pair".to_owned(),
+            ));
+        }
+        // Completed-pair maintenance was admitted without a pending index.
+        // Reauthenticate that same finalized WSV authority before consuming its
+        // original component allocation; missing indexed ownership never falls
+        // through to this branch.
+        if original_index.is_none()
+            && (!self.native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(receipt, manifest)
+                || !self.native_amx_publication_wsv_join_is_complete_locked(manifest, receipt)?)
+        {
+            return Err(Error::PruneIntentConflict(
+                "Native startup maintenance lost its completed-pair authority".to_owned(),
+            ));
+        }
+        for (component, bytes) in [
+            (
+                NativeAmxPublicationComponent::Manifest,
+                manifest.encode_framed()?.len(),
+            ),
+            (
+                NativeAmxPublicationComponent::Receipt,
+                receipt.encode_framed()?.len(),
+            ),
+            (
+                NativeAmxPublicationComponent::Latest,
+                norito::encode_canonical(&expected)?.len(),
+            ),
+        ] {
+            self.consume_native_amx_publication_component_after_durable_publication(
+                receipt, component, bytes,
+            )?;
+        }
         Ok(())
     }
     fn complete_native_amx_publication_route_capacity_locked(
@@ -1387,8 +1504,9 @@ impl Kura {
                 }
             }
             let incomplete_carriers = committed_index_carriers;
-            self.recover_native_amx_completed_repair_prefixes_under_prune_and_canonical_guards(
+            self.recover_native_amx_indexed_publication_prefixes_under_prune_and_canonical_guards(
                 &incomplete_carriers.iter().copied().collect::<Vec<_>>(),
+                NativeAmxPrefixRecoveryScope::Startup,
             )?;
             {
                 let _geometry = self.lane_geometry_lock.lock();
