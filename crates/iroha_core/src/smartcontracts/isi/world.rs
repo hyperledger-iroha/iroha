@@ -4932,13 +4932,6 @@ pub mod isi {
                 ),
             ));
         }
-        if typed_proposal_for_standalone_referendum(&ballot.referendum_id, state_transaction)?
-            .is_some()
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "typed governance proposals accept only timed-private Parliament ballots".into(),
-            ));
-        }
         ensure_citizen_for_ballot(authority, &ballot.referendum_id, state_transaction)?;
         if ballot.amount < policy.minimum_bond {
             state_transaction.world.emit_events(Some(
@@ -5253,6 +5246,16 @@ pub mod isi {
                 &self.referendum_id,
                 state_transaction,
             )?;
+            // Reject typed proposal selectors before looking up a standalone
+            // referendum or its frozen public-ballot policy.
+            if typed_proposal_for_standalone_referendum(&self.referendum_id, state_transaction)?
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "typed governance proposals accept only timed-private Parliament ballots"
+                        .into(),
+                ));
+            }
             if !state_transaction.gov.plain_voting_enabled {
                 return Err(invalid_smart_contract_parameter(
                     "plain voting mode disabled by policy",
@@ -25678,7 +25681,7 @@ pub mod isi {
                         "liquidity_profile": "tier1",
                         "volatility_class": "stable"
                     }])),
-                    "not a canonical asset definition address",
+                    "invalid ivm_gas_units_per_gas asset",
                 ),
                 (
                     "duplicate asset",
@@ -25714,7 +25717,7 @@ pub mod isi {
                         Error::InvalidParameter(InvalidParameterError::SmartContract(message))
                             if message.contains(expected)
                     ),
-                    "unexpected {label} error: {error}"
+                    "unexpected {label} error: {error:?}"
                 );
                 assert!(
                     stx.world
@@ -29487,12 +29490,15 @@ pub mod isi {
         world_test!(accepted_destination_proof_terminalizes_one_payload_and_frees_capacity_immediately {
             let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
             let kura = Kura::blank_kura_for_testing();
-            let (fixture, finality) = store_exact_sccp_finality_for_test(&kura, &fixture);
+            let provisional_finality =
+                iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                    .expect("exact provisional SCCP finality fixture decodes");
             let state = State::new_with_chain_and_network_id_for_testing(
-                World::default(), kura, LiveQueryStore::start_test(),
+                World::default(), Arc::clone(&kura), LiveQueryStore::start_test(),
                 iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
-                finality.finality_artifact.height_context.network_id,
+                provisional_finality.finality_artifact.height_context.network_id,
             );
+            let (fixture, finality) = store_exact_sccp_finality_for_test(&kura, &fixture);
             let mut state_block = state.block(finality.block_header.clone());
             let exact_sender = exact_sccp_fixture_sender(&fixture);
             let exact_key = crate::bridge::test_sccp_outbound_message_key(&fixture.bundle.payload);

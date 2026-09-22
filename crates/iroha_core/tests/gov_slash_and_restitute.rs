@@ -317,6 +317,7 @@ fn retained_governance_successor(
 ) -> (
     iroha_data_model::block::SignedBlock,
     iroha_data_model::block::consensus_v2::HeightContext,
+    Vec<iroha_data_model::block::consensus::LaneBlockProposalV1>,
 ) {
     let context = crate::sumeragi::v2_context::build_successor_height_context(
         parent,
@@ -402,7 +403,90 @@ fn retained_governance_successor(
         .try_build_with_signature(u64::from(leader), signer.private_key())
         .unwrap()
         .canonical_resultless_proposal();
-    (proposal, context)
+    (proposal, context, plan.proposals)
+}
+
+/// Complete the original lane proposals with exact quorum and application evidence.
+fn finalize_retained_governance_lanes(
+    state: &State,
+    finality: &iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact,
+    proposals: Vec<iroha_data_model::block::consensus::LaneBlockProposalV1>,
+    keys: &[iroha_crypto::KeyPair],
+) {
+    use iroha_data_model::block::consensus::{CertPhase, LaneBlockProposalPayloadHintV1};
+
+    for mut proposal in proposals {
+        proposal.payload_block_hint = Some(LaneBlockProposalPayloadHintV1 {
+            proposal_height: finality.height,
+            proposal_view: finality.commit_qc.proposal_round.view,
+            proposal_block_hash: finality.block_hash,
+        });
+        crate::lane_consensus::validate_lane_block_proposal(&proposal)
+            .expect("validate the original proposal with its exact finalized carrier hint");
+        let committee = proposal
+            .descriptor
+            .validator_set
+            .iter()
+            .map(|peer| {
+                keys.iter()
+                    .find(|key| key.public_key() == peer.public_key())
+                    .expect("fixture owns the actual lane committee key")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(committee.len(), 4);
+        assert_eq!(proposal.descriptor.min_quorum, 3);
+        let sign_qc = |phase| {
+            let body = proposal.vote_body(phase);
+            let votes = committee[..3]
+                .iter()
+                .map(|key| crate::lane_consensus::LaneBlockVoteV1 {
+                    body: body.clone(),
+                    signer: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
+                    bls_signature: iroha_crypto::Signature::try_new(
+                        key.private_key(),
+                        &body.signature_preimage(),
+                    )
+                    .expect("sign the exact lane vote")
+                    .payload()
+                    .to_vec(),
+                    payload_availability_vote: None,
+                })
+                .collect::<Vec<_>>();
+            crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+                body,
+                proposal.descriptor.validator_set.clone(),
+                &votes,
+            )
+            .expect("authenticate exactly three votes from the four-validator lane committee")
+        };
+        let signer_pops = committee[..3]
+            .iter()
+            .map(|key| {
+                (
+                    key.public_key().clone(),
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("prove possession for each actual lane QC signer"),
+                )
+            })
+            .collect();
+        let session = crate::lane_consensus::CommittedLaneBlockSession {
+            prepare_qc: sign_qc(CertPhase::Prepare),
+            commit_qc: sign_qc(CertPhase::Commit),
+            proposal,
+        };
+        state
+            .persist_committed_lane_block_session_lifecycle_bound(&session, &signer_pops)
+            .expect("persist exact lane finality under current lifecycle authority");
+        state
+            .kura()
+            .persist_lane_block_application_receipt(&session.proposal)
+            .expect("retain the exact finalized lane application receipt");
+        assert!(
+            state
+                .certified_lane_block_session_is_applied_or_snapshot_anchored(&session)
+                .expect("authenticate completed lane application")
+        );
+    }
 }
 
 fn seed_slash_snapshot(
@@ -602,7 +686,7 @@ fn double_vote_slashes_plain_lock() {
     );
     let commitment_entrypoint = TransactionEntrypoint::SealedCommitment(sealed_commitment);
     let commitment_hash = commitment_entrypoint.hash();
-    let (proposal, context) =
+    let (proposal, context, lane_proposals) =
         retained_governance_successor(&state, &finality, commitment_entrypoint, &keys);
     let prepared =
         prepare_retained_governance_candidate(&state, proposal, &context, &mut executions);
@@ -624,6 +708,7 @@ fn double_vote_slashes_plain_lock() {
         commitment_output.result
     );
     let finality = crate::state::publish_governance_fixture(&state, prepared, &keys);
+    finalize_retained_governance_lanes(&state, &finality, lane_proposals, &keys);
     publications += 1;
 
     // Block 3: the sealed reveal enters the shared sequential corridor. The
@@ -634,7 +719,7 @@ fn double_vote_slashes_plain_lock() {
         salt,
     ));
     let reveal_hash = reveal_entrypoint.hash();
-    let (proposal, context) =
+    let (proposal, context, lane_proposals) =
         retained_governance_successor(&state, &finality, reveal_entrypoint, &keys);
     let prepared =
         prepare_retained_governance_candidate(&state, proposal, &context, &mut executions);
@@ -659,6 +744,7 @@ fn double_vote_slashes_plain_lock() {
         "unexpected rejection: {rejection:?}"
     );
     let finality = crate::state::publish_governance_fixture(&state, prepared, &keys);
+    finalize_retained_governance_lanes(&state, &finality, lane_proposals, &keys);
     publications += 1;
     assert_eq!(executions, 3, "each signed candidate executes exactly once");
     assert_eq!(

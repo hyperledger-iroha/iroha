@@ -2239,6 +2239,7 @@ state_test! { sync live_merge_rejects_historical_incarnation_reuse_beyond_rollin
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
     let (candidate, commit_keypairs, _) = record_commit_ready_merge_candidate_with_lanes(&mut state, 2, 1);
+    let kura = Arc::clone(&state.kura);
     let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
     let first = merge_entry_from_candidate(candidate.clone(), qc);
     // Seed the retained history independently of the bounded query cache. The
@@ -2943,6 +2944,7 @@ state_test! { sync commit_merge_entry_persists_to_kura
     let query = LiveQueryStore::start_test();
     let mut state = State::new(World::default(), Arc::clone(&kura), query);
     let (candidate, keypairs, _) = record_commit_ready_merge_candidate_with_lanes(&mut state, 3, 1);
+    let kura = Arc::clone(&state.kura);
     let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
     let entry = merge_entry_from_candidate(candidate, qc);
     let epoch = entry.epoch_id;
@@ -3126,7 +3128,8 @@ state_test! { sync state_rehydrates_multi_lane_merge_ledger_from_kura_snapshot
         lane_catalog: LaneCatalog::new(nonzero!(2_u32), lanes).expect("two-lane catalog"),
         ..iroha_config::parameters::actual::Nexus::default()
     };
-    original.set_nexus(nexus).expect("configure both lanes before genesis");
+    configure_pre_genesis_nexus_fixture(&mut original, nexus);
+    let kura = Arc::clone(&original.kura);
     let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&original, &validator_keypairs);
     install_lane_manifest_registry(&original, &[

@@ -974,9 +974,11 @@ mod tests {
             ],
         )
         .expect("shared public penalty lane catalog");
-        state
-            .set_nexus(nexus)
-            .expect("install shared public penalty lane catalog");
+        *state = State::new_with_nexus_for_testing(
+            std::mem::take(&mut state.world),
+            nexus,
+            LiveQueryStore::start_test(),
+        );
     }
 
     fn roster_keys() -> Vec<KeyPair> {

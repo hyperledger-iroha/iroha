@@ -7553,6 +7553,7 @@ pub mod tests {
         state_block
             .transactions
             .insert_block_with_single_tx(accepted.as_ref().hash_as_entrypoint(), nonzero!(1_usize));
+        state_block.block_hashes.push(header.hash());
         state_block.commit().expect("block commit");
         let view = state.view();
         let result = accepted.into_checked(&view);

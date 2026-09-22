@@ -514,7 +514,11 @@ fn record_commit_ready_merge_candidate_with_lanes(
     let_row! { lanes: Vec<LaneConfig> = (0..lane_count) .map(|idx| { if idx == 0 { LaneConfig::default() } else { LaneConfig { id: LaneId::new(idx), alias: format!("lane-{idx}"), dataspace_id: DataSpaceId::UNIVERSAL, ..LaneConfig::default() } } }) .collect() };
     let_row! { lane_catalog = LaneCatalog::new( core::num::NonZeroU32::new(lane_count).expect("non-zero"), lanes, ) .expect("lane catalog") };
     let_row! { nexus = iroha_config::parameters::actual::Nexus { lane_catalog, ..iroha_config::parameters::actual::Nexus::default() } };
-    state.set_nexus(nexus).expect("apply Nexus lane catalog");
+    if state.nexus_snapshot().lane_catalog != nexus.lane_catalog {
+        configure_pre_genesis_nexus_fixture(state, nexus);
+    } else {
+        state.set_nexus(nexus).expect("apply unchanged Nexus lane catalog");
+    }
     let_row! { registry_entries: Vec<_> = (0..lane_count) .map(|idx| { ( LaneId::new(idx), DataSpaceId::UNIVERSAL, validator_ids.clone(), ) }) .collect() };
     install_lane_manifest_registry(state, &registry_entries);
     let commit_keypairs = configure_commit_topology_preserving_world_peers(state, 1);
