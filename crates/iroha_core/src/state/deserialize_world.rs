@@ -11181,7 +11181,7 @@ mod decode_tests {
     }
     #[test]
     fn musubi_resolver_checkpoint_keys_use_canonical_nonzero_decimal() {
-        use mv::json::JsonKeyCodec;
+        use norito::json::JsonKeyCodec;
         let revision = MusubiResolverIndexRevisionV1::new(42).expect("revision forty-two");
         let mut encoded = String::new();
         revision.encode_json_key(&mut encoded);

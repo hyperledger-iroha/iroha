@@ -31,7 +31,7 @@ use state_capture::{StateCaptureError, StateJournalCapture};
 
 #[path = "decision_binding.rs"]
 pub(crate) mod decision_binding;
-pub(crate) use decision_binding::{PublishedNativeApply, RetainedCarrier};
+pub(crate) use decision_binding::{PublishedCarrier, PublishedNativeApply, RetainedCarrier};
 #[cfg(test)]
 use runtime_journals::RuntimeJournalInputs;
 use runtime_journals::RuntimeJournals;

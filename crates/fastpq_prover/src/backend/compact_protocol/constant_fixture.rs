@@ -3,7 +3,7 @@
 //! This relation exercises the complete required geometry and real polynomial
 //! constraints. It is separate from the production transfer AIR and its witnesses.
 //! Raw verification tests use an explicit 64 MiB diagnostic allocation policy;
-//! the unchanged 32 MiB baseline is exercised as a rejection control.
+//! the unchanged 32 MiB baseline is checked against the measured codec charges.
 
 use std::sync::{Mutex, OnceLock};
 

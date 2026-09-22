@@ -8391,12 +8391,17 @@ class AccountTransaction:
 
 @dataclass(frozen=True)
 class VerifiedCommittedTransaction:
-    """A network transaction with native input and full-output proofs against its carrier."""
+    """A selected full output authenticated by a rooted consensus finality chain."""
 
     transaction_hash: str
     block_hash: str
     block_height: int
     output_hash: str
+    network_id: str
+    height_context_id: str
+    execution_commitment: Mapping[str, Any]
+    executed_block_wire_hash: str
+    executed_block_wire_len: int
     entrypoint_kind: str
     authority: Optional[str]
     signer_public_key_hex: Optional[str]
@@ -8421,6 +8426,11 @@ class VerifiedCommittedTransaction:
             "block_hash",
             "block_height",
             "output_hash",
+            "network_id",
+            "height_context_id",
+            "execution_commitment",
+            "executed_block_wire_hash",
+            "executed_block_wire_len",
             "entrypoint_kind",
             "authority",
             "signer_public_key_hex",
@@ -8454,6 +8464,21 @@ class VerifiedCommittedTransaction:
             payload.get("block_height"),
             "verified carrier block height",
             allow_zero=False,
+        )
+        network_id = _require_exact_non_empty_string(
+            payload["network_id"], "verified network id"
+        )
+        height_context_id = _require_exact_non_empty_string(
+            payload["height_context_id"], "verified height context id"
+        )
+        execution_commitment = payload["execution_commitment"]
+        if not isinstance(execution_commitment, Mapping):
+            raise TypeError("verified execution_commitment must be an object")
+        executed_block_wire_hash = _normalize_hash_hex(
+            payload["executed_block_wire_hash"], "verified executed wire hash"
+        )
+        executed_block_wire_len = _normalize_positive_int(
+            payload["executed_block_wire_len"], "verified executed wire length", allow_zero=False
         )
         entrypoint_kind = payload.get("entrypoint_kind")
         if entrypoint_kind not in {
@@ -8652,6 +8677,11 @@ class VerifiedCommittedTransaction:
             block_hash=block_hash,
             block_height=block_height,
             output_hash=output_hash,
+            network_id=network_id,
+            height_context_id=height_context_id,
+            execution_commitment=dict(execution_commitment),
+            executed_block_wire_hash=executed_block_wire_hash,
+            executed_block_wire_len=executed_block_wire_len,
             entrypoint_kind=entrypoint_kind,
             authority=authority,
             signer_public_key_hex=signer_public_key_hex,
@@ -14649,21 +14679,25 @@ class ToriiClient(
         transaction_hash: str,
         authority: str,
         network_id: "NetworkId",
+        executed_block_wire: bytes,
+        finality_bundle_chain_json: str,
+        trusted_height_context_id: str,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
     ) -> VerifiedCommittedTransaction:
-        """Fetch and verify a committed transaction against its exact carrier block.
+        """Fetch a committed row and authenticate it against exact executed bytes.
 
-        ``transaction_hash`` is the canonical external transaction hash returned by
-        :class:`SignedTransactionEnvelope`; it is the same entrypoint hash committed by blocks.
-        Both ledger reads use signed native queries. The returned value is created only after the
-        entrypoint and execution-result Merkle proofs verify against the returned carrier block.
+        The required bundle JSON array must link the independently trusted
+        network/context through immediate successors to this carrier. Obtain
+        ``network_id`` and ``trusted_height_context_id`` from trusted network
+        configuration or a previously verified checkpoint, never this response.
+        The native verifier binds the selected full output to the final Commit
+        QC's exact executed wire commitment. Check ``result_ok`` before treating
+        the authenticated transaction as successful.
         """
 
         from .crypto import (
-            build_find_block_by_hash_query,
             build_find_committed_transaction_query,
-            committed_transaction_carrier_block_hash,
             verify_committed_transaction_inclusion,
         )
 
@@ -14698,34 +14732,13 @@ class ToriiClient(
             "committed transaction query",
         )
 
-        block_hash = committed_transaction_carrier_block_hash(
-            normalized_hash,
-            transaction_response_bytes,
-        )
-        block_request = build_find_block_by_hash_query(
-            canonical_authority,
-            signing_key,
-            network_id,
-            block_hash,
-        )
-        block_response = self._request(
-            "POST",
-            "/query",
-            data=block_request,
-            headers={
-                "Content-Type": "application/x-norito",
-                "Accept": "application/x-norito",
-            },
-        )
-        self._expect_status(block_response, {200})
-        block_response_bytes = self._native_query_response_bytes(
-            block_response,
-            "carrier block query",
-        )
         verified = verify_committed_transaction_inclusion(
             normalized_hash,
             transaction_response_bytes,
-            block_response_bytes,
+            executed_block_wire,
+            finality_bundle_chain_json=finality_bundle_chain_json,
+            expected_network_id=network_id,
+            trusted_height_context_id=trusted_height_context_id,
         )
         result = VerifiedCommittedTransaction.from_payload(verified)
         if result.transaction_hash != normalized_hash:
@@ -18873,6 +18886,7 @@ class ToriiClient(
         *,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
+        creation_time_ms: Optional[int] = None,
         ttl_ms: Optional[int] = 900_000,
         nonce: Optional[int] = None,
         metadata: Optional[Mapping[str, Any]] = None,
@@ -18895,6 +18909,7 @@ class ToriiClient(
                     if fee_payment is not None
                     else authority_fee_payment(charge_limits=[])
                 ),
+                creation_time_ms=creation_time_ms,
                 ttl_ms=ttl_ms,
                 nonce=nonce,
                 metadata=metadata,
@@ -22336,7 +22351,11 @@ class ToriiClient(
         interval: float = 1.0,
         timeout: Optional[float] = 120.0,
     ) -> Mapping[str, Any]:
-        """Prepare, locally sign, and submit one ordered atomic batch."""
+        """Prepare, locally sign, and submit one ordered atomic batch.
+
+        The draft fixes ``creation_time_ms`` before signing, using the local
+        clock once when omitted.
+        """
 
         if (private_key is None) == (private_key_hex is None):
             raise ValueError("provide exactly one of private_key or private_key_hex")
@@ -22355,6 +22374,7 @@ class ToriiClient(
         draft = self._transaction_draft(
             authority=authority,
             fee_payment=fee_payment,
+            creation_time_ms=creation_time_ms,
             ttl_ms=ttl_ms,
             metadata=signed_metadata,
         ).use_executable_batch()
@@ -22402,7 +22422,6 @@ class ToriiClient(
                 wait=wait,
                 interval=interval,
                 timeout=timeout,
-                creation_time_ms=creation_time_ms,
             )
         )
         result["plan"] = {

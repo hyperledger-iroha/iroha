@@ -1287,7 +1287,7 @@ pub mod role {
     use core::{fmt, str::FromStr};
     use derive_more::Constructor;
     use iroha_primitives::impl_as_dyn_key;
-    use mv::json::JsonKeyCodec;
+    use norito::json::JsonKeyCodec;
     use norito::json;
     /// [`RoleId`] with owner [`AccountId`] attached to it.
     #[derive(norito::NoritoSchema)]

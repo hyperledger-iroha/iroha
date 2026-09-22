@@ -421,7 +421,7 @@ impl norito::json::JsonObjectKeyOwned for Name {
         Self::parse_for_json_decode(key)
     }
 }
-impl mv::json::JsonKeyCodec for Name {
+impl norito::json::JsonKeyCodec for Name {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(self.as_ref(), out);
     }

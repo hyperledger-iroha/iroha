@@ -6,6 +6,7 @@ struct NativeCandidateFixture {
     state: Arc<State>,
     parent: SignedBlock,
     work: crate::sumeragi::v2_lane_driver::NativeLaneCandidateBatch,
+    handoff: crate::sumeragi::v2_lane_driver::NativeLaneDecisionHandoff,
 }
 
 #[inline(never)]
@@ -47,10 +48,12 @@ fn native_candidate_fixture(cases: &[NativeEconomicCase], atomic: bool) -> Nativ
         }
     }
     let handoff = driver.capture_decisions(&observed).unwrap().unwrap();
-    let prepared = std::thread::spawn(move || handoff.prepare_candidate())
-        .join()
-        .unwrap()
-        .unwrap();
+    let (handoff, prepared) = std::thread::spawn(move || {
+        let prepared = handoff.prepare_candidate().unwrap();
+        (handoff, prepared)
+    })
+    .join()
+    .unwrap();
     assert!(prepared.waits.is_empty());
     let work = prepared
         .work
@@ -69,10 +72,97 @@ fn native_candidate_fixture(cases: &[NativeEconomicCase], atomic: bool) -> Nativ
         state,
         parent: fixture.native.block,
         work,
+        handoff,
     }
 }
 
+fn assemble_native_handoff_for_test(
+    fixture: &NativeCandidateFixture,
+    max_transactions: usize,
+    max_bytes: usize,
+    attachments: crate::sumeragi::v2_candidate::CandidateAttachments,
+) -> Result<
+    crate::sumeragi::v2_candidate::NativeCandidateAssembly,
+    crate::sumeragi::v2_candidate::CandidateError,
+> {
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        v2::LocalProposalDirective,
+        v2_candidate::{CandidateLimits, CandidateParent, CandidateRequest, V2CandidateAssembler},
+        v2_core::{EventTag, Generation},
+    };
+    let verified =
+        native_control_verified_context(&fixture.state, fixture.parent.header().height().get());
+    let context = verified.context();
+    let local = context.leader(0);
+    // Global and lane committees are distinct fixture authorities. Sign with
+    // the actual global leader, never a key selected from the native committee.
+    let keys = native_preparation_global_keys(context);
+    let key = &keys[local as usize];
+    let (_, time_source) = iroha_primitives::time::TimeSource::new_mock(
+        fixture.parent.header().creation_time() + fixture.state.sumeragi_block_cadence(),
+    );
+    let queue = Arc::new(crate::queue::Queue::test(
+        iroha_config::parameters::actual::Queue::default(),
+        &time_source,
+    ));
+    let assembler = V2CandidateAssembler::new(
+        CandidateLimits::new(
+            NonZeroUsize::new(max_transactions).unwrap(),
+            NonZeroUsize::new(max_bytes).unwrap(),
+            NonZeroUsize::new(max_transactions).unwrap(),
+        )
+        .unwrap(),
+        time_source,
+    );
+    let guard = ConsensusOutputGuard::isolated();
+    let result = assembler.assemble_native(CandidateRequest {
+        context,
+        directive: LocalProposalDirective::for_test(
+            EventTag::new(context.height, 0, Generation::new(0)),
+            local,
+            None,
+            None,
+            None,
+        ),
+        local_validator: local,
+        parent: CandidateParent::Block(&fixture.parent),
+        state: &fixture.state,
+        queue: &queue,
+        key_pair: key,
+        output_guard: &guard,
+        attachments,
+        work_provider: &fixture.handoff,
+    });
+    assert!(
+        !guard.restart_required(),
+        "unsigned selection failures preserve the output owner"
+    );
+    assert_eq!(queue.queued_len(), 0);
+    result
+}
+
 fn assemble_native_candidate_for_test(
+    fixture: &NativeCandidateFixture,
+    max_transactions: usize,
+    max_bytes: usize,
+    attachments: crate::sumeragi::v2_candidate::CandidateAttachments,
+) -> Result<
+    crate::sumeragi::v2_candidate::CandidateAssemblyOutcome,
+    crate::sumeragi::v2_candidate::CandidateError,
+> {
+    let assembly =
+        assemble_native_handoff_for_test(fixture, max_transactions, max_bytes, attachments)?;
+    assert!(assembly.source.waits.is_empty());
+    assert_eq!(
+        assembly.source.work.as_ref().unwrap().batch(),
+        fixture.work.batch(),
+        "success, fitting, deferral and refusal retain every original prepared group",
+    );
+    assembly.outcome
+}
+
+fn assemble_prepared_native_candidate_for_test(
     fixture: &NativeCandidateFixture,
     max_transactions: usize,
     max_bytes: usize,
@@ -210,7 +300,7 @@ state_test! { sync native_candidate_stale_observation_waits_without_signing_or_c
     let publication = publication_notice.begin();
     drop(publication);
     drop(publication_notice);
-    assert!(matches!(assemble_native_candidate_for_test(&fixture, 16, 2 * 1024 * 1024,
+    assert!(matches!(assemble_prepared_native_candidate_for_test(&fixture, 16, 2 * 1024 * 1024,
         CandidateAttachments::default()).unwrap(), CandidateAssemblyOutcome::WorkDeferred {
             reason: CandidateWorkDeferral::NativeLaneSource, ..
         }));
@@ -298,4 +388,80 @@ state_test! { sync native_candidate_proof_rejects_foreign_state_and_network
     let mut wrong_height = context.context().clone();
     wrong_height.height += 1;
     assert!(!fixture.work.is_current(&fixture.state, &wrong_height));
+}
+
+state_test! { sync native_candidate_handoff_rejects_retired_merge_before_signing
+    use crate::sumeragi::v2_candidate::{CandidateAttachments, CandidateError};
+    let fixture = native_candidate_fixture(&[NativeEconomicCase::Transfer(25)], false);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
+    let error = assemble_native_handoff_for_test(&fixture, 16, 2 * 1024 * 1024,
+        CandidateAttachments {
+            certified_merge_carrier_header: Some(fixture.parent.header()),
+            ..CandidateAttachments::default()
+        }).err().expect("retired producer attachment must be refused");
+    assert!(matches!(error, CandidateError::NativeLaneDecisionInvalid(reason)
+        if reason.contains("retired certified merge")));
+    assert!(fixture.handoff.belongs_to(&fixture.state));
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap(), before);
+}
+
+state_test! { sync native_candidate_handoff_rejects_foreign_original_state
+    use crate::sumeragi::v2_candidate::{CandidateAttachments, CandidateError};
+    let mut fixture = native_candidate_fixture(&[NativeEconomicCase::Transfer(25)], false);
+    let foreign = native_candidate_fixture(&[NativeEconomicCase::Transfer(25)], false);
+    assert!(!foreign.handoff.belongs_to(&fixture.state));
+    fixture.handoff = foreign.handoff;
+    let error = assemble_native_handoff_for_test(&fixture, 16, 2 * 1024 * 1024,
+        CandidateAttachments::default()).err().expect("foreign State custody must be refused");
+    assert!(matches!(error, CandidateError::NativeLaneDecisionInvalid(reason)
+        if reason.contains("another State owner")));
+}
+
+state_test! { sync native_candidate_partial_atomic_handoff_retains_waits_and_independent_work
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        v2_candidate::{CandidateAssemblyOutcome, CandidateAttachments},
+        v2_lane_driver::{NativeLaneAdmission, NativeLaneDriver, NativeLaneInput},
+    };
+    let mut fixture = native_candidate_fixture(&[NativeEconomicCase::Transfer(25)], true);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let guard = ConsensusOutputGuard::isolated();
+    let outsider = KeyPair::try_from_seed(vec![0xE9; 32], Algorithm::BlsNormal).unwrap();
+    let mut driver = NativeLaneDriver::new(
+        Arc::clone(&fixture.state), Arc::clone(&guard), outsider,
+        native_driver_limits_for_test(),
+    ).unwrap();
+    let full = fixture.handoff.prepare_groups().unwrap();
+    assert_eq!(full.groups.len(), 1);
+    let decisions = full.groups[0].decisions();
+    assert_eq!(decisions.len(), 2, "real atomic input owns two route Decisions");
+    assert!(matches!(driver.admit(&observed, NativeLaneInput::Decision(decisions[0].clone())),
+        NativeLaneAdmission::Accepted));
+    fixture.handoff = driver.capture_decisions(&observed).unwrap().unwrap();
+    let assembly = assemble_native_handoff_for_test(&fixture, 16, 2 * 1024 * 1024,
+        CandidateAttachments::default()).unwrap();
+    assert!(assembly.source.work.is_none());
+    assert!(matches!(assembly.source.waits.as_slice(),
+        [LaneDecisionGroupPreparationV1::MissingDecisions(missing)] if missing.len() == 1));
+    assert!(matches!(assembly.outcome, Ok(CandidateAssemblyOutcome::NoProposalWork(_))),
+        "a partial atomic input must not manufacture a carrier");
+
+    let control = norito::encode_canonical(&fixture.work.batch().groups[0].payload.input).unwrap();
+    let assembly = assemble_native_handoff_for_test(&fixture, 16, 2 * 1024 * 1024,
+        CandidateAttachments { queue_plan_admissions: vec![control.clone()],
+            ..CandidateAttachments::default() }).unwrap();
+    assert!(assembly.source.work.is_none());
+    assert!(matches!(assembly.source.waits.as_slice(),
+        [LaneDecisionGroupPreparationV1::MissingDecisions(missing)] if missing.len() == 1));
+    let CandidateAssemblyOutcome::Assembled(candidate) = assembly.outcome.unwrap()
+    else { panic!("complete admission work remains serviceable while a route Decision is missing"); };
+    assert!(candidate.block().external_entrypoints_slice().is_empty());
+    let context = candidate.block().execution_context().unwrap();
+    assert!(context.native_lane_decisions.is_none());
+    assert!(context.merge_entry.is_none());
+    assert_eq!(context.queue_plan_admissions(), &[control]);
+    drop(candidate);
+    assert_eq!(driver.process().occupancy().instances, 0, "evidence cannot settle a local Apply");
+    assert!(!guard.restart_required());
+    driver.shutdown().join().unwrap();
 }

@@ -1873,7 +1873,7 @@ fn aggregate_acquisition_holds_every_family_without_publishing_or_losing_origina
     assert_eq!(state.committed_height(), 0);
     assert_eq!(state.state_view_generation(), generation);
     assert!(matches!(
-        world_probe.try_prepare_publication(&state.world, |_, _| Ok::<_, Infallible>(())),
+        world_probe.try_prepare_publication(&state.world, None, |_, _| Ok::<_, Infallible>(())),
         Err((_, WorldPublicationError::Field(_), _))
     ));
     assert!(matches!(
@@ -2744,7 +2744,7 @@ fn carrier_abort_drop_and_unwind_release_all_original_fences_before_component_wa
             .unwrap();
         let prepared = acquire(decision, &state);
         let (competitor, error, _cleanup) = competitor
-            .try_prepare_publication(&state.world, |_, _| Ok::<_, Infallible>(()))
+            .try_prepare_publication(&state.world, None, |_, _| Ok::<_, Infallible>(()))
             .err()
             .unwrap();
         drop(_cleanup);

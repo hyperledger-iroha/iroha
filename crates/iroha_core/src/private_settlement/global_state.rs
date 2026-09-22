@@ -249,7 +249,7 @@ fn decode_private_settlement_storage_key_v1<
 macro_rules! impl_private_settlement_json_key_v1 {
     ($($key:ty),+ $(,)?) => {
         $(
-            impl mv::json::JsonKeyCodec for $key {
+            impl norito::json::JsonKeyCodec for $key {
                 fn encode_json_key(&self, out: &mut String) {
                     encode_private_settlement_storage_key_v1(self, out);
                 }

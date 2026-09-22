@@ -681,19 +681,25 @@ fn captured_public_producer_artifacts_verify_against_independent_fixture() {
                 .unwrap();
             let error = verify(&changed, expected).unwrap_err();
             if reorder {
-                assert!(matches!(
-                    error,
-                    crate::offline_compact::VerificationError::Verify(
-                        Error::TransferInvariant { details }
-                    ) if details == "shared table indices differ from the exact transcript-derived set"
-                ));
+                assert!(
+                    matches!(
+                        &error,
+                        crate::offline_compact::VerificationError::Verify(
+                            Error::InvalidTraceShape { details }
+                        ) if details == "shared table indices differ from the exact transcript-derived set"
+                    ),
+                    "reordered child proof returned an unexpected error: {error:?}"
+                );
             } else {
                 // A truncated child's canonical frame must fail before its
                 // cryptographic relation is evaluated.
-                assert!(matches!(
-                    error,
-                    crate::offline_compact::VerificationError::Verify(Error::Encode(_))
-                ));
+                assert!(
+                    matches!(
+                        &error,
+                        crate::offline_compact::VerificationError::Verify(Error::Encode(_))
+                    ),
+                    "truncated child proof returned an unexpected error: {error:?}"
+                );
             }
         }
         eprintln!(

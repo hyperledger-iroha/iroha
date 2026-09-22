@@ -387,7 +387,9 @@ mod carrier_geometry_preparation;
 mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_preparation;
-pub(crate) use carrier_preparation::{PreparedCarrier, PublishedNativeApply, RetainedCarrier};
+pub(crate) use carrier_preparation::{
+    PreparedCarrier, PublishedCarrier, PublishedNativeApply, RetainedCarrier,
+};
 mod committed_hash_journal;
 #[cfg(test)]
 mod committed_transaction_context;
@@ -3569,6 +3571,10 @@ pub enum MergeLedgerCommitError {
     /// This is a caller scheduling error, never evidence of an invalid input.
     #[error("merge execution recorder ownership conflict: {0}")]
     ExecutionRecorderConflict(String),
+    /// Native common control validation retains its original local or semantic
+    /// failure. Flattening this into a batch diagnostic loses storage provenance.
+    #[error("Native execution control validation failed: {0}")]
+    NativeControlValidation(#[source] Box<crate::block::BlockValidationError>),
     /// The merge entry must contain settlement snapshots, an execution batch, or one drain certificate.
     #[error(
         "merge ledger entry must include a lane snapshot, execution batch, or drain certificate"
@@ -4963,7 +4969,7 @@ impl SmartContractCodeUploadKey {
             ..=Self::new(authority.clone(), Hash::prehashed([u8::MAX; Hash::LENGTH]))
     }
 }
-impl mv::json::JsonKeyCodec for SmartContractCodeUploadKey {
+impl norito::json::JsonKeyCodec for SmartContractCodeUploadKey {
     fn encode_json_key(&self, out: &mut String) {
         let key = format!(
             "{}|{}",
@@ -5033,7 +5039,7 @@ impl SmartContractCodeUploadChunkKey {
         Self::new(upload.clone(), 0)..=Self::new(upload.clone(), u32::MAX)
     }
 }
-impl mv::json::JsonKeyCodec for SmartContractCodeUploadChunkKey {
+impl norito::json::JsonKeyCodec for SmartContractCodeUploadChunkKey {
     fn encode_json_key(&self, out: &mut String) {
         let key = format!(
             "{}|{}|{}",
@@ -5148,7 +5154,7 @@ impl Default for MusubiResolverIndexRevisionV1 {
         Self(1)
     }
 }
-impl mv::json::JsonKeyCodec for MusubiResolverIndexRevisionV1 {
+impl norito::json::JsonKeyCodec for MusubiResolverIndexRevisionV1 {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.0.to_string(), out);
     }
@@ -59473,7 +59479,7 @@ mod tiered_snapshot_diff_tests {
     }
     #[test]
     fn contract_upload_json_keys_are_stable_text_and_reject_trailing_components() {
-        use mv::json::JsonKeyCodec;
+        use norito::json::JsonKeyCodec;
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let code_hash = iroha_crypto::Hash::new(b"stable contract upload json key");
         let upload_key = SmartContractCodeUploadKey::new(authority.clone(), code_hash);

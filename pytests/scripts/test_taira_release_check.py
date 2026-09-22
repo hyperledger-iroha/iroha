@@ -30,8 +30,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1499 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1677 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1561 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1739 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -76,6 +76,160 @@ def isolate_stage_fixture(stack, *, keep=()):
 
 
 class BeaconGateTests(unittest.TestCase):
+    def test_native_connection_controls_are_required_and_focused(self):
+        required = (
+            'state::tests::native_candidate_uses_exact_decisions_and_canonical_recorded_execution',
+            'state::tests::native_candidate_fits_whole_priority_prefix_before_signing',
+            'state::tests::native_candidate_stale_observation_waits_without_signing_or_custody_loss',
+            'state::tests::native_candidate_controls_fit_without_displacing_or_duplicating_economic_input',
+            'state::tests::native_candidate_refuses_unsupported_carrier_controls_before_signing',
+            'state::tests::native_candidate_proof_rejects_foreign_state_and_network',
+            'state::tests::native_candidate_handoff_rejects_retired_merge_before_signing',
+            'state::tests::native_candidate_handoff_rejects_foreign_original_state',
+            'state::tests::native_candidate_partial_atomic_handoff_retains_waits_and_independent_work',
+            'sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback',
+            'state::tests::native_preparation_preserves_local_recorder_conflict',
+            'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_marker_failures_return_exact_wait_and_original_owner',
+            'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_capture_refusal_keeps_exact_wait_without_success_marker',
+            'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cache_and_reproposal_reuse_original_owner',
+            'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_foreign_store_returns_request_before_execution',
+            'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cached_scalar_receipt_cannot_replace_missing_owner',
+            'sumeragi::v2_apply::tests::archive_reservations::acquires_original_pair_without_execution',
+            'sumeragi::v2_apply::tests::archive_reservations::index_busy_wakes_original_runner',
+            'sumeragi::v2_apply::tests::archive_reservations::second_capture_refusal_releases_first',
+            'sumeragi::v2_apply::tests::archive_reservations::original_capture_drop_wakes_runner_and_preserves_old_wait',
+            'sumeragi::v2_apply::tests::archive_reservations::rejects_mismatch_before_acquisition',
+            'sumeragi::v2_apply::tests::archive_reservations::handoff_retains_owner_on_context_wire_and_service_mismatch',
+            'sumeragi::v2_apply::tests::archive_reservations::local_archive_failure_requires_recovery',
+            'query::archive_capture::tests::only_the_exact_original_gate_accepts_its_retained_owner',
+            'query::archive_capture::tests::observers_neither_own_nor_cancel_the_reservation',
+            'query::archive_capture::tests::release_before_wait_registration_cannot_be_missed',
+            'query::archive_capture::tests::active_wait_is_woken_by_the_actual_owner_drop',
+            'query::archive_capture::tests::old_wait_remains_released_while_a_new_owner_is_active',
+            'query::archive_capture::tests::move_to_another_worker_preserves_custody_without_retaining_the_archive',
+            'query::archive_capture::tests::concurrent_attempts_retain_exactly_one_original_owner',
+            'state::tests::native_service_preparation_single_preserves_original_sources_and_archives',
+            'state::tests::native_service_preparation_atomic_preserves_original_sources_and_archives',
+            'state::tests::native_service_preparation_index_busy_precedes_execution',
+            'state::tests::native_service_preparation_capture_busy_releases_partial_owner',
+            'state::tests::native_service_preparation_stale_source_skips_archives_and_execution',
+            'state::tests::native_service_preparation_foreign_source_and_body_are_rejected',
+            'state::tests::native_service_preparation_recorder_conflict_releases_archives',
+            'sumeragi::v2_apply::tests::native_preparation_errors::hash_admission_retains_original_release_and_runner_through_all_native_origins',
+            'sumeragi::v2_apply::tests::native_preparation_errors::native_controls_preserve_local_storage_failure_and_semantic_rejection',
+            'sumeragi::v2_apply::tests::native_preparation_errors::metadata_and_recorder_diagnostics_cannot_authorize_negative_markers',
+            'sumeragi::v2_apply::tests::native_preparation_errors::governed_native_batch_limit_remains_a_semantic_body_verdict',
+            'state::tests::native_preparation_single_retains_real_suffix_controls_and_unpublished_outputs',
+            'state::tests::native_preparation_atomic_retains_real_suffix_controls_and_unpublished_outputs',
+            'state::tests::native_preparation_single_authenticates_original_durable_sources_under_lease',
+            'state::tests::native_preparation_atomic_authenticates_original_durable_sources_under_lease',
+            'state::tests::native_preparation_rejects_signed_noncanonical_time',
+            'state::tests::native_preparation_rejects_signed_confidential_policy_substitution',
+            'state::tests::native_preparation_rejects_wrong_and_multiple_origin_signatures',
+            'state::tests::native_preparation_rejects_stale_source_without_execution_or_publication',
+            'state::tests::native_preparation_retained_prefix_does_not_authorize_raw_state_commit',
+            'state::tests::native_preparation_refreshes_source_after_actual_finalized_height_advance',
+            'state::tests::native_recorded_control_rejects_changed_opening_and_stale_verified_height',
+            'state::tests::native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon',
+        )
+        self.assertEqual(len(required), 53)
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("native_connection_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            connection = [name for _, names in selected_gate.CORE_NATIVE_CONNECTION_STAGES for name in names]
+            startup = [name for _, names in selected_gate.CORE_STARTUP_STAGES for name in names]
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                stages = selected_gate.qualification_stages(scope)["core"]
+                selected = [name for _, names in stages for name in names]
+                for regression in required:
+                    with self.subTest(platform=platform, scope=scope, regression=regression):
+                        self.assertEqual(connection.count(regression), 1)
+                        self.assertEqual(startup.count(regression), 1)
+                        self.assertEqual(selected.count(regression), 1)
+                        focused = selected_gate.focused_regression_stages(scope, ("core=" + regression,))
+                        self.assertEqual(tuple(focused), ("core",))
+                        self.assertEqual([name for _, names in focused["core"] for name in names], [regression])
+                        listing = "\n".join(name + ": test" for name in selected if name != regression)
+                        with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                            selected_gate.require_tests(listing, stages)
+
+    def test_native_connection_selectors_follow_actual_module_and_include_paths(self):
+        root = SCRIPT.resolve().parents[1] / "crates/iroha_core/src"
+        def source(path):
+            return (root / path).read_text()
+        # Includes contribute tests to the containing module, not their filename.
+        self.assertIn("mod tests;", source("state.rs"))
+        self.assertIn('include!("lane_process_tests.rs");', source("state/tests.rs"))
+        self.assertIn('include!("lane_driver_tests.rs");', source("state/lane_process_tests.rs"))
+        self.assertIn('include!("native_lane_candidate_tests.rs");', source("state/lane_driver_tests.rs"))
+        self.assertIn('include!("native_lane_preparation_tests.rs");', source("state/tests.rs"))
+        self.assertIn("pub(crate) mod v2_candidate;", source("sumeragi/mod.rs"))
+        self.assertIn("mod tests {", source("sumeragi/v2_candidate.rs"))
+        self.assertIn("pub(crate) mod v2_lifecycle_coordinator;", source("sumeragi/mod.rs"))
+        self.assertRegex(source("sumeragi/v2_lifecycle_coordinator.rs"),
+                         r'#\[path = "v2_lifecycle_work_registry\.rs"\]\s*(?:#\[[^\n]*\]\s*)*mod work_registry;')
+        registry = source("sumeragi/v2_lifecycle_work_registry.rs")
+        self.assertIn("mod tests {", registry)
+        self.assertIn('include!("tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs");', registry)
+        dispatch = source("sumeragi/tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs")
+        self.assertIn("mod retained_dispatch {", dispatch)
+        candidates = re.findall(r"state_test!\s*\{\s*sync\s+(native_candidate_\w+)",
+                                source("state/native_lane_candidate_tests.rs"))
+        self.assertEqual(len(candidates), 9)
+        dispatch_names = re.findall(r"#\[test\]\s*fn\s+(retained_dispatch_\w+)", dispatch)
+        self.assertEqual(len(dispatch_names), 5)
+        required = {"state::tests::" + name for name in candidates}
+        required.update("sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::" + name
+                        for name in dispatch_names)
+        for path, pattern, regression in (
+            ("sumeragi/v2_candidate.rs", r"#\[test\]\s*fn\s+native_source_wait_never_selects_ordinary_fallback\s*\(",
+             "sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback"),
+            ("state/native_lane_preparation_tests.rs", r"state_test!\s*\{\s*sync\s+native_preparation_preserves_local_recorder_conflict\b",
+             "state::tests::native_preparation_preserves_local_recorder_conflict"),
+        ):
+            self.assertRegex(source(path), pattern)
+            required.add(regression)
+        preparation_names = re.findall(r"state_test!\s*\{\s*sync\s+(native_preparation_\w+)",
+                                       source("state/native_lane_preparation_tests.rs"))
+        self.assertEqual(len(preparation_names), 11)
+        required.update("state::tests::" + name for name in preparation_names)
+        self.assertIn('include!("native_lane_control_execution_tests.rs");', source("state/tests.rs"))
+        control_source = source("state/native_lane_control_execution_tests.rs")
+        for name in (
+            "native_recorded_control_rejects_changed_opening_and_stale_verified_height",
+            "native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon",
+        ):
+            self.assertRegex(control_source, r"state_test!\s*\{\s*sync\s+" + name + r"\b")
+            required.add("state::tests::" + name)
+        self.assertIn('include!("native_lane_service_preparation_tests.rs");', source("state/tests.rs"))
+        service_names = re.findall(r"state_test!\s*\{\s*sync\s+(native_service_preparation_\w+)",
+                                   source("state/native_lane_service_preparation_tests.rs"))
+        self.assertEqual(len(service_names), 7)
+        required.update("state::tests::" + name for name in service_names)
+        self.assertRegex(source("sumeragi/v2_apply.rs"),
+                         r'#\[path = "v2_apply_tests\.rs"\]\s*mod tests;')
+        apply_tests = source("sumeragi/v2_apply_tests.rs")
+        for filename, module, count in (
+            ("archive_reservations_tests.rs", "archive_reservations", 7),
+            ("native_preparation_error_tests.rs", "native_preparation_errors", 4),
+        ):
+            self.assertIn('include!("v2_apply/' + filename + '");', apply_tests)
+            leaf = source("sumeragi/v2_apply/" + filename)
+            self.assertIn("mod " + module + " {", leaf)
+            names = re.findall(r"#\[test\]\s*fn\s+(\w+)", leaf)
+            self.assertEqual(len(names), count)
+            required.update("sumeragi::v2_apply::tests::" + module + "::" + name for name in names)
+        self.assertIn("mod archive_capture;", source("query/mod.rs"))
+        capture = source("query/archive_capture.rs")
+        self.assertIn("mod tests {", capture)
+        capture_names = re.findall(r"#\[(?:tokio::)?test\]\s*(?:async\s+)?fn\s+(\w+)", capture)
+        self.assertEqual(len(capture_names), 7)
+        required.update("query::archive_capture::tests::" + name for name in capture_names)
+        registered = {name for _, names in gate.CORE_NATIVE_CONNECTION_STAGES for name in names}
+        self.assertEqual(required - registered, set())
+
     def test_partial_publication_refusal_controls_are_required_in_both_scopes(self):
         required = ('queue::tests::lane_retirement_observer::refused_cut_retains_original_notifications_through_outer_fence', 'state::carrier_geometry_preparation::tests::queue_retirement_tests::route_refusal_retains_original_cut_cleanup_through_lifecycle', 'state::carrier_preparation::journals::decision_binding::physical_publication::tests::queue_publication_tests::state_fence_refusal_defers_callbacks_through_original_queue_and_kura', 'sumeragi::v2_apply::retirement_release_tests::autoscale_queue_scan_and_refusal_release_lifecycle_before_queue_wake')
         required += ('kura::publication_lease::tests::partial_kura_refusal_releases_every_acquired_fence_before_callbacks', 'kura::publication_lease::tests::full_and_partial_kura_abandonment_release_jointly_even_on_unwind', 'kura::publication_lease::tests::cold_kura_sidecar_wakes_after_joint_success_and_real_storage_refusal', 'kura::publication_lease::tests::repeated_cold_kura_lookups_retain_one_batch_through_outer_unwind', 'kura::publication_lease::tests::foreign_cold_batch_returns_original_guard_for_joint_cleanup', 'kura::tests::native_amx_live_custody_wrappers_unlock_together_before_callbacks')
@@ -500,7 +654,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                  "crates/mv/src/storage.rs", "crates/mv/src/storage/publication_tests.rs",
                  "crates/mv/src/storage/detached_tests.rs", "crates/mv/src/storage/touches.rs",
                  "crates/mv/src/storage/touches_tests.rs", "crates/mv/src/storage/admitted_tests.rs",
-                 "crates/mv/src/storage/fresh_pair_acquisition_tests.rs")
+                 "crates/mv/src/storage/fresh_pair_acquisition_tests.rs",
+                 "crates/mv/src/storage/scoped_acquisition_tests.rs")
         with tempfile.TemporaryDirectory() as temporary:
             copied = Path(temporary)
             for relative in paths:
@@ -553,7 +708,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "cell::aggregate_acquisition_tests::": 3,
             "storage::aggregate_acquisition_tests::": 2,
             "storage::detached_tests::": 10,
-            "storage::admitted_tests::": 18,
+            "storage::admitted_tests::": 24,
             "storage::touches::tests::": 6,
         }
         for platform in ("darwin", "linux"):
@@ -565,10 +720,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 92)
+                self.assertEqual(len(library), 98)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 92), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 71), ("concread", 151)):
+                for harness, count in (("mv", 98), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 71), ("concread", 151)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -2142,7 +2297,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             requested = tuple(harness + "=" + test for harness in gate.MV_OWNERSHIP_HARNESSES
                               for _, tests in selected[harness] for test in tests)
-            self.assertEqual(len(requested), 343)
+            self.assertEqual(len(requested), 349)
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
             with self.subTest(scope=scope), \
@@ -2168,7 +2323,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
-            self.assertIn("343 focused regressions", output.getvalue())
+            self.assertIn("349 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 

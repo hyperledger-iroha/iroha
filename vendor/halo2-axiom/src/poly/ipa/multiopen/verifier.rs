@@ -147,17 +147,23 @@ impl<
             .iter()
             .zip(q_eval_sets.iter())
             .zip(u.iter())
-            .fold(
+            .try_fold(
                 C::Scalar::ZERO,
                 |msm_eval, ((points, evals), proof_eval)| {
                     let r_poly = lagrange_interpolate(points, evals);
                     let r_eval = eval_polynomial(&r_poly, *x_3);
-                    let eval = points.iter().fold(*proof_eval - &r_eval, |eval, point| {
-                        eval * &(*x_3 - point).invert().unwrap()
-                    });
-                    msm_eval * &(*x_2) + &eval
+                    let eval = points
+                        .iter()
+                        .try_fold(*proof_eval - &r_eval, |eval, point| {
+                            // A transcript challenge can coincide with a queried point. This
+                            // quotient is then undefined; reject without resampling or panicking.
+                            let inverse = Option::<C::Scalar>::from((*x_3 - point).invert())
+                                .ok_or(Error::OpeningError)?;
+                            Ok::<_, Error>(eval * &inverse)
+                        })?;
+                    Ok::<_, Error>(msm_eval * &(*x_2) + &eval)
                 },
-            );
+            )?;
 
         // Sample a challenge x_4 that we will use to collapse the openings of
         // the various remaining polynomials at x_3 together.
@@ -178,3 +184,7 @@ impl<
         super::commitment::verify_proof(self.params, msm, transcript, *x_3, v)
     }
 }
+
+#[cfg(test)]
+#[path = "verifier_tests.rs"]
+mod tests;

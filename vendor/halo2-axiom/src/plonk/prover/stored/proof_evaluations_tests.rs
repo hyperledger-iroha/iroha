@@ -9,7 +9,7 @@ use crate::{
     plonk::prover::stored::proof_evaluations::{
         self as evaluations, StoredOpeningBlindV1 as OpeningBlind, StoredOpeningSourceV1 as Source,
     },
-    poly::{Coeff, Polynomial, query::ProverQuery},
+    poly::{Coeff, Polynomial, ProverQuery},
 };
 
 #[derive(Clone, Copy)]
@@ -892,3 +892,6 @@ fn both_pasta_opening_copy_rejects_invalid_requests_and_erases_partial_h_on_erro
     copy_failure_matrix::<EqAffine>();
     copy_failure_matrix::<EpAffine>();
 }
+
+#[path = "proof_evaluations/opening_tests.rs"]
+mod opening;

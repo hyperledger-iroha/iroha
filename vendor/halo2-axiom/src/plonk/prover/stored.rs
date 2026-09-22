@@ -12,9 +12,10 @@
 //! existing ordinary/consuming proof APIs remain unchanged. The stored quotient continuation
 //! produces undivided numerator parts and the inverse continuation produces ordinary
 //! coefficient pieces, then commits them and writes the original scalar evaluations. Its
-//! immutable owner-local opening schedule retains H as a lazy coefficient recipe. The stored
-//! IPA opening suffix and exact Core integration remain required. No complete proof,
-//! process-memory or latency claim follows.
+//! immutable owner-local opening schedule retains H as a lazy coefficient recipe. Outer IPA
+//! multiopening constructs guarded P; guarded inner IPA completes a closed internal owner.
+//! Exact authenticated Core integration remains required. No production proof-entry-point,
+//! process-memory or latency qualification follows.
 
 use std::{
     marker::PhantomData,

@@ -6,7 +6,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 
-use mv::json::JsonKeyCodec;
+use norito::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
 /// Exact byte length of a canonical first-release manifest root CID.
 pub const MANIFEST_ROOT_CID_LENGTH: usize = sorafs_manifest::MAX_MANIFEST_ROOT_CID_BYTES;

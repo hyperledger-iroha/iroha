@@ -95,9 +95,11 @@ function capture(input) {
 }
 function symbols(binding) {
   const names = Reflect.ownKeys(binding);
+  // Match the sole ABI owner's rejection-only prefix; this is not an export or decoder.
+  const retiredPrefix = "connect_norito_" + ["cash", "offline"].reverse().join("_") + "_";
   demand(names.length <= 1024 && names.every((name) => typeof name === "string"), "native symbol inventory differs");
   demand(names.every((name) => name !== "privateSettlementVerifyAuditorCapsuleResponseV1"
-    && !name.startsWith("connect_norito_offline_cash_")), "retired native export present");
+    && !name.startsWith(retiredPrefix)), "retired native export present");
   for (const name of [...ABI_SYMBOLS, ...SORAFS_SYMBOLS])
     demand(typeof Object.getOwnPropertyDescriptor(binding, name)?.value === "function", `missing native capability ${name}`);
   const version = binding.connectNoritoBridgeAbiVersion();

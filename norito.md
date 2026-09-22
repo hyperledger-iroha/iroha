@@ -988,6 +988,12 @@ formatters must preserve that error even if a formatter ignores a failed write.
 Key decoders retain duplicate-key rejection and the active decode resource
 limits. This JSON contract does not change the binary map layout above.
 
+Persisted MV maps use the distinct `norito::json::JsonKeyCodec` contract: its
+writer emits a complete quoted JSON key and its decoder receives unquoted text.
+Norito owns the single trait and primitive/tuple implementations; domain types
+own their implementations and MV owns only map serialization. Moving this
+contract does not change key spellings, decoding, or the map wire layout.
+
 ## MerkleTree Derived-Cache Encoding
 
 `iroha_crypto::MerkleTree<T>` never serializes its breadth-first internal-node

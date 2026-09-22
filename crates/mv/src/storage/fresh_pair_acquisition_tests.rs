@@ -615,3 +615,6 @@ fn ordinary_undo_poison_does_not_wait_for_current() {
         assert_eq!(verdict, Ok(()));
     }
 }
+
+#[path = "scoped_acquisition_tests.rs"]
+mod scoped_acquisition;

@@ -32,9 +32,10 @@ impl RetainedWorldField for FaultField {
     fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
+        scope: Option<&'target AllocationScope<'target>>,
     ) -> Box<dyn PreparedWorldField + 'target> {
         Box::new(PreparedFaultField {
-            original: self.original.publication_slot(target),
+            original: self.original.publication_slot(target, scope),
             after_prepare: self.after_prepare,
             target,
         })
@@ -79,7 +80,7 @@ pub(in crate::state) fn arm_first_release(
     waker: &Waker,
 ) -> concread::release::ReleaseFuture {
     let (_, error, cleanup) = original
-        .try_prepare_publication(target, |_, _| Ok::<_, ()>(()))
+        .try_prepare_publication(target, None, |_, _| Ok::<_, ()>(()))
         .err()
         .expect("actual earlier World writer is held");
     drop(cleanup);
@@ -104,7 +105,7 @@ pub(in crate::state) fn arm_first_release(
 pub(in crate::state) fn probe_fields(original: DetachedWorld<()>, target: &World) -> [usize; 3] {
     let mut counts = [0; 3];
     for field in original.fields {
-        let mut slot = field.publication_slot(target);
+        let mut slot = field.publication_slot(target, None);
         match slot.try_prepare() {
             Ok(()) => {
                 counts[0] += 1;
@@ -171,7 +172,7 @@ fn world_publication_slot_late_caught_panic_retains_every_writer_until_terminal_
         *stored.lock().unwrap() = Some(arm_first_release(observer.take().unwrap(), target, &waker));
         panic!("after last real World field acquired");
     });
-    let mut slot = original.publication_slot::<()>(&world);
+    let mut slot = original.publication_slot::<()>(&world, None);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         slot.try_prepare(|_, _| Ok::<_, ()>(()))
     }));

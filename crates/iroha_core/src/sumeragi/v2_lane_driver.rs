@@ -522,6 +522,11 @@ pub(crate) struct NativeLaneDecisionPreparation {
 }
 
 impl NativeLaneDecisionHandoff {
+    /// Match this immutable handoff to the original committed State owner.
+    pub(crate) fn belongs_to(&self, state: &State) -> bool {
+        std::ptr::eq(self.state.as_ref(), state)
+    }
+
     /// Prepare candidate input on a worker while preserving original reducer
     /// Decisions and Apply effects. The proof retains the exact observed State;
     /// global assembly rechecks it under the publication lease before signing.

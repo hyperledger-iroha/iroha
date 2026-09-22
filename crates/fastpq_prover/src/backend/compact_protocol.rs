@@ -367,9 +367,34 @@ fn prepare_trace(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<Prepa
     let bound_statement = relation.statement_bytes().to_vec();
     let planner = Planner::new(&FASTPQ_FINAL_V1);
     let mut coefficients = columns.to_vec();
+    #[cfg(test)]
+    let phase_started = {
+        eprintln!("fastpq_test_prover phase=ifft start");
+        std::time::Instant::now()
+    };
     planner.ifft_columns(&mut coefficients);
+    #[cfg(test)]
+    eprintln!(
+        "fastpq_test_prover phase=ifft elapsed={:?}",
+        phase_started.elapsed()
+    );
+    #[cfg(test)]
+    let phase_started = {
+        eprintln!("fastpq_test_prover phase=lde start");
+        std::time::Instant::now()
+    };
     let columns = planner.lde_columns(&coefficients);
+    #[cfg(test)]
+    eprintln!(
+        "fastpq_test_prover phase=lde elapsed={:?}",
+        phase_started.elapsed()
+    );
     drop(coefficients);
+    #[cfg(test)]
+    let phase_started = {
+        eprintln!("fastpq_test_prover phase=row_leaf_hashing start");
+        std::time::Instant::now()
+    };
     let leaves = collect_prover_rows(geometry.lde_rows, |indices| {
         let mut row = vec![0; geometry.schema.width];
         indices
@@ -379,7 +404,22 @@ fn prepare_trace(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<Prepa
             })
             .collect()
     })?;
+    #[cfg(test)]
+    eprintln!(
+        "fastpq_test_prover phase=row_leaf_hashing elapsed={:?}",
+        phase_started.elapsed()
+    );
+    #[cfg(test)]
+    let phase_started = {
+        eprintln!("fastpq_test_prover phase=row_tree start");
+        std::time::Instant::now()
+    };
     let rows = binding.tree(&leaves, MerkleTreeRoleV1::AirTrace)?;
+    #[cfg(test)]
+    eprintln!(
+        "fastpq_test_prover phase=row_tree elapsed={:?}",
+        phase_started.elapsed()
+    );
     Ok(PreparedTrace {
         geometry,
         columns,
@@ -407,6 +447,11 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
     )?;
     let mut transcript = binding.transcript(relation, geometry, trace.rows.root())?;
     let mixing = transcript.columns()?;
+    #[cfg(test)]
+    let phase_started = {
+        eprintln!("fastpq_test_prover phase=mixed_values start");
+        std::time::Instant::now()
+    };
     let mixed: Vec<_> = (0..geometry.lde_rows)
         .into_par_iter()
         .with_min_len(64)
@@ -420,6 +465,16 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
                 })
         })
         .collect();
+    #[cfg(test)]
+    eprintln!(
+        "fastpq_test_prover phase=mixed_values elapsed={:?}",
+        phase_started.elapsed()
+    );
+    #[cfg(test)]
+    let phase_started = {
+        eprintln!("fastpq_test_prover phase=mixed_leaf_hashing start");
+        std::time::Instant::now()
+    };
     let mixed_leaves = {
         let results: Vec<Result<Digest>> = mixed
             .par_iter()
@@ -428,11 +483,41 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
             .collect();
         results.into_iter().collect::<Result<Vec<Digest>>>()?
     };
+    #[cfg(test)]
+    eprintln!(
+        "fastpq_test_prover phase=mixed_leaf_hashing elapsed={:?}",
+        phase_started.elapsed()
+    );
+    #[cfg(test)]
+    let phase_started = {
+        eprintln!("fastpq_test_prover phase=mixed_tree start");
+        std::time::Instant::now()
+    };
     let mixed_tree = binding.tree(&mixed_leaves, MerkleTreeRoleV1::Lde)?;
+    #[cfg(test)]
+    eprintln!(
+        "fastpq_test_prover phase=mixed_tree elapsed={:?}",
+        phase_started.elapsed()
+    );
     drop(mixed_leaves);
     let alphas = transcript.alphas(mixed_tree.root())?;
+    #[cfg(test)]
+    let phase_started = {
+        eprintln!("fastpq_test_prover phase=quotient_preparation start");
+        std::time::Instant::now()
+    };
     let weights = AirQuotientDomain::new(&FASTPQ_FINAL_V1, geometry.lde_rows)?;
     let prepared = relation.prepare_prover()?;
+    #[cfg(test)]
+    eprintln!(
+        "fastpq_test_prover phase=quotient_preparation elapsed={:?}",
+        phase_started.elapsed()
+    );
+    #[cfg(test)]
+    let phase_started = {
+        eprintln!("fastpq_test_prover phase=quotient_evaluation start");
+        std::time::Instant::now()
+    };
     let quotients = collect_prover_rows(geometry.lde_rows, |indices| {
         let mut evaluate = prepared.evaluator();
         let mut current = vec![0; geometry.schema.width];
@@ -450,7 +535,17 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
             })
             .collect()
     })?;
+    #[cfg(test)]
+    eprintln!(
+        "fastpq_test_prover phase=quotient_evaluation elapsed={:?}",
+        phase_started.elapsed()
+    );
     drop(prepared); // No evaluator remains; release all prover-only fixed LDEs.
+    #[cfg(test)]
+    let phase_started = {
+        eprintln!("fastpq_test_prover phase=quotient_leaf_hashing start");
+        std::time::Instant::now()
+    };
     let quotient_leaves = {
         let results: Vec<Result<Digest>> = quotients
             .par_iter()
@@ -459,7 +554,22 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
             .collect();
         results.into_iter().collect::<Result<Vec<Digest>>>()?
     };
+    #[cfg(test)]
+    eprintln!(
+        "fastpq_test_prover phase=quotient_leaf_hashing elapsed={:?}",
+        phase_started.elapsed()
+    );
+    #[cfg(test)]
+    let phase_started = {
+        eprintln!("fastpq_test_prover phase=quotient_tree start");
+        std::time::Instant::now()
+    };
     let quotient_tree = binding.tree(&quotient_leaves, MerkleTreeRoleV1::AirComposition)?;
+    #[cfg(test)]
+    eprintln!(
+        "fastpq_test_prover phase=quotient_tree elapsed={:?}",
+        phase_started.elapsed()
+    );
     drop(quotient_leaves);
     let joint = transcript.joint(quotient_tree.root())?;
     let (mut fri, indices) = fold_protocol_layers(
@@ -521,6 +631,11 @@ fn fold_protocol_layers(
                 "compact FRI layer length differs from fixed geometry",
             ));
         }
+        #[cfg(test)]
+        let phase_started = {
+            eprintln!("fastpq_test_prover phase=fri_round round={round} start");
+            std::time::Instant::now()
+        };
         let leaves = {
             let half = current.len() / 2;
             let results: Vec<Result<Digest>> = (0..half)
@@ -539,6 +654,11 @@ fn fold_protocol_layers(
         layer_values.push(current);
         current = next;
         domain = domain.folded(2);
+        #[cfg(test)]
+        eprintln!(
+            "fastpq_test_prover phase=fri_round round={round} elapsed={:?}",
+            phase_started.elapsed()
+        );
     }
     let final_round = geometry.fri_lengths.len() - 1;
     if current.len() != geometry.fri_lengths[final_round] {
@@ -546,6 +666,11 @@ fn fold_protocol_layers(
             "compact FRI terminal length differs from fixed geometry",
         ));
     }
+    #[cfg(test)]
+    let phase_started = {
+        eprintln!("fastpq_test_prover phase=fri_terminal start");
+        std::time::Instant::now()
+    };
     let terminal_leaf = binding.fri(final_round, 0, &current)?;
     let tree = binding.tree(&[terminal_leaf], MerkleTreeRoleV1::Fri(final_round as u32))?;
     let root = tree.root();
@@ -553,6 +678,11 @@ fn fold_protocol_layers(
     roots.push(root);
     layer_values.push(current);
     let indices = transcript.queries(root)?;
+    #[cfg(test)]
+    eprintln!(
+        "fastpq_test_prover phase=fri_terminal elapsed={:?}",
+        phase_started.elapsed()
+    );
     Ok((
         super::FriOpeningLayers {
             layer_values,

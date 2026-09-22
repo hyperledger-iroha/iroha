@@ -1,0 +1,12 @@
+{
+  "description": "Exact current prose superseded by the guarded-P default validation update. Historical text, not a runtime receipt.",
+  "original_files": {
+    "specs/kagemusha_v1_production_readiness.md": "501d7a85f28a2ab6f46ec08943998d180d080c97a5e90837d1aa5cf0cfd4cd6a",
+    "status.md": "57742374aed275c47500f51dbb2d5fb8bd6c746853116b03882b4b2a4263af82"
+  },
+  "sections": {
+    "opening-predecessor-active.md": "88baacaa6e55de0af26199fc3bc071c56f479c2207905c1808b1f862b00c6e13",
+    "opening-predecessor-validation.md": "ec9ced93ab9bc5fd89124ce51dc6ebfb63f78e76c0a4c1b95cf078f28f1498d4",
+    "opening-predecessor-status-row.md": "54e4d960a9ead563ca9d464ce9594a75aa5eb5905445a9d176d8b7b93a370d35"
+  }
+}

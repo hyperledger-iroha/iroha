@@ -16,6 +16,7 @@ mod prover;
 mod verifier;
 
 pub use prover::create_proof;
+pub(crate) use prover::{collapse_round_vectors, parallel_generator_collapse};
 pub use verifier::verify_proof;
 
 use std::io;

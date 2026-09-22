@@ -38,7 +38,10 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPublicationError
 
 /// Actual published State and its original block, events, source and reservations.
 /// This token has no second publication or reexecution operation.
-pub(in crate::state::carrier_preparation::journals) struct PublishedCarrier<A, B, I> {
+/// Move the complete owner across worker completion before borrowing Native Apply
+/// authority; its original source and all three reservations remain attached.
+#[must_use = "retain published custody until original lane Apply completion is delivered"]
+pub(crate) struct PublishedCarrier<A, B, I> {
     block: CommittedBlock,
     committed_event: iroha_data_model::events::pipeline::BlockEvent,
     events: Vec<EventBox>,
@@ -166,7 +169,7 @@ impl PublishedNativeApply<'_> {
 
 impl<A, B, I> PublishedCarrier<A, B, I> {
     /// Borrow exact Native completion authority only from actual State publication.
-    pub(in crate::state::carrier_preparation::journals) fn native_apply(
+    pub(crate) fn native_apply(
         &self,
     ) -> Option<PublishedNativeApply<'_>> {
         let source = self.source.native()?;
@@ -180,14 +183,14 @@ impl<A, B, I> PublishedCarrier<A, B, I> {
     }
 
     /// Borrow the exact result-bearing carrier that became visible.
-    pub(in crate::state::carrier_preparation::journals) fn block(
+    pub(crate) fn block(
         &self,
     ) -> &iroha_data_model::block::SignedBlock {
         self.block.as_ref()
     }
 
     /// Inspect events only after complete State publication and writer release.
-    pub(in crate::state::carrier_preparation::journals) fn events(&self) -> &[EventBox] {
+    pub(crate) fn events(&self) -> &[EventBox] {
         &self.events
     }
 }

@@ -3520,6 +3520,17 @@ pub(crate) mod validation_custody;
 
 pub(crate) mod carrier_queue_retirement;
 
+/// Exact archive predecessor custody before the retained validator executes.
+// TODO: consume through the production CarrierValidator with full resource admission.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod archive_reservations;
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "TODO: connect resource-admitted Native preparation to retained validation")
+)]
+mod native_preparation;
+
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
     state: Arc<State>,

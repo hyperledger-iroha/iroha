@@ -2868,6 +2868,7 @@ impl BlockValidationError {
         use crate::state::MergeLedgerCommitError;
         match error {
             MergeLedgerCommitError::BlockHashAdmission(error) => Self::BlockHashAdmission(error),
+            MergeLedgerCommitError::NativeControlValidation(error) => *error,
             MergeLedgerCommitError::MissingCertifiedMergeSidecar { entry_hash } => {
                 Self::MissingCertifiedMergeSidecar { entry_hash }
             }

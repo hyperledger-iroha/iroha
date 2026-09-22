@@ -77,3 +77,7 @@ where
         &self.metadata
     }
 }
+
+// TODO: connect the original authenticated key owner before stored proof admission.
+#[allow(dead_code)]
+pub(crate) mod reads;

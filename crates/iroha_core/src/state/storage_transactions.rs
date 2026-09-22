@@ -4,7 +4,7 @@ use arc_swap::ArcSwapOption;
 use dashmap::DashMap;
 use iroha_crypto::HashOf;
 use iroha_data_model::prelude::TransactionEntrypoint;
-use mv::json::JsonKeyCodec;
+use norito::json::JsonKeyCodec;
 use norito::json::{
     self, FastJsonWrite, JsonDeserialize as JsonDeserializeTrait,
     JsonSerialize as JsonSerializeTrait,

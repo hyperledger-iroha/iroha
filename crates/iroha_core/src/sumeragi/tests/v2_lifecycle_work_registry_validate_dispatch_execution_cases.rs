@@ -4808,3 +4808,350 @@ fn local_validate_turn_driver_retains_queue_wait_and_recovery_quarantine() {
         std::panic::resume_unwind(payload);
     }
 }
+
+#[cfg(feature = "bls")]
+mod retained_dispatch {
+    use super::*;
+    use crate::sumeragi::{
+        v2_apply::validation_custody::{
+            CarrierCustodyError, CarrierValidator, RetainedBodyValidationService,
+            test_support::TrackedOwner,
+        },
+        v2_body_store::{
+            LocalValidationRefusal, fail_next_marker_directory_sync, fail_next_marker_file_sync,
+        },
+    };
+    use mv::allocation::AllocationBudget;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    // These owners test dispatch custody only; actual State phase transitions and
+    // publication remain covered by the retained physical-publication fixtures.
+    struct Producer {
+        commitment: wire::ExecutionCommitment,
+        ready: bool,
+        calls: Arc<AtomicUsize>,
+        resumes: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl CarrierValidator for Producer {
+        type Owner = TrackedOwner;
+        type Error = LocalValidationRefusal;
+
+        fn prepare(
+            &mut self,
+            context: &wire::HeightContext,
+            body: &SignedBlock,
+        ) -> Result<Self::Owner, Self::Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let owner = TrackedOwner::new(context, body, self.commitment, Arc::clone(&self.drops));
+            Ok(if self.ready {
+                owner
+            } else {
+                owner.into_incomplete()
+            })
+        }
+
+        fn resume(
+            &mut self,
+            owner: Self::Owner,
+        ) -> Result<Self::Owner, (Self::Owner, LocalValidationRefusal)> {
+            self.resumes.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.ready, "ready owners must not enter capture again");
+            Err((
+                owner,
+                LocalValidationRefusal::RecoveryRequired(
+                    "dispatch fixture retains unfinished capture".to_owned(),
+                ),
+            ))
+        }
+    }
+
+    fn service(
+        store: &V2BodyStore,
+        durable: &DurableBodyReceipt,
+        ready: bool,
+    ) -> (
+        RetainedBodyValidationService<Producer>,
+        [Arc<AtomicUsize>; 3],
+    ) {
+        let counts = std::array::from_fn(|_| Arc::new(AtomicUsize::new(0)));
+        let budget = AllocationBudget::new(
+            store
+                .retained_validation_descriptor_bytes::<Producer>()
+                .unwrap(),
+        );
+        let service = store
+            .retained_validation_service(
+                Producer {
+                    commitment: ValidatedBodyReceipt::for_test(durable.clone())
+                        .execution_commitment(),
+                    ready,
+                    calls: Arc::clone(&counts[0]),
+                    resumes: Arc::clone(&counts[1]),
+                    drops: Arc::clone(&counts[2]),
+                },
+                &budget,
+            )
+            .unwrap();
+        (service, counts)
+    }
+
+    fn counts(values: &[Arc<AtomicUsize>; 3]) -> [usize; 3] {
+        std::array::from_fn(|index| values[index].load(Ordering::SeqCst))
+    }
+
+    #[test]
+    fn retained_dispatch_marker_failures_return_exact_wait_and_original_owner() {
+        let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xC0);
+        let mut coordinator = claimed_durable_validate_coordinator(&fixture);
+        let mut holder = take_dispatch_registry(&mut fixture);
+        let registry_before = format!("{:?}", holder.registry_for_test());
+        let mut dispatch = coordinator
+            .begin_durable_validate_dispatch(&mut holder, fixture.lease.clone(), &fixture.verified)
+            .unwrap();
+        let wait = dispatch.wait_token_for_test();
+        let (mut service, observed) = service(&store, &durable, true);
+        let mut allocation = None;
+        for fault in [
+            fail_next_marker_file_sync as fn(),
+            fail_next_marker_directory_sync,
+        ] {
+            fault();
+            let (error, returned) = dispatch
+                .execute_retained(&mut store, &mut service)
+                .expect_err("marker durability refusal must return the exact dispatch");
+            assert!(matches!(error, V2BodyStoreError::Io { .. }));
+            assert_eq!(returned.wait_token_for_test(), wait);
+            let actual = service
+                .owner_for_test(durable.subject())
+                .unwrap()
+                .allocation();
+            assert_eq!(*allocation.get_or_insert(actual), actual);
+            assert_eq!(counts(&observed), [1, 0, 0]);
+            assert_eq!(service.marker_counts_for_test(), (1, 0));
+            assert!(store.validated_recovery_catalog().is_empty());
+            assert!(store.rejected_recovery_catalog().is_empty());
+            assert!(matches!(
+                service.select(&ValidatedBodyReceipt::for_test(durable.clone())),
+                Err(CarrierCustodyError::Unconfirmed)
+            ));
+            dispatch = returned;
+        }
+        let executed = dispatch.execute_retained(&mut store, &mut service).unwrap();
+        assert_eq!(executed.wait_token_for_test(), wait);
+        assert_eq!(executed.outcome().durable_body(), &durable);
+        let receipt = executed.outcome().validated_receipt().unwrap().clone();
+        assert_eq!(service.marker_counts_for_test(), (0, 1));
+        drop(executed);
+        assert_eq!(counts(&observed), [1, 0, 0]);
+        drop(service.select(&receipt).unwrap());
+        assert_eq!(
+            service
+                .owner_for_test(durable.subject())
+                .unwrap()
+                .allocation(),
+            allocation.unwrap()
+        );
+        assert_eq!(format!("{:?}", holder.registry_for_test()), registry_before);
+        assert_eq!(
+            coordinator.records[&fixture.lease.ordinal()].state,
+            LifecycleState::Waiting(wait)
+        );
+        drop(service);
+        assert_eq!(counts(&observed), [1, 0, 1]);
+    }
+
+    #[test]
+    fn retained_dispatch_capture_refusal_keeps_exact_wait_without_success_marker() {
+        let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xC1);
+        let mut coordinator = claimed_durable_validate_coordinator(&fixture);
+        let mut holder = take_dispatch_registry(&mut fixture);
+        let mut dispatch = coordinator
+            .begin_durable_validate_dispatch(&mut holder, fixture.lease.clone(), &fixture.verified)
+            .unwrap();
+        let wait = dispatch.wait_token_for_test();
+        let (mut service, observed) = service(&store, &durable, false);
+        let mut allocation = None;
+        for attempts in 1..=2 {
+            let (error, returned) = dispatch
+                .execute_retained(&mut store, &mut service)
+                .expect_err("unfinished original capture must retain a retryable request");
+            assert!(matches!(
+                error,
+                V2BodyStoreError::LocalValidation(LocalValidationRefusal::RecoveryRequired(_))
+            ));
+            assert_eq!(returned.wait_token_for_test(), wait);
+            let actual = service
+                .owner_for_test(durable.subject())
+                .unwrap()
+                .allocation();
+            assert_eq!(*allocation.get_or_insert(actual), actual);
+            assert_eq!(counts(&observed), [1, attempts, 0]);
+            assert_eq!(service.marker_counts_for_test(), (0, 0));
+            assert!(store.validated_recovery_catalog().is_empty());
+            assert!(store.rejected_recovery_catalog().is_empty());
+            dispatch = returned;
+        }
+        drop(dispatch);
+        assert_eq!(counts(&observed), [1, 2, 0]);
+        assert_eq!(
+            coordinator.records[&fixture.lease.ordinal()].state,
+            LifecycleState::Waiting(wait)
+        );
+        drop(service);
+        assert_eq!(counts(&observed), [1, 2, 1]);
+    }
+
+    #[test]
+    fn retained_dispatch_cache_and_reproposal_reuse_original_owner() {
+        let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xC2);
+        let (mut service, observed) = service(&store, &durable, true);
+        let receipt = store
+            .execute_retained_durable_validation(
+                durable.clone(),
+                durable.manifest_hash(),
+                &mut service,
+            )
+            .unwrap()
+            .into_validated_receipt()
+            .unwrap();
+        let allocation = service
+            .owner_for_test(durable.subject())
+            .unwrap()
+            .allocation();
+        let mut coordinator = claimed_durable_validate_coordinator(&fixture);
+        let mut holder = take_dispatch_registry(&mut fixture);
+        let dispatch = coordinator
+            .begin_durable_validate_dispatch(&mut holder, fixture.lease.clone(), &fixture.verified)
+            .unwrap();
+        let wait = dispatch.wait_token_for_test();
+        let cached = dispatch.execute_retained(&mut store, &mut service).unwrap();
+        assert_eq!(cached.wait_token_for_test(), wait);
+        assert_eq!(cached.outcome().validated_receipt(), Some(&receipt));
+        let later_manifest = encode_payload(
+            fixture.verified.context(),
+            wire::ConsensusRound {
+                view: 7,
+                ..durable.round()
+            },
+            durable.subject(),
+            &fixture.canonical_wire,
+        )
+        .unwrap()
+        .manifest()
+        .clone();
+        let later_fixture = durable_validate_fixture_from_material(
+            0xC3,
+            fixture.verified.clone(),
+            later_manifest,
+            fixture.canonical_wire.clone(),
+        );
+        let (mut later_fixture, later_durable) = persist_durable_validate_fixture_into_store(
+            later_fixture,
+            &mut store,
+            Some(receipt.execution_commitment()),
+        );
+        assert_eq!(later_durable.subject(), durable.subject());
+        assert_ne!(later_durable.round(), durable.round());
+        let mut later_coordinator = claimed_durable_validate_coordinator(&later_fixture);
+        let mut later_holder = take_dispatch_registry(&mut later_fixture);
+        let dispatch = later_coordinator
+            .begin_durable_validate_dispatch(
+                &mut later_holder,
+                later_fixture.lease.clone(),
+                &later_fixture.verified,
+            )
+            .unwrap();
+        let later_wait = dispatch.wait_token_for_test();
+        let later = dispatch.execute_retained(&mut store, &mut service).unwrap();
+        assert_eq!(later.wait_token_for_test(), later_wait);
+        assert_eq!(later.outcome().durable_body(), &later_durable);
+        assert_eq!(
+            later
+                .outcome()
+                .validated_receipt()
+                .unwrap()
+                .execution_commitment(),
+            receipt.execution_commitment()
+        );
+        assert_eq!(
+            service
+                .owner_for_test(durable.subject())
+                .unwrap()
+                .allocation(),
+            allocation
+        );
+        assert_eq!(service.marker_counts_for_test(), (0, 2));
+        assert_eq!(counts(&observed), [1, 0, 0]);
+        drop(cached);
+        drop(later);
+        drop(service.select(&receipt).unwrap());
+        assert_eq!(counts(&observed), [1, 0, 0]);
+    }
+
+    #[test]
+    fn retained_dispatch_foreign_store_returns_request_before_execution() {
+        let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xC4);
+        let mut coordinator = claimed_durable_validate_coordinator(&fixture);
+        let mut holder = take_dispatch_registry(&mut fixture);
+        let dispatch = coordinator
+            .begin_durable_validate_dispatch(&mut holder, fixture.lease.clone(), &fixture.verified)
+            .unwrap();
+        let wait = dispatch.wait_token_for_test();
+        let (mut service, observed) = service(&store, &durable, true);
+        let foreign_directory = TempDir::new().unwrap();
+        let mut foreign_store =
+            V2BodyStore::open(foreign_directory.path(), fixture.verified.context().clone())
+                .unwrap();
+        let (error, dispatch) = dispatch
+            .execute_retained(&mut foreign_store, &mut service)
+            .expect_err("same context cannot replace the service's original open store");
+        assert!(matches!(
+            error,
+            V2BodyStoreError::CarrierCustody(CarrierCustodyError::Identity)
+        ));
+        assert_eq!(dispatch.wait_token_for_test(), wait);
+        assert_eq!(counts(&observed), [0, 0, 0]);
+        assert_eq!(service.marker_counts_for_test(), (0, 0));
+        let executed = dispatch.execute_retained(&mut store, &mut service).unwrap();
+        assert_eq!(executed.wait_token_for_test(), wait);
+        assert_eq!(executed.outcome().durable_body(), &durable);
+        assert_eq!(counts(&observed), [1, 0, 0]);
+    }
+
+    #[test]
+    fn retained_dispatch_cached_scalar_receipt_cannot_replace_missing_owner() {
+        let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xC5);
+        let commitment = ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
+        store
+            .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
+                Ok::<_, DetachedValidationError>(commitment)
+            })
+            .unwrap();
+        let mut coordinator = claimed_durable_validate_coordinator(&fixture);
+        let mut holder = take_dispatch_registry(&mut fixture);
+        let dispatch = coordinator
+            .begin_durable_validate_dispatch(&mut holder, fixture.lease.clone(), &fixture.verified)
+            .unwrap();
+        let wait = dispatch.wait_token_for_test();
+        let (mut service, observed) = service(&store, &durable, true);
+        let (error, dispatch) = dispatch
+            .execute_retained(&mut store, &mut service)
+            .expect_err("a marker without its executed carrier must fail closed");
+        assert!(matches!(
+            error,
+            V2BodyStoreError::CarrierCustody(CarrierCustodyError::MissingOwner)
+        ));
+        assert_eq!(dispatch.wait_token_for_test(), wait);
+        assert_eq!(counts(&observed), [0, 0, 0]);
+        assert_eq!(service.marker_counts_for_test(), (0, 0));
+        assert_eq!(
+            coordinator.records[&fixture.lease.ordinal()].state,
+            LifecycleState::Waiting(wait)
+        );
+    }
+}

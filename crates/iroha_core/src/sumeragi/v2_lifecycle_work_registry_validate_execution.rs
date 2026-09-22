@@ -1,3 +1,7 @@
+use crate::sumeragi::v2_apply::validation_custody::{
+    CarrierValidator, RetainedBodyValidationService,
+};
+
 // DURABLE_VALIDATE_ASYNC_HANDOFF_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DetachedDurableValidateExecution {
@@ -28,6 +32,40 @@ impl DetachedDurableValidateExecution {
             Ok(outcome) => outcome,
             Err(error) => return Err((error, self)),
         };
+        self.seal_outcome(outcome)
+    }
+
+    /// Execute with the original candidate owner retained in the exact open
+    /// store's service, including unfinished capture and durable marker retries.
+    #[allow(clippy::result_large_err)]
+    fn execute_retained<P: CarrierValidator>(
+        self,
+        body_store: &mut V2BodyStore,
+        service: &mut RetainedBodyValidationService<P>,
+    ) -> Result<
+        ExecutedDurableValidateExecution,
+        (V2BodyStoreError, DetachedDurableValidateExecution),
+    > {
+        let outcome = match body_store.execute_retained_durable_validation(
+            self.durable_receipt.clone(),
+            self.expected_manifest_hash,
+            service,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => return Err((error, self)),
+        };
+        self.seal_outcome(outcome)
+    }
+
+    /// Seal only the closed outcome for this exact detached request.
+    #[allow(clippy::result_large_err)]
+    fn seal_outcome(
+        self,
+        outcome: DurableBodyValidationOutcome,
+    ) -> Result<
+        ExecutedDurableValidateExecution,
+        (V2BodyStoreError, DetachedDurableValidateExecution),
+    > {
         if outcome.durable_body() != &self.durable_receipt {
             return Err((V2BodyStoreError::ReceiptMismatch, self));
         }
@@ -97,9 +135,9 @@ impl DurableValidateDispatch {
     /// Execute the exact request after its claimed lifecycle row became an
     /// external wait.
     ///
-    /// This is the sole externally visible execution path. A body-store error
-    /// reconstructs and returns the complete dispatch, including its exact
-    /// wake authority, so retry cannot mint a second request or wait token.
+    /// A body-store error reconstructs and returns the complete dispatch,
+    /// including its exact wake authority, so retry cannot mint a second
+    /// request or wait token.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn execute<F, E>(
         self,
@@ -112,6 +150,28 @@ impl DurableValidateDispatch {
     {
         let Self { request, wake } = self;
         match request.execute(body_store, validator) {
+            Ok(executed) => Ok(ExecutedDurableValidateDispatch { executed, wake }),
+            Err((error, request)) => Err((error, Self { request, wake })),
+        }
+    }
+
+    /// Execute through the existing retained validator without detaching its
+    /// candidate owner from the service. Errors return this same request and
+    /// wake authority; marker retries, cache hits and reproposals retain the
+    /// original Capturing/Validated phase in that service.
+    ///
+    /// The caller must keep the exact store/service pair alive through selected
+    /// publication. A receipt alone cannot replace its missing carrier, and this
+    /// dispatch cannot create Apply authority or fall back to scalar execution.
+    /// TODO: wire the worker only with its concrete aggregate admission owner.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn execute_retained<P: CarrierValidator>(
+        self,
+        body_store: &mut V2BodyStore,
+        service: &mut RetainedBodyValidationService<P>,
+    ) -> Result<ExecutedDurableValidateDispatch, (V2BodyStoreError, Self)> {
+        let Self { request, wake } = self;
+        match request.execute_retained(body_store, service) {
             Ok(executed) => Ok(ExecutedDurableValidateDispatch { executed, wake }),
             Err((error, request)) => Err((error, Self { request, wake })),
         }

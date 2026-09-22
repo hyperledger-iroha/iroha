@@ -580,7 +580,10 @@ fn assert_native_preparation_refusal(
         .err()
         .expect("global validation refuses before producing a prepared owner");
     assert!(
-        matches!(error, MergeLedgerCommitError::ExecutionBatchInvalid(_)),
+        matches!(
+            error,
+            crate::block::valid::NativeCandidatePreparationError::Preflight(_)
+        ),
         "{error}"
     );
     assert!(
@@ -662,6 +665,33 @@ state_test! { sync native_preparation_rejects_stale_source_without_execution_or_
         fixture.applying, &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
         &clock, state.sumeragi_block_cadence(),
     ).unwrap().is_none(), "equal data does not renew an obsolete source observation");
+    drop(state.block(carrier.header()));
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
+    assert_native_economic_relay_recorder_released();
+}
+
+state_test! { sync native_preparation_preserves_local_recorder_conflict
+    use super::NativeLaneBatchSourcePreparationV1;
+    use crate::block::valid::NativeCandidatePreparationError;
+    let fixture = native_control_execution_fixture(false, false);
+    let state = &fixture.economic.native.state;
+    let carrier = native_preparation_carrier(&fixture, Vec::new(), None, Duration::ZERO, false);
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let files = exact_test_tree_fingerprint(&state.kura.store_root());
+    let NativeLaneBatchSourcePreparationV1::Ready(source) = state
+        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+        else { panic!("original source"); };
+    let (_, clock) = iroha_primitives::time::TimeSource::new_mock(carrier.header().creation_time());
+    let recorder = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
+    let error = source.prepare_candidate(
+        fixture.applying, &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
+        &clock, state.sumeragi_block_cadence(),
+    ).err().expect("existing recorder refuses before State execution");
+    assert!(matches!(error, NativeCandidatePreparationError::Execution(
+        MergeLedgerCommitError::ExecutionRecorderConflict(_)
+    )), "{error}");
+    drop(recorder);
     drop(state.block(carrier.header()));
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
     assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
@@ -1302,6 +1332,11 @@ impl NativePublicationFixture {
     /// Exact applying context verified from the original parent's durable QC.
     pub(super) fn context(&self) -> &HeightContext {
         self.original.applying.context()
+    }
+
+    /// Original authenticated applying context for the real service adapter.
+    pub(super) fn verified_context(&self) -> crate::sumeragi::v2::VerifiedHeightContext {
+        self.original.applying.clone()
     }
 
     /// Canonical signed proposal before recorded Native execution.
