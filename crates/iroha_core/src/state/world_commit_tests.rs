@@ -521,7 +521,8 @@ fn staged_snapshot_projects_pin_indexes_and_matches_actual_commit() {
     block
         .stage_canonical_carrier_membership(core::iter::empty(), NonZeroUsize::MIN)
         .unwrap();
-    block.block_hashes.push(block._curr_block.hash());
+    let block_hash = block._curr_block.hash();
+    block.block_hashes.push(block_hash);
     let expected = crate::snapshot::canonical_staged_state_snapshot_hash(&block);
     let bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(&block);
     assert!(

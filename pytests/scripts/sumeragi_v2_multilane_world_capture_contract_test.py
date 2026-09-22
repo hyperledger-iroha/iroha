@@ -19,23 +19,25 @@ def test_world_capture_accepts_actual_aggregate_owners(fixture):
 
 
 @pytest.mark.parametrize("owner,symbol,old,new", [
-    pytest.param('World','declare_world_capture','$(if let Some(field) = self.$prefix.as_mut() { field.release(); })*','$(if let Some(field) = self.$prefix.as_mut() { let _ = field; })*', id='prefix-unlocks-before-drop'),
-    pytest.param('World','declare_world_capture','$(self.$prefix.as_mut().expect("original World capture slot").capture()?;)*','$(let _ = &self.$prefix;)*', id='prefix-captures-every-original'),
-    pytest.param('World','capture_world_fields','$(pending.$prefix = Some($prefix.into_capture());)*','$(pending.$prefix = None;)*', id='prefix-retains-inert-slot'),
-    pytest.param('World','declare_world_capture','$(if let Some(field) = self.$privacy.as_mut() { field.release(); })*','$(if let Some(field) = self.$privacy.as_mut() { let _ = field; })*', id='privacy-unlocks-before-drop'),
-    pytest.param('World','declare_world_capture','$(self.$privacy.as_mut().expect("original World capture slot").capture()?;)*','$(let _ = &self.$privacy;)*', id='privacy-captures-every-original'),
-    pytest.param('World','capture_world_fields','$(pending.$privacy = Some($privacy.into_capture());)*','$(pending.$privacy = None;)*', id='privacy-retains-inert-slot'),
-    pytest.param('World','declare_world_capture','$(if let Some(field) = self.$suffix.as_mut() { field.release(); })*','$(if let Some(field) = self.$suffix.as_mut() { let _ = field; })*', id='suffix-unlocks-before-drop'),
-    pytest.param('World','declare_world_capture','$(self.$suffix.as_mut().expect("original World capture slot").capture()?;)*','$(let _ = &self.$suffix;)*', id='suffix-captures-every-original'),
-    pytest.param('World','capture_world_fields','$(pending.$suffix = Some($suffix.into_capture());)*','$(pending.$suffix = None;)*', id='suffix-retains-inert-slot'),
-    pytest.param('World','capture_world_fields','pending.capture().map_err(widen_error)?;','let _ = &pending;', id='capture-all-before-notifications'),
-    pytest.param('World','capture_world_fields','$admit(&$original)','$admit(&other)', id='admit-original-complete-world'),
+    pytest.param('World','declare_world_capture','$(if let Some((field, _)) = self.$prefix.as_mut() { field.release(); })*','$(if let Some((field, _)) = self.$prefix.as_mut() { let _ = field; })*', id='prefix-unlocks-before-drop'),
+    pytest.param('World','declare_world_capture','$(self.$prefix.as_mut().expect("original World capture slot").0.capture()?;)*','$(let _ = &self.$prefix;)*', id='prefix-captures-every-original'),
+    pytest.param('World','capture_world_fields','$(pending.$prefix = Some(($prefix.into_capture(), |target: &World| &target.$prefix));)*','$(pending.$prefix = None;)*', id='prefix-retains-inert-slot'),
+    pytest.param('World','declare_world_capture','$(if let Some((field, _)) = self.$privacy.as_mut() { field.release(); })*','$(if let Some((field, _)) = self.$privacy.as_mut() { let _ = field; })*', id='privacy-unlocks-before-drop'),
+    pytest.param('World','declare_world_capture','$(self.$privacy.as_mut().expect("original World capture slot").0.capture()?;)*','$(let _ = &self.$privacy;)*', id='privacy-captures-every-original'),
+    pytest.param('World','capture_world_fields','$(pending.$privacy = Some(($privacy.into_capture(), |target: &World| &target.$privacy));)*','$(pending.$privacy = None;)*', id='privacy-retains-inert-slot'),
+    pytest.param('World','declare_world_capture','$(if let Some((field, _)) = self.$suffix.as_mut() { field.release(); })*','$(if let Some((field, _)) = self.$suffix.as_mut() { let _ = field; })*', id='suffix-unlocks-before-drop'),
+    pytest.param('World','declare_world_capture','$(self.$suffix.as_mut().expect("original World capture slot").0.capture()?;)*','$(let _ = &self.$suffix;)*', id='suffix-captures-every-original'),
+    pytest.param('World','capture_world_fields','$(pending.$suffix = Some(($suffix.into_capture(), |target: &World| &target.$suffix));)*','$(pending.$suffix = None;)*', id='suffix-retains-inert-slot'),
+    pytest.param('World','WorldBlock::try_detach_journals','pending.capture().map_err(widen_error)?;','let _ = &pending;', id='capture-all-before-notifications'),
+    pytest.param('World','WorldBlock::try_detach_journals','admit(&self)','admit(&other)', id='admit-original-complete-world'),
     pytest.param('World','capture_world_fields','fill_world_capture(|| {','fill_world_capture(move || {', id='fill-borrows-original-aggregate'),
-    pytest.param('World','capture_world_fields','let mut extras = None;','let mut extras = None; drop(admission);', id='admission-outlives-retained-payloads'),
-    pytest.param('World','capture_world_fields','extras = Some((dataspace_catalog, external_event_buf));','drop((dataspace_catalog, external_event_buf));', id='retain-original-extras'),
-    pytest.param('World','capture_world_fields','let fields = finish_world_capture(|| {','let fields = finish_world_capture(|| { drop(extras.take());', id='extras-outlive-wrapper-materialization'),
-    pytest.param('World','retain_field','|target: &World| &target.$field','|target: &World| &other.$field', id='retained-original-target'),
-    pytest.param('World','WorldBlock::try_detach_journals','with_world_overlay_fields!(capture_world_fields, self, admit)','with_world_overlay_fields!(capture_world_fields, other, admit)', id='capture-sole-world-inventory'),
+    pytest.param('World','declare_world_capture','let mut pending = self;','let mut pending = self; drop(admission);', id='admission-outlives-retained-payloads'),
+    pytest.param('World','capture_world_fields','pending.extras = Some((dataspace_catalog, external_event_buf));','drop((dataspace_catalog, external_event_buf));', id='retain-original-extras'),
+    pytest.param('World','declare_world_capture','let fields = finish_world_capture(|| {','let fields = finish_world_capture(|| { drop(pending.extras.take());', id='extras-outlive-wrapper-materialization'),
+    pytest.param('World','capture_world_fields','|target: &World| &target.$prefix','|target: &World| &other.$prefix', id='retained-original-target'),
+    pytest.param('World','capture_world_fields','|target: &World| &target.$privacy','|target: &World| &other.$privacy', id='retained-original-privacy-target'),
+    pytest.param('World','capture_world_fields','|target: &World| &target.$suffix','|target: &World| &other.$suffix', id='retained-original-suffix-target'),
+    pytest.param('World','WorldBlock::capture_slot','with_world_overlay_fields!(capture_world_fields, self)','with_world_overlay_fields!(capture_world_fields, other)', id='capture-sole-world-inventory'),
     pytest.param('World','StorageCaptureSlot::release','BlockCapture::release(self);','let _ = self;', id='release-StorageCaptureSlot'),
     pytest.param('World','StorageCaptureSlot::retain','let (journal, cleanup) = self.into_detached();','let (journal, cleanup) = other.into_detached();', id='original-journal-StorageCaptureSlot'),
     pytest.param('World','CellCaptureSlot::release','BlockCapture::release(self);','let _ = self;', id='release-CellCaptureSlot'),
@@ -56,7 +58,7 @@ def test_world_capture_accepts_actual_aggregate_owners(fixture):
 def test_world_capture_requires_original_custody(fixture, owner, symbol, old, new):
     root, _, checker, _ = fixture
     path = "crates/iroha_core/src/state/world_journals.rs" if owner == "World" else "crates/iroha_core/src/smartcontracts/isi/triggers/set_capture.rs"
-    rows = [row for row in checker.native_preparation_contract.CORE_CAPTURE_BINDINGS if row[0] == path and row[2] == symbol]
+    rows = [row for row in (*checker.native_preparation_contract.CORE_CAPTURE_BINDINGS, *checker.native_preparation_contract.STATE_CAPTURE_BINDINGS) if row[0] == path and row[2] == symbol]
     assert len(rows) == 1
     _, kind, _, _ = rows[0]
     target = root / path

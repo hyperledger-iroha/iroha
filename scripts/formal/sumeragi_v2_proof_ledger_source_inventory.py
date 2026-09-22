@@ -88,6 +88,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/lane_artifact_budget.rs",
     "kura/native_amx_publication_capacity.rs",
     "kura/native_amx_publication_index.rs",
+    "kura/native_amx_repair_prefix.rs",
     "kura/native_amx_publication_startup_pins.rs",
     "kura/autonomous_lifecycle_terminal_outcomes.rs",
     "kura/autonomous_release_authority.rs",

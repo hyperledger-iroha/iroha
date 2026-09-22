@@ -443,7 +443,7 @@ fn borrowed_action_binds_authority_filter_metadata_and_retry_fields() {
 fn net_delta_hook_mentions_every_trigger_block_store() {
     let source = include_str!("set.rs");
     let declaration = source
-        .split("pub struct SetBlock<'set> {")
+        .split("pub struct SetBlockFields<'set> {")
         .nth(1)
         .unwrap()
         .split("\n}")

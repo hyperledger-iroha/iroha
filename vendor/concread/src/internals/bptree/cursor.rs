@@ -318,6 +318,9 @@ where
     root: *mut Node<K, V, M::Charge>,
     last_seen: Option<M::Buffer>,
     first_seen: M::Buffer,
+    // The original retained base, not the evolving private root. Checkpoints
+    // preserve this count; all new allocations remain in first_seen until free.
+    base_node_counts: (usize, usize),
     funding: M,
     // A borrowed admitted edit may unwind inside catch_unwind while its physical
     // writer stays held. Such a cursor must never become readable/publishable.
@@ -473,6 +476,7 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M>
             root,
             last_seen: Some(last_seen),
             first_seen,
+            base_node_counts: sblock.node_counts(),
             funding,
             edit_failed: false,
         }
@@ -681,6 +685,25 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M>
 impl<K: Clone + Ord + Debug, V: Clone, P: NodeCloning<K, V>>
     CursorWrite<K, V, crate::bptree::Prepaid<P>>
 {
+    /// Original base plus every private node still owned by this cursor.
+    /// This explicit diagnostic scans only first_seen, never the base tree or
+    /// its successor chain. Retired private nodes are still live allocations.
+    pub(crate) fn admitted_node_custody_counts(&self) -> Option<(usize, usize)> {
+        self.assert_operable();
+        assert!(self.funding.0.is_none(), "previous edit must be sealed");
+        let (mut leaves, mut branches) = self.base_node_counts;
+        for &node in self.first_seen.as_slice() {
+            // SAFETY: every original first_seen pointer remains allocated until
+            // cursor cleanup or checkpoint rollback removes and frees its suffix.
+            if unsafe { &*node }.is_leaf() {
+                leaves = leaves.checked_add(1)?;
+            } else {
+                branches = branches.checked_add(1)?;
+            }
+        }
+        Some((leaves, branches))
+    }
+
     /// Existing original bookkeeping counts, inspected before further admission.
     pub(crate) fn admitted_tracking(&self) -> [(usize, usize); 2] {
         let retired = self.last_seen.as_ref().expect("original retirement buffer");

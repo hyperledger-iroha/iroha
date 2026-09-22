@@ -34,6 +34,11 @@ pub(crate) use journals::RetainedCarrier;
 
 /// A prepared candidate with all execution ownership retained and no Apply API.
 pub(crate) struct PreparedCarrier<'state> {
+    parts: Option<PreparedCarrierFields<'state>>,
+}
+
+/// Exact candidate fields; the enclosing owner retires every writer first.
+pub(crate) struct PreparedCarrierFields<'state> {
     valid: ValidBlock,
     state: Box<StateBlock<'state>>,
     source_prefix: execution_prefix::ValidatedExecutionPrefix,
@@ -50,7 +55,36 @@ pub(crate) struct PreparedCarrier<'state> {
     _publication_events: Vec<EventBox>,
 }
 
+impl<'state> std::ops::Deref for PreparedCarrier<'state> {
+    type Target = PreparedCarrierFields<'state>;
+
+    fn deref(&self) -> &Self::Target {
+        self.parts.as_ref().expect("original prepared carrier")
+    }
+}
+
+impl Drop for PreparedCarrier<'_> {
+    fn drop(&mut self) {
+        use mv::BlockRetirement as _;
+        if let Some(parts) = self.parts.as_mut() {
+            parts.state.release_writers();
+        }
+    }
+}
+
 impl<'state> PreparedCarrier<'state> {
+    fn new(parts: PreparedCarrierFields<'state>) -> Self {
+        Self { parts: Some(parts) }
+    }
+
+    fn parts_mut(&mut self) -> &mut PreparedCarrierFields<'state> {
+        self.parts.as_mut().expect("original prepared carrier")
+    }
+
+    fn into_parts(mut self) -> PreparedCarrierFields<'state> {
+        self.parts.take().expect("original prepared carrier")
+    }
+
     /// Plan World journal wrapper allocations before acquiring execution writers.
     /// These capture/installation shells coexist through retry. Their checked
     /// requested bytes are only one part of complete candidate admission; MV
@@ -71,7 +105,7 @@ impl<'state> PreparedCarrier<'state> {
     /// Exercise the unchanged raw publication refusal after preparation.
     #[cfg(test)]
     pub(in crate::state) fn into_state_for_test(self) -> Box<StateBlock<'state>> {
-        self.state
+        self.into_parts().state
     }
 
     /// Consume the exact validator output; errors drop every staged journal.

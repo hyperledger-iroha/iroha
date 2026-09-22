@@ -89,6 +89,14 @@ and wake retries after their physical guards are released. Other threads and
 pools keep notifying normally. Notification also preserves the remaining
 original waiters when one callback unwinds, without suppressing its panic.
 
+`allocation::ChargedBuffer<T>` admits one exact fixed backing layout for `Copy`
+elements before allocation. Appending, reordering the initialized slice and
+truncating its prefix cannot grow the allocation or refund its charge early.
+Logical capacity also applies to zero-sized elements. Snapshot payload reads use
+this same owner with `u8`; ordered membership batches can use fixed-width hashes.
+Referenced storage, comparison callbacks and surrounding control owners require
+their own admission. This buffer alone does not fund membership publication.
+
 Writer admission carries original move-only input alongside exact shell charges.
 The existing B+tree wrappers expose `Prepaid<P>` for closed admitted edits:
 under the original writer lock, it plans node/buffer/shell layouts and an explicit

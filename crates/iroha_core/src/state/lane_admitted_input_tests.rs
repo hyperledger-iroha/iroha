@@ -464,6 +464,7 @@ state_test! { large_stack canonical_queue_plan_input_retains_first_carrier_after
     state.validate_committed_autoscale_lane_lifecycle(
         overlay.pending_autoscale_lifecycle.as_ref().unwrap(),
         close.header().height().get(), close.hash(), None,
+            &mut LaneLifecycleReleases::new(&state),
     ).unwrap();
     overlay.block_hashes.push(close.hash());
     insert_empty_transaction_block_for_state_commit(&mut overlay, &close);

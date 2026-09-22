@@ -79,6 +79,20 @@ fn physical_custody<A>(journal: &DetachedWorld<A>) -> (usize, usize, Vec<usize>)
     )
 }
 
+fn prepare_field<'target>(
+    original: Box<dyn RetainedWorldField>,
+    target: &'target World,
+) -> Result<
+    Box<dyn PreparedWorldField + 'target>,
+    (Box<dyn PreparedWorldField + 'target>, FieldRefusal),
+> {
+    let mut slot = original.publication_slot(target);
+    match slot.try_prepare() {
+        Ok(()) => Ok(slot),
+        Err(error) => Err((slot, error)),
+    }
+}
+
 fn mutate(original: &mut WorldBlock<'_>, value: u8, trigger: &str) {
     let mut child = original.transaction_without_telemetry(LaneConfig::default(), 1);
     child
@@ -111,7 +125,9 @@ fn complete_world_preparation_holds_every_inventory_writer_and_matches_direct_co
     // a missing writer later in the heterogeneous World inventory.
     for probe in probes {
         let name = probe.summary().name;
-        let (_, refusal) = probe.try_prepare(&world).err().expect("all writers held");
+        let (_, refusal) = prepare_field(probe, &world)
+            .err()
+            .expect("all writers held");
         assert_eq!(refusal.field, name);
         assert!(matches!(
             refusal.cause,
@@ -482,42 +498,37 @@ impl RetainedWorldField for UnwindField {
         self.original.matches_current(target)
     }
 
-    fn try_prepare<'target>(
+    fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
-    ) -> Result<
-        Box<dyn PreparedWorldField + 'target>,
-        (Box<dyn PreparedWorldField + 'target>, FieldRefusal),
-    > {
-        if matches!(self.boundary, Some(UnwindBoundary::Prepare)) {
-            panic!("injected failure after the preceding real field acquired its writers");
-        }
+    ) -> Box<dyn PreparedWorldField + 'target> {
         let Self {
             original,
             boundary,
             dropped,
         } = *self;
-        match original.try_prepare(target) {
-            Ok(original) => Ok(Box::new(UnwindPreparedField {
-                original,
-                boundary,
-                dropped,
-            })),
-            Err((original, error)) => Err((
-                Box::new(UnwindPreparedField {
-                    original,
-                    boundary,
-                    dropped,
-                }),
-                error,
-            )),
-        }
+        Box::new(UnwindPreparedField {
+            original: original.publication_slot(target),
+            boundary,
+            dropped,
+        })
     }
 }
 
 impl PreparedWorldField for UnwindPreparedField<'_> {
+    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {
+        if matches!(self.boundary, Some(UnwindBoundary::Prepare)) {
+            panic!("injected failure after the preceding real field acquired its writers");
+        }
+        self.original.try_prepare()
+    }
+
     fn release(&mut self) {
         self.original.release();
+    }
+
+    fn release_for_recovery(&mut self) {
+        self.original.release_for_recovery();
     }
 
     fn abort(&mut self) -> Box<dyn RetainedWorldField> {
@@ -633,7 +644,7 @@ fn world_publication_unwind_retains_both_admissions_until_original_fields_drop()
                 UnwindBoundary::Prepare => index == 0,
                 UnwindBoundary::Abort => false,
             };
-            match field.try_prepare(&world) {
+            match prepare_field(field, &world) {
                 Ok(mut prepared) => {
                     assert!(
                         !poisoned,
@@ -789,21 +800,37 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
         fn matches_current(&self, target: &World) -> bool {
             self.original.matches_current(target)
         }
-        fn try_prepare<'target>(
+        fn publication_slot<'target>(
             self: Box<Self>,
             target: &'target World,
-        ) -> Result<
-            Box<dyn PreparedWorldField + 'target>,
-            (Box<dyn PreparedWorldField + 'target>, FieldRefusal),
-        > {
+        ) -> Box<dyn PreparedWorldField + 'target> {
             let Self {
                 original,
                 journal,
                 future,
                 callback,
             } = *self;
+            Box::new(PreparedObservePrefix {
+                original: original.publication_slot(target),
+                journal: Some(journal),
+                future,
+                callback,
+                target,
+            })
+        }
+    }
+    struct PreparedObservePrefix<'target> {
+        original: Box<dyn PreparedWorldField + 'target>,
+        journal: Option<DetachedWorld<()>>,
+        future: Arc<Mutex<Option<concread::release::ReleaseFuture>>>,
+        callback: Arc<Probe>,
+        target: &'target World,
+    }
+    impl PreparedWorldField for PreparedObservePrefix<'_> {
+        fn try_prepare(&mut self) -> Result<(), FieldRefusal> {
+            let journal = self.journal.take().expect("one original prefix probe");
             let (_, error, cleanup) = journal
-                .try_prepare_publication(target, |_, _| Ok::<_, ()>(()))
+                .try_prepare_publication(self.target, |_, _| Ok::<_, ()>(()))
                 .err()
                 .expect("earlier original field is held");
             drop(cleanup);
@@ -815,14 +842,26 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
                 panic!("actual first-field lock observation");
             };
             let mut wait = wait.wait_for_release();
-            let waker = Waker::from(callback);
+            let waker = Waker::from(Arc::clone(&self.callback));
             assert!(
                 Pin::new(&mut wait)
                     .poll(&mut Context::from_waker(&waker))
                     .is_pending()
             );
-            *future.lock().unwrap() = Some(wait);
-            original.try_prepare(target)
+            *self.future.lock().unwrap() = Some(wait);
+            self.original.try_prepare()
+        }
+        fn release(&mut self) {
+            self.original.release();
+        }
+        fn release_for_recovery(&mut self) {
+            self.original.release_for_recovery();
+        }
+        fn abort(&mut self) -> Box<dyn RetainedWorldField> {
+            self.original.abort()
+        }
+        fn publish(&mut self) {
+            self.original.publish();
         }
     }
     let world = fixture();

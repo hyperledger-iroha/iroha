@@ -6,13 +6,16 @@ impl State {
     ) -> bool {
         let privacy = Arc::new(LanePrivacyRegistry::from_manifest_registry(manifests));
         let manifests = Arc::clone(manifests);
-        let _state_write_lock = self.state_write_lock.lock();
-        let publication = self.begin_state_view_write();
+        let mut publication_notice = self.state_view_publication();
+        let mut releases = LaneLifecycleReleases::new(self);
+        let mut state_write_release = self.state_write_lock.defer_notifications();
+        let _state_write_lock = state_write_release.lock();
+        let publication = publication_notice.begin();
         if !manifests.is_bound_to_catalog(&self.nexus_ownership_projection().lane_catalog) {
             return false;
         }
         {
-            let current = self.lane_manifests.read();
+            let current = releases.manifests.read();
             if current.consensus_policy_digest() != manifests.consensus_policy_digest()
                 || current.baseline_consensus_policy_digest()
                     != manifests.baseline_consensus_policy_digest()
@@ -20,7 +23,7 @@ impl State {
                 return false;
             }
         }
-        self.install_prepared_lane_manifests_in_publication(manifests, privacy, &publication);
+        self.install_prepared_lane_manifests_in_publication(manifests, privacy, &publication, &mut releases);
         true
     }
 

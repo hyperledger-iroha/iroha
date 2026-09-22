@@ -427,13 +427,14 @@ impl<'state> PrefixPreparation<'state> {
             )
             .map_err(|error| error.to_string())?;
         }
+        let fields = state.fields.as_mut().expect("original executing State");
         world_commit::PreparedWorldCommit::prepare_overlay(
-            &mut state.world,
+            &mut fields.world,
             height,
-            &state.nexus,
-            &state.lane_incarnation_activation_heights,
-            state.pending_da_pin_intents.as_ref(),
-            state.pending_autoscale_lifecycle.as_ref(),
+            &fields.nexus,
+            &fields.lane_incarnation_activation_heights,
+            fields.pending_da_pin_intents.as_ref(),
+            fields.pending_autoscale_lifecycle.as_ref(),
         )
     }
 }
@@ -489,7 +490,7 @@ pub(super) fn prepare<'state>(
                 state,
                 prefix: source_prefix,
             } = preparation;
-            Ok(PreparedCarrier {
+            Ok(PreparedCarrier::new(super::PreparedCarrierFields {
                 valid,
                 state,
                 source_prefix,
@@ -498,7 +499,7 @@ pub(super) fn prepare<'state>(
                 native_amx_manifest,
                 _world_effects: world_effects,
                 _publication_events: publication_events,
-            })
+            }))
         }
         Err(error) => Err((Box::new(valid.into()), error)),
     }

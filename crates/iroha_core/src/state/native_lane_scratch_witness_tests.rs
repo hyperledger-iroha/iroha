@@ -69,7 +69,7 @@ fn assert_native_scratch_unlock_applied(overlay: &StateBlock<'_>, fixture: &Nati
             .get(NATIVE_SCRATCH_UNLOCK)
             .is_none()
     );
-    assert_eq!(*overlay.world.governance_last_unlock_sweep_height, 7);
+    assert_eq!(*overlay.world.governance_last_unlock_sweep_height.get(), 7);
     assert_eq!(
         overlay.world.assets.get(&fixture.source).unwrap().0,
         Quantity::from(75u32)

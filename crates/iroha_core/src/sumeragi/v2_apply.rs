@@ -3425,8 +3425,8 @@ impl CheckedCarrierApplications {
         });
         Ok(())
     }
-    fn consume_for_state_commit(
-        self,
+    fn validate_for_state_commit(
+        &self,
         carrier_block_hash: HashOf<BlockHeader>,
         staged_merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<(), &'static str> {
@@ -3460,9 +3460,9 @@ impl CheckedCarrierApplications {
         for CheckedCarrierApplication {
             checked,
             projection,
-        } in self.applications
+        } in &self.applications
         {
-            if checked.into_projection() != projection {
+            if checked.accepted_projection() != projection {
                 return Err("checked ApplyCarrier projection changed before State commit");
             }
         }
@@ -3470,13 +3470,13 @@ impl CheckedCarrierApplications {
     }
 }
 impl StateBlockCommitAuthorization for CheckedCarrierApplications {
-    fn consume_for_state_commit(
-        self: Box<Self>,
+    fn validate_for_state_commit(
+        &self,
         carrier_block_hash: HashOf<BlockHeader>,
         staged_merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<(), String> {
-        CheckedCarrierApplications::consume_for_state_commit(
-            *self,
+        CheckedCarrierApplications::validate_for_state_commit(
+            self,
             carrier_block_hash,
             staged_merge_entry,
         )

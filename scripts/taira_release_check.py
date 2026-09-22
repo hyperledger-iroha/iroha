@@ -1942,6 +1942,35 @@ CORE_STARTUP_STAGES += CORE_WORLD_CAPTURE_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_WORLD_CAPTURE_STAGES
 
 
+CORE_STATE_CAPTURE_STAGES = (("original State, runtime and membership capture custody", (
+    'state::carrier_preparation::journals::tests::state_capture_tests::carrier_capture_unlocks_state_topology_before_world_parameters_notification',
+    'state::carrier_preparation::journals::tests::state_capture_tests::carrier_capture_refused_original_drop_releases_membership_before_world_notification',
+    'state::carrier_preparation::journals::tests::state_capture_tests::carrier_capture_admission_panic_releases_healthy_membership_before_world_notification',
+    'state::carrier_preparation::journals::tests::state_capture_tests::state_capture_late_membership_refusal_retains_completed_world_and_runtime_until_joint_drop',
+    'state::carrier_preparation::journals::runtime_journals::publication_tests::capture_tests::ordinary_runtime_capture_unlocks_contexts_before_runtime_notification',
+    'state::carrier_preparation::journals::runtime_journals::publication_tests::capture_tests::replacement_runtime_capture_unlocks_contexts_before_runtime_notification',
+    'state::storage_transactions::block::capture_tests::membership_capture_retains_original_ordinary_and_replacement_journals_and_releases',
+    'state::storage_transactions::block::capture_tests::membership_capture_real_refusal_keeps_original_writer_until_joint_release',
+    'state::storage_transactions::block::capture_tests::membership_capture_outer_unwind_releases_prepared_or_captured_and_attached_sibling',
+    'state::storage_transactions::block::capture_tests::membership_terminal_release_rejects_read_mutation_preparation_and_publication',
+    'state::storage_transactions::block::capture_tests::membership_capture_wake_panic_keeps_other_original_release_healthy',
+)), )
+CORE_STAGES += CORE_STATE_CAPTURE_STAGES
+CORE_STARTUP_STAGES += CORE_STATE_CAPTURE_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_STATE_CAPTURE_STAGES
+
+
+CORE_STATE_ACQUISITION_STAGES = (("original State acquisition and executing-block retirement", (
+    'state::carrier_preparation::tests::state_acquisition_drop_tests::pristine_stage_refusal_releases_membership_before_world_notification',
+    'state::carrier_preparation::tests::state_acquisition_drop_tests::complete_state_block_drop_releases_membership_before_world_notification',
+    'state::carrier_preparation::tests::state_acquisition_drop_tests::pristine_stage_panic_releases_healthy_membership_before_world_notification',
+    'state::carrier_preparation::tests::state_acquisition_drop_tests::acquired_runtime_result_drop_releases_membership_before_world_notification',
+)), )
+CORE_STAGES += CORE_STATE_ACQUISITION_STAGES
+CORE_STARTUP_STAGES += CORE_STATE_ACQUISITION_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_STATE_ACQUISITION_STAGES
+
+
 # Portable ownership prerequisites; every selected leaf runs in both scopes.
 MV_OWNERSHIP_HARNESSES = ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
 

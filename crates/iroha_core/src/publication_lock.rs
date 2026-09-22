@@ -139,6 +139,71 @@ impl<T> std::fmt::Debug for PublicationMutex<T> {
     }
 }
 
+/// Same-source release custody, retained outside the complete State owner.
+/// Each short physical lock borrows this owner and records its release on Drop.
+/// The batch never accepts a caller-selected notification source.
+pub(crate) struct DeferredPublicationFence<'state, T> {
+    mutex: &'state PublicationMutex<T>,
+    releases: concread::release::DeferredReleaseBatch,
+}
+
+/// Physical guard whose original notification stays with its enclosing fence.
+pub(crate) struct DeferredPublicationGuard<'fence, 'state, T> {
+    guard: Option<PublicationGuard<'state, T>>,
+    releases: &'fence mut concread::release::DeferredReleaseBatch,
+}
+
+impl<'state, T> DeferredPublicationFence<'state, T> {
+    /// Acquire the original mutex; release notification stays in this owner.
+    pub(crate) fn lock(&mut self) -> DeferredPublicationGuard<'_, 'state, T> {
+        DeferredPublicationGuard {
+            guard: Some(self.mutex.lock()),
+            releases: &mut self.releases,
+        }
+    }
+}
+
+impl<T> std::ops::Deref for DeferredPublicationGuard<'_, '_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.guard
+            .as_deref()
+            .expect("original deferred physical guard")
+    }
+}
+
+impl<T> std::ops::DerefMut for DeferredPublicationGuard<'_, '_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.guard
+            .as_deref_mut()
+            .expect("original deferred physical guard")
+    }
+}
+
+impl<T> Drop for DeferredPublicationGuard<'_, '_, T> {
+    fn drop(&mut self) {
+        if let Some(guard) = self.guard.take() {
+            // Both fields are private and created together by defer_notifications.
+            // The source cannot change between acquisition and physical release.
+            assert!(
+                guard.try_release_into(self.releases).is_ok(),
+                "original fence release source"
+            );
+        }
+    }
+}
+
+impl<T> PublicationMutex<T> {
+    /// Retain all original release hints through an enclosing aggregate's Drop.
+    pub(crate) fn defer_notifications(&self) -> DeferredPublicationFence<'_, T> {
+        DeferredPublicationFence {
+            mutex: self,
+            releases: self.deferred_releases(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,3 +376,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "publication_lock_scoped_tests.rs"]
+mod scoped_tests;

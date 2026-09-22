@@ -25,6 +25,8 @@ pub(super) struct PreparedDaCommitmentEffects {
 /// Disposable journal persistence after the State generation has completed.
 pub(super) struct DaCommitmentPostPublication {
     lane_config: Option<iroha_config::parameters::actual::LaneConfig>,
+    snapshot: Option<DaShardCursorJournal>,
+    captured: bool,
 }
 
 impl PreparedDaCommitmentEffects {
@@ -112,6 +114,7 @@ impl PreparedDaCommitmentEffects {
     pub(super) fn publish(
         self,
         state: &State,
+        indexes: &mut effect_publication::StateEffectLocks<'_>,
         _publication: &StateViewGenerationWriteGuard<'_>,
         persist_cursor_journal: bool,
     ) -> DaCommitmentPostPublication {
@@ -124,9 +127,10 @@ impl PreparedDaCommitmentEffects {
             confidential,
         } = self;
         let height = pending.block_height;
-        state
+        indexes
             .da_commitments
-            .write()
+            .as_mut()
+            .expect("prepared DA commitments")
             .insert_bundle_with_visibility_filter(
                 height,
                 pending.bundle,
@@ -134,7 +138,10 @@ impl PreparedDaCommitmentEffects {
                 |record| query_visible.contains(&DaCommitmentKey::from_record(record)),
             );
         let cursor_result = state.advance_da_shard_cursors_into(
-            &mut state.da_shard_cursors.write(),
+            indexes
+                .da_shard_cursors
+                .as_mut()
+                .expect("prepared DA shard cursors"),
             &lane_config,
             height,
             &active,
@@ -149,38 +156,66 @@ impl PreparedDaCommitmentEffects {
                 false
             }
         };
-        if let Err(error) = state.advance_da_receipt_cursors_from_bundle(height, &active) {
+        if let Err(error) = state.advance_da_receipt_cursors_into(
+            indexes
+                .da_receipt_cursors
+                .as_mut()
+                .expect("prepared DA receipt cursors"),
+            height,
+            &active,
+        ) {
             warn!(
                 ?error,
                 height, "failed to advance DA receipt cursor index during block commit"
             );
         }
         {
-            let mut store = state.da_confidential_compute.write();
+            let store = indexes
+                .da_confidential_compute
+                .as_mut()
+                .expect("prepared confidential compute");
             for (record, location, policy) in confidential {
                 store.insert(&record, location, &policy);
             }
         }
         DaCommitmentPostPublication {
             lane_config: persist.then_some(lane_config),
+            snapshot: None,
+            captured: false,
         }
     }
 }
 
 impl DaCommitmentPostPublication {
+    /// Retain the final same-carrier cursor image through the already acquired
+    /// original writer. This must follow every lifecycle and DA cursor update.
+    pub(super) fn capture_snapshot(&mut self, state: &State, cursors: &DaShardCursorIndex) {
+        assert!(!self.captured, "original DA cursor snapshot captured once");
+        self.captured = true;
+        let Some(lane_config) = self.lane_config.as_ref() else {
+            return;
+        };
+        let path = state.da_shard_cursor_journal_path();
+        if !path.as_os_str().is_empty() {
+            self.snapshot = Some(DaShardCursorJournal::from_index(
+                lane_config,
+                cursors,
+                &path,
+            ));
+        }
+    }
+
     /// Schedule only after generation publication, with the original lane mapping.
     /// The complete carrier publisher must retain its physical fences until this
     /// final cursor projection is captured, then retain any unfinished completion.
     pub(super) fn publish(self, state: &State) {
-        let Some(lane_config) = self.lane_config else {
+        assert!(
+            self.captured,
+            "original DA cursor snapshot precedes release"
+        );
+        let Some(snapshot) = self.snapshot else {
             return;
         };
-        let path = state.da_shard_cursor_journal_path();
-        if path.as_os_str().is_empty() {
-            return;
-        }
-        let snapshot =
-            DaShardCursorJournal::from_index(&lane_config, &state.da_shard_cursors.read(), &path);
         state.da_shard_cursor_persistor.schedule(snapshot);
     }
 }

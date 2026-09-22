@@ -34,7 +34,8 @@ pub(in crate::state) struct FieldRefusal {
     pub cause: PublicationPreparationError<Infallible>,
 }
 
-/// Refusal preserves all original World journals and releases every writer.
+/// Local refusal retains the original World journals in their caller-owned slot.
+/// The caller must recover or terminally release the slot before awaiting a retry.
 #[derive(Debug)]
 pub(in crate::state) enum WorldPublicationError<E> {
     /// Complete installation resources were refused before any writer acquisition.
@@ -44,269 +45,381 @@ pub(in crate::state) enum WorldPublicationError<E> {
 }
 
 pub(super) trait PreparedWorldField {
+    fn try_prepare(&mut self) -> Result<(), FieldRefusal>;
     fn release(&mut self);
+    fn release_for_recovery(&mut self);
     fn abort(&mut self) -> Box<dyn RetainedWorldField>;
     fn publish(&mut self);
 }
 
+enum FieldPhase<Slot, Prepared> {
+    Preparing(Slot),
+    Prepared(Prepared),
+    Recovered,
+}
+
 struct PreparedStorage<'target, K: Key, V: Value> {
     original: Option<Box<RetainedStorage<K, V>>>,
-    journal: Option<mv::storage::PreparedPublication<'target, K, V, (), ()>>,
+    phase: FieldPhase<
+        mv::storage::DetachedPublicationSlot<'target, K, V, (), ()>,
+        mv::storage::PreparedPublication<'target, K, V, (), ()>,
+    >,
     published: Option<mv::storage::PublishedPublication<K, V, (), ()>>,
     aborted: Option<mv::PublicationCleanup<()>>,
+    released: bool,
+    normal_recovery: bool,
 }
 
 impl<K: Key, V: Value> PreparedWorldField for PreparedStorage<'_, K, V> {
+    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {
+        assert!(!self.released, "original field was terminally released");
+        let name = self.original.as_ref().expect("original field box").name;
+        let FieldPhase::Preparing(slot) = &mut self.phase else {
+            panic!("original field preparation is one-shot");
+        };
+        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))
+            .map_err(|cause| FieldRefusal {
+                field: name,
+                trigger_component: None,
+                cause,
+            })?;
+        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)
+        else {
+            unreachable!("checked original field slot");
+        };
+        self.phase = FieldPhase::Prepared(slot.into_prepared());
+        Ok(())
+    }
+
     fn release(&mut self) {
-        if let Some(journal) = self.journal.take() {
+        self.released = true;
+        if let FieldPhase::Preparing(slot) = &mut self.phase {
+            slot.release_writers();
+        } else if matches!(&self.phase, FieldPhase::Prepared(_)) {
+            let FieldPhase::Prepared(journal) =
+                std::mem::replace(&mut self.phase, FieldPhase::Recovered)
+            else {
+                unreachable!("original prepared field");
+            };
             let (journal, retirement) = journal.abort();
             self.original.as_mut().expect("original field box").journal = Some(journal);
             self.aborted = Some(retirement);
         }
     }
 
+    fn release_for_recovery(&mut self) {
+        assert!(
+            !self.released,
+            "terminal field release is not retry authority"
+        );
+        if self.normal_recovery {
+            return;
+        }
+        match &mut self.phase {
+            FieldPhase::Preparing(slot) => {
+                let journal = slot.recover_original();
+                self.original.as_mut().expect("original field box").journal = Some(journal);
+            }
+            FieldPhase::Prepared(_) => {
+                let FieldPhase::Prepared(journal) =
+                    std::mem::replace(&mut self.phase, FieldPhase::Recovered)
+                else {
+                    unreachable!("original prepared field");
+                };
+                let (journal, retirement) = journal.abort();
+                self.original.as_mut().expect("original field box").journal = Some(journal);
+                self.aborted = Some(retirement);
+            }
+            FieldPhase::Recovered => panic!("original field was already consumed"),
+        }
+        self.normal_recovery = true;
+    }
+
     fn abort(&mut self) -> Box<dyn RetainedWorldField> {
-        self.release();
+        self.release_for_recovery();
+        self.released = true;
         self.original.take().expect("original field box")
     }
 
     fn publish(&mut self) {
-        self.published = Some(
-            self.journal
-                .take()
-                .expect("prepared original journal")
-                .publish(),
+        assert!(
+            !self.released && matches!(&self.phase, FieldPhase::Prepared(_)),
+            "complete original field"
         );
+        let FieldPhase::Prepared(journal) =
+            std::mem::replace(&mut self.phase, FieldPhase::Recovered)
+        else {
+            unreachable!("checked original prepared field");
+        };
+        self.published = Some(journal.publish());
+        self.released = true;
     }
 }
 
-pub(super) fn prepare_storage<'target, K: Key, V: Value>(
-    original: Box<RetainedStorage<K, V>>,
+pub(super) fn storage_slot<'target, K: Key, V: Value>(
+    mut original: Box<RetainedStorage<K, V>>,
     world: &'target World,
-) -> Result<
-    Box<dyn PreparedWorldField + 'target>,
-    (Box<dyn PreparedWorldField + 'target>, FieldRefusal),
-> {
-    // Allocate only the transient prepared shell before taking this field's writers.
-    // The populated original box stays owned throughout acquisition and rollback.
-    let mut prepared = Box::new(PreparedStorage {
+) -> Box<dyn PreparedWorldField + 'target> {
+    let target = (original.target)(world);
+    let journal = original.journal.take().expect("retained original journal");
+    // Inert shell construction precedes every field's physical preparation.
+    Box::new(PreparedStorage {
         original: Some(original),
-        journal: None,
+        phase: FieldPhase::Preparing(journal.publication_slot(target)),
         published: None,
         aborted: None,
-    });
-    let name = prepared.original.as_ref().expect("original field box").name;
-    let target = prepared
-        .original
-        .as_ref()
-        .expect("original field box")
-        .target;
-    let journal = prepared
-        .original
-        .as_mut()
-        .expect("original field box")
-        .journal
-        .take()
-        .expect("retained original journal");
-    match journal.try_prepare_publication(target(world), |_, _| Ok::<_, Infallible>(())) {
-        Ok(journal) => {
-            prepared.journal = Some(journal);
-            Ok(prepared)
-        }
-        Err((journal, cause, cleanup)) => {
-            prepared
-                .original
-                .as_mut()
-                .expect("original field box")
-                .journal = Some(journal);
-            prepared.aborted = Some(cleanup);
-            Err((
-                prepared,
-                FieldRefusal {
-                    field: name,
-                    trigger_component: None,
-                    cause,
-                },
-            ))
-        }
-    }
+        released: false,
+        normal_recovery: false,
+    })
 }
 
 struct PreparedCell<'target, V: Value> {
     original: Option<Box<RetainedCell<V>>>,
-    journal: Option<mv::cell::PreparedPublication<'target, V, (), ()>>,
+    phase: FieldPhase<
+        mv::cell::DetachedPublicationSlot<'target, V, (), ()>,
+        mv::cell::PreparedPublication<'target, V, (), ()>,
+    >,
     published: Option<mv::cell::PublishedPublication<V, (), ()>>,
     aborted: Option<mv::PublicationCleanup<()>>,
+    released: bool,
+    normal_recovery: bool,
 }
 
 impl<V: Value> PreparedWorldField for PreparedCell<'_, V> {
+    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {
+        assert!(!self.released, "original field was terminally released");
+        let name = self.original.as_ref().expect("original field box").name;
+        let FieldPhase::Preparing(slot) = &mut self.phase else {
+            panic!("original field preparation is one-shot");
+        };
+        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))
+            .map_err(|cause| FieldRefusal {
+                field: name,
+                trigger_component: None,
+                cause,
+            })?;
+        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)
+        else {
+            unreachable!("checked original field slot");
+        };
+        self.phase = FieldPhase::Prepared(slot.into_prepared());
+        Ok(())
+    }
+
     fn release(&mut self) {
-        if let Some(journal) = self.journal.take() {
+        self.released = true;
+        if let FieldPhase::Preparing(slot) = &mut self.phase {
+            slot.release_writers();
+        } else if matches!(&self.phase, FieldPhase::Prepared(_)) {
+            let FieldPhase::Prepared(journal) =
+                std::mem::replace(&mut self.phase, FieldPhase::Recovered)
+            else {
+                unreachable!("original prepared field");
+            };
             let (journal, retirement) = journal.abort();
             self.original.as_mut().expect("original field box").journal = Some(journal);
             self.aborted = Some(retirement);
         }
     }
 
+    fn release_for_recovery(&mut self) {
+        assert!(
+            !self.released,
+            "terminal field release is not retry authority"
+        );
+        if self.normal_recovery {
+            return;
+        }
+        match &mut self.phase {
+            FieldPhase::Preparing(slot) => {
+                let journal = slot.recover_original();
+                self.original.as_mut().expect("original field box").journal = Some(journal);
+            }
+            FieldPhase::Prepared(_) => {
+                let FieldPhase::Prepared(journal) =
+                    std::mem::replace(&mut self.phase, FieldPhase::Recovered)
+                else {
+                    unreachable!("original prepared field");
+                };
+                let (journal, retirement) = journal.abort();
+                self.original.as_mut().expect("original field box").journal = Some(journal);
+                self.aborted = Some(retirement);
+            }
+            FieldPhase::Recovered => panic!("original field was already consumed"),
+        }
+        self.normal_recovery = true;
+    }
+
     fn abort(&mut self) -> Box<dyn RetainedWorldField> {
-        self.release();
+        self.release_for_recovery();
+        self.released = true;
         self.original.take().expect("original field box")
     }
 
     fn publish(&mut self) {
-        self.published = Some(
-            self.journal
-                .take()
-                .expect("prepared original journal")
-                .publish(),
+        assert!(
+            !self.released && matches!(&self.phase, FieldPhase::Prepared(_)),
+            "complete original field"
         );
+        let FieldPhase::Prepared(journal) =
+            std::mem::replace(&mut self.phase, FieldPhase::Recovered)
+        else {
+            unreachable!("checked original prepared field");
+        };
+        self.published = Some(journal.publish());
+        self.released = true;
     }
 }
 
-pub(super) fn prepare_cell<'target, V: Value>(
-    original: Box<RetainedCell<V>>,
+pub(super) fn cell_slot<'target, V: Value>(
+    mut original: Box<RetainedCell<V>>,
     world: &'target World,
-) -> Result<
-    Box<dyn PreparedWorldField + 'target>,
-    (Box<dyn PreparedWorldField + 'target>, FieldRefusal),
-> {
-    // Allocate only the transient prepared shell before taking this field's writers.
-    // The populated original box stays owned throughout acquisition and rollback.
-    let mut prepared = Box::new(PreparedCell {
+) -> Box<dyn PreparedWorldField + 'target> {
+    let target = (original.target)(world);
+    let journal = original.journal.take().expect("retained original journal");
+    // Inert shell construction precedes every field's physical preparation.
+    Box::new(PreparedCell {
         original: Some(original),
-        journal: None,
+        phase: FieldPhase::Preparing(journal.publication_slot(target)),
         published: None,
         aborted: None,
-    });
-    let name = prepared.original.as_ref().expect("original field box").name;
-    let target = prepared
-        .original
-        .as_ref()
-        .expect("original field box")
-        .target;
-    let journal = prepared
-        .original
-        .as_mut()
-        .expect("original field box")
-        .journal
-        .take()
-        .expect("retained original journal");
-    match journal.try_prepare_publication(target(world), |_, _| Ok::<_, Infallible>(())) {
-        Ok(journal) => {
-            prepared.journal = Some(journal);
-            Ok(prepared)
-        }
-        Err((journal, cause, cleanup)) => {
-            prepared
-                .original
-                .as_mut()
-                .expect("original field box")
-                .journal = Some(journal);
-            prepared.aborted = Some(cleanup);
-            Err((
-                prepared,
-                FieldRefusal {
-                    field: name,
-                    trigger_component: None,
-                    cause,
-                },
-            ))
-        }
-    }
+        released: false,
+        normal_recovery: false,
+    })
 }
 
 struct PreparedTriggers<'target> {
     original: Option<Box<RetainedTriggers>>,
-    journal: Option<PreparedSet<'target, (), ()>>,
+    phase: FieldPhase<
+        crate::smartcontracts::isi::triggers::set::DetachedSetPublicationSlot<'target, (), ()>,
+        PreparedSet<'target, (), ()>,
+    >,
     published: Option<crate::smartcontracts::isi::triggers::set::PublishedSet<(), ()>>,
     aborted: Option<crate::smartcontracts::isi::triggers::set::AbortedSet<()>>,
+    released: bool,
+    normal_recovery: bool,
 }
 
 impl PreparedWorldField for PreparedTriggers<'_> {
+    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {
+        assert!(!self.released, "original field was terminally released");
+        let name = self.original.as_ref().expect("original field box").name;
+        let FieldPhase::Preparing(slot) = &mut self.phase else {
+            panic!("original field preparation is one-shot");
+        };
+        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))
+            .map_err(|error| match error {
+                SetPublicationError::Admission(impossible) => match impossible {},
+                SetPublicationError::Component { field, cause } => FieldRefusal {
+                    field: name,
+                    trigger_component: Some(field),
+                    cause,
+                },
+            })?;
+        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)
+        else {
+            unreachable!("checked original field slot");
+        };
+        self.phase = FieldPhase::Prepared(slot.into_prepared());
+        Ok(())
+    }
+
     fn release(&mut self) {
-        if let Some(journal) = self.journal.take() {
+        self.released = true;
+        if let FieldPhase::Preparing(slot) = &mut self.phase {
+            slot.release_writers();
+        } else if matches!(&self.phase, FieldPhase::Prepared(_)) {
+            let FieldPhase::Prepared(journal) =
+                std::mem::replace(&mut self.phase, FieldPhase::Recovered)
+            else {
+                unreachable!("original prepared field");
+            };
             let (journal, retirement) = journal.abort();
             self.original.as_mut().expect("original field box").journal = Some(journal);
             self.aborted = Some(retirement);
         }
     }
 
+    fn release_for_recovery(&mut self) {
+        assert!(
+            !self.released,
+            "terminal field release is not retry authority"
+        );
+        if self.normal_recovery {
+            return;
+        }
+        match &mut self.phase {
+            FieldPhase::Preparing(slot) => {
+                let journal = slot.recover_original();
+                self.original.as_mut().expect("original field box").journal = Some(journal);
+            }
+            FieldPhase::Prepared(_) => {
+                let FieldPhase::Prepared(journal) =
+                    std::mem::replace(&mut self.phase, FieldPhase::Recovered)
+                else {
+                    unreachable!("original prepared field");
+                };
+                let (journal, retirement) = journal.abort();
+                self.original.as_mut().expect("original field box").journal = Some(journal);
+                self.aborted = Some(retirement);
+            }
+            FieldPhase::Recovered => panic!("original field was already consumed"),
+        }
+        self.normal_recovery = true;
+    }
+
     fn abort(&mut self) -> Box<dyn RetainedWorldField> {
-        self.release();
+        self.release_for_recovery();
+        self.released = true;
         self.original.take().expect("original field box")
     }
 
     fn publish(&mut self) {
-        self.published = Some(
-            self.journal
-                .take()
-                .expect("prepared original journal")
-                .publish(),
+        assert!(
+            !self.released && matches!(&self.phase, FieldPhase::Prepared(_)),
+            "complete original field"
         );
+        let FieldPhase::Prepared(journal) =
+            std::mem::replace(&mut self.phase, FieldPhase::Recovered)
+        else {
+            unreachable!("checked original prepared field");
+        };
+        self.published = Some(journal.publish());
+        self.released = true;
     }
 }
 
-pub(super) fn prepare_triggers<'target>(
-    original: Box<RetainedTriggers>,
+pub(super) fn triggers_slot<'target>(
+    mut original: Box<RetainedTriggers>,
     world: &'target World,
-) -> Result<
-    Box<dyn PreparedWorldField + 'target>,
-    (Box<dyn PreparedWorldField + 'target>, FieldRefusal),
-> {
-    // Allocate only the transient prepared shell before taking this field's writers.
-    // The populated original box stays owned throughout acquisition and rollback.
-    let mut prepared = Box::new(PreparedTriggers {
+) -> Box<dyn PreparedWorldField + 'target> {
+    let target = (original.target)(world);
+    let journal = original.journal.take().expect("retained original journal");
+    // Inert shell construction precedes every field's physical preparation.
+    Box::new(PreparedTriggers {
         original: Some(original),
-        journal: None,
+        phase: FieldPhase::Preparing(journal.publication_slot(target)),
         published: None,
         aborted: None,
-    });
-    let name = prepared.original.as_ref().expect("original field box").name;
-    let target = prepared
-        .original
-        .as_ref()
-        .expect("original field box")
-        .target;
-    let journal = prepared
-        .original
-        .as_mut()
-        .expect("original field box")
-        .journal
-        .take()
-        .expect("retained original journal");
-    match journal.try_prepare_publication(target(world), |_, _| Ok::<_, Infallible>(())) {
-        Ok(journal) => {
-            prepared.journal = Some(journal);
-            Ok(prepared)
-        }
-        Err((journal, SetPublicationError::Component { field, cause }, cleanup)) => {
-            prepared
-                .original
-                .as_mut()
-                .expect("original field box")
-                .journal = Some(journal);
-            prepared.aborted = Some(cleanup);
-            Err((
-                prepared,
-                FieldRefusal {
-                    field: name,
-                    trigger_component: Some(field),
-                    cause,
-                },
-            ))
-        }
-        Err((_, SetPublicationError::Admission(impossible), _)) => match impossible {},
-    }
+        released: false,
+        normal_recovery: false,
+    })
 }
 
-/// The original heterogeneous prepared vector releases every writer before any
-/// field shell, payload or callback is destroyed, including preparation unwind.
 struct PreparedWorldFields<'target>(Vec<Box<dyn PreparedWorldField + 'target>>);
 
 impl<'target> PreparedWorldFields<'target> {
     fn release_all(&mut self) {
         for field in &mut self.0 {
             field.release();
+        }
+    }
+
+    fn recover_all(&mut self) {
+        // Retain every original box and notification through the full physical
+        // pass. Only a subsequent normal transfer may return retry authority.
+        for field in &mut self.0 {
+            field.release_for_recovery();
         }
     }
 
@@ -360,13 +473,12 @@ pub(in crate::state) struct WorldRetirement<'target> {
     _retry: Vec<Box<dyn RetainedWorldField>>,
 }
 
+#[path = "world_preparation.rs"]
+mod preparation;
+pub(in crate::state) use preparation::WorldPublicationSlot;
+
 impl<Admission> DetachedWorld<Admission> {
-    /// Admit all World installation costs, then acquire every exact component.
-    ///
-    /// Admission covers the prepared field container and transient wrappers,
-    /// all COW staging, undo and retained-reader publication costs. Failed or
-    /// aborted preparation returns the original vector and populated field boxes
-    /// without replacement allocations; it never reexecutes or recaptures World.
+    /// Prepare through the same caller-owned aggregate used by State publication.
     pub(in crate::state) fn try_prepare_publication<'target, Installation, E>(
         self,
         target: &'target World,
@@ -379,70 +491,14 @@ impl<Admission> DetachedWorld<Admission> {
             AbortedWorld<'target, Installation>,
         ),
     > {
-        // These locals precede every payload so panic unwinding releases
-        // original/prepared fields before either retained capacity owner.
-        let installation;
-        let admission;
-        installation = match admit(&self, target) {
-            Ok(installation) => installation,
+        let mut slot = self.publication_slot(target);
+        match slot.try_prepare(admit) {
+            Ok(()) => Ok(slot.into_prepared()),
             Err(error) => {
-                return Err((
-                    self,
-                    WorldPublicationError::Admission(error),
-                    AbortedWorld {
-                        _fields: PreparedWorldFields(Vec::new()),
-                        _installation: None,
-                    },
-                ));
-            }
-        };
-        let Self {
-            mode,
-            mut fields,
-            dataspace_catalog,
-            external_event_buf,
-            admission: retained_admission,
-        } = self;
-        admission = retained_admission;
-        let mut prepared = PreparedWorldFields(Vec::with_capacity(fields.len()));
-        // Pop in inventory order while retaining the original vector allocation.
-        fields.reverse();
-        while let Some(field) = fields.pop() {
-            match field.try_prepare(target) {
-                Ok(field) => prepared.push(field),
-                Err((field, error)) => {
-                    prepared.push(field);
-                    // Restore the original order without allocating rollback custody.
-                    prepared.release_all();
-                    fields.extend(prepared.iter_mut().rev().map(|field| field.abort()));
-                    fields.reverse();
-                    let retirement = AbortedWorld {
-                        _fields: prepared,
-                        _installation: Some(installation),
-                    };
-                    return Err((
-                        DetachedWorld {
-                            mode,
-                            fields,
-                            dataspace_catalog,
-                            external_event_buf,
-                            admission,
-                        },
-                        WorldPublicationError::Field(error),
-                        retirement,
-                    ));
-                }
+                let original = slot.recover_original();
+                Err((original, error, slot.into_cleanup()))
             }
         }
-        Ok(PreparedWorld {
-            mode,
-            fields: prepared,
-            retry: fields,
-            dataspace_catalog,
-            external_event_buf,
-            admission,
-            installation,
-        })
     }
 }
 
@@ -481,7 +537,7 @@ impl<'target, Admission, Installation> PreparedWorld<'target, Admission, Install
         } = self;
         installation = retained_installation;
         admission = retained_admission;
-        fields.release_all();
+        fields.recover_all();
         retry.extend(fields.iter_mut().map(|field| field.abort()));
         let retirement = AbortedWorld {
             _fields: fields,

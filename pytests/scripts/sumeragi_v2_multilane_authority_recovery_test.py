@@ -31,6 +31,30 @@ spec.loader.exec_module(checker)
 BINDINGS = contract.AUTHORITY_RECOVERY_BINDINGS
 
 
+
+def defining_evidence_kernel(binding, old, new):
+    """Retain old control IDs while exercising the same moved validation body."""
+    kernels = {
+        "lane_has_drain_blocking_evidence": "lane_has_drain_blocking_evidence_with_releases",
+        "native_amx_participant_application_snapshot": "native_amx_participant_application_snapshot_with_lifecycle",
+        "native_amx_participant_frontiers_pending_durable_evidence_snapshot": "native_amx_participant_frontiers_pending_durable_evidence_snapshot_with_lifecycle",
+    }
+    symbol = binding[3]
+    if symbol not in kernels:
+        return binding, old, new
+    current = next(row for row in BINDINGS if row[3] == kernels[symbol])
+    if symbol == "lane_has_drain_blocking_evidence":
+        for name in ("unapplied_lane_block_artifact_heights_snapshot_cached", "unapplied_certified_lane_block_heights_snapshot_cached"):
+            old = old.replace(name + "()", name + "_with_lifecycle(&lifecycle)")
+            new = new.replace(name + "()", name + "_with_lifecycle(&lifecycle)")
+        before = ".native_amx_participant_frontiers_pending_durable_evidence_snapshot()"
+        after = ".native_amx_participant_frontiers_pending_durable_evidence_snapshot_with_lifecycle(\n                    &lifecycle,\n                )"
+        old, new = old.replace(before, after), new.replace(before, after)
+    elif symbol == "native_amx_participant_frontiers_pending_durable_evidence_snapshot":
+        old = old.replace("Ok(self.native_amx_participant_application_snapshot()?.repair)", "Ok(self\n            .native_amx_participant_application_snapshot_with_lifecycle(lifecycle)?\n            .repair)")
+    return current, old, new
+
+
 def models():
     return json.loads((ROOT / "formal/sumeragi_v2/multilane_source_bindings.json").read_text())["models"]
 
@@ -749,7 +773,7 @@ MUTATIONS = ((0,
 @pytest.mark.parametrize("case", MUTATIONS, ids=lambda c:c[1])
 def test_semantic_mutations_rejected_after_full_provider_rehash(tmp_path, case):
     index, name, old, new, reason, order_only = case
-    binding = BINDINGS[index]
+    binding, old, new = defining_evidence_kernel(BINDINGS[index], old, new)
     item = source_item(binding)
     assert item.count(old) == 1, reason
     post = item.replace(old, new, 1)
@@ -865,8 +889,7 @@ def test_history_body_read_requires_both_inner_guard_drops(tmp_path):
      "Arc::clone(&other.updated_lane_manifests)"),
     ("PreparedLaneLifecycleEffects::prepare", "pending.catalog_update.updated_lane_config.clone()",
      "nexus.lane_config.clone()"),
-    ("PreparedLaneLifecycleEffects::publish", "state.reset_lane_scoped_runtime_indexes(&self.lanes_to_reset);",
-     "state.reset_lane_scoped_runtime_indexes(&BTreeSet::new());"),
+    pytest.param('PreparedLaneLifecycleEffects::publish', '        if !self.lanes_to_reset.is_empty() {\n            indexes\n                .merge_admission\n                .as_mut()\n                .expect("prepared merge admission")\n                .prune_lane_progress(&self.lanes_to_reset);\n            indexes\n                .lane_relays\n                .as_mut()\n                .expect("prepared relays")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_commitments\n                .as_mut()\n                .expect("prepared commitments")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_confidential_compute\n                .as_mut()\n                .expect("prepared confidential compute")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_pin_intents\n                .as_mut()\n                .expect("prepared pins")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_receipt_cursors\n                .as_mut()\n                .expect("prepared receipt cursors")\n                .prune_lanes(&self.lanes_to_reset);\n            indexes\n                .da_shard_cursors\n                .as_mut()\n                .expect("prepared shard cursors")\n                .prune_lanes(&self.lanes_to_reset);\n        }\n', '        if !self.lanes_to_reset.is_empty() {\n            indexes\n                .merge_admission\n                .as_mut()\n                .expect("prepared merge admission")\n                .prune_lane_progress(&BTreeSet::new());\n            indexes\n                .lane_relays\n                .as_mut()\n                .expect("prepared relays")\n                .prune_lanes(&BTreeSet::new());\n            indexes\n                .da_commitments\n                .as_mut()\n                .expect("prepared commitments")\n                .prune_lanes(&BTreeSet::new());\n            indexes\n                .da_confidential_compute\n                .as_mut()\n                .expect("prepared confidential compute")\n                .prune_lanes(&BTreeSet::new());\n            indexes\n                .da_pin_intents\n                .as_mut()\n                .expect("prepared pins")\n                .prune_lanes(&BTreeSet::new());\n            indexes\n                .da_receipt_cursors\n                .as_mut()\n                .expect("prepared receipt cursors")\n                .prune_lanes(&BTreeSet::new());\n            indexes\n                .da_shard_cursors\n                .as_mut()\n                .expect("prepared shard cursors")\n                .prune_lanes(&BTreeSet::new());\n        }\n', id='PreparedLaneLifecycleEffects::publish-state.reset_lane_scoped_runtime_indexes(&self.lanes_to_reset);-state.reset_lane_scoped_runtime_indexes(&BTreeSet::new());'),
     ("PreparedLaneLifecycleEffects::publish", "if publish_process_runtime {", "if true {"),
     ("PreparedLaneLifecycleEffects::publish", "!self.active_reset_lanes.is_empty() && self.transition_height != 0",
      "!self.active_reset_lanes.is_empty() || self.transition_height != 0"),
@@ -875,16 +898,17 @@ def test_history_body_read_requires_both_inner_guard_drops(tmp_path):
      ".mark_lanes_canonically_reset(&self.lanes_to_reset, self.transition_height);"),
     ("PreparedLaneLifecycleEffects::publish", "let persist_cursor_journal = publish_process_runtime",
      "let persist_cursor_journal = true"),
-    ("LaneLifecyclePostPublication::publish", "if self.persist_cursor_journal {", "if false {"),
-    ("LaneLifecyclePostPublication::publish",
-     "state.persist_da_shard_cursor_journal_with_config(&self.lane_config);",
-     "state.persist_da_shard_cursor_journal();"),
+    pytest.param('LaneLifecyclePostPublication::publish', 'if let Some(snapshot) = self.snapshot {', 'if let Some(snapshot) = None {', id='LaneLifecyclePostPublication::publish-if self.persist_cursor_journal {-if false {'),
+    pytest.param('LaneLifecyclePostPublication::capture_snapshot', '&self.lane_config,', '&state.nexus_snapshot().lane_config,', id='LaneLifecyclePostPublication::publish-state.persist_da_shard_cursor_journal_with_config(&self.lane_config);-state.persist_da_shard_cursor_journal();'),
     ("active_reset_lanes", "lane_config.entry(*lane_id).is_some()", "true"),
-    ("StateBlock::commit_inner", "prepared.publish(state_ref, &_view_generation, !replay_prevalidation)",
-     "prepared.publish(state_ref, &_view_generation, true)"),
+    pytest.param(
+        "StateBlock::commit_inner", "prepared.publish(state_ref, &mut effect_locks, &_view_generation, !*replay_prevalidation)",
+        "prepared.publish(state_ref, &mut effect_locks, &_view_generation, true)",
+        id="StateBlock::commit_inner-prepared.publish(state_ref, &_view_generation, !replay_prevalidation)-prepared.publish(state_ref, &_view_generation, true)",
+    ),
 ])
 def test_typed_drain_and_retained_lifecycle_preserve_semantics(tmp_path, symbol, old, new):
-    binding = next(b for b in BINDINGS if b[3] == symbol)
+    binding, old, new = defining_evidence_kernel(next(b for b in BINDINGS if b[3] == symbol), old, new)
     item = source_item(binding)
     assert old in item
     post = item.replace(old, new, 1)
@@ -901,28 +925,29 @@ def test_typed_drain_and_retained_lifecycle_preserve_semantics(tmp_path, symbol,
 def test_lifecycle_post_work_requires_original_generation_and_fences(tmp_path, mutation):
     binding = next(b for b in BINDINGS if b[3] == "StateBlock::commit_inner")
     item = source_item(binding)
-    post = """        if let Some(post) = lifecycle_post_publication {
+    post = """        if let Some(post) = lifecycle_post_publication.take() {
             post.publish(state_ref);
         }"""
     assert item.count(post) == 1
     if mutation == "post_inside_generation":
-        changed = item.replace(post, "", 1).replace("            hash_retirement = block_hashes.publish();",
-            "            hash_retirement = block_hashes.publish();\n" + post, 1)
+        changed = item.replace(post, "", 1).replace("            block_hashes.publish_prepared();",
+            "            block_hashes.publish_prepared();\n" + post, 1)
     elif mutation == "hash_prepare_refusal":
-        changed = item.replace(".map_err(|(_, _, cleanup)| {\n                    hash_refusal_cleanup = Some(cleanup);\n                    TransactionsBlockError::SnapshotObservationChanged\n                })?;", ".unwrap();", 1)
+        changed = item.replace(".map_err(|_| {\n                TransactionsBlockError::SnapshotObservationChanged\n            })?;", ".unwrap();", 1)
     elif mutation == "hash_cleanup_before_commit_unlock":
-        changed = item.replace("        drop(hash_retirement);", "", 1).replace(
-            "        drop(_state_commit_lock);", "        drop(hash_retirement);\n        drop(_state_commit_lock);", 1)
+        changed = item.replace("        drop(_state_commit_lock);", "        block_hashes.release_writers();\n        drop(_state_commit_lock);", 1)
     elif mutation == "hash_cleanup_declared_after_commit_lock":
-        changed = item.replace("        let hash_retirement;", "", 1).replace(
-            "let _state_commit_lock = state_ref.state_commit_lock.lock();",
-            "let _state_commit_lock = state_ref.state_commit_lock.lock();\n        let hash_retirement;", 1)
+        owner = "        let mut write_fence = self.state_write_lock.defer_notifications();"
+        changed = item.replace(owner, "", 1).replace(
+            "let _state_commit_lock = commit_fence.lock();",
+            "let _state_commit_lock = commit_fence.lock();\n" + owner, 1)
     elif mutation == "lifecycle_fence_released":
         changed = item.replace("        drop(autoscale_lifecycle_guard);", "", 1).replace(
             post, "        drop(autoscale_lifecycle_guard);\n" + post, 1)
     else:
-        call = "Some(prepared.publish(state_ref, &_view_generation, !replay_prevalidation))"
+        call = "Some(prepared.publish(state_ref, &mut effect_locks, &_view_generation, !*replay_prevalidation))"
         changed = item.replace(call, "{ drop(_view_generation); " + call + " }", 1)
+    assert changed != item
     changed_provider(tmp_path, binding, item, changed)
     assert all(token in changed for token in binding[4])
     errors = []
@@ -976,7 +1001,8 @@ def test_source_manifest_registers_authority_contract_and_controls(monkeypatch):
 
     observed = []
 
-    def capture(paths):
+    def capture(paths, *, root):
+        assert root == ROOT
         observed.extend(paths)
         raise CapturedManifestInventory
 
@@ -988,7 +1014,7 @@ def test_source_manifest_registers_authority_contract_and_controls(monkeypatch):
 
 
 ACTION_REGRESSIONS = ({'id': 'A18-blocked-insertion',
-  'symbol': 'native_amx_participant_application_snapshot',
+  'symbol': 'native_amx_participant_application_snapshot_with_lifecycle',
   'old': 'snapshot\n'
          '                        .blocked\n'
          '                        .entry(route)\n'
@@ -996,7 +1022,7 @@ ACTION_REGRESSIONS = ({'id': 'A18-blocked-insertion',
          '                        .or_insert(height);',
   'new': 'let _ = (route, height);'},
  {'id': 'A19-applied-projection',
-  'symbol': 'native_amx_participant_application_snapshot',
+  'symbol': 'native_amx_participant_application_snapshot_with_lifecycle',
   'old': 'snapshot.applied.push(marker);',
   'new': 'let _ = marker;'},
  {'id': 'A20-blocked-predecessor',

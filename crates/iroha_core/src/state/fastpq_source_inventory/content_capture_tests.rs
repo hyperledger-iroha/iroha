@@ -107,7 +107,8 @@ fn stage_marker_and_membership(block: &mut StateBlock<'_>) {
     block
         .stage_canonical_carrier_membership(core::iter::empty(), nonzero!(1_usize))
         .unwrap();
-    block.block_hashes.push(block._curr_block.hash());
+    let block_hash = block._curr_block.hash();
+    block.block_hashes.push(block_hash);
 }
 
 fn assert_not_published(state: &State) {

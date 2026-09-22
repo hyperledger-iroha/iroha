@@ -480,7 +480,7 @@ fn inconsistent_original_modes_refuse_before_callback_and_release_all_owners() {
     let set = Arc::new(Set::default());
     let foreign = Arc::new(Set::default());
     let mut block = set.block();
-    block.ids = foreign.ids.block_and_revert();
+    block.ids = crate::state::block_field::BlockField::new(foreign.ids.block_and_revert());
     let called = AtomicBool::new(false);
     let result = block.try_detach(|_| {
         called.store(true, Ordering::SeqCst);

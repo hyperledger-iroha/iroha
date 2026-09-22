@@ -1620,9 +1620,10 @@ fn autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height_on_cons
             .expect("fixture carrier height has a successor"),
     )
     .expect("a successor carrier height is non-zero");
+    let entrypoints = state_block.merge_carrier_entrypoints.clone();
     state_block
         .transactions
-        .insert_block(state_block.merge_carrier_entrypoints.clone(), wrong_height);
+        .insert_block(entrypoints, wrong_height);
     assert!(matches!(
         state_block.validate_staged_merge_execution_authorization(),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
@@ -4133,7 +4134,9 @@ fn queue_plan_validation_waiting_for_state_generation_does_not_pin_block_hashes(
             .expect("return QueuePlan validation result");
     });
 
-    let generation_guard = state.begin_state_view_write();
+    let mut generation_guard_notice = state.state_view_publication();
+
+    let generation_guard = generation_guard_notice.begin();
     start.wait();
     entered_rx
         .recv_timeout(Duration::from_secs(1))
@@ -4150,6 +4153,7 @@ fn queue_plan_validation_waiting_for_state_generation_does_not_pin_block_hashes(
     let premature_completion = completion_rx.try_recv().ok();
     let completed_while_generation_odd = premature_completion.is_some();
     drop(generation_guard);
+    drop(generation_guard_notice);
     let validation = premature_completion.unwrap_or_else(|| {
         completion_rx
             .recv_timeout(Duration::from_secs(5))

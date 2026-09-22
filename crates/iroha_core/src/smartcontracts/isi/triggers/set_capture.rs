@@ -32,7 +32,7 @@ macro_rules! capture_fields {
             fn new(original: SetBlock<'set>, admission: Admission) -> Self {
                 // Only infallible, inert owner moves occur across this extraction.
                 let SetBlockFields { $($field,)+ } = original.into_fields();
-                Self { $($field: Some($field.capture_slot()),)+ admission: Some(admission) }
+                Self { $($field: Some($field.into_executing().capture_slot()),)+ admission: Some(admission) }
             }
 
             fn capture(&mut self) {

@@ -1878,8 +1878,22 @@ def _production_trace_extraction_source_snapshot(
                 for token in checked_transition_consumer["required_tokens"]
                 if _token_sequence_count(consumer_tokens, rust_code_tokens(token)) == 0
             ]
+            # Apply keeps the exact checked proof inside its consuming State
+            # operation until physical retirement. Only that explicit owner
+            # validates by borrow; every other consumer must still move its
+            # checked projection at the established transition boundary.
+            retained_state_consumer = (
+                binding["id"] == "canonical_wsv_commit_authorization"
+                and checked_transition_consumer_impl == "CheckedCarrierApplications"
+                and checked_transition_consumer["symbol"] == "validate_for_state_commit"
+            )
+            projection_access = (
+                "checked.accepted_projection()"
+                if retained_state_consumer
+                else "into_projection"
+            )
             consumer_count = _token_sequence_count(
-                consumer_tokens, rust_code_tokens("into_projection")
+                consumer_tokens, rust_code_tokens(projection_access)
             )
             consumer_order_error = _production_trace_ordered_token_sequence_error(
                 consumer_tokens,
@@ -1897,7 +1911,7 @@ def _production_trace_extraction_source_snapshot(
                     )
                 if consumer_count < expected_count:
                     detail.append(
-                        "move-only checked projection consumptions "
+                        f"checked projection access {projection_access!r} "
                         f"expected at least {expected_count}, found {consumer_count}"
                     )
                 if consumer_order_error is not None:

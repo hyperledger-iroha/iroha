@@ -231,7 +231,8 @@ fn snapshot_capture_refuses_active_publisher_without_waiting() {
     snapshot_capture_test(|| {
         let state = state();
         let original_nexus = state.nexus_snapshot();
-        let publication = state.begin_state_view_write();
+        let mut publication_notice = state.state_view_publication();
+        let publication = publication_notice.begin();
         assert!(state.try_nexus_snapshot_once().unwrap().is_none());
         assert_eq!(
             state.nexus_ownership_projection().lane_catalog,
@@ -251,6 +252,7 @@ fn snapshot_capture_refuses_active_publisher_without_waiting() {
             MergeLedgerCommitError::ExecutionObservationChanged
         ));
         drop(publication);
+        drop(publication_notice);
         assert_eq!(
             state
                 .try_nexus_snapshot_once()
@@ -279,8 +281,10 @@ fn snapshot_capture_discards_bytes_after_completed_publication() {
             &state,
             || {
                 // Even a semantically empty real publication invalidates the observation.
-                let publication = state.begin_state_view_write();
+                let mut publication_notice = state.state_view_publication();
+                let publication = publication_notice.begin();
                 drop(publication);
+                drop(publication_notice);
             },
         ) {
             Ok(_) => panic!("changed generation cannot yield the partial capture"),
@@ -306,11 +310,13 @@ fn snapshot_capture_stable_malformed_runtime_is_fallible_and_read_only() {
     snapshot_capture_test(|| {
         let state = state();
         {
-            let publication = state.begin_state_view_write();
+            let mut publication_notice = state.state_view_publication();
+            let publication = publication_notice.begin();
             let mut runtime = state.canonical_runtime.block();
             runtime.get_mut().lane_incarnation_lineage.clear();
             runtime.commit();
             drop(publication);
+            drop(publication_notice);
         }
         let before = norito::json::to_json(&state.canonical_runtime).unwrap();
         let world_before = norito::json::to_json(&state.world).unwrap();
@@ -344,13 +350,15 @@ fn snapshot_capture_retains_exact_topology_bytes_after_later_publication() {
         let hash = captured.canonical_hash().unwrap();
         {
             // Explicit topology-owner fixture, not authenticated carrier application.
-            let publication = state.begin_state_view_write();
+            let mut publication_notice = state.state_view_publication();
+            let publication = publication_notice.begin();
             let mut topology = state.commit_topology.block();
             topology.get_mut().push(iroha_model_base::peer::PeerId::new(
                 iroha_test_samples::ALICE_KEYPAIR.public_key().clone(),
             ));
             topology.commit();
             drop(publication);
+            drop(publication_notice);
         }
         let current = crate::snapshot::CapturedStateSnapshot::capture(&state).unwrap();
         assert_eq!(captured.as_json(), original);

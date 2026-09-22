@@ -232,6 +232,20 @@ where
     /// Validate the original writer before beginning an aggregate publication.
     /// This neither pins the epoch collector nor changes the active generation.
     pub fn prepare_commit(self) -> EbrCellPreparedCommit<'a, T, Charge> {
+        let mut slot = self.commit_slot();
+        slot.prepare();
+        slot.into_prepared()
+    }
+
+    /// Move the original writer into caller custody before validating it.
+    pub fn commit_slot(self) -> EbrCellCommitSlot<'a, T, Charge> {
+        EbrCellCommitSlot {
+            writer: Some(self),
+            ready: false,
+        }
+    }
+
+    fn validate_commit(&self) {
         assert!(self.data.is_some(), "original unpublished allocation");
         // SAFETY: this writer exclusively prevents replacement of active. Its
         // borrowed cell cannot be destroyed, and active is never null in a live
@@ -241,7 +255,6 @@ where
             .active
             .load(Acquire, unsafe { epoch::unprotected() });
         assert!(!active.is_null(), "original initialized generation");
-        EbrCellPreparedCommit { writer: self }
     }
 
     /// Release this writer while retaining its exact unpublished allocation.
@@ -251,6 +264,52 @@ where
         EbrCellOwned {
             data: self.data.take(),
         }
+    }
+}
+
+/// The original EBR writer retained by its caller throughout validation.
+/// Construction and preparation do not pin the collector or allocate a payload.
+#[must_use = "retain the original writer until aggregate release or publication"]
+pub struct EbrCellCommitSlot<'a, T, Charge = Untracked>
+where
+    T: Clone + Send + Sync + 'static,
+    Charge: Send + Sync + 'static,
+{
+    writer: Option<EbrCellWriteTxn<'a, T, Charge>>,
+    ready: bool,
+}
+
+impl<'a, T, Charge> EbrCellCommitSlot<'a, T, Charge>
+where
+    T: Clone + Send + Sync + 'static,
+    Charge: Send + Sync + 'static,
+{
+    /// Validate while the caller continues to own the original physical writer.
+    pub fn prepare(&mut self) {
+        assert!(!self.ready, "original EBR writer prepares once");
+        self.writer
+            .as_ref()
+            .expect("original EBR writer")
+            .validate_commit();
+        self.ready = true;
+    }
+
+    /// Whether the retained writer has completed validation.
+    pub fn is_prepared(&self) -> bool {
+        self.ready
+    }
+
+    /// Transfer only checked ownership without additional work or callbacks.
+    pub fn into_prepared(mut self) -> EbrCellPreparedCommit<'a, T, Charge> {
+        assert!(self.ready, "original preparation must complete");
+        EbrCellPreparedCommit {
+            writer: self.writer.take().expect("original EBR writer"),
+        }
+    }
+
+    /// Return the exact original writer without publication or reconstruction.
+    pub fn abort(mut self) -> EbrCellWriteTxn<'a, T, Charge> {
+        self.writer.take().expect("original EBR writer")
     }
 }
 
@@ -1185,3 +1244,6 @@ mod staged_commit_tests {
 #[cfg(test)]
 #[path = "acquisition_tests.rs"]
 mod acquisition_tests;
+
+#[cfg(test)]
+mod commit_slot_tests;

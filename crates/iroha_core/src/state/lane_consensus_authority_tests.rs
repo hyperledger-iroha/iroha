@@ -55,6 +55,7 @@ fn closed_lane_opening_authority_fixture(
             close.header().height().get(),
             close.header().hash(),
             None,
+            &mut LaneLifecycleReleases::new(&state),
         )
         .expect("exact native drain staging must pass publication preflight");
     overlay.block_hashes.push(close.hash());
