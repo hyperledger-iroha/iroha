@@ -96,6 +96,8 @@ python3 -m pytest -q \
   scripts/tests/python_wheel_byte_owner_test.py \
   scripts/tests/python_installed_content_owner_test.py \
   scripts/tests/python_zip_directory_admission_test.py \
+  scripts/tests/sorafs_python_child_input_content_test.py \
+  scripts/tests/sorafs_python_posix_profile_test.py \
   scripts/tests/sorafs_python_child_runner_test.py \
   scripts/tests/sorafs_python_consumer_artifact_test.py \
   scripts/tests/build_sorafs_python_consumer_artifact_test.py \

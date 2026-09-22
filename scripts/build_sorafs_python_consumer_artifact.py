@@ -37,7 +37,7 @@ from sorafs_python_package_source import authenticate_package_source
 from sorafs_python_process import run_python_process
 from sorafs_python_publication import PythonArtifactPublication
 from sorafs_python_producer_inputs import (
-    OriginalInputs, capture_tree, child, identity,
+    POSIX_EXTENSION_SUFFIXES, OriginalInputs, capture_tree, child, identity,
     installed_wheel_join, native_member, source_snapshot, verifier, write_fresh,
 )
 from sorafs_python_runtime_custody import OriginalPythonRuntime
@@ -107,13 +107,14 @@ def _produce(args: argparse.Namespace, originals: OriginalInputs, copied: Origin
     requirements, wheels, parsed_wheels, package_sources = [], [], [], []
     for path, owner in ((args.native_wheel, verifier.NATIVE_OWNER), (args.sdk_wheel, verifier.SDK_OWNER)):
         raw = copy_input(path, "wheels/" + path.name, verifier.MAX_WHEEL_BYTES)
-        parsed = verifier.parse_wheel_bytes(raw, owner=owner)
+        parsed = verifier.parse_wheel_bytes(raw, owner=owner, extension_suffixes=POSIX_EXTENSION_SUFFIXES)
         package_source = authenticate_package_source(parsed, root, originals)
         parsed_wheels.append(parsed)
         package_sources.append(package_source)
         retained.update({"package-source/" + name: body for name, body in package_source.items()})
         private = work / "wheels" / path.name
-        wheel = verifier.preflight_wheel(private, verifier.seal_wheel(private).render(), owner=owner)
+        wheel = verifier.preflight_wheel(private, verifier.seal_wheel(private).render(), owner=owner,
+                                        extension_suffixes=POSIX_EXTENSION_SUFFIXES)
         wheels.append(wheel)
         requirements.append((private, hashlib.sha256(raw).hexdigest()))
         if owner == verifier.NATIVE_OWNER:

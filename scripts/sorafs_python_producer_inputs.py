@@ -21,6 +21,10 @@ from sorafs_python_consumer_artifact import (
     MAX_SOURCE_FILE_BYTES, SOURCE_PREFIXES, _VERIFIER as verifier,
 )
 
+# The POSIX release package is the pyo3 abi3-py39 artifact. Producer and remote
+# replay use this source-owned profile, never the verifier host's suffix list.
+POSIX_EXTENSION_SUFFIXES = (".abi3.so",)
+
 _CHILD_PATH = Path(__file__).resolve().parent / "fixtures/SorafsPythonConsumerQualificationRunner.py"
 _spec = importlib.util.spec_from_file_location("_sorafs_python_producer_child", _CHILD_PATH)
 if _spec is None or _spec.loader is None:

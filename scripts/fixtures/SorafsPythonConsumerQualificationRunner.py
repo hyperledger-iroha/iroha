@@ -78,13 +78,20 @@ def _object(value: object, fields: set[str]) -> dict:
     return value
 
 
-def _absolute(value: object) -> Path:
+def _absolute_content(value: object) -> PurePosixPath:
+    """Validate one logical POSIX path without opening its historical location."""
     require(type(value) is str and 0 < len(value.encode("utf-8")) <= 4096
             and unicodedata.normalize("NFC", value) == value
             and not any(ord(char) < 32 or ord(char) == 127 for char in value), "invalid absolute path")
-    path = Path(value)
-    require(path.is_absolute() and str(path) == value
-            and path.resolve(strict=True) == path, "path is not canonical")
+    path = PurePosixPath(value)
+    require(path.is_absolute() and path.anchor == "/" and str(path) == value
+            and ".." not in path.parts, "path is not canonical")
+    return path
+
+
+def _absolute(value: object) -> Path:
+    path = Path(_absolute_content(value))
+    require(path.resolve(strict=True) == path, "path is not canonical")
     return path
 
 
@@ -101,7 +108,7 @@ def _relative(value: object) -> str:
 
 def _identity_row(value: object, *, relative: bool) -> dict:
     row = _object(value, {"path", "sha256", "size"})
-    _relative(row["path"]) if relative else _absolute(row["path"])
+    _relative(row["path"]) if relative else _absolute_content(row["path"])
     require(type(row["sha256"]) is str and _DIGEST.fullmatch(row["sha256"]) is not None,
             "invalid source digest")
     require(type(row["size"]) is int and 0 <= row["size"] <= MAX_FILE_BYTES,
@@ -134,8 +141,13 @@ def read_stable(path: Path, *, limit: int = MAX_FILE_BYTES) -> tuple[bytes, tupl
     return raw, seal
 
 
-def parse_input(raw: bytes) -> dict:
-    """Validate the fixed input schema, including inventory bounds before file reads."""
+def parse_input_content(raw: bytes) -> dict:
+    """Validate closed input bytes and logical labels without filesystem access.
+
+    Wheel seals remain bounded strings here. The live child validates them with
+    its authenticated snapshot verifier later; an offline adapter must use its
+    already authenticated sole FileSeal parser. This grants no live path owner.
+    """
     require(type(raw) is bytes and 0 < len(raw) <= MAX_INPUT, "input byte bound")
     value = json.loads(raw, object_pairs_hook=_pairs,
                        parse_constant=lambda _value: require(False, "nonfinite JSON"))
@@ -143,13 +155,12 @@ def parse_input(raw: bytes) -> dict:
                     "sdk_wheel", "source_files", "python"})
     require(canonical_json(value) == raw and value["schema"] == INPUT_SCHEMA,
             "input is not canonical V1 JSON")
-    snapshot = _absolute(value["snapshot_root"])
-    environment = _absolute(value["environment_root"])
-    require(snapshot.is_dir() and environment.is_dir() and snapshot != environment,
-            "source and environment roots must be distinct directories")
+    snapshot = _absolute_content(value["snapshot_root"])
+    environment = _absolute_content(value["environment_root"])
+    require(snapshot != environment, "source and environment roots must be distinct")
     for name in ("native_wheel", "sdk_wheel"):
         wheel = _object(value[name], {"path", "seal"})
-        _absolute(wheel["path"])
+        _absolute_content(wheel["path"])
         require(type(wheel["seal"]) is str and len(wheel["seal"]) <= 512,
                 "invalid wheel seal")
     _identity_row(value["python"], relative=False)
@@ -167,6 +178,19 @@ def parse_input(raw: bytes) -> dict:
                 "source inventory contains an unowned path")
     require(names == sorted(set(names)) and {RUNNER, VERIFIER, CASES, TEST} <= set(names),
             "source inventory is unordered, duplicate or missing a fixed owner")
+    return value
+
+
+def parse_input(raw: bytes) -> dict:
+    """Apply the sole byte algorithm, then require its current live path owners."""
+    value = parse_input_content(raw)
+    snapshot = _absolute(value["snapshot_root"])
+    environment = _absolute(value["environment_root"])
+    require(snapshot.is_dir() and environment.is_dir(),
+            "source and environment roots must be distinct directories")
+    for name in ("native_wheel", "sdk_wheel"):
+        _absolute(value[name]["path"])
+    _absolute(value["python"]["path"])
     return value
 
 
