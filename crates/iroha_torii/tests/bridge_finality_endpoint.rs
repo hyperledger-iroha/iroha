@@ -31,7 +31,7 @@ use iroha_data_model::{
         BridgeFinalityVerifyError,
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
 };
@@ -95,10 +95,10 @@ fn exact_v2_fixture(network_id: NetworkId) -> (Arc<SignedBlock>, V2FinalityArtif
         iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(0, block_key.private_key()),
     );
-    let mint_roster = KagemushaMintFinalityEpochRosterV1 {
+    let mint_roster = KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch: 0,
+        generation: 0,
         validators: roster
             .iter()
             .zip(1..=4_u8)
@@ -114,10 +114,25 @@ fn exact_v2_fixture(network_id: NetworkId) -> (Arc<SignedBlock>, V2FinalityArtif
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
-        kagemusha_mint_finality_epoch_id: mint_roster
-            .finality_epoch_id()
-            .expect("valid fixture mint-finality roster"),
-        kagemusha_mint_finality_epoch_roster: mint_roster,
+        kagemusha_mint_finality_authorization: {
+            let authority = &mint_roster;
+            let authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id: authority.network_id,
+                epoch: 0,
+                first_height: 1,
+                last_height: 10,
+                authority_generation: authority.generation,
+                authority_id: authority.authority_id().expect("fixture authority identity"),
+                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+                previous_authorization_id: [0; 32],
+                transition_id: [0; 32],
+                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+            };
+            authorization.validate_against_authority(authority).expect("complete genesis fixture authorization");
+            authorization
+        },
+        kagemusha_mint_finality_authority: mint_roster,
         epoch_end_height: 10,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,

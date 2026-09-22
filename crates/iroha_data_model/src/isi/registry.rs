@@ -1379,7 +1379,22 @@ mod tests {
         assert_default_registry_decodes(crate::isi::staking::ClaimPublicLaneRewards {
             lane_id: iroha_model_base::topology::LaneId::SINGLE,
             account: account(0xA4),
-            upto_epoch: Some(9),
+            claim_plan: crate::nexus::staking::PublicLaneRewardClaimPlanV1 {
+                network_scope: crate::nexus::staking::PublicLaneMonetaryScopeV1::Network(
+                    crate::NetworkId::from_genesis_hash(
+                        iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+                            iroha_crypto::Hash::new(b"registry reward claim network"),
+                        ),
+                    ),
+                ),
+                valid_until_height: 10,
+                expected_state: None,
+                records: vec![crate::nexus::staking::PublicLaneRewardRecordRefV1 {
+                    epoch: 9,
+                    record_hash: iroha_crypto::Hash::new(b"registry reward record"),
+                }],
+                sources: Vec::new(),
+            },
         });
     }
     #[test]

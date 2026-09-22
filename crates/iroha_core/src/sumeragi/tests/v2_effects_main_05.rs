@@ -6640,13 +6640,9 @@ fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
     foreign_context.network_id =
         crate::sumeragi::synthetic_network_id("foreign-v2-effect-executor-test");
     (
-        foreign_context.kagemusha_mint_finality_epoch_id,
-        foreign_context.kagemusha_mint_finality_epoch_roster,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-        foreign_context.network_id,
-        foreign_context.epoch,
-        &foreign_context.roster,
-    );
+        foreign_context.kagemusha_mint_finality_authorization,
+        foreign_context.kagemusha_mint_finality_authority,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(foreign_context.network_id, foreign_context.epoch, foreign_context.epoch_end_height, &foreign_context.roster);
     let mut foreign_commit = fixture.qc(wire::GlobalPhase::Commit);
     foreign_commit.round.context_id = foreign_context.id();
     foreign_commit.proposal_round.context_id = foreign_context.id();

@@ -1843,9 +1843,23 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
+            if let Some(((lane_id, claimant), _)) = state_transaction
                 .world
                 .public_lane_reward_claims
+                .iter()
+                .find(|((_, claimant), _)| claimant == &account_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it has public-lane reward processing state (lane {lane_id}, account {claimant}); clear the retained cursor first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
+                .world
+                .public_lane_reward_accruals
                 .iter()
                 .find(|((_, claimant, asset_id), _)| {
                     claimant == &account_id || asset_id.account() == &account_id
@@ -1853,7 +1867,7 @@ pub mod isi {
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it has pending public-lane reward claim state as claimant or reward-asset owner (lane {lane_id}, account {claimant}, asset {asset_id}); claim or clear rewards first"
+                        "cannot unregister account {account_id}: it has unpaid public-lane reward accrual state as claimant or reward-asset owner (lane {lane_id}, account {claimant}, asset {asset_id}); settle rewards first"
                     )
                     .into(),
                 )
@@ -2757,13 +2771,13 @@ pub mod isi {
             }
             if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
                 .world
-                .public_lane_reward_claims
+                .public_lane_reward_accruals
                 .iter()
                 .find(|((_, _, asset_id), _)| asset_id.definition() == &asset_definition_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister asset definition {asset_definition_id}: it has pending public-lane reward claim state (lane {lane_id}, account {claimant}, asset {asset_id}); claim or clear rewards first"
+                        "cannot unregister asset definition {asset_definition_id}: it has unpaid public-lane reward accrual state (lane {lane_id}, account {claimant}, asset {asset_id}); settle rewards first"
                     )
                     .into(),
                 )
@@ -8703,7 +8717,7 @@ mod tests {
     fn unregister_account_rejects_when_account_is_reward_claim_asset_owner() {
         assert_account_unregister_guard(
             |tx, domain_id, authority, account_id| {
-                tx.world.public_lane_reward_claims.insert(
+                tx.world.public_lane_reward_accruals.insert(
                     (
                         LaneId::SINGLE,
                         authority.clone(),
@@ -8715,12 +8729,28 @@ mod tests {
                             account_id.clone(),
                         ),
                     ),
-                    1,
+                    Quantity::from(1_u32),
                 );
             },
             "account referenced by reward-claim asset owner must not be unregistered",
-            "public-lane reward claim state",
+            "public-lane reward accrual state",
             "error should explain reward-claim conflict",
+        );
+    }
+    #[test]
+    fn unregister_account_rejects_retained_reward_processing_cursor() {
+        assert_account_unregister_guard(
+            |tx, _, _, account_id| {
+                tx.world.public_lane_reward_claims.insert(
+                    (LaneId::SINGLE, account_id.clone()),
+                    iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+                        through_epoch: Some(1),
+                    },
+                );
+            },
+            "account with a retained reward cursor must not be unregistered",
+            "public-lane reward processing state",
+            "error should explain the retained cursor",
         );
     }
     #[test]
@@ -11786,6 +11816,29 @@ mod tests {
                 metadata: Metadata::default(),
             },
         );
+        let accrual_key = (
+            LaneId::SINGLE,
+            authority.clone(),
+            AssetId::new(asset_definition_id.clone(), authority.clone()),
+        );
+        tx.world
+            .public_lane_reward_accruals
+            .insert(accrual_key.clone(), Quantity::one());
+        let error = Unregister::asset_definition(asset_definition_id.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("unpaid source must pin its asset definition");
+        assert!(
+            error
+                .to_string()
+                .contains("public-lane reward accrual state")
+        );
+        assert!(
+            tx.world
+                .asset_definitions
+                .get(&asset_definition_id)
+                .is_some()
+        );
+        tx.world.public_lane_reward_accruals.remove(accrual_key);
         Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect("mismatched public-lane reward row must not block asset definition unregister");

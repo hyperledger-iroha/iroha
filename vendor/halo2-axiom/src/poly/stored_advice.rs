@@ -76,10 +76,23 @@ pub enum StoredLookupSideV1 {
     Table,
 }
 
+/// Exact original proving-key mask identity, retained across allowed basis conversions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoredKeyMaskV1 {
+    /// The original proving key's `l0` mask.
+    L0,
+    /// The original proving key's `l_last` mask.
+    LLast,
+    /// The original proving key's `l_active_row` mask.
+    LActiveRow,
+}
+
 /// Semantic polynomial identity authenticated independently of its scalar basis.
 ///
 /// Lookup indices use the retained proving key's lookup order. Advice coordinates are valid
-/// only for advice polynomials; callers must not encode lookup identities as advice columns.
+/// only for advice polynomials; callers must not encode lookup or key identities as advice
+/// columns. Key indices use the original retained key's order and require validation against
+/// that key at the consuming boundary. A role or layout alone grants no source authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoredPolynomialRoleV1 {
     /// Undivided quotient numerator evaluations on one exact original coset part.
@@ -154,6 +167,21 @@ pub enum StoredPolynomialRoleV1 {
         /// Base-two logarithm of each sorted run width, between min(k, 8) and k.
         run_log: u32,
     },
+    /// One original fixed key column, including any compressed selector column.
+    KeyFixed {
+        /// Original fixed-column index, bounded by the retained key at the consuming boundary.
+        column: u32,
+    },
+    /// One original key permutation polynomial, distinct from a permutation product.
+    KeyPermutation {
+        /// Original permutation-column index, bounded by the retained key at the consumer.
+        column: u32,
+    },
+    /// One original key mask, stored only as coefficients or an exact coset part.
+    KeyMask {
+        /// Original mask identity; no numeric column alias is accepted.
+        kind: StoredKeyMaskV1,
+    },
 }
 
 /// Coarse, nonsecret failure class; no paths, scalars, or backend strings escape here.
@@ -218,7 +246,9 @@ impl StoredPolynomialLayoutV1 {
     /// # Errors
     /// Rejects a zero proof context, unsupported phase/domain, invalid coset part, or
     /// a sorted scratch pass outside min(k, 8)..=k, or a role outside its exact supported
-    /// basis/part/piece bounds. Aliased quotient intermediates are coefficient-only scratch.
+    /// basis/part/piece bounds. Aliased quotient intermediates are coefficient-only scratch;
+    /// original key masks support only coefficients and exact coset parts. Key-column counts
+    /// remain the retained key owner's responsibility, not a property of this metadata.
     pub fn new(
         proof_context: [u8; 32],
         ordinal: u64,
@@ -230,6 +260,8 @@ impl StoredPolynomialLayoutV1 {
         if proof_context == [0; 32]
             || matches!(role, StoredPolynomialRoleV1::QuotientNumerator
                 if !matches!(basis, StoredPolynomialBasisV1::CosetPart { .. }))
+            || matches!(role, StoredPolynomialRoleV1::KeyMask { .. }
+                if basis == StoredPolynomialBasisV1::Lagrange)
             || k > STORED_MAX_K_V1
             || matches!(role, StoredPolynomialRoleV1::Advice { phase, .. } if phase > 2)
             || matches!(role, StoredPolynomialRoleV1::LookupLeftoverTable { .. }
@@ -321,7 +353,10 @@ impl StoredPolynomialLayoutV1 {
             | StoredPolynomialRoleV1::VanishingRandom
             | StoredPolynomialRoleV1::QuotientNumerator
             | StoredPolynomialRoleV1::QuotientAliasedPart { .. }
-            | StoredPolynomialRoleV1::QuotientPiece { .. } => Err(StoredPolynomialErrorV1::Context),
+            | StoredPolynomialRoleV1::QuotientPiece { .. }
+            | StoredPolynomialRoleV1::KeyFixed { .. }
+            | StoredPolynomialRoleV1::KeyPermutation { .. }
+            | StoredPolynomialRoleV1::KeyMask { .. } => Err(StoredPolynomialErrorV1::Context),
         }
     }
     /// Return the logical length, excluding final chunk padding.
@@ -361,6 +396,9 @@ impl StoredPolynomialLayoutV1 {
     /// Permuted arguments use tag 4, detail Input = 0 or Table = 1 across their legitimate bases. Its domain tag
     /// separates this format from former advice-only bindings. Backends must authenticate this
     /// complete digest together with the chunk index; the digest alone authorizes no read.
+    /// Key fixed/permutation columns use tags 12/13, their original index, and detail 0.
+    /// Key masks use tag 14, index 0, and detail 0/1/2 for l0/l_last/l_active_row respectively.
+    /// Existing tags 0 through 11 retain their exact framing and bytes.
     pub fn context_digest(self) -> [u8; 32] {
         let mut hash = Params::new()
             .hash_length(32)
@@ -387,6 +425,17 @@ impl StoredPolynomialLayoutV1 {
         hash.update(&self.k.to_le_bytes());
         let (role_tag, role_index, role_detail) = match self.role {
             StoredPolynomialRoleV1::Advice { column, phase } => (0, column, phase),
+            StoredPolynomialRoleV1::KeyFixed { column } => (12, column, 0),
+            StoredPolynomialRoleV1::KeyPermutation { column } => (13, column, 0),
+            StoredPolynomialRoleV1::KeyMask { kind } => (
+                14,
+                0,
+                match kind {
+                    StoredKeyMaskV1::L0 => 0,
+                    StoredKeyMaskV1::LLast => 1,
+                    StoredKeyMaskV1::LActiveRow => 2,
+                },
+            ),
             StoredPolynomialRoleV1::LookupCompressed { lookup, side } => (
                 1,
                 lookup,
@@ -518,3 +567,7 @@ mod tests;
 #[cfg(test)]
 #[path = "stored_advice/lookup_membership_role_tests.rs"]
 mod lookup_membership_role_tests;
+
+#[cfg(test)]
+#[path = "stored_advice/key_role_tests.rs"]
+mod key_role_tests;

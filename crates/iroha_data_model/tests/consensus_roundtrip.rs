@@ -19,8 +19,10 @@ use iroha_data_model::{
         },
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
-        KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalityGenesisParametersV1,
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+        KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
 };
@@ -50,15 +52,15 @@ fn sample_block_hash(seed: u8) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(sample_hash(seed))
 }
 
-fn mint_finality_roster(
+fn mint_finality_authority(
     network_id: NetworkId,
-    epoch: u64,
+    generation: u64,
     roster: &[ValidatorPower],
-) -> KagemushaMintFinalityEpochRosterV1 {
-    KagemushaMintFinalityEpochRosterV1 {
+) -> KagemushaMintFinalityAuthorityGenerationV1 {
+    KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch,
+        generation,
         validators: roster
             .iter()
             .enumerate()
@@ -69,6 +71,29 @@ fn mint_finality_roster(
             })
             .collect(),
     }
+}
+
+fn mint_finality_genesis_authorization(
+    authority: &KagemushaMintFinalityAuthorityGenerationV1,
+    last_height: u64,
+) -> KagemushaMintFinalityEpochAuthorizationV1 {
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id: authority.network_id,
+        epoch: 0,
+        first_height: 1,
+        last_height,
+        authority_generation: authority.generation,
+        authority_id: authority.authority_id().expect("valid fixture authority"),
+        beacon: BeaconEpochBindingV1::Bootstrap,
+        previous_authorization_id: [0; 32],
+        transition_id: [0; 32],
+        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+    };
+    authorization
+        .validate_against_authority(authority)
+        .expect("valid fixture genesis authorization");
+    authorization
 }
 
 fn recommended_genesis_context() -> SumeragiV2GenesisContextParameters {
@@ -249,18 +274,61 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
     roster.sort();
     let height = rng.next_u64().max(1);
     let network_id = NetworkId::from_genesis_hash(rng_block_hash(rng));
-    let epoch = rng.next_u64();
-    let mint_finality_roster = mint_finality_roster(network_id, epoch, &roster);
-    let mint_finality_epoch_id = mint_finality_roster
-        .finality_epoch_id()
-        .expect("valid fixture mint-finality roster");
+    let authorization_case = rng.next_u64() % 3;
+    let incumbent = mint_finality_authority(network_id, 0, &roster);
+    let (mint_finality_authorization, mint_finality_authority) =
+        if authorization_case == 0 || height == 1 {
+            (
+                mint_finality_genesis_authorization(&incumbent, height),
+                incumbent,
+            )
+        } else {
+            let previous = mint_finality_genesis_authorization(&incumbent, 1);
+            let retained = authorization_case == 1;
+            let authority = if retained {
+                incumbent
+            } else {
+                mint_finality_authority(network_id, 1, &roster)
+            };
+            let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id,
+                epoch: 1,
+                first_height: 2,
+                last_height: height,
+                authority_generation: authority.generation,
+                authority_id: authority
+                    .authority_id()
+                    .expect("valid fixture successor authority"),
+                beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                    session_id: [0xB1; 32],
+                    transcript_hash: [0xB2; 32],
+                }),
+                previous_authorization_id: previous
+                    .authorization_id()
+                    .expect("valid fixture predecessor"),
+                transition_id: if retained { [0; 32] } else { [0xB3; 32] },
+                decision: if retained {
+                    KagemushaMintFinalityEpochDecisionV1::Retain
+                } else {
+                    KagemushaMintFinalityEpochDecisionV1::Activate
+                },
+            };
+            authorization
+                .validate_against_authority(&authority)
+                .expect("valid successor authority binding");
+            authorization
+                .validate_successor(&previous)
+                .expect("contiguous fixture authorization");
+            (authorization, authority)
+        };
     let context = HeightContext {
         network_id,
         protocol_version: V2_PROTOCOL_VERSION,
         height,
-        epoch,
-        kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+        epoch: mint_finality_authorization.epoch,
+        kagemusha_mint_finality_authorization: mint_finality_authorization,
+        kagemusha_mint_finality_authority: mint_finality_authority,
         epoch_end_height: height,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,
@@ -424,23 +492,19 @@ fn kagemusha_mint_finality_genesis_parameters_norito_roundtrip() {
         })
         .collect::<Vec<_>>();
     roster.sort();
-    let template = |epoch| {
-        let roster = mint_finality_roster(network_id, epoch, &roster);
-        KagemushaMintFinalityEpochRosterTemplateV1 {
-            version: roster.version,
-            epoch: roster.epoch,
-            validators: roster.validators,
-        }
-    };
+    let authority = mint_finality_authority(network_id, 0, &roster);
     let parameters = KagemushaMintFinalityGenesisParametersV1 {
-        epoch_roster: template(0),
-        next_epoch_roster: Some(template(1)),
+        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
+            version: authority.version,
+            generation: authority.generation,
+            validators: authority.validators,
+        },
     };
     parameters.validate().expect("valid genesis authority");
     assert_roundtrip(&parameters);
     assert_eq!(
         parameters
-            .epoch_roster
+            .authority_generation
             .bind_network_id(network_id)
             .expect("bind final network identity")
             .network_id,

@@ -535,15 +535,15 @@ fn bridge_finality_chain_fixture_for_block(
         SignedBlock::header,
     );
     assert_eq!(header.height(), height);
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        mint_finality_roster_fixture(&roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        mint_finality_authorization_fixture(&roster);
     let context = HeightContext {
         network_id: test_network_id(),
         protocol_version: PROTOCOL_VERSION,
         height: height.get(),
         epoch: 0,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         epoch_end_height: 10,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,
@@ -625,12 +625,12 @@ fn bridge_finality_chain_fixture_for_block(
         protocol_version: PROTOCOL_VERSION,
         height: successor_height.get(),
         epoch: parent_artifact.height_context.epoch,
-        kagemusha_mint_finality_epoch_id: parent_artifact
+        kagemusha_mint_finality_authorization: parent_artifact
             .height_context
-            .kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster: parent_artifact
+            .kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority: parent_artifact
             .height_context
-            .kagemusha_mint_finality_epoch_roster
+            .kagemusha_mint_finality_authority
             .clone(),
         epoch_end_height: parent_artifact.height_context.epoch_end_height,
         next_epoch_snapshot: None,
@@ -1065,14 +1065,31 @@ impl GenesisAttestationFixture {
             })
             .collect::<Vec<_>>();
         let network = NetworkId::from_genesis_hash(proof.block_header.hash());
-        let (_, mut mint_roster) = mint_finality_roster_fixture(&roster);
+        let (_, mut mint_roster) = mint_finality_authorization_fixture(&roster);
         mint_roster.network_id = network;
         let mut context = proof.finality_artifact.height_context.clone();
         context.network_id = network;
         context.mode = ConsensusMode::Npos;
-        context.kagemusha_mint_finality_epoch_id =
-            mint_roster.finality_epoch_id().expect("mint roster");
-        context.kagemusha_mint_finality_epoch_roster = mint_roster;
+        context.kagemusha_mint_finality_authorization =
+            {
+            let authority = &mint_roster;
+            let authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id: authority.network_id,
+                epoch: 0,
+                first_height: 1,
+                last_height: context.epoch_end_height,
+                authority_generation: authority.generation,
+                authority_id: authority.authority_id().expect("fixture authority identity"),
+                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+                previous_authorization_id: [0; 32],
+                transition_id: [0; 32],
+                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+            };
+            authorization.validate_against_authority(authority).expect("complete genesis fixture authorization");
+            authorization
+        };
+        context.kagemusha_mint_finality_authority = mint_roster;
         context.roster = roster;
         context.quorum = DualQuorum::from_roster(&context.roster).expect("four-validator quorum");
         context.validate().expect("independent genesis context");

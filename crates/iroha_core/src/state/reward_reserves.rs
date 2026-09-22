@@ -37,7 +37,8 @@ pub(super) fn validate_public_lane_reward_reserves(
                 let amount = processed
                     .entry((key.0, share.account.clone(), record.asset.clone()))
                     .or_insert_with(Quantity::zero);
-                *amount = amount.checked_add(&share.amount)
+                *amount = amount
+                    .checked_add(&share.amount)
                     .map_err(|_| "processed reward source total overflowed".to_owned())?;
                 continue;
             }
@@ -54,10 +55,13 @@ pub(super) fn validate_public_lane_reward_reserves(
     }
     for (key, accrued) in world.public_lane_reward_accruals().iter() {
         if accrued.is_zero() || processed.get(key).is_none_or(|total| accrued > total) {
-            return Err("reward accrual is zero, orphaned or exceeds its processed entitlement".to_owned());
+            return Err(
+                "reward accrual is zero, orphaned or exceeds its processed entitlement".to_owned(),
+            );
         }
         let amount = expected.entry(key.2.clone()).or_insert_with(Quantity::zero);
-        *amount = amount.checked_add(accrued)
+        *amount = amount
+            .checked_add(accrued)
             .map_err(|_| "accrued reward reserve total overflowed".to_owned())?;
     }
     if world
@@ -66,7 +70,8 @@ pub(super) fn validate_public_lane_reward_reserves(
         .ne(expected.iter())
     {
         return Err(
-            "reward reserves do not match unprocessed reward records and unpaid accruals".to_owned(),
+            "reward reserves do not match unprocessed reward records and unpaid accruals"
+                .to_owned(),
         );
     }
     for (asset, reserved) in expected {
@@ -186,9 +191,12 @@ mod tests {
             .public_lane_reward_reserves
             .insert(asset.clone(), Quantity::from(24_u64));
         assert!(validate_public_lane_reward_reserves(&world.view()).is_err());
-        world
-            .public_lane_reward_claims
-            .insert((LaneId::SINGLE, BOB_ID.clone(), asset.clone()), 0);
+        world.public_lane_reward_claims.insert(
+            (LaneId::SINGLE, BOB_ID.clone()),
+            iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+                through_epoch: Some(0),
+            },
+        );
         assert!(validate_public_lane_reward_reserves(&world.view()).is_err());
         {
             let mut block = world.public_lane_reward_reserves.block();
@@ -263,9 +271,12 @@ mod tests {
     #[test]
     fn reward_reserves_reject_malformed_even_fully_claimed_totals() {
         let (mut world, asset) = fixture();
-        world
-            .public_lane_reward_claims
-            .insert((LaneId::SINGLE, BOB_ID.clone(), asset.clone()), 0);
+        world.public_lane_reward_claims.insert(
+            (LaneId::SINGLE, BOB_ID.clone()),
+            iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+                through_epoch: Some(0),
+            },
+        );
         {
             let mut block = world.public_lane_reward_reserves.block();
             block.remove(asset);
@@ -301,9 +312,12 @@ mod tests {
         );
         {
             let mut block = state.world.block();
-            block
-                .public_lane_reward_claims
-                .insert((LaneId::SINGLE, BOB_ID.clone(), asset.clone()), 0);
+            block.public_lane_reward_claims.insert(
+                (LaneId::SINGLE, BOB_ID.clone()),
+                iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+                    through_epoch: Some(0),
+                },
+            );
             block.public_lane_reward_reserves.remove(asset.clone());
             block.commit();
         }
@@ -383,9 +397,12 @@ mod tests {
             .is_ok(),
             "another lane's unpaid rewards do not prohibit retirement"
         );
-        world
-            .public_lane_reward_claims
-            .insert((LaneId::SINGLE, BOB_ID.clone(), asset.clone()), 0);
+        world.public_lane_reward_claims.insert(
+            (LaneId::SINGLE, BOB_ID.clone()),
+            iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+                through_epoch: Some(0),
+            },
+        );
         {
             let mut block = world.public_lane_reward_reserves.block();
             block.remove(asset);

@@ -441,8 +441,10 @@ fn reconcile_pending_kura_terminal_lane_output_handoffs(
     active_runner: &mut ProductionLifecycleActiveRunnerBorrowV1,
     control_queue_capacity: usize,
 ) -> Result<bool, V2RunnerError> {
-    activated.with_runner_runtime(active_runner, |_executor, services, lane_work| {
-        retry_exact_output_and_apply_sidecar_admissions(lane_work, services, control_queue_capacity)
+    activated.with_runner_runtime(active_runner, |_executor, services| {
+        services
+            .retry_pending_exact_output()
+            .map_err(V2RunnerError::Service)
     })
 }
 
@@ -457,6 +459,10 @@ fn run_pending_active_height(
     kura: &Arc<Kura>,
     receiver: &Arc<FairV2Ingress>,
     lane_relay_rx: &std::sync::mpsc::Receiver<crate::sumeragi::LaneRelayMessage>,
+    queue_plan: &mut QueuePlanAdmissionOwner,
+    native: &mut super::native_process::NativeRunnerProcess,
+    native_global: &crate::sumeragi::v2::VerifiedHeightContext,
+    native_network: &crate::IrohaNetwork,
     wake_rx: &std::sync::mpsc::Receiver<()>,
     shutdown_signal: &iroha_futures::supervisor::ShutdownSignal,
     output_guard: &Arc<ConsensusOutputGuard>,
@@ -467,12 +473,9 @@ fn run_pending_active_height(
     control_queue_capacity: usize,
     round_timeout: Duration,
     retransmit_interval: Duration,
-) -> Result<HeightRunOutcome<(PreparedPendingKuraSuccessorV1, RetainedMergeSidecars)>, V2RunnerError>
-{
+) -> Result<HeightRunOutcome<PreparedPendingKuraSuccessorV1>, V2RunnerError> {
     let mut next_recovered_decision_fetch_retransmit =
         deadline_after(Instant::now(), retransmit_interval);
-    let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);
-    let mut canonical_lane_body_recovered = false;
     loop {
         cleanup_supervisor.reap_finished();
         if output_guard.restart_required() {
@@ -483,9 +486,17 @@ fn run_pending_active_height(
             return Ok(HeightRunOutcome::Shutdown);
         }
         liveness_watchdog.poll(Instant::now());
+        activated.with_runner_runtime(&mut active_runner, |_executor, services| {
+            native.take_service_publication(services);
+            native.service_sources(services, Instant::now())
+        })?;
+        native.poll(native_global, native_network, Instant::now(), receiver)?;
+        activated.with_runner_runtime(&mut active_runner, |_executor, services| {
+            dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)
+        })?;
         activated.with_runner_runtime(
             &mut active_runner,
-            |_executor, services, _lane_work| -> Result<_, V2RunnerError> {
+            |_executor, services| -> Result<_, V2RunnerError> {
                 let _ = settle_historical_body_serve_completion(
                     receiver,
                     block_sync_server,
@@ -503,14 +514,9 @@ fn run_pending_active_height(
         }
         activated.with_runner_runtime(
             &mut active_runner,
-            |executor, services, lane_work| -> Result<_, V2RunnerError> {
-                drain_lane_relay_ingress(
-                    lane_relay_rx,
-                    lane_work,
-                    services,
-                    executor.current_tag().view(),
-                )
-                .map_err(V2RunnerError::LaneWork)
+            |executor, services| -> Result<_, V2RunnerError> {
+                drain_lane_relay_ingress(lane_relay_rx, queue_plan, executor.current_tag().view())
+                    .map_err(V2RunnerError::LaneWork)
             },
         )?;
         let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
@@ -545,7 +551,7 @@ fn run_pending_active_height(
 
         let ready_to_finish = match activated.with_runner_runtime(
             &mut active_runner,
-            |executor, services, lane_work| -> Result<_, V2RunnerError> {
+            |executor, services| -> Result<_, V2RunnerError> {
                 retry_recovered_decision_fetch_if_due(
                     Instant::now(),
                     &mut next_recovered_decision_fetch_retransmit,
@@ -553,55 +559,30 @@ fn run_pending_active_height(
                     executor,
                     services,
                 )?;
-                let _ = retry_exact_output_and_apply_sidecar_admissions(
-                    lane_work,
-                    services,
-                    control_queue_capacity,
-                )?;
+                let _ = services
+                    .retry_pending_exact_output()
+                    .map_err(V2RunnerError::Service)?;
                 let _ = services
                     .service_kura_replica_advert_refresh_turn(Instant::now())
                     .map_err(V2RunnerError::Service)?;
                 services.drain_completions(executor)?;
                 let directive = reconcile_executor_locked_body(executor, services)?;
-                lane_work.retain_merge_sidecars_for_global_view(
-                    directive.tag().view(),
-                    directive.locked_subject(),
-                    directive.decided_subject(),
-                )?;
                 drain_decided_lane_recovery_ingress(
                     receiver,
                     executor,
                     services,
-                    lane_work,
+                    native,
                     executor.current_tag().view(),
                     kura.as_ref(),
                     block_sync_server,
                     DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
                 )?;
-                drain_lane_relay_ingress(
-                    lane_relay_rx,
-                    lane_work,
-                    services,
-                    executor.current_tag().view(),
-                )?;
-                drive_merge_sidecar_recovery(executor, services, lane_work)?;
-                let now = Instant::now();
-                if now >= next_lane_retransmit {
-                    let _ = service_historical_recovery_tick(lane_work, services)?;
-                    lane_work.schedule_autonomous_new_view_timeouts(
-                        now,
-                        executor.current_tag().view(),
-                        round_timeout,
-                    )?;
-                    lane_work.schedule_retransmission()?;
-                    next_lane_retransmit = deadline_after(now, retransmit_interval);
-                }
-                dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
-                let _ = retry_exact_output_and_apply_sidecar_admissions(
-                    lane_work,
-                    services,
-                    control_queue_capacity,
-                )?;
+                drain_lane_relay_ingress(lane_relay_rx, queue_plan, executor.current_tag().view())?;
+                dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)
+                    .map(|_| ())?;
+                let _ = services
+                    .retry_pending_exact_output()
+                    .map_err(V2RunnerError::Service)?;
                 Ok(executor.ready_to_finish())
             },
         ) {
@@ -634,17 +615,10 @@ fn run_pending_active_height(
 
         let finalization_ready = activated.ready_for_finalized_rollover(&mut active_runner)?;
         let rollover_ready = if finalization_ready {
-            let rollover_ready = activated.with_runner_runtime(
-                &mut active_runner,
-                |executor, services, lane_work| {
-                    super::preflight_finalized_lane_rollover(
-                        executor,
-                        services,
-                        lane_work,
-                        &mut canonical_lane_body_recovered,
-                    )
-                },
-            )?;
+            let rollover_ready =
+                activated.with_runner_runtime(&mut active_runner, |executor, services| {
+                    super::preflight_finalized_native_rollover(executor, services, native)
+                })?;
             let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
                 &mut activated,
                 &mut active_runner,
@@ -669,9 +643,10 @@ fn run_pending_active_height(
                 activated.into_clean_shutdown(&mut active_runner)?;
                 return Ok(HeightRunOutcome::Shutdown);
             }
+            native.poll(native_global, native_network, Instant::now(), receiver)?;
             liveness_watchdog.poll(Instant::now());
             let (drained_terminal_ingress, drained_terminal_relay) = activated
-                .with_runner_runtime(&mut active_runner, |executor, services, lane_work| {
+                .with_runner_runtime(&mut active_runner, |executor, services| {
                     let _ = settle_historical_body_serve_completion(
                         receiver,
                         block_sync_server,
@@ -682,7 +657,7 @@ fn run_pending_active_height(
                         receiver,
                         executor,
                         services,
-                        lane_work,
+                        native,
                         executor.current_tag().view(),
                         kura.as_ref(),
                         block_sync_server,
@@ -690,11 +665,16 @@ fn run_pending_active_height(
                     )?;
                     let drained_relay = drain_finalized_lane_relay_prefix(
                         lane_relay_rx,
-                        lane_work,
+                        queue_plan,
                         executor.current_tag().view(),
                         control_queue_capacity,
-                    );
-                    dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
+                    )?;
+                    dispatch_queue_plan_admission_effects(
+                        queue_plan,
+                        services,
+                        control_queue_capacity,
+                    )
+                    .map(|_| ())?;
                     Ok::<_, V2RunnerError>((drained.is_some(), drained_relay))
                 })?;
             let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
@@ -717,30 +697,27 @@ fn run_pending_active_height(
             .ensure_closed_drained_cut()
             .map_err(V2RunnerError::Service)?;
         if context.height == u64::MAX {
-            activated.with_runner_runtime(
-                &mut active_runner,
-                |executor, _services, _lane_work| {
-                    let (receipt, artifact) = executor.durable_finality().ok_or_else(|| {
-                        V2RunnerError::Service(
-                            "terminal pending-Kura lifecycle lost its durable finality owner"
-                                .to_owned(),
-                        )
-                    })?;
-                    authenticate_terminal_complete_tip(
-                        state.as_ref(),
-                        kura.as_ref(),
-                        context,
-                        proofs_of_possession,
-                        artifact,
-                        receipt,
-                    )?;
-                    Ok::<_, V2RunnerError>(())
-                },
-            )?;
+            activated.with_runner_runtime(&mut active_runner, |executor, _services| {
+                let (receipt, artifact) = executor.durable_finality().ok_or_else(|| {
+                    V2RunnerError::Service(
+                        "terminal pending-Kura lifecycle lost its durable finality owner"
+                            .to_owned(),
+                    )
+                })?;
+                authenticate_terminal_complete_tip(
+                    state.as_ref(),
+                    kura.as_ref(),
+                    context,
+                    proofs_of_possession,
+                    artifact,
+                    receipt,
+                )?;
+                Ok::<_, V2RunnerError>(())
+            })?;
             activated.into_clean_shutdown(&mut active_runner)?;
             return Ok(HeightRunOutcome::Terminal);
         }
-        let (finalized, lane_work) = activated.into_finalized_rollover(&mut active_runner)?;
+        let finalized = activated.into_finalized_rollover(&mut active_runner)?;
         let prepared_successor = {
             let (receipt, artifact) = finalized.finality();
             let predecessor = DurableV2PredecessorIdentity::authenticate(artifact, receipt)?;
@@ -803,9 +780,9 @@ fn run_pending_active_height(
             )
         };
         let (next_context, prepared_successor) = prepared_successor;
-        let (post_output, retained_merge_sidecars) = finalized.rollover_outputs(
+        let post_output = finalized.rollover_outputs(
             &mut active_runner,
-            lane_work,
+            native,
             &next_context,
             control_queue_capacity,
         )?;
@@ -849,10 +826,7 @@ fn run_pending_active_height(
                 "pending Kura lifecycle finalized with retained local cleanup state"
             );
         }
-        return Ok(HeightRunOutcome::Successor((
-            prepared_successor,
-            retained_merge_sidecars,
-        )));
+        return Ok(HeightRunOutcome::Successor(prepared_successor));
     }
 }
 
@@ -883,6 +857,8 @@ pub(super) fn run_pending_kura_lifecycle_height(
     block_rx: Arc<FairV2Ingress>,
     lane_relay_rx: std::sync::mpsc::Receiver<crate::sumeragi::LaneRelayMessage>,
     pending_queue_plan_admission_dirty: Arc<AtomicBool>,
+    mut queue_plan: QueuePlanAdmissionOwner,
+    native: &mut super::native_process::NativeRunnerProcess,
     wake_rx: std::sync::mpsc::Receiver<()>,
     shutdown_signal: iroha_futures::supervisor::ShutdownSignal,
     ingress_ready: Arc<AtomicBool>,
@@ -912,7 +888,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
     mut cleanup_supervisor: V2CleanupSupervisor,
     mut liveness_watchdog: crate::sumeragi::status::V2LivenessWatchdog,
     deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
-    mut retained_merge_sidecars: Option<RetainedMergeSidecars>,
     kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
     mut block_sync_server: Option<V2BlockSyncServer>,
     startup_recovery: &crate::sumeragi::StartupRecoveryPublisher,
@@ -1203,43 +1178,11 @@ pub(super) fn run_pending_kura_lifecycle_height(
         }
         false
     };
-    let mut prepared = pending.prepare_lane_recovery(
-        &mut setup_runner,
-        &queue,
-        |expected, _executor, _services| {
-            V2LaneWorkAdapter::new_with_output_guard_and_transport(
-                &verified_context,
-                local_peer.clone(),
-                common_config.key_pair.clone(),
-                config.role == NodeRole::Validator && !emergency_fast,
-                Arc::clone(&state),
-                Arc::clone(&kura),
-                lane_work_limits,
-                None,
-                Some(expected),
-                Arc::clone(&output_guard),
-                exact_output_transport_owner,
-                retained_merge_sidecars.take(),
-                lifecycle_process_generation.clone(),
-            )
-            .map_err(V2RunnerError::from)
-        },
-    )?;
+    let mut prepared = pending.prepare_lane_recovery::<V2RunnerError>(&mut setup_runner)?;
     prepared.with_runner_setup(
         &mut setup_runner,
-        |lane_work, executor, services| -> Result<_, V2RunnerError> {
-            let directive = reconcile_executor_locked_body(executor, services)?;
-            lane_work.retain_merge_sidecars_for_global_view(
-                directive.tag().view(),
-                directive.locked_subject(),
-                directive.decided_subject(),
-            )?;
-            if directive.decided_subject().is_none()
-                && let Some((locked_round, locked)) = directive.locked_body()
-            {
-                let _ = lane_work.mark_global_body_locked(locked_round, locked)?;
-            }
-            dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
+        |executor, services| -> Result<_, V2RunnerError> {
+            let _ = reconcile_executor_locked_body(executor, services)?;
             Ok(())
         },
     )?;
@@ -1255,6 +1198,10 @@ pub(super) fn run_pending_kura_lifecycle_height(
         &kura,
         &block_rx,
         &lane_relay_rx,
+        &mut queue_plan,
+        native,
+        &verified_context,
+        &network,
         &wake_rx,
         &shutdown_signal,
         &output_guard,
@@ -1268,7 +1215,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         round_timeout,
         retransmit_interval,
     )?;
-    let (successor, retained_merge_sidecars) = match completed {
+    let successor = match completed {
         HeightRunOutcome::Successor(successor) => successor,
         HeightRunOutcome::Terminal => {
             if context.height != u64::MAX {
@@ -1306,6 +1253,8 @@ pub(super) fn run_pending_kura_lifecycle_height(
         block_rx,
         lane_relay_rx,
         pending_queue_plan_admission_dirty,
+        queue_plan,
+        native,
         wake_rx,
         shutdown_signal,
         ingress_ready,
@@ -1330,7 +1279,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
         cleanup_supervisor,
         liveness_watchdog,
         deferred_admission_ordinals,
-        Some(retained_merge_sidecars),
         kura_replica_advert_refresh,
         block_sync_server,
         Some(startup_recovery),

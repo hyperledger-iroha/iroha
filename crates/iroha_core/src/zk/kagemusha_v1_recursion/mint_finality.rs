@@ -1493,7 +1493,7 @@ mod tests {
         );
     }
 
-    fn runtime_epoch_fixture(epoch: u64) -> KagemushaMintFinalityAuthorityGenerationV1 {
+    fn runtime_generation_fixture(generation: u64) -> KagemushaMintFinalityAuthorityGenerationV1 {
         let mut validators = (1_u8..=4).map(peer).collect::<Vec<_>>();
         validators.sort();
         KagemushaMintFinalityAuthorityGenerationV1 {
@@ -1501,14 +1501,14 @@ mod tests {
             network_id: NetworkId::from_genesis_hash(
                 HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"runtime epoch fixture")),
             ),
-            epoch,
+            generation,
             validators: validators
                 .into_iter()
                 .enumerate()
                 .map(|(index, validator)| {
                     derive_kagemusha_mint_finality_validator_keys_v1(
                         &[0xB0 + u8::try_from(index).expect("four validators"); 32],
-                        epoch,
+                        generation,
                         validator,
                     )
                     .expect("derive exact epoch fixture")
@@ -1519,48 +1519,48 @@ mod tests {
 
     #[test]
     fn runtime_authority_rebinds_private_seed_to_each_exact_authority_generation() {
-        let epoch_zero = runtime_epoch_fixture(0);
+        let generation_zero = runtime_generation_fixture(0);
         let authority = KagemushaMintFinalityLocalAuthorityV1::new(
-            Arc::new(epoch_zero.clone()),
+            Arc::new(generation_zero.clone()),
             Zeroizing::new([0xB1; 32]),
             1,
         )
         .expect("bind epoch zero");
-        let epoch_one = runtime_epoch_fixture(1);
+        let generation_one = runtime_generation_fixture(1);
         let signer = authority
-            .signer_for_authority(&epoch_one)
+            .signer_for_authority(&generation_one)
             .expect("bind authenticated next epoch");
         assert_eq!(signer.validator_index(), 1);
-        assert_eq!(signer.validator, epoch_zero.validators[1].validator);
-        assert_eq!(signer.epoch, 1);
+        assert_eq!(signer.validator, generation_zero.validators[1].validator);
+        assert_eq!(signer.generation, 1);
         assert_eq!(
-            signer.finality_epoch_id,
-            epoch_one.authority_id().expect("epoch id")
+            signer.authority_id,
+            generation_one.authority_id().expect("epoch id")
         );
         assert!(
-            authority.signer_for_authority(&epoch_zero).is_ok(),
+            authority.signer_for_authority(&generation_zero).is_ok(),
             "exact recovery context remains valid"
         );
     }
 
     #[test]
     fn runtime_epoch_rebinding_rejects_network_keys_epoch_and_missing_validator() {
-        let epoch_zero = runtime_epoch_fixture(0);
+        let generation_zero = runtime_generation_fixture(0);
         let authority = KagemushaMintFinalityLocalAuthorityV1::new(
-            Arc::new(epoch_zero.clone()),
+            Arc::new(generation_zero.clone()),
             Zeroizing::new([0xB1; 32]),
             1,
         )
         .expect("bind epoch zero");
-        let mut foreign = runtime_epoch_fixture(1);
+        let mut foreign = runtime_generation_fixture(1);
         foreign.network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign runtime epoch")),
         );
         assert!(authority.signer_for_authority(&foreign).is_err());
-        let mut wrong_epoch = epoch_zero.clone();
-        wrong_epoch.generation = 1;
-        assert!(authority.signer_for_authority(&wrong_epoch).is_err());
-        let mut wrong_key = runtime_epoch_fixture(1);
+        let mut wrong_generation = generation_zero.clone();
+        wrong_generation.generation = 1;
+        assert!(authority.signer_for_authority(&wrong_generation).is_err());
+        let mut wrong_key = runtime_generation_fixture(1);
         wrong_key.validators[1] = derive_kagemusha_mint_finality_validator_keys_v1(
             &[0xDD; 32],
             1,
@@ -1568,7 +1568,7 @@ mod tests {
         )
         .expect("wrong seed keys");
         assert!(authority.signer_for_authority(&wrong_key).is_err());
-        let mut absent = runtime_epoch_fixture(1);
+        let mut absent = runtime_generation_fixture(1);
         absent.validators[1] =
             derive_kagemusha_mint_finality_validator_keys_v1(&[0xDD; 32], 1, peer(99))
                 .expect("replacement validator keys");
@@ -1609,7 +1609,7 @@ mod tests {
         let mut roster = KagemushaMintFinalityAuthorityGenerationV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
-            epoch: 0,
+            generation: 0,
             validators: keys,
         };
         validate_kagemusha_mint_finality_roster_keys_v1(&roster)
@@ -1627,7 +1627,7 @@ mod tests {
 
         let mut validators = (1_u8..=4).map(peer).collect::<Vec<_>>();
         validators.sort();
-        let derive_keys = |epoch, seed_base: u8| {
+        let derive_keys = |generation, seed_base: u8| {
             validators
                 .iter()
                 .cloned()
@@ -1635,26 +1635,20 @@ mod tests {
                 .map(|(index, validator)| {
                     derive_kagemusha_mint_finality_validator_keys_v1(
                         &[seed_base.wrapping_add(u8::try_from(index).expect("small roster")); 32],
-                        epoch,
+                        generation,
                         validator,
                     )
                     .expect("derive canonical fixture keys")
                 })
                 .collect::<Vec<_>>()
         };
-        let epoch_zero_keys = derive_keys(0, 0xC0);
-        let epoch_one_keys = derive_keys(1, 0xD0);
+        let generation_zero_keys = derive_keys(0, 0xC0);
         let mut parameters = KagemushaMintFinalityGenesisParametersV1 {
             authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
-                epoch: 0,
-                validators: epoch_zero_keys.clone(),
+                generation: 0,
+                validators: generation_zero_keys.clone(),
             },
-            next_authority_generation: Some(KagemushaMintFinalityAuthorityGenerationTemplateV1 {
-                version: KAGEMUSHA_CHAIN_VERSION_V1,
-                epoch: 1,
-                validators: epoch_one_keys,
-            }),
         };
         validate_kagemusha_mint_finality_genesis_parameter_keys_v1(&parameters)
             .expect("derived genesis keys are canonical points");
@@ -1663,13 +1657,8 @@ mod tests {
             .expect_err("non-canonical Pallas point must fail closed");
         assert!(error.to_string().contains("Pallas point"));
 
-        parameters.authority_generation.validators = epoch_zero_keys;
-        parameters
-            .next_authority_generation
-            .as_mut()
-            .expect("epoch-one fixture exists")
-            .validators[0]
-            .ep_proof_public_key = [0xFF; 32];
+        parameters.authority_generation.validators = generation_zero_keys;
+        parameters.authority_generation.validators[0].ep_proof_public_key = [0xFF; 32];
         let error = validate_kagemusha_mint_finality_genesis_parameter_keys_v1(&parameters)
             .expect_err("non-canonical Vesta point must fail closed");
         assert!(error.to_string().contains("Vesta point"));

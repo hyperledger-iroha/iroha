@@ -391,7 +391,7 @@ mod tests {
             proof: paired_proof(0xB5),
             finality_certificate_binding: [0x32; 32],
             finality_authority_head: [0x33; 32],
-            finality_genesis_roster_id: [0x34; 32],
+            finality_genesis_authorization_id: [0x34; 32],
             finality_proof_binding_digest: [0x35; 32],
             encrypted_credit: vec![0xA8; 48],
             artifact_manifest_digest: [0x24; 32],

@@ -35,14 +35,14 @@ fn registration_plan(registration: &RegisterPublicLaneValidator) -> Option<&Publ
     (plan.has_canonical_shape()
         && plan.source_asset.account() == &registration.stake_account
         && plan.amount == registration.initial_stake
-        && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Registration { .. }))
+        && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Registration(..)))
     .then_some(plan)
 }
 
 fn transfer_plan(instruction: &InstructionBox) -> Option<&PublicLaneMonetaryPlanV1> {
     if let Some(candidate) = instruction.as_any().downcast_ref::<RegisterPublicLaneCandidate>() {
         let plan = registration_plan(&candidate.registration)?;
-        return matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Registration { activation_height } if activation_height == candidate.activation_height).then_some(plan);
+        return matches!(&plan.precondition, PublicLaneMonetaryPreconditionV1::Registration(precondition) if precondition.activation_height == candidate.activation_height).then_some(plan);
     }
     if let Some(registration) = instruction.as_any().downcast_ref::<RegisterPublicLaneValidator>() {
         return registration_plan(registration);
@@ -52,21 +52,21 @@ fn transfer_plan(instruction: &InstructionBox) -> Option<&PublicLaneMonetaryPlan
         return (plan.has_canonical_shape()
             && plan.source_asset.account() == &bond.staker
             && plan.amount == bond.amount
-            && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Bond { .. }))
+            && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Bond(..)))
         .then_some(plan);
     }
     if let Some(unbond) = instruction.as_any().downcast_ref::<FinalizePublicLaneUnbond>() {
         let plan = &unbond.monetary_plan;
         return (plan.has_canonical_shape()
             && plan.destination_asset.account() == &unbond.staker
-            && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Unbond { .. }))
+            && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Unbond(..)))
         .then_some(plan);
     }
     if let Some(slash) = instruction.as_any().downcast_ref::<SlashPublicLaneValidator>() {
         let plan = &slash.monetary_plan;
         return (plan.has_canonical_shape()
             && plan.amount == slash.amount
-            && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Slash { .. }))
+            && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Slash(..)))
         .then_some(plan);
     }
     None

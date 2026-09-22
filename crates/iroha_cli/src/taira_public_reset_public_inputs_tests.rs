@@ -5,7 +5,7 @@ use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     block::{SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters},
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
         KagemushaMintFinalityGenesisParametersV1,
     },
     parameter::{Parameter, system::SumeragiConsensusMode},
@@ -70,12 +70,11 @@ impl Fixture {
             .collect();
         validators.sort_by(|a, b| a.validator.cmp(&b.validator));
         let mint = KagemushaMintFinalityGenesisParametersV1 {
-            epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
-                epoch: 0,
+                generation: 0,
                 validators,
             },
-            next_epoch_roster: None,
         };
         let topology = (110..114)
             .map(|seed| {

@@ -1081,9 +1081,10 @@ mod tests {
             LaneId::SINGLE,
             validator.clone(),
             PeerId::from(validator.expect_single_signatory().clone()),
-            validator,
+            validator.clone(),
             Quantity::from(1_u64),
             Metadata::default(),
+            crate::isi::staking::registration_plan_fixture(&validator, 1),
         );
         let isi = InstructionBox::from(instruction);
         let mut visitor = RegisterVisitor { called: false };

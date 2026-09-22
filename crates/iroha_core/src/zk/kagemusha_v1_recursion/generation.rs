@@ -4352,24 +4352,28 @@ fn prepare_mint_authority_transport_v1(
         .certificate
         .certificate_binding_digest(witness.step)
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
-    let roster_id = witness
+    let authorization_id = witness
         .certificate
-        .authority_generation
-        .authority_id()
+        .seal_bundle
+        .message
+        .epoch_authorization
+        .authorization_id()
         .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
     let authority_head = match witness.step {
         KagemushaMintAuthorityStepV1::Rotate => witness
             .certificate
             .seal_bundle
             .message
-            .next_finality_epoch_id
+            .next_epoch_authorization
             .ok_or_else(|| {
                 KagemushaArtifactGenerationErrorV1::CircuitBuild(
-                    "mint-authority rotation lacks its next roster identifier".to_owned(),
+                    "mint-authority rotation lacks its next epoch authorization".to_owned(),
                 )
-            })?,
+            })?
+            .authorization_id()
+            .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?,
         KagemushaMintAuthorityStepV1::Bootstrap | KagemushaMintAuthorityStepV1::FinalizedMint => {
-            roster_id
+            authorization_id
         }
     };
     let eq_protocol_digest = witness.eq_protocol_digest;
@@ -4616,15 +4620,16 @@ pub fn prove_kagemusha_mint_authority_bootstrap_v1(
     certificate
         .validate_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
-    let roster_id = certificate
-        .authority_generation
-        .authority_id()
+    let authorization_id = certificate
+        .seal_bundle
+        .message
+        .epoch_authorization
+        .authorization_id()
         .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
     if release_id == [0; 32]
         || genesis_authorization_id == [0; 32]
         || certificate.statement.lifecycle.release_id != release_id
-        || roster_id != genesis_authorization_id
-        || certificate.seal_bundle.message.finality_epoch_id != genesis_authorization_id
+        || authorization_id != genesis_authorization_id
     {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
             "mint-authority bootstrap differs from its authenticated release or genesis roster"
@@ -4966,11 +4971,13 @@ fn prove_kagemusha_mint_authority_from_checkpoint_v1(
     let (eq_current, ep_current) = verifier
         .verify_mint_authority_checkpoint(checkpoint)
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
-    let roster_id = certificate
-        .authority_generation
-        .authority_id()
+    let authorization_id = certificate
+        .seal_bundle
+        .message
+        .epoch_authorization
+        .authorization_id()
         .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
-    if roster_id != checkpoint.authority_head
+    if authorization_id != checkpoint.authority_head
         || checkpoint.release_id != certificate.statement.lifecycle.release_id
     {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(

@@ -2750,7 +2750,7 @@ mod tests {
         assert!(bad_context.validate().is_err());
 
         let mut bad_kagemusha = handshake_metadata_fixture();
-        bad_kagemusha.kagemusha_mint_finality.epoch_roster.epoch = 1;
+        bad_kagemusha.kagemusha_mint_finality.authority_generation.generation = 1;
         assert!(bad_kagemusha.validate().is_err());
     }
 

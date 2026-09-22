@@ -545,8 +545,8 @@ impl V2CandidateAssembler {
     /// retains the immutable driver handoff across errors; once preparation is
     /// complete, all its waits and evidence return beside the assembly outcome.
     /// No State execution, validation vote, publication or Apply occurs here.
-    /// TODO: connect this entry point together with the retained consumer at the
-    /// process-lived runner cutover; Native ingress remains closed until then.
+    /// The process-lived candidate worker returns this original preparation on
+    /// every outcome; source waits never become ordinary execution or empty work.
     pub(crate) fn assemble_native(
         &self,
         request: CandidateRequest<'_, &NativeLaneDecisionHandoff>,
@@ -2477,8 +2477,12 @@ pub(super) mod tests {
             })
             .collect::<Vec<_>>();
         let network_id = *state.network_id_ref();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id,
+                u64::MAX,
+                &roster,
+            );
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -2491,8 +2495,8 @@ pub(super) mod tests {
             snapshot_bootstrap: Some(anchor),
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"candidate snapshot Nexus/AMX"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {

@@ -657,15 +657,16 @@ pub(super) fn generate(
         .certificate
         .validate_for_step(template.step)
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
-    let roster = template
+    let authorization_id = template
         .certificate
-        .authority_generation
-        .authority_id()
+        .seal_bundle
+        .message
+        .epoch_authorization
+        .authorization_id()
         .map_err(|e| KagemushaArtifactGenerationErrorV1::CircuitBuild(e.to_string()))?;
     if template.release_id == [0; 32]
         || template.certificate.statement.lifecycle.release_id != template.release_id
-        || roster != template.genesis_authorization_id
-        || template.certificate.seal_bundle.message.finality_epoch_id != roster
+        || authorization_id != template.genesis_authorization_id
     {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
             "MintAuthority bootstrap certificate differs from release or genesis roster".to_owned(),

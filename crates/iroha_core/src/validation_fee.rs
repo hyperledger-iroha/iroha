@@ -4433,8 +4433,8 @@ pub(crate) mod tests {
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let network_id = validation_fee_test_network_id();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 2, &roster);
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -4447,8 +4447,8 @@ pub(crate) mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("four equal seats"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"staking fee fixture nexus"),
             execution_policy_hash: Hash::new(b"staking fee fixture execution"),
             da_layout: DataAvailabilityLayout {

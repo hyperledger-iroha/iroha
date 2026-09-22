@@ -471,6 +471,53 @@ impl LaneProcessOwner {
         }
     }
 
+    /// Finish only the original local instance named by a genuine published carrier.
+    /// The caller retains that carrier while opening/body/drain work is in flight.
+    /// This operation never derives completion from absence in the current roster.
+    pub(crate) fn settle_and_retire_published(
+        &mut self,
+        id: HeightContextId,
+        published: &crate::state::PublishedNativeApply<'_>,
+    ) -> Result<bool> {
+        let Some(entry) = self.entries.get_mut(&id) else {
+            // This process never opened (or has already retired) this instance.
+            return Ok(true);
+        };
+        if let Some(owner) = match &mut entry.owner {
+            Owner::Active(owner) | Owner::Closing(owner) => Some(owner.as_mut()),
+            Owner::Closed(closed) => Some(closed.owner.as_mut()),
+            _ => None,
+        } {
+            match owner.settle_published_apply(published)? {
+                super::LaneApplySettlement::Applied(_)
+                | super::LaneApplySettlement::AlreadyApplied
+                | super::LaneApplySettlement::NotReady => {}
+                super::LaneApplySettlement::Backpressured => return Ok(false),
+            }
+        }
+        if !entry.work.is_empty() || !matches!(entry.owner, Owner::Closed(_)) {
+            return Ok(false);
+        }
+        // Keep the exact original entry on any refusal; no closed-owner clone or
+        // replacement constructor can stand in for this terminal authority.
+        let Owner::Closed(closed) = std::mem::replace(&mut entry.owner, Owner::DrainingClosed)
+        else {
+            return Err(bad(
+                "Native closed owner changed during exclusive settlement",
+            ));
+        };
+        match closed.retire_published(published) {
+            Ok(()) => {
+                self.entries.remove(&id);
+                Ok(true)
+            }
+            Err((closed, error)) => {
+                entry.owner = Owner::Closed(closed);
+                Err(error)
+            }
+        }
+    }
+
     /// Actual owned identities, including opening/closing/drain occurrences.
     pub(crate) fn instance_ids(&self) -> impl Iterator<Item = HeightContextId> + '_ {
         self.entries.keys().copied()

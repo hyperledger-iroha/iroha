@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import Any, NoReturn, TypeVar
 
 try:
+    import taira_source_observation as source_observation
     from taira_constants import (
         CHAIN_ID as DEFAULT_CHAIN_ID,
         CHAIN_DISCRIMINANT as DEFAULT_CHAIN_DISCRIMINANT,
@@ -70,6 +71,7 @@ try:
         network_id_from_genesis_hash,
     )
 except ModuleNotFoundError:
+    from scripts import taira_source_observation as source_observation
     from scripts.taira_constants import (
         CHAIN_ID as DEFAULT_CHAIN_ID,
         CHAIN_DISCRIMINANT as DEFAULT_CHAIN_DISCRIMINANT,
@@ -2394,184 +2396,13 @@ def clear_qualification_binary(path: Path) -> None:
     path.unlink()
 
 
-def _source_observation_field(observation: Any, name: bytes, value: bytes) -> None:
-    """Feed one length-delimited field into the worktree-observation digest."""
-
-    observation.update(len(name).to_bytes(4, "big"))
-    observation.update(name)
-    observation.update(len(value).to_bytes(8, "big"))
-    observation.update(value)
-
-
-def _untracked_source_content(path: Path, metadata: os.stat_result) -> tuple[bytes, bytes]:
-    """Return one stable untracked entry type and content digest."""
-
-    if stat.S_ISLNK(metadata.st_mode):
-        try:
-            target = os.fsencode(os.readlink(path))
-            after = path.lstat()
-        except OSError as error:
-            fail(f"cannot inspect untracked source symlink {path}: {error}")
-        if (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_ctime_ns) != (
-            metadata.st_dev,
-            metadata.st_ino,
-            metadata.st_mtime_ns,
-            metadata.st_ctime_ns,
-        ):
-            fail(f"untracked source changed while hashing it: {path}")
-        return b"symlink", hashlib.sha256(target).digest()
-    if not stat.S_ISREG(metadata.st_mode):
-        fail(f"untracked source is not a regular file or symlink: {path}")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        fail(f"cannot open untracked source {path}: {error}")
-    digest = hashlib.sha256()
-    try:
-        try:
-            opened = os.fstat(descriptor)
-            if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
-                fail(f"untracked source changed while opening it: {path}")
-            with os.fdopen(descriptor, "rb", closefd=True) as stream:
-                descriptor = -1
-                while chunk := stream.read(1024 * 1024):
-                    digest.update(chunk)
-                after = os.fstat(stream.fileno())
-        except OSError as error:
-            fail(f"cannot hash untracked source {path}: {error}")
-    finally:
-        if descriptor >= 0:
-            try:
-                os.close(descriptor)
-            except OSError as error:
-                fail(f"cannot close qualifying executable {path}: {error}")
-    try:
-        pathname_after = path.lstat()
-    except OSError as error:
-        fail(f"cannot re-inspect untracked source {path}: {error}")
-    if (
-        after.st_size,
-        after.st_mtime_ns,
-        after.st_ctime_ns,
-        pathname_after.st_dev,
-        pathname_after.st_ino,
-        pathname_after.st_size,
-        pathname_after.st_mtime_ns,
-        pathname_after.st_ctime_ns,
-    ) != (
-        metadata.st_size,
-        metadata.st_mtime_ns,
-        metadata.st_ctime_ns,
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_size,
-        metadata.st_mtime_ns,
-        metadata.st_ctime_ns,
-    ):
-        fail(f"untracked source changed while hashing it: {path}")
-    return b"file", digest.digest()
-
-
 def current_source_observation(run: Runner) -> dict[str, str]:
-    """Observe HEAD and the non-ignored worktree without claiming build custody.
-
-    This digest is a pre/post race detector.  It cannot prove which inputs
-    Cargo, rustc, build scripts, dependency caches, or repository/user Cargo
-    configuration consumed, so the public report states that limitation
-    explicitly instead of presenting the observation as source provenance.
-    """
-
-    branch = (
-        run(
-            ["git", "branch", "--show-current"],
-            cwd=REPO_ROOT,
-            timeout=20,
-        ).stdout
-        or ""
-    ).strip()
-    if branch != TAIRA_QUALIFICATION_BRANCH:
-        fail(
-            "Taira Inrou qualification requires branch "
-            f"`{TAIRA_QUALIFICATION_BRANCH}`, found `{branch or 'detached HEAD'}`"
-        )
-    git_head = (
-        run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=20).stdout or ""
-    ).strip()
-    if LOWER_GIT_COMMIT_RE.fullmatch(git_head) is None:
-        fail("Taira Inrou qualification could not resolve one canonical Git HEAD")
-    tracked_diff = (
-        run(
-            ["git", "diff", "--binary", "--no-ext-diff", "HEAD", "--", "."],
-            cwd=REPO_ROOT,
-            timeout=60,
-        ).stdout
-        or ""
-    )
-    untracked_output = (
-        run(
-            ["git", "ls-files", "--others", "--exclude-standard", "-z"],
-            cwd=REPO_ROOT,
-            timeout=30,
-        ).stdout
-        or ""
-    )
-    untracked = sorted(path for path in untracked_output.split("\0") if path)
-    observation = hashlib.sha256()
-    _source_observation_field(
-        observation,
-        b"domain",
-        b"iroha.taira.nonignored-worktree-observation.v1",
-    )
-    _source_observation_field(observation, b"git-head", git_head.encode("ascii"))
-    _source_observation_field(
-        observation,
-        b"tracked-diff",
-        tracked_diff.encode("utf-8", errors="surrogateescape"),
-    )
-    _source_observation_field(
-        observation,
-        b"untracked-count",
-        len(untracked).to_bytes(8, "big"),
-    )
-    for relative in untracked:
-        relative_path = Path(relative)
-        if relative_path.is_absolute() or ".." in relative_path.parts:
-            fail(f"Git reported an unsafe untracked source path: {relative}")
-        path = REPO_ROOT / relative_path
-        try:
-            metadata = path.lstat()
-        except OSError as error:
-            fail(f"cannot inspect untracked source {path}: {error}")
-        entry_type, content_digest = _untracked_source_content(path, metadata)
-        _source_observation_field(
-            observation,
-            b"untracked-path",
-            relative.encode("utf-8", errors="surrogateescape"),
-        )
-        _source_observation_field(
-            observation,
-            b"untracked-mode",
-            stat.S_IMODE(metadata.st_mode).to_bytes(4, "big"),
-        )
-        _source_observation_field(observation, b"untracked-type", entry_type)
-        _source_observation_field(
-            observation,
-            b"untracked-size",
-            metadata.st_size.to_bytes(8, "big"),
-        )
-        _source_observation_field(
-            observation,
-            b"untracked-content-sha256",
-            content_digest,
-        )
-    return {
-        "branch": branch,
-        "git_head": git_head,
-        "observation_scope": "git_head_tracked_diff_nonignored_untracked",
-        "observed_nonignored_worktree_sha256": observation.hexdigest(),
-        "cargo_source_consumption": "not_proven",
-    }
+    """Keep the devnet's strict branch policy around the shared race detector."""
+    try:
+        return source_observation.current_source_observation(
+            REPO_ROOT, run, required_branch=TAIRA_QUALIFICATION_BRANCH)
+    except source_observation.SourceObservationError as error:
+        raise DevnetError(str(error)) from error
 
 
 def binary_paths(
@@ -3346,28 +3177,28 @@ def _canary_workspace_directory_evidence(
 
 def _canary_content_digest(inputs: Sequence[InrouCanaryInputEvidence]) -> str:
     digest = hashlib.sha256()
-    _source_observation_field(
+    source_observation.source_observation_field(
         digest,
         b"domain",
         b"iroha.taira.inrou-canary-input-content.v1",
     )
-    _source_observation_field(
+    source_observation.source_observation_field(
         digest,
         b"entry-count",
         len(inputs).to_bytes(8, "big"),
     )
     for evidence in inputs:
-        _source_observation_field(
+        source_observation.source_observation_field(
             digest,
             b"path",
             evidence.relative_path.encode("ascii"),
         )
-        _source_observation_field(
+        source_observation.source_observation_field(
             digest,
             b"bytes",
             evidence.identity[5].to_bytes(8, "big"),
         )
-        _source_observation_field(
+        source_observation.source_observation_field(
             digest,
             b"sha256",
             bytes.fromhex(evidence.sha256),

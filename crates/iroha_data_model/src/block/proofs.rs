@@ -692,10 +692,10 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let network_id = test_network_id();
-        let mint_finality_roster = crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+        let mint_finality_roster = crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
             version: crate::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
-            epoch: 0,
+            generation: 0,
             validators: roster
                 .iter()
                 .enumerate()
@@ -712,16 +712,14 @@ mod tests {
                 })
                 .collect(),
         };
-        let mint_finality_epoch_id = mint_finality_roster
-            .finality_epoch_id()
-            .expect("valid fixture mint-finality roster");
+        let mint_finality_authorization = crate::block::consensus_v2::test_kagemusha_genesis_authorization(&mint_finality_roster, u64::MAX);
         HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: block.header().height().get(),
             epoch: 0,
-            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+            kagemusha_mint_finality_authorization: mint_finality_authorization,
+            kagemusha_mint_finality_authority: mint_finality_roster,
             epoch_end_height: u64::MAX,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,

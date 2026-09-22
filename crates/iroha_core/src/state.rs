@@ -143,8 +143,9 @@ use iroha_data_model::{
         FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
         FeeSponsorVault, FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog,
         LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
-        LaneRelayError, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardClaimStateV1, PublicLaneRewardRecord, PublicLaneStakeShare,
-        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
+        LaneRelayError, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardClaimStateV1,
+        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneValidatorRecord,
+        PublicLaneValidatorStatus, UniversalAccountId,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
         VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
@@ -154,10 +155,7 @@ use iroha_data_model::{
         DefiOracleAttestation, DefiOracleAttestationKey, FeedConfig, FeedId, OracleDispute,
         OracleDisputeId, OracleProviderKey, OracleProviderStats, TwitterBindingRecord,
     },
-    parameter::{
-        CustomParameterId, Parameters,
-        system::{KagemushaMintFinalityNextEpochParameterV1, SumeragiNposParameters},
-    },
+    parameter::{CustomParameterId, Parameters, system::SumeragiNposParameters},
     permission::{Permission, Permissions},
     prelude::*,
     query::error::{CanonicalHistoryError, FindError, QueryExecutionFail},
@@ -388,7 +386,8 @@ mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_preparation;
 pub(crate) use carrier_preparation::{
-    PreparedCarrier, PublishedCarrier, PublishedNativeApply, RetainedCarrier,
+    CarrierArchivePreparationError, CarrierJournalPreparationError, PreparedCarrier,
+    PublishedCarrier, PublishedNativeApply, RetainedCarrier,
 };
 mod committed_hash_journal;
 #[cfg(test)]
@@ -1019,10 +1018,10 @@ mod threshold_key_lifecycle_certificate_tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let kagemusha_mint_finality_epoch_roster =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster(
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                 certificate.network_id,
-                0,
+                8,
                 &election_roster,
             );
         let parent_context = crate::sumeragi::v2_context::build_genesis_height_context(
@@ -1030,7 +1029,8 @@ mod threshold_key_lifecycle_certificate_tests {
                 network_id: certificate.network_id,
                 election: crate::sumeragi::v2_context::FrozenElectionInputs {
                     epoch: 0,
-                    kagemusha_mint_finality_epoch_roster,
+                    kagemusha_mint_finality_authority,
+                    kagemusha_mint_finality_authorization,
                     epoch_end_height: 8,
                     mode: ConsensusMode::Npos,
                     roster: election_roster,
@@ -1091,16 +1091,35 @@ mod threshold_key_lifecycle_certificate_tests {
         let parent_roster = sorted_roster();
         let successor_roster = sorted_roster();
         let network_id = network_id(0x63);
-        let (successor_mint_finality_epoch_id, successor_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        let (parent_authorization, parent_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                 network_id,
                 1,
-                &successor_roster,
+                &parent_roster,
+            );
+        let successor_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+            network_id,
+            1,
+            &successor_roster,
+        );
+        let successor_authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+                &parent_authorization,
+                &successor_authority,
+                9,
+                iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Installed(
+                    iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                        session_id: [0x67; 32],
+                        transcript_hash: [0x68; 32],
+                    },
+                ),
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+                [0x69; 32],
             );
         let successor_snapshot = FinalizedNextEpochSnapshot {
             epoch: 1,
-            kagemusha_mint_finality_epoch_id: successor_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: successor_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization: successor_authorization,
+            kagemusha_mint_finality_authority: successor_authority,
             epoch_end_height: 9,
             mode: ConsensusMode::Npos,
             validator_set_pops: vec![vec![0x61]; successor_roster.len()],
@@ -1114,12 +1133,8 @@ mod threshold_key_lifecycle_certificate_tests {
                 network_id,
                 election: crate::sumeragi::v2_context::FrozenElectionInputs {
                     epoch: 0,
-                    kagemusha_mint_finality_epoch_roster:
-                        crate::kagemusha_v1_test_fixtures::mint_finality_roster(
-                            network_id,
-                            0,
-                            &parent_roster,
-                        ),
+                    kagemusha_mint_finality_authority: parent_authority,
+                    kagemusha_mint_finality_authorization: parent_authorization,
                     epoch_end_height: 1,
                     mode: ConsensusMode::Npos,
                     roster: parent_roster.clone(),
@@ -1145,6 +1160,11 @@ mod threshold_key_lifecycle_certificate_tests {
 
         let mut non_boundary_parent = boundary_parent.clone();
         non_boundary_parent.epoch_end_height = 8;
+        non_boundary_parent.kagemusha_mint_finality_authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(
+                &non_boundary_parent.kagemusha_mint_finality_authority,
+                8,
+            );
         non_boundary_parent.next_epoch_snapshot = None;
         assert_eq!(
             threshold_key_lifecycle_successor_roster_v1(2, &non_boundary_parent),
@@ -6128,7 +6148,8 @@ pub struct WorldData {
     pub(crate) public_lane_rewards: Storage<(LaneId, u64), PublicLaneRewardRecord>,
     /// Last completely processed reward record per lane and recipient.
     #[norito(skip)]
-    pub(crate) public_lane_reward_claims: Storage<(LaneId, AccountId), PublicLaneRewardClaimStateV1>,
+    pub(crate) public_lane_reward_claims:
+        Storage<(LaneId, AccountId), PublicLaneRewardClaimStateV1>,
     /// Positive accrued unpaid rewards, independently addressed by their exact source.
     #[norito(skip)]
     pub(crate) public_lane_reward_accruals: Storage<(LaneId, AccountId, AssetId), Quantity>,
@@ -7011,10 +7032,12 @@ pub struct WorldBlockFields<'world> {
     pub(crate) public_lane_rewards: StorageField<'world, (LaneId, u64), PublicLaneRewardRecord>,
     /// Last completely processed reward record per lane and recipient.
     #[norito(skip)]
-    pub(crate) public_lane_reward_claims: StorageField<'world, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
+    pub(crate) public_lane_reward_claims:
+        StorageField<'world, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
     /// Positive accrued unpaid rewards, independently addressed by their exact source.
     #[norito(skip)]
-    pub(crate) public_lane_reward_accruals: StorageField<'world, (LaneId, AccountId, AssetId), Quantity>,
+    pub(crate) public_lane_reward_accruals:
+        StorageField<'world, (LaneId, AccountId, AssetId), Quantity>,
     /// Unpaid reward obligations aggregated by exact custody asset.
     #[norito(skip)]
     pub(crate) public_lane_reward_reserves: StorageField<'world, AssetId, Quantity>,
@@ -8469,7 +8492,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) public_lane_reward_claims:
         StorageTransaction<'block, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
     /// Positive accrued unpaid rewards, independently addressed by their exact source.
-    pub(crate) public_lane_reward_accruals: StorageTransaction<'block, (LaneId, AccountId, AssetId), Quantity>,
+    pub(crate) public_lane_reward_accruals:
+        StorageTransaction<'block, (LaneId, AccountId, AssetId), Quantity>,
     /// Unpaid reward obligations aggregated by exact custody asset.
     pub(crate) public_lane_reward_reserves: StorageTransaction<'block, AssetId, Quantity>,
     /// Exact pinned escrow asset and positive held stake for each validator.
@@ -10533,9 +10557,11 @@ pub struct WorldView<'world> {
     pub(crate) public_lane_stake_shares:
         StorageView<'world, (LaneId, AccountId, AccountId), PublicLaneStakeShare>,
     pub(crate) public_lane_rewards: StorageView<'world, (LaneId, u64), PublicLaneRewardRecord>,
-    pub(crate) public_lane_reward_claims: StorageView<'world, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
+    pub(crate) public_lane_reward_claims:
+        StorageView<'world, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
     /// Positive accrued unpaid rewards, independently addressed by their exact source.
-    pub(crate) public_lane_reward_accruals: StorageView<'world, (LaneId, AccountId, AssetId), Quantity>,
+    pub(crate) public_lane_reward_accruals:
+        StorageView<'world, (LaneId, AccountId, AssetId), Quantity>,
     /// Unpaid reward obligations aggregated by exact custody asset.
     pub(crate) public_lane_reward_reserves: StorageView<'world, AssetId, Quantity>,
     /// Exact pinned escrow asset and positive held stake for each validator.
@@ -22827,12 +22853,6 @@ pub trait WorldReadOnly {
     fn sumeragi_npos_parameters(&self) -> Option<SumeragiNposParameters> {
         sumeragi_npos_parameters_from_parameters(self.parameters())
     }
-    /// Decode the consensus-committed next Kagemusha V1 Pasta roster.
-    fn kagemusha_mint_finality_next_epoch_parameter(
-        &self,
-    ) -> Option<KagemushaMintFinalityNextEpochParameterV1> {
-        kagemusha_mint_finality_next_epoch_parameter_from_parameters(self.parameters())
-    }
     world_ro_accessors!(identity, declaration);
     /// Iterate registered identifier policies.
     #[inline]
@@ -24316,19 +24336,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// derived parameter defaults.
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
         let npos_parameter_id = SumeragiNposParameters::parameter_id();
-        let kagemusha_next_roster_parameter_id =
-            KagemushaMintFinalityNextEpochParameterV1::parameter_id();
         executor_data_model.parameters.remove(&npos_parameter_id);
-        executor_data_model
-            .parameters
-            .remove(&kagemusha_next_roster_parameter_id);
-        executor_data_model
-            .parameters
-            .retain(|_, parameter| !is_retired_sccp_registry_parameter(parameter));
-        self.parameters
-            .get_mut()
-            .custom
-            .retain(|_, parameter| !is_retired_sccp_registry_parameter(parameter));
+        executor_data_model.parameters.retain(|_, parameter| {
+            !is_retired_sccp_registry_parameter(parameter)
+                && !is_retired_kagemusha_mint_finality_parameter(parameter.id())
+        });
+        self.parameters.get_mut().custom.retain(|_, parameter| {
+            !is_retired_sccp_registry_parameter(parameter)
+                && !is_retired_kagemusha_mint_finality_parameter(parameter.id())
+        });
         let declared_permissions = executor_data_model.permissions().clone();
         let permission_is_declared = |permission: &Permission| {
             declared_permissions
@@ -24599,10 +24615,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if prev_parameters == new_parameters {
             return;
         }
-        let consensus_owned_ids = [
-            SumeragiNposParameters::parameter_id(),
-            KagemushaMintFinalityNextEpochParameterV1::parameter_id(),
-        ];
+        let consensus_owned_ids = [SumeragiNposParameters::parameter_id()];
         let prev_ids: BTreeSet<_> = prev_parameters
             .keys()
             .filter(|id| !consensus_owned_ids.contains(id))
@@ -49843,34 +49856,6 @@ fn sumeragi_npos_parameters_from_parameters(params: &Parameters) -> Option<Sumer
         }
     }
 }
-fn kagemusha_mint_finality_next_epoch_parameter_from_parameters(
-    params: &Parameters,
-) -> Option<KagemushaMintFinalityNextEpochParameterV1> {
-    let id = KagemushaMintFinalityNextEpochParameterV1::parameter_id();
-    let custom = params.custom().get(&id)?;
-    if let Some(parsed) = KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(custom) {
-        return Some(parsed);
-    }
-    let payload = custom.payload();
-    let payload_preview: String = payload.get().chars().take(256).collect();
-    match payload.try_into_any_norito::<KagemushaMintFinalityNextEpochParameterV1>() {
-        Ok(parsed) if parsed.validate().is_ok() => Some(parsed),
-        Ok(parsed) => {
-            warn!(
-                error = ?parsed.validate().expect_err("invalid branch checked above"),
-                "Rejected invalid Kagemusha V1 next-roster parameter; payload_preview={payload_preview}"
-            );
-            None
-        }
-        Err(error) => {
-            warn!(
-                ?error,
-                "Failed to decode Kagemusha V1 next-roster parameter; payload_preview={payload_preview}"
-            );
-            None
-        }
-    }
-}
 /// Read the per-block gas limit from on-chain parameters, falling back to defaults on errors.
 pub(crate) fn gas_limit_from_parameters(params: &Parameters) -> u64 {
     use core::str::FromStr;
@@ -50720,6 +50705,32 @@ pub fn compute_genesis_confidential_policy_hash(
         ValidatedSccpRegistryV1::empty().policy_hash(),
     )
 }
+/// Reject the retired next-roster custom parameter without interpreting its payload.
+pub(crate) fn is_retired_kagemusha_mint_finality_parameter(
+    id: &iroha_data_model::parameter::CustomParameterId,
+) -> bool {
+    id.name().as_ref() == "kagemusha_mint_finality_next_epoch_v1"
+}
+
+#[cfg(test)]
+mod retired_mint_finality_parameter_tests {
+    #[test]
+    fn retired_parameter_id_has_no_payload_or_authority_fallback() {
+        assert!(super::is_retired_kagemusha_mint_finality_parameter(
+            &"kagemusha_mint_finality_next_epoch_v1".parse().unwrap()
+        ));
+        for name in [
+            "sumeragi_npos_parameters",
+            "kagemusha_mint_finality",
+            "ordinary_custom",
+        ] {
+            assert!(!super::is_retired_kagemusha_mint_finality_parameter(
+                &name.parse().unwrap()
+            ));
+        }
+    }
+}
+
 const RETIRED_SCCP_REGISTRY_PARAMETER_ID: &str = "sccp_registry_v1";
 pub(crate) fn is_retired_sccp_registry_parameter(
     parameter: &iroha_data_model::parameter::CustomParameter,

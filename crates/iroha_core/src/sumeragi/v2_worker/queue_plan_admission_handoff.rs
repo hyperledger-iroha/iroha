@@ -140,6 +140,20 @@ fn rotating_current_archive_targets(
 }
 
 impl ProductionV2Services {
+    /// Require the original global admission resources before accepting output custody.
+    pub(in crate::sumeragi) fn matches_queue_plan_admission_owner(
+        &self,
+        owner: &super::v2_queue_plan_admission::QueuePlanAdmissionOwner,
+    ) -> bool {
+        owner.matches_lifecycle_dependencies(
+            &self.context,
+            &self.state,
+            &self.kura,
+            &self.output_guard,
+            &self.local_peer,
+        )
+    }
+
     #[cfg(test)]
     pub(in crate::sumeragi) fn queue_plan_test_kura(&self) -> &Kura {
         &self.kura

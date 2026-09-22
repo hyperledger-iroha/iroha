@@ -85,9 +85,14 @@ impl ValidBlock {
         .map_err(|(block, reason)| {
             (
                 block,
-                Box::new(Self::execution_context_error(format!(
-                    "carrier preparation: {reason}"
-                ))),
+                Box::new(match reason {
+                    crate::state::MergeLedgerCommitError::BlockHashAdmission(error) => {
+                        BlockValidationError::BlockHashAdmission(error)
+                    }
+                    error => BlockValidationError::LocalStorageRecoveryRequired {
+                        reason: format!("carrier preparation: {error}"),
+                    },
+                }),
             )
         })
     }
@@ -110,7 +115,7 @@ pub(crate) enum NativeCandidatePreparationError {
     /// An already executed owner could not complete local metadata preparation.
     /// This is not evidence that the authenticated proposal is invalid.
     #[error("Native carrier preparation requires recovery: {0}")]
-    Preparation(String),
+    Preparation(#[source] crate::state::MergeLedgerCommitError),
 }
 
 impl ValidBlock {
@@ -216,9 +221,11 @@ impl ValidBlock {
         let Some(recorded) = source.record_execution(body, context)? else {
             return Ok(None);
         };
-        let (block, state, native) = recorded
-            .into_preparation_parts()
-            .map_err(NativeCandidatePreparationError::Preparation)?;
+        let (block, state, native) = recorded.into_preparation_parts().map_err(|reason| {
+            NativeCandidatePreparationError::Preparation(
+                MergeLedgerCommitError::ExecutionBatchInvalid(reason),
+            )
+        })?;
         let context = Arc::new(native.context().context().clone());
         crate::state::PreparedCarrier::prepare(ValidatedCarrierPreparationInput {
             valid: Self::new_signatures_verified(block),

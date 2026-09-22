@@ -28,8 +28,9 @@ use iroha_data_model::{
         Vote, encode_payload_chunks, native_amx_application_manifest_empty_root,
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
-        KagemushaMintFinalityValidatorKeysV1,
+        BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityValidatorKeysV1,
     },
     merge::MergeLedgerEntry,
 };
@@ -147,15 +148,14 @@ fn network_id(seed: u8) -> NetworkId {
         )),
     )
 }
-fn mint_finality_roster(
+fn mint_finality_authority(
     network_id: NetworkId,
-    epoch: u64,
     roster: &[ValidatorPower],
-) -> KagemushaMintFinalityEpochRosterV1 {
-    KagemushaMintFinalityEpochRosterV1 {
+) -> KagemushaMintFinalityAuthorityGenerationV1 {
+    KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch,
+        generation: 0,
         validators: roster
             .iter()
             .enumerate()
@@ -178,17 +178,32 @@ fn context() -> HeightContext {
         })
         .collect::<Vec<_>>();
     let network_id = network_id(0x71);
-    let mint_finality_roster = mint_finality_roster(network_id, 2, &roster);
-    let mint_finality_epoch_id = mint_finality_roster
-        .finality_epoch_id()
-        .expect("valid fixture mint-finality roster");
+    let mint_finality_authority = mint_finality_authority(network_id, &roster);
+    let mint_finality_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        epoch: 0,
+        first_height: 1,
+        last_height: 100,
+        authority_generation: 0,
+        authority_id: mint_finality_authority
+            .authority_id()
+            .expect("valid fixture mint-finality authority"),
+        beacon: BeaconEpochBindingV1::Bootstrap,
+        previous_authorization_id: [0; 32],
+        transition_id: [0; 32],
+        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+    };
+    mint_finality_authorization
+        .validate_against_authority(&mint_finality_authority)
+        .expect("fixture authorization binds generation zero");
     HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
         height: 1,
-        epoch: 2,
-        kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+        epoch: 0,
+        kagemusha_mint_finality_authorization: mint_finality_authorization,
+        kagemusha_mint_finality_authority: mint_finality_authority,
         epoch_end_height: 100,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
@@ -1257,6 +1272,28 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn initial_context_binds_the_complete_genesis_authorization() {
+        let context = context();
+        let authority = &context.kagemusha_mint_finality_authority;
+        let authorization = &context.kagemusha_mint_finality_authorization;
+        assert_eq!(context.validate(), Ok(()));
+        assert_eq!(context.height, 1);
+        assert_eq!(context.epoch, 0);
+        assert_eq!(authority.generation, 0);
+        assert_eq!(authorization.first_height, context.height);
+        assert_eq!(authorization.last_height, context.epoch_end_height);
+        assert_eq!(
+            authorization.decision,
+            KagemushaMintFinalityEpochDecisionV1::Genesis
+        );
+        assert_eq!(authorization.beacon, BeaconEpochBindingV1::Bootstrap);
+        assert_eq!(
+            authorization.authority_id,
+            authority.authority_id().expect("fixture authority")
+        );
+        assert_eq!(authorization.validate_against_authority(authority), Ok(()));
+    }
     #[test]
     fn canonical_body_chunks_cover_the_complete_rs16_stripe() {
         let context = context();

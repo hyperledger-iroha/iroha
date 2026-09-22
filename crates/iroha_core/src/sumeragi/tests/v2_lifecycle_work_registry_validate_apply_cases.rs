@@ -2792,7 +2792,7 @@ fn recovered_decision_apply_validate_retry_retirement_fixture() {
             &mut executor,
             completion,
         ),
-        Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied)
+        Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied(_))
     ));
     assert!(
         executor.lifecycle_decision_apply_is_complete(),

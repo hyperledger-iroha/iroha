@@ -472,7 +472,6 @@ P2P_STAGES += (("immutable reply identity and exact dynamic history", (
 
 CORE_STAGES = (("consensus scheduling and multi-route progress", (
     "sumeragi::v2_runner::tests::runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once",
-    "sumeragi::v2_lifecycle_coordinator::work_registry::tests::registered_deferred_validate_passes_ordinary_completion_without_releasing_wait",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_canonical_wire_seals_only_complete_classified_messages",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors",
     "sumeragi::v2::tests::adapter_hot_context_projections_retain_the_verified_registry_identity",
@@ -487,19 +486,6 @@ CORE_STAGES = (("consensus scheduling and multi-route progress", (
     "sumeragi::v2_lane_work::tests::completed_merge_sidecar_stays_ready_until_retry_admission_acknowledged",
     "sumeragi::v2_lane_work::tests::autonomous_producer_retains_reservations_until_participant_predecessor_repair",
     "sumeragi::v2_lane_work::tests::autonomous_producer_retains_reserved_batch_until_coordinator_predecessor_repair",
-    "sumeragi::v2_lane_work::tests::queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes",
-    "sumeragi::v2_lane_work::tests::queue_plan_leader_stages_exact_handoff_idempotently",
-    "sumeragi::v2_lane_work::tests::queue_plan_exact_marker_retains_certificate_until_transaction_application",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_corrupt",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_retires_future_after_current_source_incarnation_drifts",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_cursor_rotates_under_effect_pressure",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_new_inventory_preserves_prior_exact_transfers",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_stale_generation_cannot_complete_a_new_destination",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_is_not_retired_by_unrelated_merge_broadcast_cleanup",
     "sumeragi::v2_lane_work::tests::candidate_provider_admits_ordinary_work_in_multiroute_world_and_excludes_queue_plan_synced",
     "sumeragi::v2_lane_work::tests::candidate_provider_anchors_pending_autonomous_payload_and_defers_queue_conflict",
     "fastpq::lane::tests::persisted_proof_encoding_is_canonical_bounded_and_digest_bound",
@@ -1220,6 +1206,15 @@ DATA_MODEL_STAGES += (("authenticated executed transaction inclusion", (
     "query::canonical_output_inclusion_tests::authenticated_execution_inclusion_joins_network_indices_without_time_inputs",
     "query::canonical_output_inclusion_tests::committed_query_rejects_retired_parallel_result_and_merge_wire",
 )),)
+
+MODEL_MONETARY_CODEC_STAGES = (('canonical monetary authority payload schemas and codecs', (
+    'isi::kagemusha_v1::epoch_binding_codec_tests::beacon_epoch_binding_roundtrips_both_variants_and_registers_payload_schema',
+    'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_decisions_roundtrip_all_discriminants_and_reject_untagged_json',
+    'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_authorization_binding_keeps_fixed_width_identity',
+    'nexus::staking::monetary_codec_tests::monetary_scope_roundtrips_both_variants_and_rejects_unknown_envelope_fields',
+    'nexus::staking::monetary_codec_tests::monetary_preconditions_roundtrip_complete_payloads_and_register_schema',
+)),)
+DATA_MODEL_STAGES += MODEL_MONETARY_CODEC_STAGES
 
 TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "config::tests::base_config_applies_bounded_storage_caps",
@@ -2182,6 +2177,8 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::tests::native_service_preparation_stale_source_skips_archives_and_execution',
         'state::tests::native_service_preparation_foreign_source_and_body_are_rejected',
         'state::tests::native_service_preparation_recorder_conflict_releases_archives',
+        'state::tests::native_service_single_body_store_retries_reuse_original_execution',
+        'state::tests::native_service_atomic_body_store_retries_reuse_original_execution',
     )),
     ('native failure provenance retains local dependencies', (
         'sumeragi::v2_apply::tests::native_preparation_errors::hash_admission_retains_original_release_and_runner_through_all_native_origins',
@@ -2290,11 +2287,11 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::geometry_refusal_returns_original_decision_and_releases_every_physical_writer',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::geometry_backend_contention_releases_writers_and_waits_for_actual_backend_release',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::lifecycle_effect_refusal_precedes_storage_and_preserves_exact_retry',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::installation_refusal_precedes_all_fences_and_returns_the_decided_carrier',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_capture_reservation_survives_physical_refusal_and_exact_retry',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::changed_world_predecessor_releases_all_earlier_families_without_rebinding',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::actual_validation_overlay_defers_at_hash_before_taking_its_world_writers',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::identical_foreign_state_cannot_replace_the_original_physical_owners',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::all_reservations_outlive_component_writers_and_state_fences_on_drop_and_abort',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_reservation_outlives_component_writers_and_state_fences_on_drop_and_abort',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_kura_contention_returns_exact_decided_carrier_and_release_driven_retry',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_kura_storage_failure_returns_carrier_and_releases_all_acquired_owners',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::checkpoint_storage_refusal_precedes_state_and_retains_exact_originals',
@@ -2335,6 +2332,70 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_published_terminal_refuses_conflicting_unlaunched_decision',
     )),
 )
+CORE_QUEUE_PLAN_CONNECTION_STAGES = (('original global QueuePlan admission across actual runner callers', (
+    'sumeragi::v2_lane_work::tests::queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes',
+    'sumeragi::v2_lane_work::tests::queue_plan_leader_stages_exact_handoff_idempotently',
+    'sumeragi::v2_lane_work::tests::queue_plan_exact_marker_retains_certificate_until_transaction_application',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_corrupt',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_retires_future_after_current_source_incarnation_drifts',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_cursor_rotates_under_effect_pressure',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_new_inventory_preserves_prior_exact_transfers',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_is_not_retired_by_unrelated_merge_broadcast_cleanup',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_retains_exact_outbound_until_original_acknowledgement',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_capacity_retry_preserves_transferred_inventory',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_view_change_rejects_old_occurrence_acknowledgement',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_leader_uses_original_persistence_and_selection',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_rejects_foreign_kura_without_replacing_original_sources',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_shared_fail_stop_guard_fences_output_and_ingress',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_same_context_rollover_preserves_original_occurrence',
+    'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_preserves_original_certificate_allocation',
+    'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_refusal_keeps_original_source',
+    'sumeragi::v2_lane_work::tests::queue_plan_runner_relay_uses_global_owner_without_old_lane_admission',
+    'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_rejects_foreign_service_before_source_transfer',
+    'sumeragi::v2_queue_plan_admission::tests::queue_plan_handoff_stale_generation_cannot_complete_a_new_destination',
+    'sumeragi::v2_runner::tests::queue_plan_batch_scans_once_and_reuses_exact_sources',
+    'sumeragi::v2_lane_work::tests::queued_successor_generation_hint_cancels_ranked_older_close_before_retry',
+)),)
+
+CORE_KEY_ROLE_STAGES = (('authenticated indexed polynomial key ownership', (
+    'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals',
+    'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons',
+)),)
+
+CORE_STARTUP_STAGES += CORE_QUEUE_PLAN_CONNECTION_STAGES + CORE_KEY_ROLE_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_QUEUE_PLAN_CONNECTION_STAGES + CORE_KEY_ROLE_STAGES
+CORE_STAGES += CORE_QUEUE_PLAN_CONNECTION_STAGES + CORE_KEY_ROLE_STAGES
+
+CORE_NATIVE_CONNECTION_STAGES += (('Native process publication and bootstrap isolation', (
+    'state::tests::native_driver_observer_role_cannot_open_or_admit_voting_control',
+    'state::tests::native_driver_owned_capacity_retry_retains_original_payload_and_fair_evidence',
+    'state::tests::native_driver_owned_rejection_returns_original_payload_without_poisoning_output',
+    'state::tests::native_driver_owned_ingress_without_original_fair_evidence_fails_closed',
+    'state::tests::native_service_production_shell_pool_refuses_before_execution_and_retries',
+    'state::carrier_preparation::journals::decision_binding::tests::original_capture_pool_remains_reserved_through_decision_binding_and_handoff',
+    'state::carrier_preparation::journals::decision_binding::tests::other_signed_context_retains_original_capture_owner_for_retry',
+    'state::carrier_preparation::journals::decision_binding::physical_publication::tests::retained_publication_facade_refuses_foreign_authority_before_io_and_retries_original_checkpoint',
+    'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_driver_settles_complete_published_carrier_after_owned_worker_handoff',
+    'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_accept_zero_count_initial_height_and_no_successor_in_both_fields',
+    'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_reject_each_forbidden_witness_in_both_fields',
+    'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_are_conditional_in_both_fields',
+)), )
+
+CORE_NATIVE_CONNECTION_STAGES += (('Native retained local-source completion and original publication', (
+    'sumeragi::v2_lifecycle_coordinator::work_registry::tests::native_source_validate_passes_ordinary_completion_without_releasing_wait',
+    'sumeragi::v2_lifecycle_coordinator::work_registry::tests::native_source_validate_decision_drains_recovery_prefix_without_releasing_wait',
+    'sumeragi::v2_lifecycle_coordinator::work_registry::tests::native_source_validate_decision_drains_recovery_batch_without_releasing_wait',
+    'sumeragi::v2_runner::tests::native_source_barrier_preserves_progress_physical_completion_and_dependency_service',
+    'sumeragi::v2_lifecycle_coordinator::work_registry::tests::obsolete_sidecar_outcome_is_refused_and_leaves_waiting_row_original',
+    'state::tests::native_service_postpublication_refusal_retains_original_owner_and_notifies_once',
+    'state::tests::native_service_control_only_admission_retains_one_execution_and_publishes',
+    'sumeragi::v2_apply::tests::retained_current_genesis_executes_once_and_publishes_original_owner',
+)), )
+
 CORE_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
 CORE_STAGES += CORE_NATIVE_CONNECTION_STAGES
@@ -4246,6 +4307,32 @@ def focused_regression_stages(qualification_scope: str, requested):
             if any(key == harness for key, _ in selected)}
 
 
+def mutable_source_observation(root: Path, environment: dict[str, str]) -> dict[str, str]:
+    """Reuse the nonignored-worktree race detector; this grants no source custody."""
+    from taira_source_observation import SourceObservationError, current_source_observation
+
+    def run(command, **kwargs):
+        return subprocess.run(
+            [command[0], "--no-replace-objects", *command[1:]],
+            env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="surrogateescape",
+            check=True, **kwargs)
+
+    try:
+        return current_source_observation(root, run)
+    except (SourceObservationError, OSError, subprocess.SubprocessError) as error:
+        raise CheckError(f"cannot observe mutable diagnostic source: {error}") from error
+
+
+def require_mutable_source_unchanged(root: Path, environment: dict[str, str],
+                                     expected: dict[str, str], phase: str) -> None:
+    """Stop at a completed phase boundary; never interrupt or restart a child."""
+    if mutable_source_observation(root, environment) != expected:
+        raise CheckError(
+            f"mutable source changed before {phase}; diagnostic stopped at the phase boundary; "
+            "start a new explicit check against the intended source")
+
+
 def run_prequalification(root: Path, *, focused_regressions, qualification_scope: str = "basic",
                          environment: dict[str, str], lock_fds: tuple[int, ...]) -> None:
     """Run exact portable controls before configuration and heavier diagnostics.
@@ -4266,13 +4353,15 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
     fixture_root = Path(environment["CARGO_TARGET_DIR"])
     require_network_fixture_prerequisites(fixture_root, focused.get("network", ()))
     env = dict(environment)
-    head = subprocess.check_output(
-        ["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
-        stdin=subprocess.DEVNULL, text=True).strip()
+    source = mutable_source_observation(root, env)
+    head = source["git_head"]
+    def source_unchanged(phase: str) -> None:
+        require_mutable_source_unchanged(root, env, source, phase)
     env.pop("CARGO_BUILD_TARGET", None)
     env.update(VERGEN_GIT_SHA=head, IROHA_GIT_COMMIT_HASH=head)
     print(f"[taira-prequalify] mutable source {head}; {root}; diagnostic only", flush=True)
     run_pure_fsm_checks(root, env, lock_fds)
+    source_unchanged("lifecycle source checks")
     run_lifecycle_source_checks(root, env, lock_fds)
     shipping = shipping_harnesses(root)
     _, complete_selections, _ = native_harness_plan(scoped, shipping)
@@ -4290,10 +4379,13 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
         print("[taira-prequalify] portable diagnostic Cargo graph: " + ", ".join(portable)
               + "; mandatory configuration and remaining targets follow; NOT qualification", flush=True)
         started = time.monotonic()
+        source_unchanged("portable test metadata")
         check_test_harnesses(root, env, harnesses=portable, lock_fds=lock_fds)
+        source_unchanged("portable test codegen")
         with compile_test_harnesses(root, env, harnesses=portable, lock_fds=lock_fds) as copies:
             failures = []
             for name in portable:
+                source_unchanged(f"{name} portable regressions")
                 try:
                     run_stages(copies[name], fixture_root, env, focused[name], lock_fds)
                 except SelectedRegressionFailures as error:
@@ -4309,10 +4401,13 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
               "remaining diagnostics pending", flush=True)
     print("[taira-prequalify] remaining diagnostic Cargo graph: " + ", ".join(selections)
           + "; execute mandatory configuration before nonportable regressions", flush=True)
+    source_unchanged("remaining test metadata")
     check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
+    source_unchanged("remaining test codegen")
     with compile_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds) as harnesses:
         # Configuration remains mandatory for final success and gates the
         # nonportable phase. Explicit focused config tests must not run twice.
+        source_unchanged("mandatory configuration regressions")
         run_config_checks(harnesses, fixture_root, env, lock_fds)
         for name in selections:
             if name != "config" and name not in focused:
@@ -4329,12 +4424,15 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
         # Retain the same Core copy for its remaining tests. A partial focus must
         # neither expand to all recovery tests nor bury their failures in later work.
         if pending_kura:
+            source_unchanged("pending Kura recovery regressions")
             run_stages(harnesses["core"], fixture_root, env, pending_kura, lock_fds)
         failures = []
         for name in selections:
             if name in {"config", "network"} or name not in focused:
                 continue
             stages = remaining_core if name == "core" else focused[name]
+            if stages:
+                source_unchanged(f"{name} focused regressions")
             try:
                 if name == "cli":
                     run_stages(harnesses[name], fixture_root, env, stages, lock_fds, batch=True)
@@ -4346,12 +4444,11 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
         if failures:
             raise SelectedRegressionFailures(failures)
         if "network" in focused:
+            source_unchanged("network regressions")
             run_network_checks(root, fixture_root, env, lock_fds,
                                harness=harnesses["network"], stages=focused["network"])
             harnesses.release("network")
-    if subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"],
-                               cwd=root, env=env, stdin=subprocess.DEVNULL, text=True).strip() != head:
-        raise CheckError("HEAD changed during prequalification; rerun the focused diagnostic")
+    source_unchanged("final diagnostic success")
     requested_count = sum(len(names) for stages in focused.values() for _, names in stages)
     print(f"[taira-prequalify] diagnostic passed: {selected_harness_count} selected harnesses compiled; "
           f"{requested_count} focused regressions and mandatory configuration passed. "

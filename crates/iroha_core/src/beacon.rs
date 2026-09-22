@@ -3423,8 +3423,8 @@ pub(crate) mod tests {
             height: 40,
             view: 0,
         };
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 7, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(network_id, 7, 42, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -3458,8 +3458,8 @@ pub(crate) mod tests {
             }),
             quorum: wire::DualQuorum::from_roster(&roster).expect("four-validator quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"threshold beacon fixture nexus"),
             execution_policy_hash: Hash::new(b"threshold beacon fixture execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -3601,6 +3601,7 @@ pub(crate) mod tests {
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD3; 32]));
         let mut context = live_producer_context(&keys, network_id, parent_hash);
         context.epoch_end_height = 50;
+        context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
         context.validate().expect("valid non-boundary context");
         assert_eq!(
             context.height, 41,
@@ -3824,6 +3825,7 @@ pub(crate) mod tests {
         let mut context = live_producer_context(&keys, network_id, parent_hash);
         if parliament_requested_slot {
             context.epoch_end_height = 50;
+            context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
             context.validate().expect("valid optional-slot context");
         }
         let roster = context

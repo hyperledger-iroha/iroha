@@ -869,6 +869,11 @@ pub(in crate::state::carrier_preparation::journals) fn archive_fixture() -> (
     crate::sumeragi::network_topology::Topology,
     iroha_data_model::block::consensus_v2::HeightContext,
 ) {
+    super::super::tests::fixture_with_instructions(&archive_fixture_instructions())
+}
+
+/// Exact governed feed instructions shared by real archive capture fixtures.
+pub(in crate::state) fn archive_fixture_instructions() -> Vec<iroha_data_model::isi::InstructionBox> {
     use iroha_data_model::{
         isi::{
             Grant, Register,
@@ -940,9 +945,8 @@ pub(in crate::state::carrier_preparation::journals) fn archive_fixture() -> (
         max_pending_movements_per_provider: 4,
         max_open_appeals_per_provider: 2,
     };
-    // Activate every governed feed required by the real reputation projection
-    // through signed genesis, preserving its permissions and policy histories.
-    super::super::tests::fixture_with_instructions(&[
+    // Preserve all permissions and policy histories through real instructions.
+    vec![
         Grant::account_permission(
             Permission::new(
                 "CanManageSorafsReputationJournalPolicy".to_owned(),
@@ -978,7 +982,7 @@ pub(in crate::state::carrier_preparation::journals) fn archive_fixture() -> (
         )
         .into(),
         SetSorafsReservePolicy::new(reserve_policy).into(),
-    ])
+    ]
 }
 
 #[test]

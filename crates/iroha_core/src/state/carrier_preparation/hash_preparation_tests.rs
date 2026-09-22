@@ -78,7 +78,7 @@ fn retained_hash_admission_and_preflight_cleanup_follow_all_original_carrier_fen
                 .is_pending()
         );
         let fences = CarrierFences {
-            _state: StateFences::try_acquire::<Infallible>(&state)
+            _state: StateFences::try_acquire(&state)
                 .unwrap_or_else(|_| panic!("original State fences")),
             _queue: Some(queue_owner),
             _kura: state.kura.try_publication_lease().unwrap(),
@@ -281,7 +281,7 @@ fn complete_carrier_late_world_panic_releases_every_participant_before_any_callb
         )
         .unwrap_or_else(|_| panic!("original Queue cut"));
         let fences = CarrierFences {
-            _state: StateFences::try_acquire::<Infallible>(&state)
+            _state: StateFences::try_acquire(&state)
                 .unwrap_or_else(|_| panic!("original State fences")),
             _queue: Some(queue_owner),
             _kura: state.kura.try_publication_lease().unwrap(),
@@ -289,12 +289,12 @@ fn complete_carrier_late_world_panic_releases_every_participant_before_any_callb
         let mut owner = CarrierPreparation::new(decision.journals.components, &state, fences);
         if unwind_owner {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                owner.try_prepare::<Infallible>()
+                owner.try_prepare()
             }));
             assert!(result.is_err());
         } else {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                owner.try_prepare::<Infallible>()
+                owner.try_prepare()
             }));
             assert!(result.is_err());
             assert_eq!(callback.fences.wakes.load(Ordering::SeqCst), 0);

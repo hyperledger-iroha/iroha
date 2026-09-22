@@ -55,14 +55,14 @@ fn attach_client_fixture_outputs(
         )
         .expect("attach bounded canonical client fixture outputs");
 }
-fn mint_finality_roster_fixture(
+fn mint_finality_authorization_fixture(
     roster: &[ValidatorPower],
 ) -> (
-    [u8; 32],
-    iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
+    iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+    iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
 ) {
     use iroha_data_model::isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
         KagemushaMintFinalityValidatorKeysV1,
     };
 
@@ -83,10 +83,10 @@ fn mint_finality_roster_fixture(
         "f79037a77e26a2c0794dc326d866c664616499c064073a8f8ebf3080297be5ab",
     ];
     assert_eq!(roster.len(), 4, "fixture has exactly four validators");
-    let epoch_roster = KagemushaMintFinalityEpochRosterV1 {
+    let authority = KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id: test_network_id(),
-        epoch: 0,
+        generation: 0,
         validators: roster
             .iter()
             .enumerate()
@@ -105,10 +105,25 @@ fn mint_finality_roster_fixture(
             })
             .collect(),
     };
-    let epoch_id = epoch_roster
-        .finality_epoch_id()
-        .expect("valid exact mint-finality fixture roster");
-    (epoch_id, epoch_roster)
+    let authorization = {
+            let authority = &authority;
+            let authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id: authority.network_id,
+                epoch: 0,
+                first_height: 1,
+                last_height: 10,
+                authority_generation: authority.generation,
+                authority_id: authority.authority_id().expect("fixture authority identity"),
+                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+                previous_authorization_id: [0; 32],
+                transition_id: [0; 32],
+                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+            };
+            authorization.validate_against_authority(authority).expect("complete genesis fixture authorization");
+            authorization
+        };
+    (authorization, authority)
 }
 fn canonical_executed_network_fixture(
     inputs: u32,
@@ -290,15 +305,15 @@ fn proof_for(
         .collect::<Vec<_>>();
     let height = block.header().height();
     let header = block.header();
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        mint_finality_roster_fixture(&roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        mint_finality_authorization_fixture(&roster);
     let context = HeightContext {
         network_id: test_network_id(),
         protocol_version: PROTOCOL_VERSION,
         height: height.get(),
         epoch: 0,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         epoch_end_height: 10,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,

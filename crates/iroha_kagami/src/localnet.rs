@@ -41,7 +41,7 @@ use iroha_data_model::{
         GrantBox, RegisterBox, RevokeBox, SetAssetDefinitionAlias,
         alias_setup::EnsureAlias,
         kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
             KagemushaMintFinalityGenesisParametersV1,
         },
         nexus::{
@@ -3627,12 +3627,11 @@ fn localnet_kagemusha_mint_finality_genesis_parameters(
         })
         .collect::<Result<Vec<_>>>()?;
     let parameters = KagemushaMintFinalityGenesisParametersV1 {
-        epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
-            epoch: 0,
+            generation: 0,
             validators,
         },
-        next_epoch_roster: None,
     };
     parameters
         .validate()
@@ -6616,15 +6615,17 @@ mod tests {
         let parameters = localnet_kagemusha_mint_finality_genesis_parameters(&peers)
             .expect("derive validated localnet KAGEMUSHA authority");
         let actual_topology = parameters
-            .epoch_roster
+            .authority_generation
             .validators
             .iter()
             .map(|keys| keys.validator.clone())
             .collect::<Vec<_>>();
         assert_eq!(actual_topology, expected_topology);
         assert_eq!(actual_topology.len(), 4);
-        assert_eq!(parameters.epoch_roster.epoch, 0);
-        assert!(parameters.next_epoch_roster.is_none());
+        assert_eq!(parameters.authority_generation.generation, 0);
+        let encoded =
+            norito::json::to_value(&parameters).expect("encode current genesis authority");
+        assert!(encoded.get("next_epoch_roster").is_none());
         assert_eq!(
             parameters,
             localnet_kagemusha_mint_finality_genesis_parameters(&peers)
@@ -12165,7 +12166,7 @@ mod tests {
         ordered.sort_by_key(|peer| PeerId::new(peer.public_key.clone()));
         for (index, (peer, actual)) in ordered
             .iter()
-            .zip(parameters.epoch_roster.validators.iter())
+            .zip(parameters.authority_generation.validators.iter())
             .enumerate()
         {
             let validator = PeerId::new(peer.public_key.clone());

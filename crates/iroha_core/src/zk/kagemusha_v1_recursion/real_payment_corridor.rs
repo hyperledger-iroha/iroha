@@ -73,9 +73,10 @@ use iroha_data_model::{
     block::consensus_v2::{HeightContextId, ValidatorPower},
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalitySealBundleV1,
-        KagemushaMintFinalitySealMessageV1, KagemushaPastaSchnorrSignatureV1, KagemushaTopUpLeafV1,
-        KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+        KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
+        KagemushaPastaSchnorrSignatureV1, KagemushaTopUpLeafV1, KagemushaTopUpMembershipWitnessV1,
+        kagemusha_mint_finality_root_v1,
     },
     kagemusha::{
         KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1, KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1,
@@ -1110,12 +1111,16 @@ impl FundingCertificate {
             })
             .collect::<Vec<_>>();
         validators.sort_by(|left, right| left.validator.cmp(&right.validator));
-        let roster = crate::kagemusha_v1_test_fixtures::mint_finality_roster(
+        let roster = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
             statement.lifecycle.network_id,
             0,
             &validators,
         );
-        let genesis_authorization_id = roster.authority_id().expect("finality roster ID");
+        let authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(&roster, 10);
+        let genesis_authorization_id = authorization
+            .authorization_id()
+            .expect("genesis authorization ID");
         let leaf = KagemushaTopUpLeafV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             operation_id: digest(b"funding-operation", 0),
@@ -1129,7 +1134,7 @@ impl FundingCertificate {
             .expect("genuine sparse top-up membership tree");
         let message = Self::message(
             &roster,
-            genesis_authorization_id,
+            authorization,
             tree.execution_root(),
             tree.leaf_count(),
             None,
@@ -1173,10 +1178,10 @@ impl FundingCertificate {
             seal_bundle: KagemushaMintFinalitySealBundleV1 {
                 message: Self::message(
                     &roster,
-                    genesis_authorization_id,
+                    authorization,
                     kagemusha_mint_finality_root_v1(empty_root),
                     0,
-                    Some(genesis_authorization_id),
+                    None,
                 ),
                 seals: Vec::new(),
             },
@@ -1194,14 +1199,14 @@ impl FundingCertificate {
 
     fn message(
         roster: &KagemushaMintFinalityAuthorityGenerationV1,
-        epoch_id: DigestV1,
+        authorization: KagemushaMintFinalityEpochAuthorizationV1,
         root: Hash,
         count: u32,
-        next: Option<DigestV1>,
+        next: Option<KagemushaMintFinalityEpochAuthorizationV1>,
     ) -> KagemushaMintFinalitySealMessageV1 {
         KagemushaMintFinalitySealMessageV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
-            finality_epoch_id: epoch_id,
+            epoch_authorization: authorization,
             validator_count: u32::try_from(roster.validators.len()).expect("four validators"),
             network_id: roster.network_id,
             block_height: if count == 0 { 1 } else { 2 },
@@ -1213,7 +1218,7 @@ impl FundingCertificate {
             execution_commitment_digest: digest(b"funding-execution", u64::from(count)),
             kagemusha_top_up_root: root,
             kagemusha_top_up_count: count,
-            next_finality_epoch_id: next,
+            next_epoch_authorization: next,
         }
     }
 }
@@ -2809,6 +2814,64 @@ fn funding_certificate_preflight_has_exact_real_quorum_and_positive_membership()
     let mut substituted = funding.finalized.clone();
     substituted.seal_bundle.message.subject_digest = digest(b"substituted-finality-subject", 0);
     assert!(!certificate_signature_equations(&substituted));
+}
+
+#[test]
+fn bootstrap_certificate_is_zero_authority_and_pins_complete_genesis_authorization() {
+    let (_, _, funding) = funding_fixture();
+    let bootstrap = &funding.bootstrap;
+    bootstrap
+        .validate_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
+        .unwrap();
+    assert!(bootstrap.seal_bundle.seals.is_empty());
+    assert_eq!(bootstrap.seal_bundle.message.kagemusha_top_up_count, 0);
+    assert!(
+        bootstrap
+            .seal_bundle
+            .message
+            .next_epoch_authorization
+            .is_none()
+    );
+    assert!(bootstrap.seal_bundle.message.signing_digest().is_err());
+    assert!(bootstrap.validate_shape().is_err());
+    assert_eq!(
+        bootstrap
+            .seal_bundle
+            .message
+            .epoch_authorization
+            .authorization_id()
+            .unwrap(),
+        funding.genesis_authorization_id
+    );
+    assert_ne!(
+        bootstrap.authority_generation.authority_id().unwrap(),
+        funding.genesis_authorization_id
+    );
+    let binding = bootstrap
+        .certificate_binding_digest(KagemushaMintAuthorityStepV1::Bootstrap)
+        .unwrap();
+    let mut changed = bootstrap.clone();
+    changed.seal_bundle.message.epoch_authorization.last_height += 1;
+    assert_ne!(
+        changed
+            .certificate_binding_digest(KagemushaMintAuthorityStepV1::Bootstrap)
+            .unwrap(),
+        binding
+    );
+    for mutation in 0..4 {
+        let mut changed = bootstrap.clone();
+        match mutation {
+            0 => changed.seal_bundle.message.kagemusha_top_up_count = 1,
+            1 => changed.seal_bundle.message.block_height = 2,
+            2 => changed.seal_bundle.seals = funding.finalized.seal_bundle.seals.clone(),
+            _ => changed.authority_generation.generation = 1,
+        }
+        assert!(
+            changed
+                .validate_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
+                .is_err()
+        );
+    }
 }
 
 #[test]

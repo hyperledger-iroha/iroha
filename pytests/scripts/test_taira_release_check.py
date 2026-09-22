@@ -30,8 +30,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1561 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1739 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1616 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1780 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -76,6 +76,53 @@ def isolate_stage_fixture(stack, *, keep=()):
 
 
 class BeaconGateTests(unittest.TestCase):
+    def test_current_runner_and_monetary_repairs_are_required_in_all_scopes(self):
+        required = {'core': ['sumeragi::v2_lane_work::tests::queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes',
+          'sumeragi::v2_lane_work::tests::queue_plan_leader_stages_exact_handoff_idempotently',
+          'sumeragi::v2_lane_work::tests::queue_plan_exact_marker_retains_certificate_until_transaction_application',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_corrupt',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_retires_future_after_current_source_incarnation_drifts',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_cursor_rotates_under_effect_pressure',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_new_inventory_preserves_prior_exact_transfers',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_is_not_retired_by_unrelated_merge_broadcast_cleanup',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_retains_exact_outbound_until_original_acknowledgement',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_capacity_retry_preserves_transferred_inventory',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_view_change_rejects_old_occurrence_acknowledgement',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_leader_uses_original_persistence_and_selection',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_rejects_foreign_kura_without_replacing_original_sources',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_shared_fail_stop_guard_fences_output_and_ingress',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_same_context_rollover_preserves_original_occurrence',
+          'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_preserves_original_certificate_allocation',
+          'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_refusal_keeps_original_source',
+          'sumeragi::v2_lane_work::tests::queue_plan_runner_relay_uses_global_owner_without_old_lane_admission',
+          'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_rejects_foreign_service_before_source_transfer',
+          'sumeragi::v2_queue_plan_admission::tests::queue_plan_handoff_stale_generation_cannot_complete_a_new_destination',
+          'sumeragi::v2_runner::tests::queue_plan_batch_scans_once_and_reuses_exact_sources',
+          'sumeragi::v2_lane_work::tests::queued_successor_generation_hint_cancels_ranked_older_close_before_retry',
+          'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals',
+          'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons'],
+ 'data-model': ['isi::kagemusha_v1::epoch_binding_codec_tests::beacon_epoch_binding_roundtrips_both_variants_and_registers_payload_schema',
+                'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_decisions_roundtrip_all_discriminants_and_reject_untagged_json',
+                'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_authorization_binding_keeps_fixed_width_identity',
+                'nexus::staking::monetary_codec_tests::monetary_scope_roundtrips_both_variants_and_rejects_unknown_envelope_fields',
+                'nexus::staking::monetary_codec_tests::monetary_preconditions_roundtrip_complete_payloads_and_register_schema']}
+        for scope in gate.QUALIFICATION_SCOPES:
+            for harness, names in required.items():
+                stages = gate.qualification_stages(scope)[harness]
+                selected = [name for _, group in stages for name in group]
+                for name in names:
+                    with self.subTest(scope=scope, harness=harness, regression=name):
+                        self.assertEqual(selected.count(name), 1)
+                        focused = gate.focused_regression_stages(scope, (harness + "=" + name,))
+                        self.assertEqual([item for _, group in focused[harness] for item in group], [name])
+                        listing = "\n".join(item + ": test" for item in selected if item != name)
+                        with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                            gate.require_tests(listing, stages)
+
     def test_native_connection_controls_are_required_and_focused(self):
         required = (
             'state::tests::native_candidate_uses_exact_decisions_and_canonical_recorded_execution',
@@ -115,6 +162,8 @@ class BeaconGateTests(unittest.TestCase):
             'state::tests::native_service_preparation_stale_source_skips_archives_and_execution',
             'state::tests::native_service_preparation_foreign_source_and_body_are_rejected',
             'state::tests::native_service_preparation_recorder_conflict_releases_archives',
+            'state::tests::native_service_single_body_store_retries_reuse_original_execution',
+            'state::tests::native_service_atomic_body_store_retries_reuse_original_execution',
             'sumeragi::v2_apply::tests::native_preparation_errors::hash_admission_retains_original_release_and_runner_through_all_native_origins',
             'sumeragi::v2_apply::tests::native_preparation_errors::native_controls_preserve_local_storage_failure_and_semantic_rejection',
             'sumeragi::v2_apply::tests::native_preparation_errors::metadata_and_recorder_diagnostics_cannot_authorize_negative_markers',
@@ -132,7 +181,7 @@ class BeaconGateTests(unittest.TestCase):
             'state::tests::native_recorded_control_rejects_changed_opening_and_stale_verified_height',
             'state::tests::native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon',
         )
-        self.assertEqual(len(required), 53)
+        self.assertEqual(len(required), 55)
         for platform in ("darwin", "linux"):
             spec = importlib.util.spec_from_file_location("native_connection_gate", gate.__file__)
             selected_gate = importlib.util.module_from_spec(spec)
@@ -2274,6 +2323,118 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 self.assertEqual(check.call_args.kwargs, {"native_check_scope": scope, "native_linker": "llvm" if sys.platform == "linux" else "system"})
 
 
+class MutableSourceObservationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=SCRIPT.resolve().parents[1] / "target")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.env = dict(os.environ)
+        self.git("init", "-b", "optimizations")
+        self.git("config", "user.name", "source observation fixture")
+        self.git("config", "user.email", "source-observation@example.invalid")
+        (self.root / ".gitignore").write_text("ignored/\n")
+        self.tracked = self.root / "tracked.bin"
+        self.tracked.write_bytes(b"\x00original\xff")
+        self.git("add", ".")
+        self.git("commit", "-m", "initial fixture")
+
+    def git(self, *args, input=None):
+        return subprocess.run(["git", "--no-replace-objects", *args], cwd=self.root,
+                              env=self.env, input=input, text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, check=True).stdout.strip()
+
+    def observe(self):
+        return gate.mutable_source_observation(self.root, self.env)
+
+    def assert_drift(self, before):
+        self.assertNotEqual(self.observe(), before)
+        with self.assertRaisesRegex(gate.CheckError, "source changed before fixture phase"):
+            gate.require_mutable_source_unchanged(self.root, self.env, before, "fixture phase")
+
+    def test_no_change_and_ignored_output_preserve_observation(self):
+        before = self.observe()
+        ignored = self.root / "ignored"
+        ignored.mkdir()
+        (ignored / "build.log").write_bytes(b"new output")
+        os.utime(self.tracked, None)
+        self.assertEqual(self.observe(), before)
+        gate.require_mutable_source_unchanged(self.root, self.env, before, "fixture phase")
+        self.assertEqual(before["cargo_source_consumption"], "not_proven")
+
+    def test_git_abbreviation_changes_preserve_observation_but_actual_edits_do_not(self):
+        # Text index lines use variable object abbreviations even with --binary;
+        # a binary-only fixture would already emit full hashes and miss the bug.
+        tracked_text = self.root / ".gitignore"
+        tracked_text.write_text("ignored/\nother-generated/\n")
+        self.git("config", "core.abbrev", "7")
+        abbreviated = self.git("diff", "--binary", "--no-ext-diff", "HEAD", "--", ".")
+        before = self.observe()
+        self.git("config", "core.abbrev", "40")
+        full = self.git("diff", "--binary", "--no-ext-diff", "HEAD", "--", ".")
+        self.assertNotEqual(abbreviated, full, "real Git must reproduce index-line presentation drift")
+        self.assertEqual(self.observe(), before)
+        self.git("config", "color.ui", "always")
+        self.assertEqual(self.observe(), before)
+        tracked_text.write_text("ignored/\nchanged-generated/\n")
+        self.assert_drift(before)
+
+    def test_tracked_binary_and_staged_edits_change_same_head_observation(self):
+        before = self.observe()
+        self.tracked.write_bytes(b"\x00modified\xfe")
+        self.assertEqual(self.observe()["git_head"], before["git_head"])
+        self.assert_drift(before)
+        self.git("add", "tracked.bin")
+        self.assert_drift(before)
+
+    def test_same_head_untracked_content_edit_is_detected_even_with_retained_mtime(self):
+        path = self.root / "new.rs"
+        path.write_bytes(b"fn first() {}")
+        before = self.observe()
+        metadata = path.stat()
+        path.write_bytes(b"fn other() {}")
+        os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+        self.assertEqual(self.observe()["git_head"], before["git_head"])
+        self.assert_drift(before)
+
+    def test_commit_and_merge_change_observation_even_with_identical_tree(self):
+        before = self.observe()
+        self.git("commit", "--allow-empty", "-m", "new commit same files")
+        self.assert_drift(before)
+        before_merge = self.observe()
+        parent = self.git("rev-parse", "HEAD")
+        tree = self.git("rev-parse", "HEAD^{tree}")
+        sibling = self.git("commit-tree", tree, "-p", parent, input="other parent\n")
+        merge = self.git("commit-tree", tree, "-p", parent, "-p", sibling, input="merge fixture\n")
+        self.git("update-ref", "HEAD", merge, parent)
+        self.assertEqual(len(self.git("rev-list", "--parents", "-n", "1", "HEAD").split()), 3)
+        self.assert_drift(before_merge)
+
+    def test_metadata_return_source_drift_prevents_following_codegen(self):
+        isolate_shipping_fixture(self)
+        env = dict(self.env, CARGO="/unused/cargo", CARGO_HOME="/isolated", CARGO_TARGET_DIR="/warm")
+        requests = ("concread=" + gate.CONCREAD_STAGES[0][1][0],
+                    "core=" + gate.CORE_PENDING_KURA_RECOVERY_STAGES[0][1][0])
+        for request in requests:
+            with self.subTest(request=request), contextlib.ExitStack() as stack:
+                for name in ("require_native_artifact_inspector", "require_network_fixture_prerequisites",
+                             "run_pure_fsm_checks", "run_lifecycle_source_checks"):
+                    stack.enter_context(patch.object(gate, name))
+                metadata = stack.enter_context(patch.object(gate, "check_test_harnesses",
+                    side_effect=lambda *args, **kwargs: self.tracked.write_bytes(
+                        self.tracked.read_bytes() + b"metadata returned\n")))
+                compile = stack.enter_context(patch.object(gate, "compile_test_harnesses"))
+                runtime = stack.enter_context(patch.object(gate, "run_stages"))
+                network = stack.enter_context(patch.object(gate, "run_network_checks"))
+                stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+                with self.assertRaisesRegex(gate.CheckError, "source changed before .*test codegen"):
+                    gate.run_prequalification(self.root, focused_regressions=(request,),
+                                              environment=env, lock_fds=())
+                metadata.assert_called_once()
+                compile.assert_not_called()
+                runtime.assert_not_called()
+                network.assert_not_called()
+
+
 class FocusedPrequalificationTests(unittest.TestCase):
     def setUp(self):
         isolate_shipping_fixture(self)
@@ -2285,9 +2446,10 @@ class FocusedPrequalificationTests(unittest.TestCase):
             mock = patch.object(gate, name)
             mock.start()
             self.addCleanup(mock.stop)
-        git = patch.object(gate.subprocess, "check_output", return_value="a" * 40 + "\n")
-        self.git = git.start()
-        self.addCleanup(git.stop)
+        source = patch.object(gate, "mutable_source_observation", return_value={
+            "git_head": "a" * 40, "observed_nonignored_worktree_sha256": "b" * 64})
+        self.source = source.start()
+        self.addCleanup(source.stop)
         metadata = patch.object(gate, "check_test_harnesses")
         self.metadata = metadata.start()
         self.addCleanup(metadata.stop)
@@ -2479,16 +2641,19 @@ class FocusedPrequalificationTests(unittest.TestCase):
             self.assertNotIn("[taira-prequalify] diagnostic passed:", output.getvalue())
             network.assert_not_called()
 
-    def test_head_drift_after_portable_phase_still_refuses_final_diagnostic(self):
+    def test_source_drift_after_portable_phase_stops_remaining_graph(self):
         selected = gate.qualification_stages("basic")["concread"][0][1][0]
-        self.git.side_effect = ["a" * 40 + "\n", "b" * 40 + "\n"]
         output = io.StringIO()
+        def changed_after_portable(*args, **kwargs):
+            self.source.return_value = {"git_head": "c" * 40}
         with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("copy")) as compile, \
-             patch.object(gate, "run_stages"), contextlib.redirect_stdout(output):
-            with self.assertRaisesRegex(gate.CheckError, "HEAD changed"):
+             patch.object(gate, "run_stages", side_effect=changed_after_portable), \
+             contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(gate.CheckError, "source changed before remaining test metadata"):
                 gate.run_prequalification(Path("/mutable"), focused_regressions=("concread=" + selected,),
                                           environment=self.env, lock_fds=(91,))
-        self.assertEqual(compile.call_count, 2)
+        self.assertEqual(compile.call_count, 1)
+        self.metadata.assert_called_once()
         self.assertNotIn("[taira-prequalify] diagnostic passed:", output.getvalue())
 
     def test_focus_requires_exact_distinct_current_scope_selections_before_tools(self):
@@ -2500,7 +2665,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
                     gate.run_prequalification(Path("/mutable"), focused_regressions=requested,
                                               environment=self.env, lock_fds=())
                 compile.assert_not_called()
-        self.git.assert_not_called()
+        self.source.assert_not_called()
         self.metadata.assert_not_called()
         focused = gate.focused_regression_stages("basic", ("core=" + self.core,))
         self.assertEqual([name for _, names in focused["core"] for name in names], [self.core])
@@ -3139,6 +3304,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "TORII_LIFECYCLE_STAGES", ()))
             stack.enter_context(patch.object(gate, "TORII_STAGES", ()))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(patch.object(gate, "mutable_source_observation",
+                                             side_effect=AssertionError("immutable prepare must not inspect mutable source")))
             gate.run_checks(Path("/frozen"), qualification_scope="full", environment={"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}, source_commit="a" * 40, lock_fds=(77, 88))
         self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list], [Path("/warm"), Path("/warm")])
         self.assertNotIn("frozen", compile.call_args.kwargs)
@@ -5700,6 +5867,12 @@ class NativeTestOutputRetirementTests(unittest.TestCase):
 
 
 class BeaconFixturePrerequisiteTests(unittest.TestCase):
+    def setUp(self):
+        observation = patch.object(gate, "mutable_source_observation", side_effect=lambda root, env: {
+            "git_head": gate.subprocess.check_output(["git", "rev-parse", "HEAD"]).strip()})
+        observation.start()
+        self.addCleanup(observation.stop)
+
     env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
 
     def invoke(self, mode, scope, *, test=None, source_commit=None):
@@ -5838,6 +6011,12 @@ class BeaconFixturePrerequisiteTests(unittest.TestCase):
 
 
 class NativeArtifactInspectorPrerequisiteTests(unittest.TestCase):
+    def setUp(self):
+        observation = patch.object(gate, "mutable_source_observation", side_effect=lambda root, env: {
+            "git_head": gate.subprocess.check_output(["git", "rev-parse", "HEAD"]).strip()})
+        observation.start()
+        self.addCleanup(observation.stop)
+
     env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
 
     def invoke(self, mode, scope):

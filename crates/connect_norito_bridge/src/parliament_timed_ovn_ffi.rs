@@ -1043,11 +1043,11 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let quorum = DualQuorum::from_roster(&roster).expect("valid Parliament validator roster");
-        let kagemusha_mint_finality_epoch_roster =
-            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+        let kagemusha_mint_finality_authority =
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
                 version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
                 network_id,
-                epoch: 0,
+                generation: 0,
                 validators: roster
                     .iter()
                     .enumerate()
@@ -1061,9 +1061,24 @@ mod tests {
                     })
                     .collect(),
             };
-        let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
-            .finality_epoch_id()
-            .expect("derive mint-finality fixture roster ID");
+        let kagemusha_mint_finality_authorization = {
+            let authority = &kagemusha_mint_finality_authority;
+            let authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id: authority.network_id,
+                epoch: 0,
+                first_height: 1,
+                last_height: 100,
+                authority_generation: authority.generation,
+                authority_id: authority.authority_id().expect("fixture authority identity"),
+                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+                previous_authorization_id: [0; 32],
+                transition_id: [0; 32],
+                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+            };
+            authorization.validate_against_authority(authority).expect("complete genesis fixture authorization");
+            authorization
+        };
         let pops = keys
             .iter()
             .map(|key| {
@@ -1102,8 +1117,8 @@ mod tests {
                 snapshot_bootstrap: None,
                 quorum,
                 roster: roster.clone(),
-                kagemusha_mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster: kagemusha_mint_finality_epoch_roster.clone(),
+                kagemusha_mint_finality_authorization,
+                kagemusha_mint_finality_authority: kagemusha_mint_finality_authority.clone(),
                 nexus_amx_context_hash: Hash::new(b"Parliament casting proof test nexus"),
                 execution_policy_hash: Hash::new(b"Parliament casting proof test policy"),
                 da_layout: DataAvailabilityLayout {

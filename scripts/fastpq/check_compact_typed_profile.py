@@ -379,7 +379,7 @@ def check_source_contracts(overrides=None):
         'index: 0, counter: u64::from(round),',
         '.hash_at(index, &[body])',
         'for (block, target) in output.chunks_exact_mut(48).enumerate()',
-        'b"compact-transcript", b"whole-field-tape-block", round.0, 0, block as u64, body,',
+        'b"compact-transcript", b"whole-field-tape-block", round, 0, block as u64, body,',
         'b"compact-commitment", b"typed-h", frame.round, frame.level, u64::from(frame.position), &encoded,',
         '1 => 48, 2 => 10_944, 3 => 29_568, 4 => 96, 5..=21 => 48, 22 => QUERY_TAPE_BYTES,',
         '2 => Some(1368), 3 => Some(3692), 4 => Some(8), 5..=21 => Some(4),',
@@ -396,6 +396,35 @@ def check_source_contracts(overrides=None):
         'self.phase = Phase::Aborted;',
         'if round.0 == 22 { return Err(CandidateError::Phase); }',
         '(leaves == 1 && left != right)',
+    ]:
+        assert normal(fragment) in flat, fragment
+    # The shared block loop preserves the current entry's typed round and exact
+    # tape length. Scope these guards to complete functions, so a matching call
+    # in the private candidate cannot satisfy the current profile's contract.
+    for fragment in [
+        """pub(super) fn new(bytes: &[u8]) -> Result<Self> {
+            Self::with_profile(bytes, IDENTITY, FramingProfile::Current)
+        }""",
+        """let encoded = norito::encode_canonical(&PrefixFrame {
+            version: 1, identity: identity.to_vec(), context: bytes.to_vec(),
+        })?;""",
+        'FramingProfile::Current => Self::cache_slot(role, phase, round, level)?,',
+        """fn expand(&self, round: Round, body: &[u8], output: &mut [u8]) -> Result<()> {
+            if output.len() != round.tape_bytes() || output.len() % 48 != 0 {
+                return Err(CandidateError::TapeLength);
+            }
+            self.expand_blocks(round.0, body, output)
+        }""",
+        """fn expand_blocks(&self, round: u8, body: &[u8], output: &mut [u8]) -> Result<()> {
+            for (block, target) in output.chunks_exact_mut(48).enumerate() {
+                let digest = self.digest(
+                    b"compact-transcript", b"whole-field-tape-block",
+                    round, 0, block as u64, body,
+                )?;
+                target.copy_from_slice(&digest.to_le_bytes());
+            }
+            Ok(())
+        }""",
     ]:
         assert normal(fragment) in flat, fragment
     assert 'goldilocks-six-lane:h6:g-field-blocks:q375:c401:342cols:923slots:65536rows:8blowup:17folds:v1' in compact
@@ -552,8 +581,11 @@ def sampler_controls():
             "uniformity_scope":"iid uniform canonical field coordinates; not concrete-hash security"}
 
 
-def negative_source_controls():
-    """Fail changed source assumptions using in-memory copies, never live edits."""
+def negative_source_controls(overrides=None):
+    """Mutate checked in-memory source copies, optionally against staged inputs."""
+    overrides={} if overrides is None else dict(overrides)
+    # A failing baseline must never make every unrelated mutation look rejected.
+    check_source_contracts(overrides)
     context="crates/fastpq_prover/src/backend/compact_v1.rs"
     binding="crates/fastpq_prover/src/backend/compact_protocol/profile.rs"
     shared="crates/fastpq_prover/src/backend/compact_protocol/shared_openings.rs"
@@ -584,13 +616,29 @@ def negative_source_controls():
         (binding,'statement: relation.statement_bytes().to_vec()','statement: vec![0]'),
         (shared,'fastpq_prover::compact_v1::FixedRowSharedProofV1','fastpq_prover::compact_prototype::SharedProofV1'),
         (shared,'    quotient: GoldilocksFp4V1,','    quotient: u64,'),
+        (context,'Self::with_profile(bytes, IDENTITY, FramingProfile::Current)',
+         'Self::with_profile(bytes, super::deep_binding::IDENTITY, FramingProfile::Current)'),
+        (context,'Self::with_profile(bytes, IDENTITY, FramingProfile::Current)',
+         'Self::with_profile(bytes, IDENTITY, FramingProfile::Deep)'),
+        (context,'identity: identity.to_vec()','identity: IDENTITY.to_vec()'),
+        (context,'FramingProfile::Current => Self::cache_slot(role, phase, round, level)?,',
+         'FramingProfile::Current => 0,'),
+        (context,'if output.len() != round.tape_bytes() || output.len() % 48 != 0 {',
+         'if output.len() % 48 != 0 {'),
+        (context,'self.expand_blocks(round.0, body, output)',
+         'self.expand_blocks(0, body, output)'),
+        (context,'self.expand_blocks(round.0, body, output)',
+         'self.expand_blocks(round.0, &[], output)'),
+        (context,'                round,\n                0,\n                block as u64,',
+         '                0,\n                0,\n                block as u64,'),
+        (context,'target.copy_from_slice(&digest.to_le_bytes());','target.fill(0);'),
     ]
     reports=[]
     for path,before,after in mutations:
-        original=(ROOT/path).read_text()
+        original=overrides[path] if path in overrides else (ROOT/path).read_text()
         assert before in original,(path,before)
         changed=original.replace(before,after,1)
-        try:check_source_contracts({path:changed})
+        try:check_source_contracts({**overrides,path:changed})
         except AssertionError:reports.append({"path":path,"mutation":before,"rejected":True})
         else:raise AssertionError(f"changed source assumption was accepted: {before}")
     return reports

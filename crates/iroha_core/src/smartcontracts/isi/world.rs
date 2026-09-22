@@ -20429,13 +20429,13 @@ pub mod isi {
                 }
                 if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
                     .world
-                    .public_lane_reward_claims
+                    .public_lane_reward_accruals
                     .iter()
                     .find(|((_, _, asset_id), _)| asset_id.definition() == asset_definition_id)
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has pending public-lane reward claim state (lane {lane_id}, account {claimant}, asset {asset_id}); claim or clear rewards first"
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has unpaid public-lane reward accrual state (lane {lane_id}, account {claimant}, asset {asset_id}); settle rewards first"
                         )
                         .into(),
                     )
@@ -20782,6 +20782,14 @@ pub mod isi {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             state_transaction.validate_execution_output_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
+                if crate::state::is_retired_kagemusha_mint_finality_parameter(custom.id()) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "retired KAGEMUSHA epoch-roster parameters cannot authorize authority transitions"
+                                .to_owned(),
+                        ),
+                    ));
+                }
                 if custom.id() == &iroha_data_model::nexus::NexusRuntimeCatalogV1::parameter_id() {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -21040,46 +21048,6 @@ pub mod isi {
                                                 previous.epoch_length_blocks,
                                                 npos.epoch_length_blocks,
                                             )),
-                                        ));
-                                    }
-                                }
-                            }
-                            if next.id()
-                                == &iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::parameter_id()
-                            {
-                                let staged = iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(&next)
-                                    .ok_or_else(|| {
-                                        InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(
-                                                "invalid Kagemusha V1 next mint-finality roster parameter"
-                                                    .to_owned(),
-                                            ),
-                                        )
-                                    })?;
-                                if let Some(previous_custom) = state_transaction
-                                    .world
-                                    .parameters
-                                    .get()
-                                    .custom()
-                                    .get(next.id())
-                                {
-                                    let previous = iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(previous_custom)
-                                        .ok_or_else(|| {
-                                            InstructionExecutionError::InvalidParameter(
-                                                InvalidParameterError::SmartContract(
-                                                    "installed Kagemusha V1 next mint-finality roster parameter is invalid"
-                                                        .to_owned(),
-                                                ),
-                                            )
-                                        })?;
-                                    if staged.roster.network_id != previous.roster.network_id
-                                        || staged.roster.epoch < previous.roster.epoch
-                                    {
-                                        return Err(InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(
-                                                "Kagemusha V1 next mint-finality roster cannot change network or roll back its epoch"
-                                                    .to_owned(),
-                                            ),
                                         ));
                                     }
                                 }
@@ -33406,6 +33374,16 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                 },
             );
+            let accrual_key = (
+                LaneId::SINGLE, ALICE_ID.clone(), AssetId::new(reward_def.clone(), ALICE_ID.clone()),
+            );
+            stx.world.public_lane_reward_accruals.insert(accrual_key.clone(), Quantity::one());
+            let error = Unregister::domain(domain_id.clone())
+                .expect_execute_err(&ALICE_ID, &mut stx, "unpaid source must pin its asset-definition domain");
+            assert_contains!(format!("{error:?}"), "public-lane reward accrual state", "unexpected error: {error}");
+            assert!(stx.world.domains.get(&domain_id).is_some());
+            assert!(stx.world.asset_definitions.get(&reward_def).is_some());
+            stx.world.public_lane_reward_accruals.remove(accrual_key);
             Unregister::domain(domain_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "mismatched public-lane reward row must not block domain unregister");
             assert!(
@@ -33952,12 +33930,18 @@ seiyaku GovernanceLifecycle {
                 },
             );
             stx.world.public_lane_reward_claims.insert(
+                (LaneId::SINGLE, ALICE_ID.clone()),
+                iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+                    through_epoch: Some(1),
+                },
+            );
+            stx.world.public_lane_reward_accruals.insert(
                 (
                     LaneId::SINGLE,
                     ALICE_ID.clone(),
                     AssetId::new(reward_def, account_id.clone()),
                 ),
-                1,
+                iroha_primitives::numeric::Quantity::from(1_u32),
             );
             Unregister::domain(domain_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "domain unlink should preserve surviving account audit state");
@@ -39497,6 +39481,27 @@ seiyaku GovernanceLifecycle {
             let error = SetParameter::new(Parameter::Custom(rollback.into_custom_parameter()))
                 .expect_execute_err(&ALICE_ID, &mut stx, "retention target rollback must fail");
             assert_contains!(format!("{error:?}"), "target did not advance");
+        });
+        world_test!(set_parameter_rejects_retired_kagemusha_epoch_authority_before_state_changes {
+            blank_state_transaction!(state, block, state_block, stx);
+            let id: iroha_data_model::parameter::CustomParameterId =
+                "kagemusha_mint_finality_next_epoch_v1".parse().expect("retired ID fixture");
+            let before = stx.world.parameters.get().clone();
+            for payload in ["{}", "17", "{\"roster\":null}"] {
+                let payload: iroha_primitives::json::Json = payload.parse().expect("valid JSON fixture");
+                let custom = iroha_data_model::parameter::CustomParameter::new(id.clone(), payload);
+                let error = SetParameter::new(Parameter::Custom(custom)).expect_execute_err(
+                    &ALICE_ID, &mut stx, "retired authority payloads must be rejected before interpretation",
+                );
+                match error {
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                        assert_eq!(message, "retired KAGEMUSHA epoch-roster parameters cannot authorize authority transitions");
+                    }
+                    other => panic!("unexpected error: {other:?}"),
+                }
+                assert_eq!(stx.world.parameters.get(), &before);
+                assert!(!stx.world.parameters.get().custom().contains_key(&id));
+            }
         });
         world_test!(set_parameter_rejects_zero_npos_reconfig_fields {
             let state = blank_state();

@@ -29,6 +29,8 @@ use iroha_data_model::{
         PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
         PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
         PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+        PublicLaneRegistrationPreconditionV1, PublicLaneBondPreconditionV1,
+        PublicLaneUnbondPreconditionV1, PublicLaneSlashPreconditionV1,
         public_lane_unbonding_commitment,
     },
     prelude::AccountId,
@@ -1114,7 +1116,7 @@ fn register_public_lane_validator(
         &stake_ctx.staker_asset,
         &stake_ctx.escrow_asset,
         &initial_stake,
-        &PublicLaneMonetaryPreconditionV1::Registration { activation_height },
+        &PublicLaneMonetaryPreconditionV1::Registration(PublicLaneRegistrationPreconditionV1 { activation_height }),
     )?;
     crate::smartcontracts::isi::asset::isi::execute_staking_bond_transfer(
         state_transaction,
@@ -1602,10 +1604,10 @@ impl Execute for BondPublicLaneStake {
             &stake_ctx.staker_asset,
             &stake_ctx.escrow_asset,
             &amount,
-            &PublicLaneMonetaryPreconditionV1::Bond {
+            &PublicLaneMonetaryPreconditionV1::Bond(PublicLaneBondPreconditionV1 {
                 activation_height: validator_record.activation_height,
                 peer_id: validator_record.peer_id.clone(),
-            },
+            }),
         )?;
         crate::smartcontracts::isi::asset::isi::execute_staking_bond_transfer(
             state_transaction,
@@ -1863,10 +1865,10 @@ impl Execute for FinalizePublicLaneUnbond {
             &stake_ctx.escrow_asset,
             &stake_ctx.staker_asset,
             &pending.amount,
-            &PublicLaneMonetaryPreconditionV1::Unbond {
+            &PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneUnbondPreconditionV1 {
                 activation_height: validator_record.activation_height,
                 request_hash,
-            },
+            }),
         )?;
         crate::smartcontracts::isi::asset::isi::execute_staking_unbond_transfer(
             state_transaction,
@@ -3076,10 +3078,10 @@ fn apply_slash_to_validator_inner(
             &stake_ctx.escrow_asset,
             &slash_sink_asset,
             amount,
-            &PublicLaneMonetaryPreconditionV1::Slash {
+            &PublicLaneMonetaryPreconditionV1::Slash(PublicLaneSlashPreconditionV1 {
                 activation_height: validator_snapshot.activation_height,
                 slashable_exposure: slashable_exposure.clone(),
-            },
+            }),
         )?;
     }
     let self_pending = pending_unbond_group_total(
@@ -8549,8 +8551,8 @@ mod tests {
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let network_id = *state.network_id_ref();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 1, &roster);
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -8563,8 +8565,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"staking cancellation nexus context"),
             execution_policy_hash: Hash::new(b"staking cancellation execution policy"),
             da_layout: DataAvailabilityLayout {

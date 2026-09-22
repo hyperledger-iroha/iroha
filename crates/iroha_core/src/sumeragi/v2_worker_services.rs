@@ -26,6 +26,13 @@ pub(crate) struct ProductionV2Services {
     max_merge_sidecar_deferrals: usize,
     local_completions: VecDeque<LocalCompletion>,
     held_io_completion: Option<V2IoCompletion>,
+    // One global height can publish exactly one carrier. This original owner
+    // must move to the process-wide Native driver before height retirement.
+    pending_native_publication: Option<super::v2_apply::PublishedNativeCarrier>,
+    pending_local_apply: Option<(ApplyTask, super::v2_body_store::LocalValidationRefusal)>,
+    native_source_wait: Option<NativeSourceWait>,
+    native_source_completion:
+        Option<super::v2_apply::native_validation::NativeSourceRecoveryCompletion>,
     next_completion_source: CompletionSource,
     locked_candidate_acquisition: Option<LockedCandidateAcquisition>,
     next_locked_candidate_acquisition_id: u64,
@@ -121,12 +128,7 @@ impl V2CompletionRuntimeCutV1 {
         cut_at: Instant,
     ) -> Self {
         Self {
-            binding: V2CompletionRuntimeCutBindingV1::new(
-                output_guard,
-                context_id,
-                height,
-                cut_at,
-            ),
+            binding: V2CompletionRuntimeCutBindingV1::new(output_guard, context_id, height, cut_at),
         }
     }
 
@@ -160,12 +162,7 @@ impl V2CompletionCapacityReliefCutV1 {
         blocked_completion_lifecycle_ordinal: u128,
     ) -> Option<Self> {
         (blocked_completion_lifecycle_ordinal != 0).then(|| Self {
-            binding: V2CompletionRuntimeCutBindingV1::new(
-                output_guard,
-                context_id,
-                height,
-                cut_at,
-            ),
+            binding: V2CompletionRuntimeCutBindingV1::new(output_guard, context_id, height, cut_at),
             blocked_completion_lifecycle_ordinal,
         })
     }
@@ -482,4 +479,27 @@ fn maximum_orphan_chunk_bytes(layout: wire::DataAvailabilityLayout) -> u64 {
     u64::from(layout.max_chunk_count)
         .saturating_mul(u64::from(layout.chunk_size_bytes))
         .min(wire::MAX_DA_ENCODED_PAYLOAD_BYTES)
+}
+
+/// Original source identity borrowed from one retained lifecycle Validate.
+struct NativeSourceWait {
+    subject: wire::BlockSubject,
+    execution_index: usize,
+    source: Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+    dispatched: bool,
+}
+
+/// Worker pressure returns both original authenticated transport owners.
+#[must_use]
+pub(in crate::sumeragi) enum NativeSourceCompletionAdmission {
+    Accepted,
+    Retry {
+        request: super::v2_transport::AuthenticatedCertifiedBodyRequest,
+        response: super::v2_transport::AuthenticatedCertifiedBodyResponse,
+    },
+    Rejected {
+        request: super::v2_transport::AuthenticatedCertifiedBodyRequest,
+        response: super::v2_transport::AuthenticatedCertifiedBodyResponse,
+        reason: String,
+    },
 }

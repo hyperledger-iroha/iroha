@@ -28,9 +28,7 @@ mod participant_preparation;
 use participant_preparation::CarrierPreparation;
 
 /// Exact local acquisition refusal; this never invalidates a consensus decision.
-pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparationError<E> {
-    /// Complete installation capacity was refused before any physical acquisition.
-    Admission(E),
+pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparationError {
     /// Equal bytes or paths cannot replace the captured original Kura owner.
     ForeignKura,
     /// The target State or block header differs from the captured original geometry.
@@ -71,10 +69,9 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparat
     World(WorldPublicationError<Infallible>),
 }
 
-impl<E: std::fmt::Debug> std::fmt::Debug for CarrierPhysicalPreparationError<E> {
+impl std::fmt::Debug for CarrierPhysicalPreparationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Admission(error) => f.debug_tuple("Admission").field(error).finish(),
             Self::ForeignKura => f.write_str("ForeignKura"),
             Self::ForeignTarget => f.write_str("ForeignTarget"),
             Self::Queue(error) => f.debug_tuple("Queue").field(error).finish(),
@@ -106,23 +103,19 @@ impl<E: std::fmt::Debug> std::fmt::Debug for CarrierPhysicalPreparationError<E> 
 /// The whole original decided execution joined to durable sources under its lease.
 /// No standalone proof escapes: releasing the lease returns only the original
 /// unauthenticated decision, so every later attempt must reauthenticate it.
-struct SourceAuthenticatedCarrier<'target, Admission, BindingAdmission> {
+struct SourceAuthenticatedCarrier<'target, Admission> {
     decision: DecisionBoundCarrierJournals<
         Admission,
-        BindingAdmission,
         DetachedCarrierComponents,
         KuraWsvCheckpointReceipt,
     >,
     kura: KuraPublicationLease<'target>,
 }
 
-impl<'target, Admission, BindingAdmission>
-    SourceAuthenticatedCarrier<'target, Admission, BindingAdmission>
-{
-    fn try_new<E>(
+impl<'target, Admission> SourceAuthenticatedCarrier<'target, Admission> {
+    fn try_new(
         decision: DecisionBoundCarrierJournals<
             Admission,
-            BindingAdmission,
             DetachedCarrierComponents,
             KuraWsvCheckpointReceipt,
         >,
@@ -132,11 +125,10 @@ impl<'target, Admission, BindingAdmission>
         (
             DecisionBoundCarrierJournals<
                 Admission,
-                BindingAdmission,
                 DetachedCarrierComponents,
                 KuraWsvCheckpointReceipt,
             >,
-            CarrierPhysicalPreparationError<E>,
+            CarrierPhysicalPreparationError,
         ),
     > {
         let owner = Self { decision, kura };
@@ -188,12 +180,8 @@ impl<'target, Admission, BindingAdmission>
 
     fn release(
         self,
-    ) -> DecisionBoundCarrierJournals<
-        Admission,
-        BindingAdmission,
-        DetachedCarrierComponents,
-        KuraWsvCheckpointReceipt,
-    > {
+    ) -> DecisionBoundCarrierJournals<Admission, DetachedCarrierComponents, KuraWsvCheckpointReceipt>
+    {
         let Self { decision, kura } = self;
         drop(kura.release_deferred());
         decision
@@ -208,12 +196,12 @@ struct StateFences<'target> {
 }
 
 impl<'target> StateFences<'target> {
-    fn try_acquire<E>(
+    fn try_acquire(
         target: &'target State,
     ) -> Result<
         Self,
         (
-            CarrierPhysicalPreparationError<E>,
+            CarrierPhysicalPreparationError,
             [Option<concread::release::DeferredRelease>; 3],
         ),
     > {
@@ -296,7 +284,7 @@ impl<'target> CarrierFences<'target> {
 
 /// All original component writers and State/Kura fences, with no independent
 /// authority to publish outside the complete carrier consumer.
-/// The full carrier owns this group before its capture and binding reservations.
+/// The full carrier releases these writers before refunding its shell reservation.
 pub(in crate::state::carrier_preparation::journals) struct AcquiredCarrierComponents<'target> {
     original: Option<AcquiredCarrierParticipants<'target>>,
 }
@@ -389,64 +377,34 @@ impl AcquiredCarrierParticipants<'_> {
 pub(in crate::state::carrier_preparation::journals) struct PhysicallyPreparedCarrier<
     'target,
     Admission,
-    BindingAdmission,
-    Installation,
 > {
     // The writers below belong to this exact State, never a caller-supplied replacement.
     target: &'target State,
     decision: DecisionBoundCarrierJournals<
         Admission,
-        BindingAdmission,
         AcquiredCarrierComponents<'target>,
         KuraWsvCheckpointReceipt,
     >,
-    // Drops after original values, all writers, State/Kura fences and prior admissions.
-    installation: Installation,
 }
 
-impl<Admission, BindingAdmission>
-    DecisionBoundCarrierJournals<
-        Admission,
-        BindingAdmission,
-        DetachedCarrierComponents,
-        KuraWsvCheckpointReceipt,
-    >
+impl<Admission>
+    DecisionBoundCarrierJournals<Admission, DetachedCarrierComponents, KuraWsvCheckpointReceipt>
 {
-    /// Admit installation, join the original Kura, then acquire Kura and State.
-    /// Every physical probe is nonblocking and no source permission is minted.
-    ///
-    /// The required callback covers all component staging/COW copies, retained
-    /// readers, publication identities, durable body/finality/checkpoint decoding
-    /// and verification, both retained archive anchors and their result-bearing
-    /// body authentication, original witness and archive persistence, final
-    /// witness reauthentication, and acquisition/abort bookkeeping. There
-    /// is no implicit production capacity policy. A failed attempt returns the
-    /// exact block, verified artifact, journals, effects and prior reservations.
-    pub(in crate::state::carrier_preparation::journals) fn try_prepare_physical<
-        'target,
-        Installation,
-        E,
-    >(
+    /// Join the original Kura and acquire every State writer without waiting.
+    /// The original capture reservation retains the named shell allocations.
+    /// Durable decoding and component COW use standard allocation; this method
+    /// makes no claim of complete process-memory admission. Every refusal returns
+    /// the original detached decision after releasing its physical writers.
+    pub(in crate::state::carrier_preparation::journals) fn try_prepare_physical<'target>(
         self,
         target: &'target State,
         queue_source: Option<&OriginalCarrierQueue<'target>>,
-        admit: impl FnOnce(&Self, &State) -> Result<Installation, E>,
     ) -> Result<
-        PhysicallyPreparedCarrier<'target, Admission, BindingAdmission, Installation>,
-        (Self, CarrierPhysicalPreparationError<E>),
+        PhysicallyPreparedCarrier<'target, Admission>,
+        (Self, CarrierPhysicalPreparationError),
     > {
-        // Shadow the original after declaring installation: even an unwind in
-        // an early probe drops every retained original before its reservation.
-        let installation;
         let mut original = self;
-        installation = match admit(&original, target) {
-            Ok(guard) => guard,
-            Err(error) => {
-                return Err((original, CarrierPhysicalPreparationError::Admission(error)));
-            }
-        };
         if !target.matches_kura_instance(&original.journals.kura) {
-            drop(installation);
             return Err((original, CarrierPhysicalPreparationError::ForeignKura));
         }
         // The original geometry pins the State identity as well as its header.
@@ -457,7 +415,6 @@ impl<Admission, BindingAdmission>
             .geometry
             .matches_publication_target(target, original.block().header())
         {
-            drop(installation);
             return Err((original, CarrierPhysicalPreparationError::ForeignTarget));
         }
         if original.journals.geometry.requires_queue_custody() {
@@ -469,7 +426,6 @@ impl<Admission, BindingAdmission>
                 Some(_) => None,
             };
             if let Some(error) = refusal {
-                drop(installation);
                 return Err((original, CarrierPhysicalPreparationError::Queue(error)));
             }
         }
@@ -480,14 +436,12 @@ impl<Admission, BindingAdmission>
         let kura = match target.kura.try_publication_lease() {
             Ok(lease) => lease,
             Err(error) => {
-                drop(installation);
                 return Err((original, CarrierPhysicalPreparationError::Kura(error)));
             }
         };
         original = match SourceAuthenticatedCarrier::try_new(original, kura) {
             Ok(owner) => owner.release(),
             Err((original, error)) => {
-                drop(installation);
                 return Err((original, error));
             }
         };
@@ -504,7 +458,7 @@ impl<Admission, BindingAdmission>
                     CarrierPhysicalPreparationError::ExecutionWitness(error)
                 }
             };
-            drop(installation);
+
             return Err((original, error));
         }
         if let Err(error) = original.publish_archives() {
@@ -518,7 +472,7 @@ impl<Admission, BindingAdmission>
                 }
                 error => CarrierPhysicalPreparationError::Archive(error),
             };
-            drop(installation);
+
             return Err((original, error));
         }
         // Borrow the exact target's Arc, never a self-referential field inside
@@ -526,7 +480,6 @@ impl<Admission, BindingAdmission>
         let kura = match target.kura.try_publication_lease() {
             Ok(lease) => lease,
             Err(error) => {
-                drop(installation);
                 return Err((original, CarrierPhysicalPreparationError::Kura(error)));
             }
         };
@@ -536,7 +489,6 @@ impl<Admission, BindingAdmission>
         let authenticated = match SourceAuthenticatedCarrier::try_new(original, kura) {
             Ok(owner) => owner,
             Err((original, error)) => {
-                drop(installation);
                 return Err((original, error));
             }
         };
@@ -545,7 +497,7 @@ impl<Admission, BindingAdmission>
             .reauthenticate_execution_witness(authenticated.decision.finality.artifact())
         {
             let original = authenticated.release();
-            drop(installation);
+
             return Err((
                 original,
                 CarrierPhysicalPreparationError::ExecutionWitness(error),
@@ -564,7 +516,7 @@ impl<Admission, BindingAdmission>
                 Ok(observer) => Some(observer),
                 Err(wait) => {
                     let original = authenticated.release();
-                    drop(installation);
+
                     return Err((
                         original,
                         CarrierPhysicalPreparationError::Queue(CarrierQueueRetirementError::Busy {
@@ -587,7 +539,7 @@ impl<Admission, BindingAdmission>
                 } = authenticated;
                 let kura_retirement = kura.release_deferred();
                 drop((state_retirement, queue_retirement, kura_retirement));
-                drop(installation);
+
                 return Err((original, error));
             }
         };
@@ -624,7 +576,7 @@ impl<Admission, BindingAdmission>
                         } = authenticated;
                         let kura_retirement = kura.release_deferred();
                         drop((queue_retirement, state_retirement, kura_retirement));
-                        drop(installation);
+
                         return Err((original, CarrierPhysicalPreparationError::Queue(error)));
                     }
                 }
@@ -640,18 +592,17 @@ impl<Admission, BindingAdmission>
             _queue: queue,
             _kura: kura,
         };
-        let binding_admission;
+
         let Self {
             checkpoint,
             finality,
             committed_event,
             journals,
-            _binding_admission: original_binding_admission,
         } = original;
-        binding_admission = original_binding_admission;
+
         let prepared = journals.try_map_components(|original| {
             let mut preparation = CarrierPreparation::new(original, target, fences);
-            match preparation.try_prepare::<E>() {
+            match preparation.try_prepare() {
                 Ok(()) => Ok(preparation.into_prepared()),
                 Err(error) => {
                     let original = preparation.recover_original();
@@ -667,7 +618,6 @@ impl<Admission, BindingAdmission>
                     finality,
                     committed_event,
                     journals: $journals,
-                    _binding_admission: binding_admission,
                 }
             };
         }
@@ -675,20 +625,17 @@ impl<Admission, BindingAdmission>
             Ok(journals) => Ok(PhysicallyPreparedCarrier {
                 target,
                 decision: retain!(journals),
-                installation,
             }),
             Err((journals, error)) => {
                 // All partially acquired writers, State fences and Kura lease are gone.
-                drop(installation);
+
                 Err((retain!(journals), error))
             }
         }
     }
 }
 
-impl<Admission, BindingAdmission, Installation>
-    PhysicallyPreparedCarrier<'_, Admission, BindingAdmission, Installation>
-{
+impl<Admission> PhysicallyPreparedCarrier<'_, Admission> {
     /// Complete the original storage transition under its retained Queue custody. The terminal
     /// publisher checks exact source and lifecycle authority before calling this.
     /// No retry state or replacement descriptor is introduced here; local refusal
@@ -722,28 +669,20 @@ impl<Admission, BindingAdmission, Installation>
     /// Release all physical ownership and return the complete original decision.
     pub(in crate::state::carrier_preparation::journals) fn abort(
         self,
-    ) -> DecisionBoundCarrierJournals<
-        Admission,
-        BindingAdmission,
-        DetachedCarrierComponents,
-        KuraWsvCheckpointReceipt,
-    > {
-        let installation;
-        let binding_admission;
+    ) -> DecisionBoundCarrierJournals<Admission, DetachedCarrierComponents, KuraWsvCheckpointReceipt>
+    {
         let Self {
             target: _,
             decision,
-            installation: original_installation,
         } = self;
-        installation = original_installation;
+
         let DecisionBoundCarrierJournals {
             checkpoint,
             finality,
             committed_event,
             journals,
-            _binding_admission: original_binding_admission,
         } = decision;
-        binding_admission = original_binding_admission;
+
         let journals = journals.try_map_components(|components| {
             Ok::<_, (AcquiredCarrierComponents<'_>, Infallible)>(components.abort())
         });
@@ -751,19 +690,18 @@ impl<Admission, BindingAdmission, Installation>
             Ok(journals) => journals,
             Err((_, never)) => match never {},
         };
-        drop(installation);
+
         DecisionBoundCarrierJournals {
             checkpoint,
             finality,
             committed_event,
             journals,
-            _binding_admission: binding_admission,
         }
     }
 }
 
 #[path = "publication.rs"]
-mod publication;
+pub(super) mod publication;
 pub(crate) use publication::{PublishedCarrier, PublishedNativeApply};
 
 #[cfg(test)]
