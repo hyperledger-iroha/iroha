@@ -33,8 +33,9 @@ After configuration, explicit MV ownership stages and the complete admitted-map,
 Concread admission/writer/checkpoint source census execute before exact Pending Kura
 recovery controls. Either prerequisite stops qualification on failure before
 other startup checks, shipping builds or network execution. These controls use
-the same complete native compile graph; focused development checks can compile
-only configuration and selected MV targets, without qualifying a release.
+the same complete native compile graph. Focused development checks execute
+selected MV targets before building mandatory configuration in the same lane;
+that separate diagnostic graph never qualifies a release.
 After mandatory startup checks, both scopes separately metadata-check every
 authoritative shipping binary with default production features before CLI and
 long independent tests. This check also reruns when an independent checkpoint
@@ -48,10 +49,13 @@ Configuration and compiler paths match authenticated preparation, while source
 remains the mutable checkout. These checks never qualify release artifacts and
 accept no live configuration, credentials, SSH, deployment or signing inputs.
 Repeat --focus-regression HARNESS=EXACT_TEST for prequalification: metadata-check
-and compile mandatory configuration plus only the explicitly selected harnesses,
-then execute configuration and those exact tests. Unselected harnesses wait for
-immutable preparation. Selected Pending Kura recovery controls run immediately
-after configuration and must pass before the remaining focused regressions.
+and compile only explicitly selected harnesses. Selected portable MV/Concread
+controls run first in a separate diagnostic Cargo graph. Configuration and the
+remaining targets build afterward in the same warm lane; configuration must pass
+before nonportable tests and overall success. Unselected harnesses wait for
+immutable preparation, whose complete compile graph is unchanged. Selected Pending
+Kura recovery runs immediately after configuration and must pass before the
+remaining nonportable focused regressions.
 The metadata pass catches type/import errors early; the
 selected build still detects codegen-only errors. This diagnostic writes no qualification checkpoint and
 does not replace immutable preparation or its complete gate.
@@ -4163,8 +4167,11 @@ def focused_regression_stages(qualification_scope: str, requested):
 
 def run_prequalification(root: Path, *, focused_regressions, qualification_scope: str = "basic",
                          environment: dict[str, str], lock_fds: tuple[int, ...]) -> None:
-    """Check and compile configuration and requested harnesses, then run exact focuses.
+    """Run exact portable controls before configuration and heavier diagnostics.
 
+    Each phase retains its own Cargo feature graph and artifact observations in
+    the same coordinated lane. Configuration is mandatory for overall success;
+    immutable qualification still compiles and executes its complete graph.
     Called only from the coordinated mutable development lane. This function has
     no signed-source, qualification checkpoint, or release-result interface.
     """
@@ -4195,12 +4202,36 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
     # their shared package graph. Prepare owns the complete qualification graph.
     selections = tuple(name for name in complete_selections
                        if name == "config" or name in focused)
-    print(f"[taira-prequalify] request {len(selections)} focused native harnesses; "
-          "execute configuration plus explicit focused regressions", flush=True)
+    selected_harness_count = len(selections)
+    portable = tuple(name for name in selections if name in MV_OWNERSHIP_HARNESSES)
+    selections = tuple(name for name in selections if name not in portable)
+    if portable:
+        print("[taira-prequalify] portable diagnostic Cargo graph: " + ", ".join(portable)
+              + "; mandatory configuration and remaining targets follow; NOT qualification", flush=True)
+        started = time.monotonic()
+        check_test_harnesses(root, env, harnesses=portable, lock_fds=lock_fds)
+        with compile_test_harnesses(root, env, harnesses=portable, lock_fds=lock_fds) as copies:
+            failures = []
+            for name in portable:
+                try:
+                    run_stages(copies[name], fixture_root, env, focused[name], lock_fds)
+                except SelectedRegressionFailures as error:
+                    failures.extend(error.failures)
+                copies.release(name)
+            if failures:
+                raise SelectedRegressionFailures(failures)
+        # Finish all consumers and close their artifact context before another
+        # Cargo graph can replace original outputs. This pass earns no checkpoint.
+        portable_count = sum(len(tests) for name in portable for _, tests in focused[name])
+        print(f"[taira-prequalify] portable diagnostic passed: {portable_count} exact tests "
+              f"in {time.monotonic() - started:.1f}s; mandatory configuration and "
+              "remaining diagnostics pending", flush=True)
+    print("[taira-prequalify] remaining diagnostic Cargo graph: " + ", ".join(selections)
+          + "; execute mandatory configuration before nonportable regressions", flush=True)
     check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
     with compile_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds) as harnesses:
-        # Configuration is always a prerequisite; explicitly focused config
-        # tests already execute here and must not execute twice.
+        # Configuration remains mandatory for final success and gates the
+        # nonportable phase. Explicit focused config tests must not run twice.
         run_config_checks(harnesses, fixture_root, env, lock_fds)
         for name in selections:
             if name != "config" and name not in focused:
@@ -4241,7 +4272,7 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
                                cwd=root, env=env, stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during prequalification; rerun the focused diagnostic")
     requested_count = sum(len(names) for stages in focused.values() for _, names in stages)
-    print(f"[taira-prequalify] diagnostic passed: {len(selections)} selected harnesses compiled; "
+    print(f"[taira-prequalify] diagnostic passed: {selected_harness_count} selected harnesses compiled; "
           f"{requested_count} focused regressions and mandatory configuration passed. "
           "NOT release qualification; immutable prepare still runs its complete gate.", flush=True)
 
@@ -4408,7 +4439,7 @@ def main() -> int:
     parser.add_argument("--native-linker", choices=("system", "llvm"), default=release.default_development_linker(),
                         help="development only: LLVM 18 by default on Linux (clang-18/lld-18 required), system on macOS; explicit system selects the diagnostic fallback; changing selection rebuilds Cargo dependencies")
     parser.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
-                        help="development diagnostic: metadata-check and compile configuration plus explicitly selected test harnesses; not qualification")
+                        help="development diagnostic: run selected portable ownership targets first, then mandatory configuration and remaining explicit harnesses; not qualification")
     args = parser.parse_args()
     try:
         options = {"native_check_scope": args.native_check_scope, "native_linker": args.native_linker}

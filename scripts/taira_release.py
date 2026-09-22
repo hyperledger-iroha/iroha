@@ -16,9 +16,10 @@ required. Failed attempt directories and logs remain intact.
 The persistent compiler cache starts through a descriptor-isolated version probe
 before Cargo inherits the build locks; existing cache contents are preserved.
 For a mutable-source prequalification diagnostic, check accepts repeatable
---focus-regression HARNESS=EXACT_TEST: check and compile mandatory configuration
-and only explicitly selected harnesses, then run their exact tests. It writes
-no qualification checkpoint and cannot be selected by prepare.
+--focus-regression HARNESS=EXACT_TEST: run selected portable ownership tests first,
+then mandatory configuration and remaining selected harnesses in the same warm
+lane. Both phases must pass. It writes no qualification checkpoint and cannot
+be selected by prepare.
 Development checks default to LLVM 18 on Linux, requiring /usr/bin/clang-18 and
 /usr/bin/ld.lld-18 before compilation; missing tools fail without fallback.
 Install clang-18 and lld-18 with the platform package manager, or explicitly select
@@ -1333,7 +1334,7 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
                                  help="development only: LLVM 18 by default on Linux (clang-18/lld-18 required), system on macOS; explicit system selects the diagnostic fallback; changing selection rebuilds Cargo dependencies")
             command.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
-                                 help="development diagnostic: check and compile configuration plus explicitly selected harnesses; not qualification")
+                                 help="development diagnostic: run selected portable ownership targets first, then mandatory configuration and remaining explicit harnesses; not qualification")
         if name == "prepare":
             command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
                                  help="pinned native gate linker: LLVM 18 by default on Linux; system Apple ld on macOS; separate from shipping Zig")

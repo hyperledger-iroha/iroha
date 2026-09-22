@@ -11,7 +11,9 @@
 //! promote this internal generic Circuit helper to arbitrary public producer admission. The
 //! existing ordinary/consuming proof APIs remain unchanged. The stored quotient continuation
 //! produces undivided numerator parts and the inverse continuation produces ordinary
-//! coefficient pieces. Quotient commitments and openings remain required. No complete proof,
+//! coefficient pieces, then commits them and writes the original scalar evaluations. Its
+//! immutable owner-local opening schedule retains H as a lazy coefficient recipe. The stored
+//! IPA opening suffix and exact Core integration remain required. No complete proof,
 //! process-memory or latency claim follows.
 
 use std::{
@@ -424,3 +426,6 @@ mod quotient_inverse;
 
 /// Original quotient commitments and ChallengeX over the closed coefficient owner.
 mod quotient_commitments;
+
+/// Original scalar transcript sequence and immutable owner-local opening schedule.
+mod proof_evaluations;

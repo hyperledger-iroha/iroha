@@ -1552,3 +1552,6 @@ fn both_pasta_quotient_commitments_match_zero_coefficient_arithmetic_and_origina
     zero_and_identity::<EqAffine>();
     zero_and_identity::<EpAffine>();
 }
+
+#[path = "proof_evaluations_tests.rs"]
+mod proof_evaluations;

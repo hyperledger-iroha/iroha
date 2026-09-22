@@ -717,3 +717,28 @@ where
         })
     }
 }
+
+// Share the original complete receipt sweep with the scalar/opening continuation. Its callers
+// receive no geometry, mutable receipt, blind, or alternate owner-construction capability.
+impl<'params, 'instances, C, P, R, T, E, const Q: bool, const M: u64>
+    QuotientCommitmentsPendingStoredIpaProverV1<'params, 'instances, C, P, R, T, E, Q, M>
+where
+    C: CurveAffine,
+    C::Scalar: StoredAssignmentFieldV1 + WithSmallOrderMulGroup<3>,
+    P: StoredPolynomialProviderV1,
+{
+    pub(super) fn validate_evaluation_owner(&self) -> Result<(), StoredLookupErrorV1> {
+        let geometry = geometry(&self.inner.inner.pk)?;
+        if self.blinds.len() != geometry.q || self.commitments.len() != geometry.q {
+            return Err(StoredLookupErrorV1::Context);
+        }
+        let greatest = self
+            .inner
+            .pieces
+            .last()
+            .ok_or(StoredLookupErrorV1::Context)?
+            .layout
+            .ordinal();
+        validate_owner(&self.inner, geometry, greatest)
+    }
+}

@@ -51,14 +51,20 @@ warm development lane:
     python3 scripts/taira_release.py check \
       --focus-regression core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay
 
-Repeat `--focus-regression HARNESS=EXACT_TEST` for more selected regressions. The
-diagnostic compiles configuration and the requested native harnesses together,
-runs mandatory configuration checks first, then only the named tests. Names must already belong
+Repeat `--focus-regression HARNESS=EXACT_TEST` for more selected regressions. Requested
+`mv`, `mv-ebr`, `mv-map`, `mv-admitted-map` and `concread` tests compile and run
+first, before configuration or the larger Core/CLI graphs. The runner finishes
+and releases those copied executables before compiling configuration and the
+remaining requested harnesses. Mandatory configuration checks gate that second
+phase and remain required even for a portable-only diagnostic. Names must already belong
 to the chosen `--native-check-scope`; unknown or repeated selections fail before
 Cargo starts. Independent failures are aggregated; dependent network tests run
 only after those checks pass. This mutable-source diagnostic writes no release
-qualification checkpoint. `prepare` has no focus option and still requires its
-complete immutable gate. Omit the option to run the normal development gate.
+qualification checkpoint. Each phase reports its own Cargo feature graph; an
+early pass does not qualify the later graph. `prepare` has no focus option and
+still requires its complete immutable gate. Omit the option to run the normal
+development gate. Reuse the same warm target across both phases; earlier failure
+feedback does not imply a shorter total build when Cargo feature sets differ.
 
 The CLI regression selection runs as one serial native test process, using exact
 test names. This reuses immutable genesis fixtures instead of rebuilding them in

@@ -2154,21 +2154,187 @@ class FocusedPrequalificationTests(unittest.TestCase):
                  contextlib.redirect_stdout(output):
                 gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
                     focused_regressions=requested, environment=self.env, lock_fds=(91,))
-            compile.assert_called_once()
-            self.metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
+            self.assertEqual(compile.call_count, 2)
+            self.assertEqual(self.metadata.call_args_list, compile.call_args_list)
             self.metadata.reset_mock()
-            self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread"))
-            self.assertEqual(compile.call_args.kwargs["lock_fds"], (91,))
+            self.assertEqual([call.kwargs["harnesses"] for call in compile.call_args_list],
+                             [gate.MV_OWNERSHIP_HARNESSES, ("config",)])
+            self.assertTrue(all(call.kwargs["lock_fds"] == (91,) for call in compile.call_args_list))
+            self.assertIs(compile.call_args_list[0].args[1], compile.call_args_list[1].args[1])
             self.assertEqual([call.args[0] for call in run.call_args_list],
-                             ["/copies/" + name for name in ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")])
+                             ["/copies/" + name for name in ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config")])
             self.assertEqual([call.args[3] for call in run.call_args_list],
-                             [gate.CONFIG_STAGES, *[selected[name] for name in gate.MV_OWNERSHIP_HARNESSES]])
+                             [*[selected[name] for name in gate.MV_OWNERSHIP_HARNESSES], gate.CONFIG_STAGES])
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
             self.assertIn("343 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
+
+    def test_portable_phase_finishes_custody_before_remaining_graph_and_exact_tests_run_once(self):
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)
+            portable = ("mv-admitted-map", "concread")
+            names = {name: selected[name][0][1][0] for name in portable}
+            config_test = gate.CONFIG_STAGES[0][1][0]
+            recovery = gate.CORE_PENDING_KURA_RECOVERY_STAGES[0][1][0]
+            requested = tuple(name + "=" + names[name] for name in portable) + (
+                "config=" + config_test, "core=" + recovery, "core=" + self.core,
+                "cli=" + self.cli, "network=" + self.network)
+            events, executed, active = [], [], set()
+            outer = self
+            class OwnedCopies(FixtureCopies):
+                def __init__(self, selections):
+                    super().__init__({name: name for name in selections})
+                    self.selections = selections
+                def __enter__(self):
+                    outer.assertFalse(active)
+                    active.update(self.selections)
+                    events.append(("enter", self.selections))
+                    return self
+                def release(self, name):
+                    outer.assertIn(name, active)
+                    active.remove(name)
+                    events.append(("release", name))
+                def __exit__(self, *args):
+                    outer.assertFalse(active)
+                    events.append(("exit", self.selections))
+                    return False
+            def metadata(root, env, *, harnesses, lock_fds):
+                self.assertFalse(active, "earlier copies close before the next Cargo graph")
+                events.append(("metadata", harnesses))
+            def build(root, env, *, harnesses, lock_fds):
+                self.assertFalse(active)
+                events.append(("build", harnesses))
+                return OwnedCopies(harnesses)
+            def run(harness, root, env, stages, locks, **kwargs):
+                self.assertIn(harness, active)
+                self.assertEqual((root, locks), (Path("/warm"), (91,)))
+                executed.extend((harness, test) for _, tests in stages for test in tests)
+                events.append(("run", harness))
+            self.metadata.reset_mock()
+            self.metadata.side_effect = metadata
+            output = io.StringIO()
+            with self.subTest(scope=scope), \
+                 patch.object(gate, "compile_test_harnesses", side_effect=build) as compile, \
+                 patch.object(gate, "run_stages", side_effect=run), \
+                 patch.object(gate, "run_network_checks", side_effect=lambda *args, **kw:
+                              run(kw["harness"], args[1], args[2], kw["stages"], args[3])), \
+                 patch.object(gate, "independent_check_evidence") as checkpoint, \
+                 contextlib.redirect_stdout(output):
+                gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
+                    focused_regressions=requested, environment=self.env, lock_fds=(91,))
+            self.assertEqual(self.metadata.call_args_list, compile.call_args_list)
+            self.assertEqual(compile.call_args_list[0].kwargs["harnesses"], portable)
+            self.assertEqual(compile.call_args_list[1].kwargs["harnesses"], ("config", "core", "network", "cli"))
+            self.assertIs(compile.call_args_list[0].args[1], compile.call_args_list[1].args[1])
+            self.assertTrue(all(call.kwargs["lock_fds"] == (91,) for call in compile.call_args_list))
+            first_exit = events.index(("exit", portable))
+            self.assertGreater(events.index(("metadata", ("config", "core", "network", "cli"))), first_exit)
+            self.assertEqual(executed[:2], [(name, names[name]) for name in portable])
+            mandatory = [("config", name) for _, tests in gate.CONFIG_STAGES for name in tests]
+            self.assertEqual(executed[2:2 + len(mandatory)], mandatory)
+            self.assertEqual(executed[2 + len(mandatory)], ("core", recovery))
+            expected = [(name, names[name]) for name in portable] + mandatory + [
+                ("core", recovery), ("core", self.core), ("cli", self.cli), ("network", self.network)]
+            self.assertCountEqual(executed, expected)
+            self.assertEqual(len(executed), len(set(executed)))
+            checkpoint.assert_not_called()
+            self.assertIn("portable diagnostic Cargo graph: mv-admitted-map, concread", output.getvalue())
+            self.assertIn("remaining diagnostic Cargo graph: config, core, network, cli", output.getvalue())
+            self.assertIn("NOT release qualification", output.getvalue())
+            self.assertFalse(active)
+        self.metadata.side_effect = None
+
+    def test_portable_failures_stop_before_remaining_metadata_config_or_network(self):
+        selected = gate.qualification_stages("basic")["concread"][0][1][0]
+        for phase in ("metadata", "codegen", "custody", "missing-test", "runtime"):
+            for scope in gate.QUALIFICATION_SCOPES:
+                events = []
+                error = (gate.SelectedRegressionFailures(["portable failed"]) if phase == "runtime"
+                         else gate.CheckError("portable " + phase + " failure"))
+                outer = self
+                class OwnedCopies(FixtureCopies):
+                    def __exit__(self, *args):
+                        events.append("closed")
+                        return False
+                    def release(self, name):
+                        outer.assertEqual(name, "concread")
+                        events.append("released")
+                def metadata(*args, **kwargs):
+                    self.assertEqual(kwargs["harnesses"], ("concread",))
+                    if phase == "metadata":
+                        raise error
+                def build(*args, **kwargs):
+                    self.assertEqual(kwargs["harnesses"], ("concread",))
+                    if phase in {"codegen", "custody"}:
+                        raise error
+                    return OwnedCopies({"concread": "concread"})
+                self.metadata.reset_mock()
+                self.metadata.side_effect = metadata
+                output = io.StringIO()
+                with self.subTest(scope=scope, phase=phase), \
+                     patch.object(gate, "compile_test_harnesses", side_effect=build) as compile, \
+                     patch.object(gate, "run_stages", side_effect=error) as runtime, \
+                     patch.object(gate, "run_config_checks") as config, \
+                     patch.object(gate, "run_network_checks") as network, \
+                     patch.object(gate, "independent_check_evidence") as checkpoint, \
+                     contextlib.redirect_stdout(output):
+                    with self.assertRaises(type(error)):
+                        gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
+                            focused_regressions=("concread=" + selected, "core=" + self.core,
+                                                 "cli=" + self.cli, "network=" + self.network),
+                            environment=self.env, lock_fds=(91,))
+                self.metadata.assert_called_once()
+                self.assertEqual(compile.call_count, 0 if phase == "metadata" else 1)
+                self.assertEqual(runtime.call_count, int(phase in {"missing-test", "runtime"}))
+                if phase in {"missing-test", "runtime"}:
+                    self.assertIn("closed", events)
+                config.assert_not_called()
+                network.assert_not_called()
+                checkpoint.assert_not_called()
+                self.assertNotIn("diagnostic passed:", output.getvalue())
+        self.metadata.side_effect = None
+
+    def test_portable_success_cannot_skip_final_configuration_or_claim_overall_pass(self):
+        selected = gate.qualification_stages("basic")["mv"][0][1][0]
+        for scope in gate.QUALIFICATION_SCOPES:
+            output = io.StringIO()
+            copies = FixtureCopies({name: name for name in gate.HARNESS_TARGETS})
+            def runtime(harness, root, env, stages, locks, **kwargs):
+                if harness == "config":
+                    self.assertEqual(stages, gate.CONFIG_STAGES)
+                    raise gate.SelectedRegressionFailures(["mandatory final config failed"])
+                self.assertEqual(harness, "mv")
+                self.assertEqual([test for _, tests in stages for test in tests], [selected])
+            self.metadata.reset_mock()
+            with self.subTest(scope=scope), \
+                 patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
+                 patch.object(gate, "run_stages", side_effect=runtime) as run, \
+                 patch.object(gate, "run_network_checks") as network, \
+                 contextlib.redirect_stdout(output):
+                with self.assertRaises(gate.SelectedRegressionFailures):
+                    gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
+                        focused_regressions=("mv=" + selected,), environment=self.env, lock_fds=(91,))
+            self.assertEqual([call.kwargs["harnesses"] for call in compile.call_args_list], [("mv",), ("config",)])
+            self.assertEqual(self.metadata.call_args_list, compile.call_args_list)
+            self.assertEqual([call.args[0] for call in run.call_args_list], ["mv", "config"])
+            self.assertIn("mandatory configuration and remaining diagnostics pending", output.getvalue())
+            self.assertNotIn("[taira-prequalify] diagnostic passed:", output.getvalue())
+            network.assert_not_called()
+
+    def test_head_drift_after_portable_phase_still_refuses_final_diagnostic(self):
+        selected = gate.qualification_stages("basic")["concread"][0][1][0]
+        self.git.side_effect = ["a" * 40 + "\n", "b" * 40 + "\n"]
+        output = io.StringIO()
+        with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("copy")) as compile, \
+             patch.object(gate, "run_stages"), contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(gate.CheckError, "HEAD changed"):
+                gate.run_prequalification(Path("/mutable"), focused_regressions=("concread=" + selected,),
+                                          environment=self.env, lock_fds=(91,))
+        self.assertEqual(compile.call_count, 2)
+        self.assertNotIn("[taira-prequalify] diagnostic passed:", output.getvalue())
 
     def test_focus_requires_exact_distinct_current_scope_selections_before_tools(self):
         for requested in (None, (), "core=" + self.core, ("",), ("core=*",),
