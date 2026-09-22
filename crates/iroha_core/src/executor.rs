@@ -10063,6 +10063,46 @@ mod tests {
         }
     }
     #[test]
+    fn initial_executor_validator_lifecycle_requires_owner_without_peer_management() {
+        use iroha_data_model::isi::staking::{
+            ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
+        };
+        let authority = checked_account_id();
+        let intruder = checked_account_id();
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
+        let stx = block.transaction();
+        let lane = iroha_model_base::topology::LaneId::SINGLE;
+        let peer = iroha_model_base::peer::PeerId::new(authority.expect_single_signatory().clone());
+        let instructions: [InstructionBox; 3] = [
+            RegisterPublicLaneValidator::new(
+                lane,
+                authority.clone(),
+                peer,
+                authority.clone(),
+                Quantity::from(1_u64),
+                Metadata::default(),
+            )
+            .into(),
+            ActivatePublicLaneValidator::new(lane, authority.clone()).into(),
+            ExitPublicLaneValidator {
+                lane_id: lane,
+                validator: authority.clone(),
+                release_at_ms: 10,
+            }
+            .into(),
+        ];
+        for instruction in instructions {
+            validate_initial_native_instruction_authority(&stx, &authority, &instruction, false)
+                .expect("self-owned lifecycle reaches Core");
+            assert!(matches!(
+                validate_initial_native_instruction_authority(&stx, &intruder, &instruction, false),
+                Err(ValidationFail::NotPermitted(_))
+            ));
+        }
+    }
+    #[test]
     fn initial_executor_routes_self_authorized_public_lane_user_actions_to_core() {
         use iroha_data_model::isi::staking::{
             BondPublicLaneStake, ClaimPublicLaneRewards, FinalizePublicLaneUnbond,

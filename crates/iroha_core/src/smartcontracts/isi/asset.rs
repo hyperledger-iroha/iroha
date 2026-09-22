@@ -116,6 +116,11 @@ pub mod isi {
                 .checked_sub(amount)
                 .map_err(|_| MathError::NotEnoughQuantity)?;
             assert_numeric_spec_with(candidate.as_numeric(), spec)?;
+            crate::smartcontracts::isi::staking::ensure_public_lane_reserves_after_debit(
+                self,
+                &resolved_id,
+                &candidate,
+            )?;
             crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
                 self,
                 &resolved_id,
@@ -226,6 +231,16 @@ pub mod isi {
                 .checked_add(amount)
                 .map_err(|_| MathError::Overflow)?;
             assert_numeric_spec_with(to_balance_after.as_numeric(), source_spec)?;
+            let source_after = if source_id == destination_id {
+                &to_balance_after
+            } else {
+                &from_balance_after
+            };
+            crate::smartcontracts::isi::staking::ensure_public_lane_reserves_after_debit(
+                self,
+                source_id,
+                source_after,
+            )?;
             if enforce_credit_controls {
                 self.ensure_numeric_asset_holding_limit(destination_id, &to_balance_after)?;
             }
@@ -248,6 +263,18 @@ pub mod isi {
             destination_id: &AssetId,
             delta: &TransferDeltaTranscript,
         ) -> Result<(), Error> {
+            // Reservation-only instructions can change a source's available funds
+            // without changing its balance. Recheck at consumption as well as preparation.
+            let balance_after = if source_id == destination_id {
+                &delta.to_balance_after
+            } else {
+                &delta.from_balance_after
+            };
+            crate::smartcontracts::isi::staking::ensure_public_lane_reserves_after_debit(
+                self,
+                source_id,
+                balance_after,
+            )?;
             if source_id == destination_id {
                 let asset = self
                     .assets
@@ -1417,6 +1444,7 @@ pub mod isi {
         SocialReward,
         SocialEscrow,
         StakingUnbond,
+        StakingRewardClaim,
         StakingSlash,
         ModerationChallengeRefund,
         ModerationChallengeSlash,
@@ -1841,6 +1869,8 @@ pub mod isi {
         SocialEscrow(Vec<u8>),
         /// Release a matured staking unbond.
         StakingUnbond(Vec<u8>),
+        /// Pay exact signed entitlements from retained staking reward custody.
+        StakingRewardClaim(Vec<u8>),
         /// Apply a mandatory retained staking slash.
         StakingSlash(Vec<u8>),
         /// Slash a retained governance lock.
@@ -2085,6 +2115,12 @@ pub mod isi {
                     binding,
                     NumericAssetTransferSourcePolicy::StakingUnbond,
                     NumericAssetTransferControlPolicy::StakingUnbond,
+                ),
+                RetainedNumericAssetMovementPurpose::StakingRewardClaim(binding) => (
+                    "staking-reward-claim",
+                    binding,
+                    NumericAssetTransferSourcePolicy::StakingRewardClaim,
+                    NumericAssetTransferControlPolicy::Enforce,
                 ),
                 RetainedNumericAssetMovementPurpose::StakingSlash(binding) => (
                     "staking-slash",
@@ -3324,11 +3360,11 @@ pub mod isi {
             destination_id.clone(),
             amount.clone(),
         ))?;
-        execute_numeric_asset_movement(
+        let movement = PreparedNumericAssetMovement::prepare(
             state_transaction,
             source_id,
             destination_id,
-            amount,
+            amount.clone(),
             NumericAssetMovementAuthorization::embedded_user(
                 submitting_authority,
                 EmbeddedNumericAssetMovementPurpose::StakingBond {
@@ -3337,7 +3373,94 @@ pub mod isi {
                     binding,
                 },
             ),
-        )
+        )?;
+        let custody = crate::smartcontracts::isi::staking::prepare_stake_custody_credit(
+            &state_transaction.world,
+            lane_id,
+            validator,
+            &movement.plan.destination_id,
+            &amount,
+            &movement.plan.prechecked_delta.to_balance_after,
+        )?;
+        movement.apply(state_transaction)?;
+        custody.apply(&mut state_transaction.world);
+        Ok(())
+    }
+    /// Consume one exact signed reward claim as a fully prepared atomic batch.
+    pub(in crate::smartcontracts::isi) fn execute_verified_staking_reward_payouts(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        capability: crate::smartcontracts::isi::staking::VerifiedStakingRewardPayouts,
+    ) -> Result<(), Error> {
+        let (recipient, binding, payouts) = capability.into_parts();
+        if payouts.is_empty() { return Ok(()); }
+        let authorization = NumericAssetMovementAuthorization::retained(
+            &recipient,
+            RetainedNumericAssetMovementPurpose::StakingRewardClaim(binding),
+        );
+        let mut plans = Vec::with_capacity(payouts.len());
+        for (source, destination, amount) in &payouts {
+            if destination.account() != &recipient
+                || source.definition() != destination.definition()
+                || source.scope() != destination.scope()
+                || amount.is_zero()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "retained reward payout does not match the recipient and exact custody scope".into(),
+                ));
+            }
+            let plan = PreparedNumericTransferPlan::prepare(
+                state_transaction,
+                &recipient,
+                source.clone(),
+                destination.clone(),
+                amount.clone(),
+                NumericAssetTransferScopePolicy::Ambient,
+                NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
+                NumericAssetTransferSourcePolicy::StakingRewardClaim,
+                NumericAssetTransferControlPolicy::Enforce,
+                NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+            )?;
+            if &plan.source_id != source || &plan.destination_id != destination {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "retained reward payout must preserve both exact signed balance buckets".into(),
+                ));
+            }
+            plans.push(plan);
+        }
+        let batch = PreparedNumericAssetMovementBatch::aggregate(state_transaction, plans, authorization)?;
+        // Composite control stores must be encodable before the first balance write.
+        let mut stores = BTreeMap::<AccountId, AssetTransferControlStoreV1>::new();
+        for (account, _, _, after) in &batch.control_updates {
+            if let Some(record) = after {
+                let store = match stores.entry(account.clone()) {
+                    std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::btree_map::Entry::Vacant(entry) => entry.insert(
+                        load_asset_transfer_control_store(state_transaction, account)?,
+                    ),
+                };
+                if record.is_empty() { store.remove(&record.asset_definition_id); }
+                else { store.upsert(record.clone()); }
+                if !store.controls.is_empty() {
+                    store.validate_canonical().map_err(|error| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!("reward payout control update is not canonical: {error}").into(),
+                        )
+                    })?;
+                    Json::try_new(store.clone()).map_err(|error| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!("reward payout control encoding failed: {error}").into(),
+                        )
+                    })?;
+                }
+            }
+        }
+        let applied = batch.apply(state_transaction)?;
+        for movement in applied {
+            emit_numeric_asset_transfer_events(
+                state_transaction, movement.source_id, movement.destination_id, movement.amount,
+            );
+        }
+        Ok(())
     }
     /// Release one exact matured public-lane unbonding record.
     #[allow(clippy::too_many_arguments)]
@@ -3363,8 +3486,10 @@ pub mod isi {
                     && pending.release_at_ms <= state_transaction.block_unix_timestamp_ms()
             });
         if authority != staker
-            || !crate::smartcontracts::isi::staking::is_configured_staking_unbond_movement(
+            || !crate::smartcontracts::isi::staking::is_retained_staking_unbond_movement(
                 state_transaction,
+                lane_id,
+                validator,
                 staker,
                 &source_id,
                 &destination_id,
@@ -3384,7 +3509,15 @@ pub mod isi {
             destination_id.clone(),
             amount.clone(),
         ))?;
-        execute_numeric_asset_movement(
+        let custody = crate::smartcontracts::isi::staking::prepare_stake_custody_debit(
+            &state_transaction.world,
+            lane_id,
+            validator,
+            &source_id,
+            &amount,
+        )?;
+        custody.apply(&mut state_transaction.world);
+        let result = execute_numeric_asset_movement(
             state_transaction,
             source_id,
             destination_id,
@@ -3393,7 +3526,11 @@ pub mod isi {
                 authority,
                 RetainedNumericAssetMovementPurpose::StakingUnbond(binding),
             ),
-        )
+        );
+        if result.is_err() {
+            custody.restore(&mut state_transaction.world);
+        }
+        result
     }
     /// Consume an exact retained public-lane slash capability from a transaction entrypoint.
     pub(in crate::smartcontracts::isi) fn execute_verified_staking_slash_transfer(
@@ -3417,7 +3554,7 @@ pub mod isi {
         let (lane_id, validator, slash_id, source_id, destination_id, amount, slashable_exposure) =
             authorization.into_parts();
         let key = (lane_id, validator.clone());
-        let record = state_transaction
+        let _record = state_transaction
             .world
             .public_lane_validators
             .get(&key)
@@ -3427,9 +3564,10 @@ pub mod isi {
                 )
             })?;
         if slashable_exposure < amount
-            || !crate::smartcontracts::isi::staking::is_configured_staking_slash_movement(
+            || !crate::smartcontracts::isi::staking::is_retained_staking_slash_movement(
                 state_transaction,
-                &record.stake_account,
+                lane_id,
+                &validator,
                 &source_id,
                 &destination_id,
             )?
@@ -3448,21 +3586,35 @@ pub mod isi {
             amount.clone(),
             slashable_exposure,
         ))?;
-        let movement = PreparedNumericAssetMovement::prepare(
-            state_transaction,
-            source_id,
-            destination_id,
-            amount,
-            NumericAssetMovementAuthorization::retained(
-                &validator,
-                RetainedNumericAssetMovementPurpose::StakingSlash(binding),
-            ),
+        let custody = crate::smartcontracts::isi::staking::prepare_stake_custody_debit(
+            &state_transaction.world,
+            lane_id,
+            &validator,
+            &source_id,
+            &amount,
         )?;
-        if record_observability {
-            movement.apply(state_transaction)
-        } else {
-            movement.apply_without_observability(state_transaction)
+        custody.apply(&mut state_transaction.world);
+        let result = (|| {
+            let movement = PreparedNumericAssetMovement::prepare(
+                state_transaction,
+                source_id,
+                destination_id,
+                amount,
+                NumericAssetMovementAuthorization::retained(
+                    &validator,
+                    RetainedNumericAssetMovementPurpose::StakingSlash(binding),
+                ),
+            )?;
+            if record_observability {
+                movement.apply(state_transaction)
+            } else {
+                movement.apply_without_observability(state_transaction)
+            }
+        })();
+        if result.is_err() {
+            custody.restore(&mut state_transaction.world);
         }
+        result
     }
     fn prepare_verified_governance_numeric_movement(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -4872,6 +5024,21 @@ pub mod isi {
                     )?;
                 }
             }
+            // Individual plans cannot independently spend the same free balance.
+            // Check the complete ordered batch after all virtual debits and credits.
+            for source_id in plans
+                .iter()
+                .map(|plan| &plan.source_id)
+                .collect::<BTreeSet<_>>()
+            {
+                if let Some(after) = virtual_balances.get(source_id) {
+                    crate::smartcontracts::isi::staking::ensure_public_lane_reserves_after_debit(
+                        state_transaction.world(),
+                        source_id,
+                        after,
+                    )?;
+                }
+            }
             let mut aggregate_outbound =
                 BTreeMap::<(AccountId, AssetDefinitionId), (AssetId, Quantity)>::new();
             for plan in &plans {
@@ -5010,6 +5177,11 @@ pub mod isi {
                 .map_err(|_| MathError::NotEnoughQuantity)?;
             crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
                 state_transaction.world(), &source, &after,
+            )?;
+            crate::smartcontracts::isi::staking::ensure_public_lane_reserves_after_debit(
+                state_transaction.world(),
+                &source,
+                &after,
             )?;
         }
         let mut plans = Vec::with_capacity(movements.as_slice().len());
@@ -5763,6 +5935,7 @@ pub mod isi {
             | NumericAssetTransferSourcePolicy::SocialReward
             | NumericAssetTransferSourcePolicy::SocialEscrow
             | NumericAssetTransferSourcePolicy::StakingUnbond
+            | NumericAssetTransferSourcePolicy::StakingRewardClaim
             | NumericAssetTransferSourcePolicy::StakingSlash
             | NumericAssetTransferSourcePolicy::ModerationChallengeRefund
             | NumericAssetTransferSourcePolicy::ModerationChallengeSlash
@@ -7218,6 +7391,62 @@ pub mod isi {
         use super::*;
         use iroha_model_base::domain::DomainId;
         include!("asset/prepared_source_additional_owner_tests.rs");
+        #[test]
+        fn prepared_transfer_rechecks_public_lane_reserves_before_consumption() {
+            let (state, definition_id, source) = build_asset_transfer_control_test_state(100);
+            let destination = AssetId::new(definition_id, BOB_ID.clone());
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut transaction = block.transaction();
+            let delta = transaction
+                .world
+                .precheck_numeric_asset_transfer_delta_exact(
+                    &source,
+                    &destination,
+                    &Quantity::from(50_u64),
+                )
+                .unwrap();
+            transaction
+                .world
+                .public_lane_stake_reserves
+                .insert(source.clone(), Quantity::from(20_u64));
+            transaction
+                .world
+                .public_lane_reward_reserves
+                .insert(source.clone(), Quantity::from(40_u64));
+            assert!(
+                transaction
+                    .world
+                    .apply_prechecked_numeric_asset_transfer_delta_exact(
+                        &source,
+                        &destination,
+                        &delta,
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("reserved public-lane")
+            );
+            assert_eq!(
+                transaction.world.assets.get(&source).unwrap().as_ref(),
+                &Quantity::from(100_u64)
+            );
+            assert!(transaction.world.assets.get(&destination).is_none());
+            transaction
+                .world
+                .public_lane_reward_reserves
+                .insert(source.clone(), Quantity::from(30_u64));
+            transaction
+                .world
+                .apply_prechecked_numeric_asset_transfer_delta_exact(&source, &destination, &delta)
+                .unwrap();
+            assert_eq!(
+                transaction.world.assets.get(&source).unwrap().as_ref(),
+                &Quantity::from(50_u64)
+            );
+            assert_eq!(
+                transaction.world.assets.get(&destination).unwrap().as_ref(),
+                &Quantity::from(50_u64)
+            );
+        }
         #[test]
         fn oracle_movement_frames_bind_owner_and_replay_context() {
             use iroha_data_model::oracle::{

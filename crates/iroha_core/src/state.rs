@@ -143,7 +143,7 @@ use iroha_data_model::{
         FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
         FeeSponsorVault, FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog,
         LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
-        LaneRelayError, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardRecord, PublicLaneStakeShare,
+        LaneRelayError, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardClaimStateV1, PublicLaneRewardRecord, PublicLaneStakeShare,
         PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
@@ -1505,6 +1505,10 @@ macro_rules! with_world_overlay_fields {
             public_lane_stake_shares,
             public_lane_rewards,
             public_lane_reward_claims,
+            public_lane_reward_accruals,
+            public_lane_reward_reserves,
+            public_lane_stake_custody,
+            public_lane_stake_reserves,
             lane_relay_emergency_validators,
             zk_assets,
             elections,
@@ -6116,9 +6120,21 @@ pub struct WorldData {
     /// Reward records per `(lane_id, epoch)` pair.
     #[norito(skip)]
     pub(crate) public_lane_rewards: Storage<(LaneId, u64), PublicLaneRewardRecord>,
-    /// Last claimed reward epoch per `(lane_id, account, asset_id)` tuple.
+    /// Last completely processed reward record per lane and recipient.
     #[norito(skip)]
-    pub(crate) public_lane_reward_claims: Storage<(LaneId, AccountId, AssetId), u64>,
+    pub(crate) public_lane_reward_claims: Storage<(LaneId, AccountId), PublicLaneRewardClaimStateV1>,
+    /// Positive accrued unpaid rewards, independently addressed by their exact source.
+    #[norito(skip)]
+    pub(crate) public_lane_reward_accruals: Storage<(LaneId, AccountId, AssetId), Quantity>,
+    /// Unpaid reward obligations aggregated by exact custody asset; zero rows are absent.
+    #[norito(skip)]
+    pub(crate) public_lane_reward_reserves: Storage<AssetId, Quantity>,
+    /// Exact pinned escrow asset and positive held stake for each validator.
+    #[norito(skip)]
+    pub(crate) public_lane_stake_custody: Storage<(LaneId, AccountId), (AssetId, Quantity)>,
+    /// Bonded and pending-unbond obligations aggregated by exact pinned escrow asset.
+    #[norito(skip)]
+    pub(crate) public_lane_stake_reserves: Storage<AssetId, Quantity>,
     /// Emergency validator overrides for lane relay quorum recovery (per lane).
     pub(crate) lane_relay_emergency_validators: Storage<LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
@@ -6987,9 +7003,22 @@ pub struct WorldBlockFields<'world> {
     /// Public lane reward journal.
     #[norito(skip)]
     pub(crate) public_lane_rewards: StorageField<'world, (LaneId, u64), PublicLaneRewardRecord>,
-    /// Last claimed reward epoch per `(lane_id, account, asset_id)` tuple.
+    /// Last completely processed reward record per lane and recipient.
     #[norito(skip)]
-    pub(crate) public_lane_reward_claims: StorageField<'world, (LaneId, AccountId, AssetId), u64>,
+    pub(crate) public_lane_reward_claims: StorageField<'world, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
+    /// Positive accrued unpaid rewards, independently addressed by their exact source.
+    #[norito(skip)]
+    pub(crate) public_lane_reward_accruals: StorageField<'world, (LaneId, AccountId, AssetId), Quantity>,
+    /// Unpaid reward obligations aggregated by exact custody asset.
+    #[norito(skip)]
+    pub(crate) public_lane_reward_reserves: StorageField<'world, AssetId, Quantity>,
+    /// Exact pinned escrow asset and positive held stake for each validator.
+    #[norito(skip)]
+    pub(crate) public_lane_stake_custody:
+        StorageField<'world, (LaneId, AccountId), (AssetId, Quantity)>,
+    /// Bonded and pending-unbond obligations aggregated by exact pinned escrow asset.
+    #[norito(skip)]
+    pub(crate) public_lane_stake_reserves: StorageField<'world, AssetId, Quantity>,
     /// Emergency validator overrides for lane relay quorum recovery (per lane).
     pub(crate) lane_relay_emergency_validators:
         StorageField<'world, LaneId, LaneRelayEmergencyValidatorSet>,
@@ -7683,6 +7712,10 @@ impl WorldBlock<'_> {
             public_lane_stake_shares,
             public_lane_rewards,
             public_lane_reward_claims,
+            public_lane_reward_accruals,
+            public_lane_reward_reserves,
+            public_lane_stake_custody,
+            public_lane_stake_reserves,
             lane_relay_emergency_validators,
             zk_assets,
             confidential_policy_transition_index,
@@ -8428,7 +8461,16 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) public_lane_rewards:
         StorageTransaction<'block, (LaneId, u64), PublicLaneRewardRecord>,
     pub(crate) public_lane_reward_claims:
-        StorageTransaction<'block, (LaneId, AccountId, AssetId), u64>,
+        StorageTransaction<'block, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
+    /// Positive accrued unpaid rewards, independently addressed by their exact source.
+    pub(crate) public_lane_reward_accruals: StorageTransaction<'block, (LaneId, AccountId, AssetId), Quantity>,
+    /// Unpaid reward obligations aggregated by exact custody asset.
+    pub(crate) public_lane_reward_reserves: StorageTransaction<'block, AssetId, Quantity>,
+    /// Exact pinned escrow asset and positive held stake for each validator.
+    pub(crate) public_lane_stake_custody:
+        StorageTransaction<'block, (LaneId, AccountId), (AssetId, Quantity)>,
+    /// Bonded and pending-unbond obligations aggregated by exact pinned escrow asset.
+    pub(crate) public_lane_stake_reserves: StorageTransaction<'block, AssetId, Quantity>,
     /// Emergency validator overrides for lane relay quorum recovery (per lane).
     pub(crate) lane_relay_emergency_validators:
         StorageTransaction<'block, LaneId, LaneRelayEmergencyValidatorSet>,
@@ -10485,7 +10527,16 @@ pub struct WorldView<'world> {
     pub(crate) public_lane_stake_shares:
         StorageView<'world, (LaneId, AccountId, AccountId), PublicLaneStakeShare>,
     pub(crate) public_lane_rewards: StorageView<'world, (LaneId, u64), PublicLaneRewardRecord>,
-    pub(crate) public_lane_reward_claims: StorageView<'world, (LaneId, AccountId, AssetId), u64>,
+    pub(crate) public_lane_reward_claims: StorageView<'world, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
+    /// Positive accrued unpaid rewards, independently addressed by their exact source.
+    pub(crate) public_lane_reward_accruals: StorageView<'world, (LaneId, AccountId, AssetId), Quantity>,
+    /// Unpaid reward obligations aggregated by exact custody asset.
+    pub(crate) public_lane_reward_reserves: StorageView<'world, AssetId, Quantity>,
+    /// Exact pinned escrow asset and positive held stake for each validator.
+    pub(crate) public_lane_stake_custody:
+        StorageView<'world, (LaneId, AccountId), (AssetId, Quantity)>,
+    /// Bonded and pending-unbond obligations aggregated by exact pinned escrow asset.
+    pub(crate) public_lane_stake_reserves: StorageView<'world, AssetId, Quantity>,
     /// Emergency validator overrides for lane relay quorum recovery (per lane).
     pub(crate) lane_relay_emergency_validators:
         StorageView<'world, LaneId, LaneRelayEmergencyValidatorSet>,
@@ -16221,6 +16272,7 @@ pub(crate) fn consensus_key_pop_for_public_key(
     })
 }
 /// Resolve every lane id currently associated with the provided validator peers.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) fn validator_lane_ids_for_peers<I, P>(
     snapshot: &impl WorldReadOnly,
     peers: I,
@@ -16766,33 +16818,51 @@ fn select_threshold_beacon_committee(
     committee.sort();
     Some(committee)
 }
-/// Resolve an epoch validator committee using one already-authenticated seed.
+/// Resolve the exact global election candidate pool, optionally projecting one
+/// validator record replacement before any custody or lifecycle mutation.
 ///
-/// Consensus boundary construction must use this entry point so roster
-/// selection and the successor leader schedule consume the same finalized
-/// randomness. The caller owns authentication and exact chain-height binding
-/// of `selection_seed`.
+/// Consensus election and staking admission share these filters so a mutation
+/// cannot preserve a local approximation while changing the real global pool.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn epoch_validator_peer_ids_from_world_with_seed<I>(
+pub(crate) fn epoch_validator_candidate_peer_ids_from_world<I>(
     world: &impl WorldReadOnly,
     commit_topology: I,
     block_height: u64,
     nexus: &iroha_config::parameters::actual::Nexus,
-    epoch: u64,
-    selection_seed: [u8; 32],
-) -> Option<Vec<PeerId>>
+    replacement: Option<&PublicLaneValidatorRecord>,
+) -> Vec<PeerId>
 where
     I: IntoIterator<Item = PeerId>,
 {
+    let mut records: Vec<_> = world
+        .public_lane_validators()
+        .iter()
+        .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
+        .filter(|(key, _)| {
+            replacement.is_none_or(|record| key.0 != record.lane_id || key.1 != record.validator)
+        })
+        .map(|(_, record)| record)
+        .collect();
+    if let Some(record) = replacement {
+        records.push(record);
+    }
     let present_peers: std::collections::BTreeSet<PeerId> = world.peers().iter().cloned().collect();
     let mut topology_peers: std::collections::BTreeSet<PeerId> =
         commit_topology.into_iter().collect();
     let active_lane_ids = nexus_active_lane_ids(nexus);
     let enforce_topology_membership = !topology_peers.is_empty();
     let topology_lane_ids = if enforce_topology_membership {
-        validator_lane_ids_for_peers(world, topology_peers.iter(), block_height)
-            .into_iter()
-            .filter(|lane_id| active_lane_ids.contains(lane_id))
+        records
+            .iter()
+            .filter_map(|record| {
+                (topology_peers.contains(&record.peer_id)
+                    && active_lane_ids.contains(&record.lane_id)
+                    && crate::smartcontracts::isi::staking::validator_election_eligible_at_height(
+                        record,
+                        block_height,
+                    ))
+                .then_some(record.lane_id)
+            })
             .collect()
     } else {
         BTreeSet::new()
@@ -16800,10 +16870,7 @@ where
     if enforce_topology_membership {
         let mut active_candidates: std::collections::BTreeSet<PeerId> =
             std::collections::BTreeSet::new();
-        for (key, record) in world.public_lane_validators().iter() {
-            if !public_lane_validator_record_matches_key(key, record) {
-                continue;
-            }
+        for record in &records {
             if !active_lane_ids.contains(&record.lane_id) {
                 continue;
             }
@@ -16864,21 +16931,19 @@ where
             }
         }
     }
-    let mut candidates: Vec<PeerId> = world
-        .public_lane_validators()
+    let mut candidates: Vec<PeerId> = records
         .iter()
-        .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
-        .filter(|(_, record)| active_lane_ids.contains(&record.lane_id))
-        .filter(|(_, record)| {
+        .filter(|record| active_lane_ids.contains(&record.lane_id))
+        .filter(|record| {
             topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
         })
-        .filter(|(_, record)| {
+        .filter(|record| {
             crate::smartcontracts::isi::staking::validator_election_eligible_at_height(
                 record,
                 block_height,
             )
         })
-        .filter(|(_, record)| {
+        .filter(|record| {
             matches!(
                 nexus
                     .staking
@@ -16886,7 +16951,7 @@ where
                 iroha_config::parameters::actual::LaneValidatorMode::StakeElected
             )
         })
-        .filter_map(|(_, record)| {
+        .filter_map(|record| {
             let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
                 &nexus.staking.min_validator_stake,
@@ -16911,6 +16976,33 @@ where
     });
     candidates.sort();
     candidates.dedup();
+    candidates
+}
+
+/// Resolve an epoch validator committee using one already-authenticated seed.
+///
+/// Consensus boundary construction must use this entry point so roster
+/// selection and the successor leader schedule consume the same finalized
+/// randomness. The caller owns authentication and exact chain-height binding
+/// of `selection_seed`.
+pub(crate) fn epoch_validator_peer_ids_from_world_with_seed<I>(
+    world: &impl WorldReadOnly,
+    commit_topology: I,
+    block_height: u64,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    epoch: u64,
+    selection_seed: [u8; 32],
+) -> Option<Vec<PeerId>>
+where
+    I: IntoIterator<Item = PeerId>,
+{
+    let candidates = epoch_validator_candidate_peer_ids_from_world(
+        world,
+        commit_topology,
+        block_height,
+        nexus,
+        None,
+    );
     select_threshold_beacon_committee(world, epoch, selection_seed, candidates)
 }
 #[cfg(test)]
@@ -19871,6 +19963,13 @@ fn parliament_derived_read_indexes_v1<'a>(
         tle_key_session_retention_deadlines,
     })
 }
+#[path = "state/reward_reserves.rs"]
+mod reward_reserves;
+use reward_reserves::validate_public_lane_reward_reserves;
+#[path = "state/stake_reserves.rs"]
+mod stake_reserves;
+use stake_reserves::validate_public_lane_stake_reserves;
+
 impl World {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Insert or replace an account rekey fixture while maintaining its reverse index.
@@ -22556,7 +22655,15 @@ macro_rules! world_ro_accessors {
             /// Public lane reward ledger keyed by `(lane_id, epoch)` (read-only).
             storage public_lane_rewards: (LaneId, u64) => PublicLaneRewardRecord;
             /// Last claimed reward epoch keyed by `(lane_id, account, asset_id)` (read-only).
-            storage public_lane_reward_claims: (LaneId, AccountId, AssetId) => u64;
+            storage public_lane_reward_claims: (LaneId, AccountId) => PublicLaneRewardClaimStateV1;
+            /// Accrued unpaid rewards retained separately from the bounded processing cursor.
+            storage public_lane_reward_accruals: (LaneId, AccountId, AssetId) => Quantity;
+            /// Unpaid reward obligations aggregated by exact custody asset.
+            storage public_lane_reward_reserves: AssetId => Quantity;
+            /// Exact pinned escrow asset and positive held stake for each validator.
+            storage public_lane_stake_custody: (LaneId, AccountId) => (AssetId, Quantity);
+            /// Bonded and pending-unbond obligations aggregated by exact pinned escrow asset.
+            storage public_lane_stake_reserves: AssetId => Quantity;
             /// Emergency lane relay validator overrides keyed by lane (read-only).
             storage lane_relay_emergency_validators: LaneId => LaneRelayEmergencyValidatorSet;
             /// Capacity declarations (read-only).
@@ -26399,6 +26506,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             public_lane_stake_shares: _,
             public_lane_rewards: _,
             public_lane_reward_claims: _,
+            public_lane_reward_accruals: _,
+            public_lane_reward_reserves: _,
+            public_lane_stake_custody: _,
+            public_lane_stake_reserves: _,
             lane_relay_emergency_validators: _,
             repo_agreements: _,
             repo_agreements_by_initiator: _,
@@ -26596,6 +26707,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.public_lane_stake_shares.apply();
         self.public_lane_rewards.apply();
         self.public_lane_reward_claims.apply();
+        self.public_lane_reward_accruals.apply();
+        self.public_lane_reward_reserves.apply();
+        self.public_lane_stake_custody.apply();
+        self.public_lane_stake_reserves.apply();
         self.lane_relay_emergency_validators.apply();
         self.repo_agreements.apply();
         self.repo_agreements_by_initiator.apply();
@@ -33256,9 +33371,9 @@ impl State {
             .collect()
     }
     fn public_lane_reward_claim_keys_for_lanes(
-        reward_claims: &impl StorageReadOnly<(LaneId, AccountId, AssetId), u64>,
+        reward_claims: &impl StorageReadOnly<(LaneId, AccountId), PublicLaneRewardClaimStateV1>,
         lanes_to_reset: &BTreeSet<LaneId>,
-    ) -> Vec<(LaneId, AccountId, AssetId)> {
+    ) -> Vec<(LaneId, AccountId)> {
         if lanes_to_reset.is_empty() {
             return Vec::new();
         }
@@ -45810,7 +45925,17 @@ impl State {
             &nexus.dataspace_catalog,
         )?;
         if self.kura.emergency_fast_startup_enabled() && self.nexus_runtime_restored_from_snapshot {
-            Self::ensure_emergency_fast_restored_catalogs_match(self.nexus.get_mut(), &nexus)?;
+            let restored_nexus = self.nexus_snapshot();
+            Self::ensure_emergency_fast_restored_catalogs_match(&restored_nexus, &nexus)?;
+            // Fast recovery skips geometry publication, but cannot reinterpret retained stake
+            // under a different owner. Exact catalog equality means no lane is being reset.
+            ensure_live_shared_dataspace_staking_owner_is_not_reset(
+                &self.world.view(),
+                &restored_nexus,
+                &nexus,
+                &BTreeSet::new(),
+                self.block_hashes.view().len() as u64,
+            )?;
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             *self.nexus.get_mut() = nexus;

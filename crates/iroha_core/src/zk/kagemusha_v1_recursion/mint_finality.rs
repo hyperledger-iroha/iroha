@@ -18,7 +18,7 @@ use iroha_data_model::{
     },
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1,
-        KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalityGenesisParametersV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
         KagemushaMintFinalitySealShareV1, KagemushaMintFinalityValidatorKeysV1,
         KagemushaMintFinalityValidatorSealV1, KagemushaOperationKindV1,
@@ -56,7 +56,7 @@ const EP_PARITY_TAG: u8 = 1;
 pub enum KagemushaMintFinalityErrorV1 {
     /// The separately provisioned epoch roster is malformed or mismatches consensus.
     #[error("invalid Kagemusha mint-finality epoch roster: {0}")]
-    InvalidEpochRoster(String),
+    InvalidAuthorityGeneration(String),
     /// A top-up leaf or fixed-depth path is malformed.
     #[error("invalid Kagemusha mint-finality top-up tree: {0}")]
     InvalidTopUpTree(String),
@@ -313,22 +313,25 @@ pub fn verify_kagemusha_top_up_membership_v1(
 ///
 /// Returns an error unless network, epoch, count, identity order, and every
 /// canonical non-identity curve point match.
-pub fn validate_kagemusha_mint_finality_epoch_v1(
-    epoch: &KagemushaMintFinalityEpochRosterV1,
+pub fn validate_kagemusha_mint_finality_authority_v1(
+    epoch: &KagemushaMintFinalityAuthorityGenerationV1,
     context: &HeightContext,
 ) -> Result<(), KagemushaMintFinalityErrorV1> {
-    epoch
-        .validate()
-        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidEpochRoster(error.to_string()))?;
-    context
-        .validate()
-        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidEpochRoster(error.to_string()))?;
-    let finality_epoch_id = epoch
-        .finality_epoch_id()
-        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidEpochRoster(error.to_string()))?;
-    if finality_epoch_id != context.kagemusha_mint_finality_epoch_id
+    epoch.validate().map_err(|error| {
+        KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(error.to_string())
+    })?;
+    context.validate().map_err(|error| {
+        KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(error.to_string())
+    })?;
+    let authority_id = epoch.authority_id().map_err(|error| {
+        KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(error.to_string())
+    })?;
+    if context
+        .kagemusha_mint_finality_authorization
+        .validate_against_authority(epoch)
+        .is_err()
+        || authority_id != context.kagemusha_mint_finality_authorization.authority_id
         || epoch.network_id != context.network_id
-        || epoch.epoch != context.epoch
         || epoch.validators.len() != context.roster.len()
         || epoch
             .validators
@@ -336,7 +339,7 @@ pub fn validate_kagemusha_mint_finality_epoch_v1(
             .zip(&context.roster)
             .any(|(keys, validator)| keys.validator != validator.validator)
     {
-        return Err(KagemushaMintFinalityErrorV1::InvalidEpochRoster(
+        return Err(KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(
             "epoch authority or its committed identifier does not exactly match the frozen context"
                 .to_owned(),
         ));
@@ -356,11 +359,11 @@ pub fn validate_kagemusha_mint_finality_epoch_v1(
 /// Returns an error unless the roster is structurally valid and every Pallas
 /// and Vesta encoding is canonical and non-identity.
 pub fn validate_kagemusha_mint_finality_roster_keys_v1(
-    epoch: &KagemushaMintFinalityEpochRosterV1,
+    epoch: &KagemushaMintFinalityAuthorityGenerationV1,
 ) -> Result<(), KagemushaMintFinalityErrorV1> {
-    epoch
-        .validate()
-        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidEpochRoster(error.to_string()))?;
+    epoch.validate().map_err(|error| {
+        KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(error.to_string())
+    })?;
     validate_kagemusha_mint_finality_validator_keys_v1(&epoch.validators)
 }
 
@@ -376,14 +379,10 @@ pub fn validate_kagemusha_mint_finality_roster_keys_v1(
 pub fn validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
     parameters: &KagemushaMintFinalityGenesisParametersV1,
 ) -> Result<(), KagemushaMintFinalityErrorV1> {
-    parameters
-        .validate()
-        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidEpochRoster(error.to_string()))?;
-    validate_kagemusha_mint_finality_validator_keys_v1(&parameters.epoch_roster.validators)?;
-    if let Some(next_epoch_roster) = &parameters.next_epoch_roster {
-        validate_kagemusha_mint_finality_validator_keys_v1(&next_epoch_roster.validators)?;
-    }
-    Ok(())
+    parameters.validate().map_err(|error| {
+        KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(error.to_string())
+    })?;
+    validate_kagemusha_mint_finality_validator_keys_v1(&parameters.authority_generation.validators)
 }
 
 fn validate_kagemusha_mint_finality_validator_keys_v1(
@@ -391,12 +390,12 @@ fn validate_kagemusha_mint_finality_validator_keys_v1(
 ) -> Result<(), KagemushaMintFinalityErrorV1> {
     for keys in validators {
         decode_nonidentity_point::<EpAffine>(keys.eq_proof_public_key).ok_or_else(|| {
-            KagemushaMintFinalityErrorV1::InvalidEpochRoster(
+            KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(
                 "Eq/Fp helper key is not a canonical non-identity Pallas point".to_owned(),
             )
         })?;
         decode_nonidentity_point::<EqAffine>(keys.ep_proof_public_key).ok_or_else(|| {
-            KagemushaMintFinalityErrorV1::InvalidEpochRoster(
+            KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(
                 "Ep/Fq helper key is not a canonical non-identity Vesta point".to_owned(),
             )
         })?;
@@ -404,7 +403,7 @@ fn validate_kagemusha_mint_finality_validator_keys_v1(
     Ok(())
 }
 
-/// Derive one validator's epoch-scoped public keys from separately provisioned seed material.
+/// Derive one validator's generation-scoped public keys from separately provisioned seed material.
 ///
 /// This helper is for provisioning only.  It never accepts a consensus private
 /// key and there is no BLS-to-Pasta fallback. Deployments must provision an
@@ -439,17 +438,17 @@ pub struct KagemushaMintFinalitySignerV1 {
     seed: Zeroizing<[u8; 32]>,
     validator_index: u32,
     network_id: iroha_data_model::NetworkId,
-    epoch: u64,
-    finality_epoch_id: [u8; 32],
+    generation: u64,
+    authority_id: [u8; 32],
     validator: iroha_model_base::peer::PeerId,
 }
 
-/// Runtime authority for one node's exact epoch roster and local signing seed.
+/// Runtime authority for one node's exact key generation and local signing seed.
 ///
 /// Sumeragi may share this object through `Arc`; no key material is cloned or
 /// exposed by the recursive relation.
 pub struct KagemushaMintFinalityLocalAuthorityV1 {
-    epoch: Arc<KagemushaMintFinalityEpochRosterV1>,
+    generation: Arc<KagemushaMintFinalityAuthorityGenerationV1>,
     signer: KagemushaMintFinalitySignerV1,
 }
 
@@ -457,41 +456,41 @@ impl core::fmt::Debug for KagemushaMintFinalityLocalAuthorityV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("KagemushaMintFinalityLocalAuthorityV1")
-            .field("epoch", &self.epoch)
+            .field("generation", &self.generation)
             .field("signer", &self.signer)
             .finish()
     }
 }
 
 impl KagemushaMintFinalityLocalAuthorityV1 {
-    /// Bind separately provisioned seed material to one authenticated epoch roster.
+    /// Bind separately provisioned seed material to one authenticated key generation.
     ///
     /// # Errors
     ///
     /// Returns an error unless the seed-derived keys exactly equal the local
     /// validator's roster entry.
     pub fn new(
-        epoch: Arc<KagemushaMintFinalityEpochRosterV1>,
+        generation: Arc<KagemushaMintFinalityAuthorityGenerationV1>,
         seed: Zeroizing<[u8; 32]>,
         validator_index: u32,
     ) -> Result<Self, KagemushaMintFinalityErrorV1> {
         let signer =
-            KagemushaMintFinalitySignerV1::from_seed(seed, validator_index, epoch.as_ref())?;
-        Ok(Self { epoch, signer })
+            KagemushaMintFinalitySignerV1::from_seed(seed, validator_index, generation.as_ref())?;
+        Ok(Self { generation, signer })
     }
 
-    /// Rebind the held private seed to this validator in an authenticated epoch roster.
+    /// Bind the held private seed to this validator in an authenticated key generation.
     ///
     /// The caller must obtain `epoch` from its verified height context. Network identity and
-    /// local validator identity remain fixed; every epoch's published keys must exactly match
+    /// local validator identity remain fixed; every generation's published keys must exactly match
     /// private derivation. Historical contexts remain usable for authenticated recovery.
     ///
     /// # Errors
     ///
     /// Rejects another network, an absent local validator, malformed roster, or changed keys.
-    pub fn signer_for_epoch(
+    pub fn signer_for_authority(
         &self,
-        epoch: &KagemushaMintFinalityEpochRosterV1,
+        epoch: &KagemushaMintFinalityAuthorityGenerationV1,
     ) -> Result<KagemushaMintFinalitySignerV1, KagemushaMintFinalityErrorV1> {
         if epoch.network_id != self.signer.network_id {
             return Err(KagemushaMintFinalityErrorV1::InvalidSigner(
@@ -511,10 +510,10 @@ impl KagemushaMintFinalityLocalAuthorityV1 {
         KagemushaMintFinalitySignerV1::from_seed(Zeroizing::new(*self.signer.seed), index, epoch)
     }
 
-    /// Borrow the mandatory epoch authority.
+    /// Borrow the immutable key generation admitted at startup.
     #[must_use]
-    pub fn epoch(&self) -> &KagemushaMintFinalityEpochRosterV1 {
-        self.epoch.as_ref()
+    pub fn authority(&self) -> &KagemushaMintFinalityAuthorityGenerationV1 {
+        self.generation.as_ref()
     }
 
     /// Borrow the local signer without exposing its private seed.
@@ -530,8 +529,8 @@ impl core::fmt::Debug for KagemushaMintFinalitySignerV1 {
             .debug_struct("KagemushaMintFinalitySignerV1")
             .field("validator_index", &self.validator_index)
             .field("network_id", &self.network_id)
-            .field("epoch", &self.epoch)
-            .field("finality_epoch_id", &self.finality_epoch_id)
+            .field("generation", &self.generation)
+            .field("authority_id", &self.authority_id)
             .finish_non_exhaustive()
     }
 }
@@ -545,7 +544,7 @@ impl KagemushaMintFinalitySignerV1 {
     pub fn from_seed(
         seed: Zeroizing<[u8; 32]>,
         validator_index: u32,
-        epoch: &KagemushaMintFinalityEpochRosterV1,
+        epoch: &KagemushaMintFinalityAuthorityGenerationV1,
     ) -> Result<Self, KagemushaMintFinalityErrorV1> {
         epoch
             .validate()
@@ -562,7 +561,7 @@ impl KagemushaMintFinalitySignerV1 {
         })?;
         let derived = derive_kagemusha_mint_finality_validator_keys_v1(
             &seed,
-            epoch.epoch,
+            epoch.generation,
             expected.validator.clone(),
         )?;
         if &derived != expected {
@@ -574,9 +573,9 @@ impl KagemushaMintFinalitySignerV1 {
             seed,
             validator_index,
             network_id: epoch.network_id,
-            epoch: epoch.epoch,
-            finality_epoch_id: epoch
-                .finality_epoch_id()
+            generation: epoch.generation,
+            authority_id: epoch
+                .authority_id()
                 .map_err(|error| KagemushaMintFinalityErrorV1::InvalidSigner(error.to_string()))?,
             validator: expected.validator.clone(),
         })
@@ -602,7 +601,8 @@ impl KagemushaMintFinalitySignerV1 {
             .validate()
             .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
         if message.network_id != self.network_id
-            || message.finality_epoch_id != self.finality_epoch_id
+            || message.epoch_authorization.authority_id != self.authority_id
+            || message.epoch_authorization.authority_generation != self.generation
             || self.validator_index >= message.validator_count
         {
             return Err(KagemushaMintFinalityErrorV1::InvalidSigner(
@@ -616,13 +616,13 @@ impl KagemushaMintFinalitySignerV1 {
         let eq_secret = derive_nonzero_key_scalar::<Fq>(
             EQ_PARITY_TAG,
             &self.seed,
-            self.epoch,
+            self.generation,
             &validator_bytes,
         )?;
         let ep_secret = derive_nonzero_key_scalar::<Fp>(
             EP_PARITY_TAG,
             &self.seed,
-            self.epoch,
+            self.generation,
             &validator_bytes,
         )?;
         Ok(KagemushaMintFinalityValidatorSealV1 {
@@ -630,7 +630,7 @@ impl KagemushaMintFinalitySignerV1 {
             eq_proof_signature: schnorr_sign::<EpAffine>(
                 &self.seed,
                 &self.network_id,
-                self.epoch,
+                self.generation,
                 &validator_bytes,
                 self.validator_index,
                 EQ_PARITY_TAG,
@@ -640,7 +640,7 @@ impl KagemushaMintFinalitySignerV1 {
             ep_proof_signature: schnorr_sign::<EqAffine>(
                 &self.seed,
                 &self.network_id,
-                self.epoch,
+                self.generation,
                 &validator_bytes,
                 self.validator_index,
                 EP_PARITY_TAG,
@@ -663,21 +663,21 @@ impl KagemushaMintFinalitySignerV1 {
 /// Returns an error unless the epoch authority and unsigned vote match the
 /// frozen context exactly.
 pub fn build_kagemusha_mint_finality_seal_message_v1(
-    epoch: &KagemushaMintFinalityEpochRosterV1,
+    epoch: &KagemushaMintFinalityAuthorityGenerationV1,
     context: &HeightContext,
     vote: &Vote,
 ) -> Result<Option<KagemushaMintFinalitySealMessageV1>, KagemushaMintFinalityErrorV1> {
-    validate_kagemusha_mint_finality_epoch_v1(epoch, context)?;
+    validate_kagemusha_mint_finality_authority_v1(epoch, context)?;
     validate_unsigned_vote(context, vote)?;
-    let next_finality_epoch_id = context
+    let next_epoch_authorization = context
         .next_epoch_snapshot
         .as_ref()
-        .map(|snapshot| snapshot.kagemusha_mint_finality_epoch_id);
+        .map(|snapshot| snapshot.kagemusha_mint_finality_authorization);
     match (
         vote.execution_commitment.kagemusha_top_up_count,
         vote.execution_commitment.kagemusha_top_up_root,
     ) {
-        (0, None) if next_finality_epoch_id.is_none() => Ok(None),
+        (0, None) if next_epoch_authorization.is_none() => Ok(None),
         (0, None) => {
             if vote.phase != GlobalPhase::Commit {
                 return Ok(None);
@@ -690,7 +690,7 @@ pub fn build_kagemusha_mint_finality_seal_message_v1(
                 vote.execution_commitment,
                 root,
                 0,
-                next_finality_epoch_id,
+                next_epoch_authorization,
             )
             .map(Some)
         }
@@ -710,7 +710,7 @@ pub fn build_kagemusha_mint_finality_seal_message_v1(
                 vote.execution_commitment,
                 root,
                 count,
-                next_finality_epoch_id,
+                next_epoch_authorization,
             )?;
             Ok(Some(message))
         }
@@ -735,7 +735,7 @@ pub fn sign_kagemusha_mint_finality_seal_v1(
 ///
 /// Returns an error for any context/message/signer/key/signature substitution.
 pub fn verify_kagemusha_mint_finality_seal_share_v1(
-    epoch: &KagemushaMintFinalityEpochRosterV1,
+    epoch: &KagemushaMintFinalityAuthorityGenerationV1,
     context: &HeightContext,
     vote: &Vote,
     share: &KagemushaMintFinalitySealShareV1,
@@ -763,25 +763,25 @@ pub fn verify_kagemusha_mint_finality_seal_share_v1(
 ///
 /// Returns an error for any context/QC/message/quorum/key/signature substitution.
 pub fn verify_kagemusha_mint_finality_seal_bundle_v1(
-    epoch: &KagemushaMintFinalityEpochRosterV1,
+    epoch: &KagemushaMintFinalityAuthorityGenerationV1,
     context: &HeightContext,
     certificate: &QuorumCertificate,
     bundle: &KagemushaMintFinalitySealBundleV1,
 ) -> Result<(), KagemushaMintFinalityErrorV1> {
-    validate_kagemusha_mint_finality_epoch_v1(epoch, context)?;
+    validate_kagemusha_mint_finality_authority_v1(epoch, context)?;
     validate_commit_qc_shape(context, certificate)?;
     bundle
         .validate()
         .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
-    let next_finality_epoch_id = context
+    let next_epoch_authorization = context
         .next_epoch_snapshot
         .as_ref()
-        .map(|snapshot| snapshot.kagemusha_mint_finality_epoch_id);
+        .map(|snapshot| snapshot.kagemusha_mint_finality_authorization);
     let root = match (
         certificate.execution_commitment.kagemusha_top_up_count,
         certificate.execution_commitment.kagemusha_top_up_root,
     ) {
-        (0, None) if next_finality_epoch_id.is_some() => {
+        (0, None) if next_epoch_authorization.is_some() => {
             kagemusha_mint_finality_root_v1(kagemusha_mint_finality_empty_root_v1()?)
         }
         (count, Some(root)) if count > 0 => root,
@@ -798,7 +798,7 @@ pub fn verify_kagemusha_mint_finality_seal_bundle_v1(
         certificate.execution_commitment,
         root,
         certificate.execution_commitment.kagemusha_top_up_count,
-        next_finality_epoch_id,
+        next_epoch_authorization,
     )?;
     if bundle.message != expected
         || bundle
@@ -976,21 +976,21 @@ fn validate_commit_qc_shape(
 }
 
 fn seal_message_from_parts(
-    epoch: &KagemushaMintFinalityEpochRosterV1,
+    epoch: &KagemushaMintFinalityAuthorityGenerationV1,
     context: &HeightContext,
     subject: iroha_data_model::block::consensus_v2::BlockSubject,
     execution_commitment: ExecutionCommitment,
     root: iroha_crypto::Hash,
     count: u32,
-    next_finality_epoch_id: Option<[u8; 32]>,
+    next_epoch_authorization: Option<
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+    >,
 ) -> Result<KagemushaMintFinalitySealMessageV1, KagemushaMintFinalityErrorV1> {
     let message = KagemushaMintFinalitySealMessageV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
-        finality_epoch_id: epoch
-            .finality_epoch_id()
-            .map_err(|error| KagemushaMintFinalityErrorV1::InvalidEpochRoster(error.to_string()))?,
+        epoch_authorization: context.kagemusha_mint_finality_authorization,
         validator_count: u32::try_from(epoch.validators.len()).map_err(|_| {
-            KagemushaMintFinalityErrorV1::InvalidEpochRoster(
+            KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(
                 "validator count does not fit u32".to_owned(),
             )
         })?,
@@ -1004,7 +1004,7 @@ fn seal_message_from_parts(
         ),
         kagemusha_top_up_root: root,
         kagemusha_top_up_count: count,
-        next_finality_epoch_id,
+        next_epoch_authorization,
     };
     message
         .validate()
@@ -1013,7 +1013,7 @@ fn seal_message_from_parts(
 }
 
 fn verify_validator_seal(
-    epoch: &KagemushaMintFinalityEpochRosterV1,
+    epoch: &KagemushaMintFinalityAuthorityGenerationV1,
     message: &KagemushaMintFinalitySealMessageV1,
     seal: &KagemushaMintFinalityValidatorSealV1,
 ) -> Result<(), KagemushaMintFinalityErrorV1> {
@@ -1313,7 +1313,9 @@ mod tests {
     use iroha_data_model::{
         NetworkId,
         block::BlockHeader,
-        isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
+        isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
+        },
     };
     use iroha_model_base::peer::PeerId;
 
@@ -1491,10 +1493,10 @@ mod tests {
         );
     }
 
-    fn runtime_epoch_fixture(epoch: u64) -> KagemushaMintFinalityEpochRosterV1 {
+    fn runtime_epoch_fixture(epoch: u64) -> KagemushaMintFinalityAuthorityGenerationV1 {
         let mut validators = (1_u8..=4).map(peer).collect::<Vec<_>>();
         validators.sort();
-        KagemushaMintFinalityEpochRosterV1 {
+        KagemushaMintFinalityAuthorityGenerationV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             network_id: NetworkId::from_genesis_hash(
                 HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"runtime epoch fixture")),
@@ -1516,7 +1518,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_authority_rebinds_private_seed_to_each_exact_epoch_roster() {
+    fn runtime_authority_rebinds_private_seed_to_each_exact_authority_generation() {
         let epoch_zero = runtime_epoch_fixture(0);
         let authority = KagemushaMintFinalityLocalAuthorityV1::new(
             Arc::new(epoch_zero.clone()),
@@ -1526,17 +1528,17 @@ mod tests {
         .expect("bind epoch zero");
         let epoch_one = runtime_epoch_fixture(1);
         let signer = authority
-            .signer_for_epoch(&epoch_one)
+            .signer_for_authority(&epoch_one)
             .expect("bind authenticated next epoch");
         assert_eq!(signer.validator_index(), 1);
         assert_eq!(signer.validator, epoch_zero.validators[1].validator);
         assert_eq!(signer.epoch, 1);
         assert_eq!(
             signer.finality_epoch_id,
-            epoch_one.finality_epoch_id().expect("epoch id")
+            epoch_one.authority_id().expect("epoch id")
         );
         assert!(
-            authority.signer_for_epoch(&epoch_zero).is_ok(),
+            authority.signer_for_authority(&epoch_zero).is_ok(),
             "exact recovery context remains valid"
         );
     }
@@ -1554,10 +1556,10 @@ mod tests {
         foreign.network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign runtime epoch")),
         );
-        assert!(authority.signer_for_epoch(&foreign).is_err());
+        assert!(authority.signer_for_authority(&foreign).is_err());
         let mut wrong_epoch = epoch_zero.clone();
-        wrong_epoch.epoch = 1;
-        assert!(authority.signer_for_epoch(&wrong_epoch).is_err());
+        wrong_epoch.generation = 1;
+        assert!(authority.signer_for_authority(&wrong_epoch).is_err());
         let mut wrong_key = runtime_epoch_fixture(1);
         wrong_key.validators[1] = derive_kagemusha_mint_finality_validator_keys_v1(
             &[0xDD; 32],
@@ -1565,7 +1567,7 @@ mod tests {
             wrong_key.validators[1].validator.clone(),
         )
         .expect("wrong seed keys");
-        assert!(authority.signer_for_epoch(&wrong_key).is_err());
+        assert!(authority.signer_for_authority(&wrong_key).is_err());
         let mut absent = runtime_epoch_fixture(1);
         absent.validators[1] =
             derive_kagemusha_mint_finality_validator_keys_v1(&[0xDD; 32], 1, peer(99))
@@ -1576,7 +1578,7 @@ mod tests {
         absent
             .validate()
             .expect("valid roster without local validator");
-        assert!(authority.signer_for_epoch(&absent).is_err());
+        assert!(authority.signer_for_authority(&absent).is_err());
     }
 
     #[test]
@@ -1604,7 +1606,7 @@ mod tests {
         let network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"roster key validation")),
         );
-        let mut roster = KagemushaMintFinalityEpochRosterV1 {
+        let mut roster = KagemushaMintFinalityAuthorityGenerationV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
             epoch: 0,
@@ -1619,7 +1621,8 @@ mod tests {
     #[test]
     fn genesis_parameter_key_validation_rejects_a_noncanonical_curve_point() {
         use iroha_data_model::isi::kagemusha_v1::{
-            KagemushaMintFinalityEpochRosterTemplateV1, KagemushaMintFinalityGenesisParametersV1,
+            KagemushaMintFinalityAuthorityGenerationTemplateV1,
+            KagemushaMintFinalityGenesisParametersV1,
         };
 
         let mut validators = (1_u8..=4).map(peer).collect::<Vec<_>>();
@@ -1642,12 +1645,12 @@ mod tests {
         let epoch_zero_keys = derive_keys(0, 0xC0);
         let epoch_one_keys = derive_keys(1, 0xD0);
         let mut parameters = KagemushaMintFinalityGenesisParametersV1 {
-            epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
                 epoch: 0,
                 validators: epoch_zero_keys.clone(),
             },
-            next_epoch_roster: Some(KagemushaMintFinalityEpochRosterTemplateV1 {
+            next_authority_generation: Some(KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
                 epoch: 1,
                 validators: epoch_one_keys,
@@ -1655,14 +1658,14 @@ mod tests {
         };
         validate_kagemusha_mint_finality_genesis_parameter_keys_v1(&parameters)
             .expect("derived genesis keys are canonical points");
-        parameters.epoch_roster.validators[0].eq_proof_public_key = [0xFF; 32];
+        parameters.authority_generation.validators[0].eq_proof_public_key = [0xFF; 32];
         let error = validate_kagemusha_mint_finality_genesis_parameter_keys_v1(&parameters)
             .expect_err("non-canonical Pallas point must fail closed");
         assert!(error.to_string().contains("Pallas point"));
 
-        parameters.epoch_roster.validators = epoch_zero_keys;
+        parameters.authority_generation.validators = epoch_zero_keys;
         parameters
-            .next_epoch_roster
+            .next_authority_generation
             .as_mut()
             .expect("epoch-one fixture exists")
             .validators[0]

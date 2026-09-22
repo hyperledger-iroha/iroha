@@ -100,7 +100,7 @@ pub struct KagemushaMintAuthorityCheckpointV1 {
     /// Authenticated proof-release identifier.
     pub release_id: DigestV1,
     /// Release-pinned genesis roster identifier.
-    pub genesis_roster_id: DigestV1,
+    pub genesis_authorization_id: DigestV1,
     /// Inner Eq deferred-audit commitment to the paired authority metadata, proved in outer
     /// cells 20..21.
     ///
@@ -136,7 +136,7 @@ impl KagemushaMintAuthorityCheckpointV1 {
         if self.certificate_binding == [0; 32]
             || self.authority_head == [0; 32]
             || self.release_id == [0; 32]
-            || self.genesis_roster_id == [0; 32]
+            || self.genesis_authorization_id == [0; 32]
             || self.proof_binding_digest == [0; 32]
             || self.statement.lifecycle.release_id != self.release_id
             || self.proof.guard_eq_credential_audit != self.certificate_binding
@@ -230,7 +230,7 @@ where
 pub(super) struct KagemushaMintAuthorityPairWitnessV1<'a> {
     pub(super) step: KagemushaMintAuthorityStepV1,
     pub(super) release_id: DigestV1,
-    pub(super) genesis_roster_id: DigestV1,
+    pub(super) genesis_authorization_id: DigestV1,
     pub(super) eq_protocol_digest: DigestV1,
     pub(super) ep_protocol_digest: DigestV1,
     pub(super) eq_hash_claim_protocol_digest: DigestV1,
@@ -362,7 +362,7 @@ fn validate_pair_witness_v1(
     witness: &KagemushaMintAuthorityPairWitnessV1<'_>,
 ) -> Result<(), String> {
     if witness.release_id == [0; 32]
-        || witness.genesis_roster_id == [0; 32]
+        || witness.genesis_authorization_id == [0; 32]
         || witness.eq_protocol_digest == [0; 32]
         || witness.ep_protocol_digest == [0; 32]
         || witness.eq_protocol_digest == witness.ep_protocol_digest
@@ -407,7 +407,7 @@ pub(super) fn discover_kagemusha_mint_authority_audits_v1(
         KagemushaPastaParityV1::Ep,
         witness.step,
         witness.release_id,
-        witness.genesis_roster_id,
+        witness.genesis_authorization_id,
         witness.eq_protocol_digest,
         witness.ep_protocol_digest,
         witness.eq_hash_claim_protocol_digest,
@@ -433,7 +433,7 @@ pub(super) fn discover_kagemusha_mint_authority_audits_v1(
         KagemushaPastaParityV1::Eq,
         witness.step,
         witness.release_id,
-        witness.genesis_roster_id,
+        witness.genesis_authorization_id,
         witness.eq_protocol_digest,
         witness.ep_protocol_digest,
         witness.eq_hash_claim_protocol_digest,
@@ -475,7 +475,7 @@ pub(super) fn build_kagemusha_mint_authority_eq_v1(
             KagemushaPastaParityV1::Eq,
             witness.step,
             witness.release_id,
-            witness.genesis_roster_id,
+            witness.genesis_authorization_id,
             witness.eq_protocol_digest,
             witness.ep_protocol_digest,
             witness.eq_hash_claim_protocol_digest,
@@ -530,7 +530,7 @@ pub(super) fn build_kagemusha_mint_authority_ep_v1(
             KagemushaPastaParityV1::Ep,
             witness.step,
             witness.release_id,
-            witness.genesis_roster_id,
+            witness.genesis_authorization_id,
             witness.eq_protocol_digest,
             witness.ep_protocol_digest,
             witness.eq_hash_claim_protocol_digest,
@@ -604,7 +604,7 @@ fn build_scalar_half<C, S>(
     parity: KagemushaPastaParityV1,
     step: KagemushaMintAuthorityStepV1,
     release_id: DigestV1,
-    genesis_roster_id: DigestV1,
+    genesis_authorization_id: DigestV1,
     eq_protocol_digest: DigestV1,
     ep_protocol_digest: DigestV1,
     eq_hash_claim_protocol_digest: DigestV1,
@@ -644,7 +644,7 @@ where
     let gate = range.gate();
     let ctx = builder.main(0);
     let release = assign_digest(ctx, &range, release_id);
-    let genesis = assign_digest(ctx, &range, genesis_roster_id);
+    let genesis = assign_digest(ctx, &range, genesis_authorization_id);
     let eq_protocol = assign_digest(ctx, &range, eq_protocol_digest);
     let ep_protocol = assign_digest(ctx, &range, ep_protocol_digest);
     // These internal protocol identities have no direct state-public cells.  Put them in fixed
@@ -658,14 +658,14 @@ where
     let eq_audit = assign_digest(ctx, &range, eq_deferred_audit);
     let ep_audit = assign_digest(ctx, &range, ep_deferred_audit);
 
-    for (roster, expected) in assigned.roster_state_digest.iter().zip(genesis) {
+    for (roster, expected) in assigned.authorization_state_digest.iter().zip(genesis) {
         constrain_equal_if(ctx, gate, *roster, expected, assigned.bootstrap);
     }
     let authority: [AssignedValue<C::ScalarExt>; 2] = std::array::from_fn(|index| {
         gate.select(
             ctx,
-            Existing(assigned.next_epoch_id_digest[index]),
-            Existing(assigned.roster_state_digest[index]),
+            Existing(assigned.next_authorization_id_digest[index]),
+            Existing(assigned.authorization_state_digest[index]),
             Existing(assigned.rotate),
         )
     });
@@ -778,7 +778,7 @@ where
     constrain_authority_parent(
         &loader,
         parent_column,
-        &assigned.roster_state_digest,
+        &assigned.authorization_state_digest,
         &release,
         &genesis,
         &eq_protocol,
@@ -1187,7 +1187,7 @@ mod tests {
             statement: credit.statement,
             certificate_binding: credit.finality_certificate_binding,
             authority_head: credit.finality_authority_head,
-            genesis_roster_id: credit.finality_genesis_roster_id,
+            genesis_authorization_id: credit.finality_genesis_authorization_id,
             proof_binding_digest: credit.finality_proof_binding_digest,
             proof: credit.proof,
         };
@@ -1207,7 +1207,7 @@ mod tests {
                 2 => changed.certificate_binding = [0xB2; 32],
                 3 => changed.authority_head = [0xB3; 32],
                 4 => changed.release_id = [0xB4; 32],
-                5 => changed.genesis_roster_id = [0; 32],
+                5 => changed.genesis_authorization_id = [0; 32],
                 6 => changed.proof.eq_history[0..32].fill(0xFF),
                 7 => changed.proof.ep_history[0..32].fill(0xFF),
                 8 => {

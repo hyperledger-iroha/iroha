@@ -582,7 +582,7 @@ pub(super) fn compact_mint_credit_fixture() -> KagemushaMintCreditV1 {
         statement,
         finality_certificate_binding: proof.guard_eq_credential_audit,
         finality_authority_head: proof.guard_ep_credential_audit,
-        finality_genesis_roster_id: digest(0xAD),
+        finality_genesis_authorization_id: digest(0xAD),
         // Compact fixtures exercise native framing only; recursive verification enforces that
         // this equals the circuit-derived Eq deferred audit.
         finality_proof_binding_digest: digest(0xAE),
@@ -606,7 +606,7 @@ pub(super) fn compact_mint_request(
         proof: &credit.proof,
         finality_certificate_binding: credit.finality_certificate_binding,
         finality_authority_head: credit.finality_authority_head,
-        finality_genesis_roster_id: credit.finality_genesis_roster_id,
+        finality_genesis_authorization_id: credit.finality_genesis_authorization_id,
         finality_proof_binding_digest: credit.finality_proof_binding_digest,
         artifact_manifest_digest: credit.artifact_manifest_digest,
     }
@@ -656,7 +656,7 @@ impl KagemushaRecursiveVerifierV1 for MintFixtureVerifier {
             || request.semantic_digest != expected.semantic_digest
             || request.finality_certificate_binding != expected.finality_certificate_binding
             || request.finality_authority_head != expected.finality_authority_head
-            || request.finality_genesis_roster_id != expected.finality_genesis_roster_id
+            || request.finality_genesis_authorization_id != expected.finality_genesis_authorization_id
             || request.finality_proof_binding_digest != expected.finality_proof_binding_digest
             || request.artifact_manifest_digest != expected.artifact_manifest_digest
         {

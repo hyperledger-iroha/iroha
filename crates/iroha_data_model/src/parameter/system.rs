@@ -54,70 +54,6 @@ impl core::fmt::Display for ConsensusFingerprint {
         write!(formatter, "0x{}", hex::encode(self.0))
     }
 }
-/// Consensus-state staging record for the next KAGEMUSHA V1 Pasta roster.
-///
-/// Validators read this value from the finalized world state before building
-/// an epoch-boundary height context. The old roster then authenticates the
-/// complete next roster through the boundary context and its `CommitQC`.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1"
-)]
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    norito::codec::Encode,
-    norito::codec::Decode,
-    iroha_schema::IntoSchema,
-    norito :: derive :: JsonSerialize,
-    norito :: derive :: JsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct KagemushaMintFinalityNextEpochParameterV1 {
-    /// Full separately provisioned public roster for the next election epoch.
-    pub roster: crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
-}
-impl KagemushaMintFinalityNextEpochParameterV1 {
-    /// Sole custom-parameter identity for the next roster.
-    pub const PARAMETER_ID_STR: &'static str = "kagemusha_mint_finality_next_epoch_v1";
-
-    /// Construct the canonical custom-parameter identifier.
-    #[must_use]
-    pub fn parameter_id() -> CustomParameterId {
-        Self::PARAMETER_ID_STR
-            .parse()
-            .expect("valid KAGEMUSHA V1 next-roster parameter identifier")
-    }
-
-    /// Validate the complete public roster before it enters consensus state.
-    ///
-    /// # Errors
-    ///
-    /// Returns the roster validation error unchanged.
-    pub fn validate(&self) -> Result<(), crate::isi::kagemusha_v1::KagemushaIsiValidationErrorV1> {
-        self.roster.validate()
-    }
-
-    /// Convert the typed payload into its canonical custom-parameter carrier.
-    #[must_use]
-    pub fn into_custom_parameter(self) -> CustomParameter {
-        CustomParameter::new(Self::parameter_id(), Json::new(self))
-    }
-
-    /// Decode and validate the typed payload from its sole parameter identity.
-    #[must_use]
-    pub fn from_custom_parameter(custom: &CustomParameter) -> Option<Self> {
-        if custom.id != Self::parameter_id() {
-            return None;
-        }
-        let value = norito::json::from_str::<Self>(custom.payload().get()).ok()?;
-        value.validate().ok()?;
-        Some(value)
-    }
-}
-
 impl JsonSerialize for ConsensusFingerprint {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(&format!("0x{}", hex::encode(self.0)), out);
@@ -387,6 +323,11 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     #[norito(deny_unknown_fields)]
     pub struct SumeragiNposParameters {
+        /// Canonical XOR asset authenticated by genesis for this network.
+        ///
+        /// This identity is immutable after installation; aliases and node-local
+        /// selectors cannot introduce another staking currency.
+        pub xor_asset_definition_id: crate::asset::AssetDefinitionId,
         /// Deterministic epoch seed used for PRF-based leader and validator selection.
         pub epoch_seed: [u8; 32],
         /// Exact bounded `3f + 1` ceiling for the next epoch committee.
@@ -509,6 +450,14 @@ mod model {
         /// Returns a stable diagnostic when a seed, bond, percentage,
         /// or reconfiguration bound is invalid.
         pub fn validate(&self) -> Result<(), &'static str> {
+            let synthetic_stake = crate::asset::AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::parse_fully_qualified("nexus.universal")
+                    .expect("fixed rejected synthetic staking domain"),
+                "xor".parse().expect("fixed rejected synthetic staking name"),
+            );
+            if self.xor_asset_definition_id == synthetic_stake {
+                return Err("NPoS must use the network's canonical XOR asset, not synthetic nexus.universal/xor");
+            }
             if self.epoch_seed == [0; 32] {
                 return Err("epoch_seed must not be all zero");
             }
@@ -555,6 +504,9 @@ mod model {
         fn default() -> Self {
             use defaults::sumeragi::npos::*;
             Self {
+                xor_asset_definition_id: crate::asset::AssetDefinitionId::parse_address_literal(
+                    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+                ).expect("canonical Taira XOR identity; public Nexus genesis supplies its own identity"),
                 epoch_seed: [0xA5; 32],
                 max_validators: max_validators(),
                 min_self_bond: min_self_bond(),
@@ -821,6 +773,7 @@ impl core::fmt::Display for Parameter {
 #[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct SumeragiNposParametersJson {
+    xor_asset_definition_id: crate::asset::AssetDefinitionId,
     epoch_seed: [u8; 32],
     max_validators: u32,
     min_self_bond: Quantity,
@@ -838,6 +791,7 @@ struct SumeragiNposParametersJson {
 impl From<SumeragiNposParameters> for SumeragiNposParametersJson {
     fn from(value: SumeragiNposParameters) -> Self {
         Self {
+            xor_asset_definition_id: value.xor_asset_definition_id,
             epoch_seed: value.epoch_seed,
             max_validators: value.max_validators,
             min_self_bond: value.min_self_bond,
@@ -857,6 +811,7 @@ impl From<SumeragiNposParameters> for SumeragiNposParametersJson {
 impl From<SumeragiNposParametersJson> for SumeragiNposParameters {
     fn from(value: SumeragiNposParametersJson) -> Self {
         Self {
+            xor_asset_definition_id: value.xor_asset_definition_id,
             epoch_seed: value.epoch_seed,
             max_validators: value.max_validators,
             min_self_bond: value.min_self_bond,
@@ -884,6 +839,7 @@ impl JsonSerialize for SumeragiNposParameters {
         out.begin_container()?;
         out.push('{')?;
         let mut first = true;
+        json_support::write_field_to(out, &mut first, "xor_asset_definition_id", &self.xor_asset_definition_id)?;
         json_support::write_field_to(out, &mut first, "epoch_seed", &self.epoch_seed)?;
         json_support::write_field_to(out, &mut first, "max_validators", &self.max_validators)?;
         json_support::write_field_to(out, &mut first, "min_self_bond", &self.min_self_bond)?;

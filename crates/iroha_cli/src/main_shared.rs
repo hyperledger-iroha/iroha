@@ -897,7 +897,7 @@ mod app {
         /// Nexus helpers (lanes, governance)
         #[command(subcommand)]
         Nexus(crate::nexus::Command),
-        /// Public-lane staking helpers (register/activate/exit)
+        /// Public-lane validator admission, staking, withdrawals, and rewards
         #[command(subcommand)]
         Staking(crate::staking::Command),
         /// Subscription plan and billing helpers

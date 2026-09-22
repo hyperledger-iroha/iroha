@@ -1587,3 +1587,9 @@ record!(
     crate::isi::zk::VerifyProof,
     "iroha_data_model::isi::zk::VerifyProof"
 );
+
+record!(
+    public_lane_candidate,
+    crate::isi::staking::RegisterPublicLaneCandidate,
+    "iroha_data_model::isi::staking::RegisterPublicLaneCandidate"
+);

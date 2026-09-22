@@ -1764,6 +1764,27 @@ pub mod isi {
                 )
                 .into());
             }
+            if state_transaction
+                .world
+                .public_lane_stake_custody
+                .iter()
+                .any(|((_, validator), (asset, _))| {
+                    validator == &account_id || asset.account() == &account_id
+                })
+                || state_transaction
+                    .world
+                    .public_lane_stake_reserves
+                    .iter()
+                    .any(|(asset, _)| asset.account() == &account_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is referenced by pinned public-lane staking custody; release all held stake first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if let Some(((lane_id, validator), _)) = state_transaction
                 .world
                 .public_lane_validators
@@ -2693,6 +2714,25 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister asset definition {asset_definition_id}: it is referenced by committed settlement receipt {settlement_id}"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if state_transaction
+                .world
+                .public_lane_stake_custody
+                .iter()
+                .any(|(_, (asset, _))| asset.definition() == &asset_definition_id)
+                || state_transaction
+                    .world
+                    .public_lane_stake_reserves
+                    .iter()
+                    .any(|(asset, _)| asset.definition() == &asset_definition_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it is referenced by pinned public-lane staking custody; release all held stake first"
                     )
                     .into(),
                 )
@@ -8521,6 +8561,48 @@ mod tests {
         );
     }
     #[test]
+    fn unregister_account_preserves_pinned_staking_custody_after_config_change() {
+        with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
+            tx.nexus.staking.stake_escrow_account_id = authority.to_string();
+            let asset = AssetId::new(
+                AssetDefinitionId::derive_from_components(domain_id, "stake".parse().unwrap()),
+                account_id.clone(),
+            );
+            let key = (LaneId::SINGLE, authority.clone());
+            tx.world
+                .public_lane_stake_custody
+                .insert(key.clone(), (asset.clone(), Quantity::one()));
+            for has_custody_row in [true, false] {
+                let reserves_before = tx.world.public_lane_stake_reserves.get(&asset).cloned();
+                let error = Unregister::account(account_id.clone())
+                    .execute(&authority, tx)
+                    .expect_err("pinned escrow owner must remain registered");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("pinned public-lane staking custody"),
+                    "{error}"
+                );
+                assert!(tx.world.accounts.get(&account_id).is_some());
+                assert_eq!(
+                    tx.world.public_lane_stake_reserves.get(&asset),
+                    reserves_before.as_ref()
+                );
+                if has_custody_row {
+                    tx.world.public_lane_stake_custody.remove(key.clone());
+                    tx.world
+                        .public_lane_stake_reserves
+                        .insert(asset.clone(), Quantity::one());
+                }
+            }
+            tx.world.public_lane_stake_reserves.remove(asset);
+            Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect("former escrow owner can be removed after liability release");
+            assert!(tx.world.accounts.get(&account_id).is_none());
+        });
+    }
+    #[test]
     fn unregister_account_rejects_when_account_has_public_lane_validator_state() {
         assert_account_unregister_guard(
             |tx, _domain_id, _authority, account_id| {
@@ -11143,6 +11225,61 @@ mod tests {
                         .get(&asset_definition_id)
                         .is_some(),
                     "asset definition should remain after rejected unregister"
+                );
+            },
+        );
+    }
+    #[test]
+    fn unregister_asset_definition_preserves_pinned_staking_custody_after_config_change() {
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                tx.nexus.staking.stake_asset_id = AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("replacement", "universal").unwrap(),
+                    "stake".parse().unwrap(),
+                )
+                .to_string();
+                let asset = AssetId::new(asset_definition_id.clone(), authority.clone());
+                let key = (LaneId::SINGLE, authority.clone());
+                tx.world
+                    .public_lane_stake_custody
+                    .insert(key.clone(), (asset.clone(), Quantity::one()));
+                for has_custody_row in [true, false] {
+                    let reserves_before = tx.world.public_lane_stake_reserves.get(&asset).cloned();
+                    let error = Unregister::asset_definition(asset_definition_id.clone())
+                        .execute(&authority, tx)
+                        .expect_err("pinned stake definition must remain registered");
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("pinned public-lane staking custody"),
+                        "{error}"
+                    );
+                    assert!(
+                        tx.world
+                            .asset_definitions
+                            .get(&asset_definition_id)
+                            .is_some()
+                    );
+                    assert_eq!(
+                        tx.world.public_lane_stake_reserves.get(&asset),
+                        reserves_before.as_ref()
+                    );
+                    if has_custody_row {
+                        tx.world.public_lane_stake_custody.remove(key.clone());
+                        tx.world
+                            .public_lane_stake_reserves
+                            .insert(asset.clone(), Quantity::one());
+                    }
+                }
+                tx.world.public_lane_stake_reserves.remove(asset);
+                Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect("former stake definition can be removed after liability release");
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_none()
                 );
             },
         );

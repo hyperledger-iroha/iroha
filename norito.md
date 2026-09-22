@@ -470,6 +470,17 @@ built-in type under an alternate ID. New built-ins must add a unique identifier
 and update the corresponding golden inventory; an existing V1 identifier must
 not be renamed or reused for a different layout.
 
+Public-lane candidate admission uses the explicit instruction wire ID
+`iroha.staking.register_public_lane_candidate`. Its canonical fields are the
+registration, exact activation height, BLS proof of possession, and typed peer
+signature. The peer authorization includes a fixed protocol domain and the
+genesis-derived network identity. The current rebind layout carries an explicit
+optional peer-consent signature, whose message binds network, lane, account,
+activation height, previous peer, and replacement peer. Both optional-signature
+tags use the ordinary advertised Norito layout; there is no retired-layout
+decoder. Generated-record frame fixtures cover candidate admission and both
+rebind consent forms.
+
 The only supported SDK/node compatibility handshake is
 `DATA_MODEL_VERSION = 4`. Validation-fee policy and payout-lifecycle proposal
 preimages bind the canonical `proposal_operator`; policy proposals also bind

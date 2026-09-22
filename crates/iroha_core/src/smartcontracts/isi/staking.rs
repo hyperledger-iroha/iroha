@@ -14,17 +14,22 @@ use crate::{
 use iroha_data_model::{
     asset::{Asset, AssetDefinitionId, AssetId},
     block::consensus::EvidencePenaltyStatus,
+    consensus::ConsensusKeyRole,
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError, MathError},
         staking::{
             BondPublicLaneStake, CancelConsensusEvidencePenalty, ClaimPublicLaneRewards,
-            FinalizePublicLaneUnbond, RebindPublicLaneValidatorPeer, RecordPublicLaneRewards,
-            RegisterPublicLaneValidator, SchedulePublicLaneUnbond, SlashPublicLaneValidator,
+            FinalizePublicLaneUnbond, PublicLaneCandidateAuthorization,
+            PublicLanePeerBindingAuthorization, RebindPublicLaneValidatorPeer,
+            RecordPublicLaneRewards, RegisterPublicLaneCandidate, RegisterPublicLaneValidator,
+            SchedulePublicLaneUnbond, SlashPublicLaneValidator,
         },
     },
     nexus::{
         PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
         PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+        PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+        public_lane_unbonding_commitment,
     },
     prelude::AccountId,
 };
@@ -33,6 +38,17 @@ use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use std::{collections::BTreeMap, time::Duration};
+#[path = "staking_effects.rs"]
+mod effects;
+pub(in crate::smartcontracts::isi) use effects::VerifiedStakingRewardPayouts;
+#[path = "staking_rewards.rs"]
+mod rewards;
+pub(crate) use rewards::ensure_public_lane_reserves_after_debit;
+#[path = "staking_custody.rs"]
+mod custody;
+pub(crate) use custody::{
+    prepare_stake_custody_credit, prepare_stake_custody_debit, retained_stake_custody_asset,
+};
 /// Canonical storage key for one public-lane stake share.
 pub(crate) type PublicLaneStakeShareKey = (LaneId, AccountId, AccountId);
 
@@ -373,6 +389,203 @@ pub(crate) fn validator_election_eligible_at_height(
     // sole authority for exact-height election and validation.
     validator_tenure_contains_height(record, height).unwrap_or(false)
 }
+
+/// Normalize exact-height tenures to their future election-height union.
+fn normalized_future_election_intervals(
+    intervals: impl IntoIterator<Item = (u64, Option<u64>)>,
+    first_election: u64,
+    epoch_length: u64,
+) -> Vec<(u128, u128)> {
+    let round = |height: u64| {
+        let height = u128::from(height.max(first_election));
+        let length = u128::from(epoch_length);
+        height + (length - (height - 1) % length) % length
+    };
+    let terminal = u128::from(u64::MAX) + 1;
+    let mut intervals: Vec<_> = intervals
+        .into_iter()
+        .filter_map(|(start, end)| {
+            let start = round(start);
+            let end = end.map_or(terminal, round).min(terminal);
+            (start < end).then_some((start, end))
+        })
+        .collect();
+    intervals.sort_unstable();
+    let mut merged: Vec<(u128, u128)> = Vec::new();
+    for (start, end) in intervals {
+        if let Some(last) = merged.last_mut()
+            && start <= last.1
+        {
+            last.1 = last.1.max(end);
+        } else {
+            merged.push((start, end));
+        }
+    }
+    merged
+}
+
+/// Keep the seed-independent global election pool unchanged until committee
+/// changes can atomically prepare their mint-finality and beacon epoch keys.
+#[allow(clippy::too_many_lines)]
+fn ensure_global_candidate_pool_preserved(
+    state_transaction: &StateTransaction<'_, '_>,
+    replacement: &PublicLaneValidatorRecord,
+    operation: &str,
+) -> Result<(), Error> {
+    if state_transaction._curr_block.is_genesis() || state_transaction.commit_topology.is_empty() {
+        return Ok(());
+    }
+    let minimum = &state_transaction.nexus.staking.min_validator_stake;
+    let existing = state_transaction
+        .world
+        .public_lane_validators
+        .get(&(replacement.lane_id, replacement.validator.clone()));
+    // Amount and status changes that preserve these source predicates cannot
+    // change any election, including one after a later key/tenure boundary.
+    if existing.is_some_and(|record| {
+        record.peer_id == replacement.peer_id
+            && record.activation_height == replacement.activation_height
+            && record.deactivation_height == replacement.deactivation_height
+            && meets_min_stake(&record.self_stake, minimum).ok()
+                == meets_min_stake(&replacement.self_stake, minimum).ok()
+    }) {
+        return Ok(());
+    }
+    let topology: std::collections::BTreeSet<_> =
+        state_transaction.commit_topology.iter().cloned().collect();
+    let mut peers = vec![replacement.peer_id.clone()];
+    if let Some(record) = existing {
+        peers.push(record.peer_id.clone());
+    }
+    peers.sort();
+    peers.dedup();
+    let future_global_key = |peer: &PeerId, height: u64| {
+        state_transaction
+            .world
+            .consensus_keys
+            .iter()
+            .any(|(_, key)| {
+                key.id.role == ConsensusKeyRole::Validator
+                    && key.public_key == *peer.public_key()
+                    && key.is_live_at(height.max(key.activation_height), 0, 0)
+            })
+    };
+    if peers.iter().all(|peer| {
+        !topology.contains(peer) && !future_global_key(peer, state_transaction.block_height())
+    }) {
+        return Ok(());
+    }
+    let first_election = scheduled_validator_deactivation_height(state_transaction)?;
+    let epoch_length = state_transaction
+        .world
+        .sumeragi_npos_parameters()
+        .ok_or_else(|| {
+            Error::InvariantViolation(
+                "global candidate eligibility requires committed NPoS parameters".into(),
+            )
+        })?
+        .epoch_length_blocks
+        .get();
+    let refusal = || {
+        Error::InvariantViolation(
+        format!("{operation} changes global election eligibility; a prepared epoch key transition is required").into(),
+    )
+    };
+    let rows: Vec<_> = state_transaction
+        .world
+        .public_lane_validators
+        .iter()
+        .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
+        .map(|(_, record)| record)
+        .collect();
+    let projected: Vec<_> = rows
+        .iter()
+        .copied()
+        .filter(|record| {
+            record.lane_id != replacement.lane_id || record.validator != replacement.validator
+        })
+        .chain(core::iter::once(replacement))
+        .collect();
+    let active_lanes = crate::state::nexus_active_lane_ids(&state_transaction.nexus);
+    for peer in peers {
+        if !future_global_key(&peer, first_election) {
+            continue;
+        }
+        if !topology.contains(&peer) {
+            return Err(refusal());
+        }
+        let intervals = |records: &[&PublicLaneValidatorRecord]| {
+            normalized_future_election_intervals(
+                records
+                    .iter()
+                    .filter(|record| {
+                        record.peer_id == peer
+                            && active_lanes.contains(&record.lane_id)
+                            && matches!(
+                                state_transaction.nexus.staking.validator_mode(
+                                    record.lane_id,
+                                    &state_transaction.nexus.lane_catalog
+                                ),
+                                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+                            )
+                            && meets_min_stake(&record.self_stake, minimum).unwrap_or(false)
+                    })
+                    .map(|record| (record.activation_height, record.deactivation_height)),
+                first_election,
+                epoch_length,
+            )
+        };
+        if intervals(&rows) != intervals(&projected) {
+            return Err(refusal());
+        }
+    }
+    // The global source also filters by the lanes occupied by current topology
+    // peers. Preserve those future unions even when the affected peer remains
+    // covered elsewhere; otherwise a later lane-filter change can expose a
+    // previously hidden candidate. Sorting intervals keeps work O(R log R + K),
+    // with at most two peers/two lanes, not a global scan per future boundary.
+    let mut lanes = vec![replacement.lane_id];
+    if let Some(record) = existing {
+        lanes.push(record.lane_id);
+    }
+    lanes.sort();
+    lanes.dedup();
+    for lane in lanes {
+        if !active_lanes.contains(&lane) {
+            continue;
+        }
+        let intervals = |records: &[&PublicLaneValidatorRecord]| {
+            normalized_future_election_intervals(
+                records
+                    .iter()
+                    .filter(|record| record.lane_id == lane && topology.contains(&record.peer_id))
+                    .map(|record| (record.activation_height, record.deactivation_height)),
+                first_election,
+                epoch_length,
+            )
+        };
+        if intervals(&rows) != intervals(&projected) {
+            return Err(refusal());
+        }
+    }
+    let candidates = |replacement| {
+        crate::state::epoch_validator_candidate_peer_ids_from_world(
+            &state_transaction.world,
+            state_transaction.commit_topology.iter().cloned(),
+            first_election,
+            &state_transaction.nexus,
+            replacement,
+        )
+    };
+    if candidates(None) != candidates(Some(replacement)) {
+        return Err(refusal());
+    }
+    // TODO: replace this fail-closed gate with authenticated prepared global
+    // committee transitions. Evidence-owned slashing stays unconditional; its
+    // automatic roster recovery remains a separate protocol requirement.
+    Ok(())
+}
+
 fn ensure_validator_deactivation_reached(
     record: &PublicLaneValidatorRecord,
     block_height: u64,
@@ -517,219 +730,448 @@ fn ensure_public_lane_stake_share_matches_key(
         ))
     }
 }
+struct CandidateAdmission {
+    activation_height: u64,
+    prepared_peer: Option<iroha_data_model::consensus::ConsensusKeyRecord>,
+}
 impl Execute for RegisterPublicLaneValidator {
-    #[iroha_logger::log(
-        name = "register_public_lane_validator",
-        skip_all,
-        fields(lane_id = %self.lane_id, validator = %self.validator)
-    )]
+    #[iroha_logger::log(name = "register_public_lane_validator", skip_all)]
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        register_public_lane_validator(self, authority, state_transaction, None)
+    }
+}
+impl Execute for RegisterPublicLaneCandidate {
+    #[iroha_logger::log(name = "register_public_lane_candidate", skip_all)]
     #[allow(clippy::too_many_lines)]
     fn execute(
         self,
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        let registration = self.registration;
         ensure_lane_allows_staking(
             state_transaction,
-            self.lane_id,
-            "register_public_lane_validator",
+            registration.lane_id,
+            "register_public_lane_candidate",
         )?;
         ensure_canonical_staking_owner(
             state_transaction,
-            self.lane_id,
-            "register_public_lane_validator",
+            registration.lane_id,
+            "register_public_lane_candidate",
         )?;
-        let is_genesis_bootstrap =
-            state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty();
-        if !is_genesis_bootstrap {
-            ensure_validator_authority(
-                authority,
-                &self.validator,
-                "register_public_lane_validator",
-            )?;
-        }
+        ensure_validator_authority(
+            authority,
+            &registration.validator,
+            "register_public_lane_candidate",
+        )?;
         ensure_registration_uses_validator_stake(
-            &self.validator,
-            &self.stake_account,
-            "register_public_lane_validator",
+            &registration.validator,
+            &registration.stake_account,
+            "register_public_lane_candidate",
         )?;
-        finalize_validator_lifecycle(state_transaction)?;
-        // Resolve the exact election boundary before validating the peer or
-        // moving funds. An open-ended validator tenure requires a validator
-        // key that remains live from this boundary onward.
-        let activation_height = scheduled_validator_eligibility_height(state_transaction)?;
-        ensure_validator_peer_registered(
-            state_transaction,
-            self.lane_id,
-            &self.validator,
-            &self.peer_id,
-            activation_height,
-        )?;
-        ensure_positive_amount(&self.initial_stake, "initial stake")?;
-        let meets_min = meets_min_stake(
-            &self.initial_stake,
-            &state_transaction.nexus.staking.min_validator_stake,
-        )?;
-        if !meets_min {
+        if registration.lane_id == LaneId::SINGLE
+            && !state_transaction
+                .commit_topology
+                .iter()
+                .any(|peer| peer == &registration.peer_id)
+        {
             return Err(Error::InvariantViolation(
-                "initial stake below minimum configured amount".into(),
+                "fresh global candidate requires a prepared epoch key transition before admission"
+                    .into(),
             ));
         }
-        let stake_ctx = stake_context(
-            &state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            &state_transaction.nexus.staking,
-            &self.stake_account,
-            None,
-            state_transaction.block_unix_timestamp_ms(),
-        )?;
-        assert_stake_amount_matches_spec(
-            state_transaction,
-            &stake_ctx.asset_definition,
-            &self.initial_stake,
-        )?;
-        let validator_key = validator_storage_key(self.lane_id, &self.validator);
-        let replacing_exited = if let Some(existing) = state_transaction
+        let parameters = state_transaction
             .world
-            .public_lane_validators
-            .get(&validator_key)
-        {
-            ensure_public_lane_validator_record_matches_key(&validator_key, existing)?;
-            if !matches!(existing.status, PublicLaneValidatorStatus::Exited) {
+            .sumeragi_npos_parameters()
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "candidate admission requires committed NPoS election parameters".into(),
+                )
+            })?;
+        parameters.validate().map_err(|error| {
+            Error::InvariantViolation(
+                format!(
+                    "candidate admission requires a valid committed NPoS election schedule: {error}"
+                )
+                .into(),
+            )
+        })?;
+        let block_height = state_transaction.block_height();
+        let registered = state_transaction
+            .world
+            .peers
+            .iter()
+            .any(|peer| peer == &registration.peer_id);
+        let key_activation_height = if registered || state_transaction._curr_block.is_genesis() {
+            block_height
+        } else {
+            block_height
+                .checked_add(
+                    state_transaction
+                        .world
+                        .parameters
+                        .get()
+                        .sumeragi
+                        .key_activation_lead_blocks,
+                )
+                .ok_or_else(|| {
+                    Error::InvariantViolation("candidate key activation height overflowed".into())
+                })?
+        };
+        // Consent names one exact future tenure. It cannot authorize admission
+        // after that election boundary, including after exit and custody release.
+        let activation_height = next_unfrozen_election_height(
+            key_activation_height,
+            parameters.epoch_length_blocks.get(),
+        )?;
+        if self.activation_height != activation_height {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "candidate consent targets activation height {}, expected {activation_height}",
+                    self.activation_height
+                )
+                .into(),
+            ));
+        }
+        iroha_crypto::bls_normal_pop_verify(
+            registration.peer_id.public_key(),
+            &self.proof_of_possession,
+        )
+        .map_err(|_| {
+            Error::InvariantViolation(
+                "candidate has an invalid BLS-normal proof of possession".into(),
+            )
+        })?;
+        let authorization = PublicLaneCandidateAuthorization::new(
+            *state_transaction.network_id(),
+            registration.clone(),
+            activation_height,
+        );
+        self.peer_signature
+            .verify(registration.peer_id.public_key(), &authorization)
+            .map_err(|_| {
+                Error::InvariantViolation(
+                    "candidate peer signature does not authorize this network and registration"
+                        .into(),
+                )
+            })?;
+        let prepared_peer = if registered {
+            // A consented pre-registered identity keeps its exact existing key
+            // lifecycle and must already be live at admission.
+            ensure_validator_peer_registered(
+                state_transaction,
+                registration.lane_id,
+                &registration.validator,
+                &registration.peer_id,
+                activation_height,
+            )?;
+            let allowed_roles = consensus_key_roles_for_lane(registration.lane_id);
+            let exact_live_pop =
+                state_transaction
+                    .world
+                    .consensus_keys()
+                    .iter()
+                    .any(|(id, record)| {
+                        record.id == *id
+                            && allowed_roles.contains(&id.role)
+                            && record.public_key == *registration.peer_id.public_key()
+                            && record.pop.as_deref() == Some(self.proof_of_possession.as_slice())
+                            && record.expiry_height.is_none()
+                            && record.is_live_at(block_height, 0, 0)
+                            && record.is_live_at(activation_height, 0, 0)
+                    });
+            if !exact_live_pop {
                 return Err(Error::InvariantViolation(
-                    "validator already registered for lane".into(),
+                    "candidate proof of possession must match its live consensus key".into(),
                 ));
             }
-            ensure_validator_deactivation_reached(
-                existing,
-                state_transaction.block_height(),
-                "register_public_lane_validator",
-            )?;
-            ensure_no_pending_evidence_for_validator(
+            None
+        } else {
+            let role = if registration.lane_id == LaneId::SINGLE {
+                iroha_data_model::consensus::ConsensusKeyRole::Validator
+            } else {
+                iroha_data_model::consensus::ConsensusKeyRole::Committee
+            };
+            super::world::isi::prepare_peer_identity_with_pop(
+                registration.peer_id.clone(),
+                self.proof_of_possession,
+                Some(key_activation_height),
+                None,
+                role,
+                "RegisterPublicLaneCandidate",
                 state_transaction,
-                existing,
-                "register_public_lane_validator",
-            )?;
-            if !existing.total_stake.is_zero()
-                || !existing.self_stake.is_zero()
-                || state_transaction.world.public_lane_stake_shares.iter().any(
-                    |((lane, validator, _), _)| {
-                        *lane == self.lane_id && validator == &self.validator
-                    },
-                )
-            {
-                return Err(Error::InvariantViolation(
+            )?
+        };
+        // Peer preparation is read-only. Publish its identity only after the
+        // stake transfer succeeds, even if a host catches an instruction error.
+        register_public_lane_validator(
+            registration,
+            authority,
+            state_transaction,
+            Some(CandidateAdmission {
+                activation_height,
+                prepared_peer,
+            }),
+        )
+    }
+}
+#[allow(clippy::too_many_lines)]
+fn register_public_lane_validator(
+    registration: RegisterPublicLaneValidator,
+    authority: &AccountId,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    candidate_admission: Option<CandidateAdmission>,
+) -> Result<(), Error> {
+    ensure_lane_allows_staking(
+        state_transaction,
+        registration.lane_id,
+        "register_public_lane_validator",
+    )?;
+    ensure_canonical_staking_owner(
+        state_transaction,
+        registration.lane_id,
+        "register_public_lane_validator",
+    )?;
+    let is_genesis_bootstrap =
+        state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty();
+    if !is_genesis_bootstrap {
+        ensure_validator_authority(
+            authority,
+            &registration.validator,
+            "register_public_lane_validator",
+        )?;
+    }
+    ensure_registration_uses_validator_stake(
+        &registration.validator,
+        &registration.stake_account,
+        "register_public_lane_validator",
+    )?;
+    finalize_validator_lifecycle(state_transaction)?;
+    // Resolve the exact election boundary before validating the peer or
+    // moving funds. An open-ended validator tenure requires a validator
+    // key that remains live from this boundary onward.
+    let activation_height = match &candidate_admission {
+        Some(candidate) => candidate.activation_height,
+        None => scheduled_validator_eligibility_height(state_transaction)?,
+    };
+    if let Some(prepared) = candidate_admission
+        .as_ref()
+        .and_then(|candidate| candidate.prepared_peer.as_ref())
+    {
+        if prepared.public_key != *registration.peer_id.public_key()
+            || !consensus_key_roles_for_lane(registration.lane_id).contains(&prepared.id.role)
+            || prepared.expiry_height.is_some()
+            || !prepared.is_live_at(activation_height, 0, 0)
+        {
+            return Err(Error::InvariantViolation(
+                "prepared candidate peer does not cover its exact election tenure".into(),
+            ));
+        }
+    } else {
+        ensure_validator_peer_registered(
+            state_transaction,
+            registration.lane_id,
+            &registration.validator,
+            &registration.peer_id,
+            activation_height,
+        )?;
+    }
+    ensure_positive_amount(&registration.initial_stake, "initial stake")?;
+    let meets_min = meets_min_stake(
+        &registration.initial_stake,
+        &state_transaction.nexus.staking.min_validator_stake,
+    )?;
+    if !meets_min {
+        return Err(Error::InvariantViolation(
+            "initial stake below minimum configured amount".into(),
+        ));
+    }
+    let stake_ctx = stake_context(
+        &state_transaction.world,
+        &state_transaction.nexus.dataspace_catalog,
+        &state_transaction.nexus.staking,
+        &registration.stake_account,
+        state_transaction.block_unix_timestamp_ms(),
+    )?;
+    assert_stake_amount_matches_spec(
+        state_transaction,
+        &stake_ctx.asset_definition,
+        &registration.initial_stake,
+    )?;
+    let validator_key = validator_storage_key(registration.lane_id, &registration.validator);
+    let replacing_exited = if let Some(existing) = state_transaction
+        .world
+        .public_lane_validators
+        .get(&validator_key)
+    {
+        ensure_public_lane_validator_record_matches_key(&validator_key, existing)?;
+        if !matches!(existing.status, PublicLaneValidatorStatus::Exited) {
+            return Err(Error::InvariantViolation(
+                "validator already registered for lane".into(),
+            ));
+        }
+        ensure_validator_deactivation_reached(
+            existing,
+            state_transaction.block_height(),
+            "register_public_lane_validator",
+        )?;
+        ensure_no_pending_evidence_for_validator(
+            state_transaction,
+            existing,
+            "register_public_lane_validator",
+        )?;
+        if !existing.total_stake.is_zero()
+            || !existing.self_stake.is_zero()
+            || state_transaction.world.public_lane_stake_shares.iter().any(
+                |((lane, validator, _), _)| {
+                    *lane == registration.lane_id && validator == &registration.validator
+                },
+            )
+        {
+            return Err(Error::InvariantViolation(
                     "exited validator retains slashable stake custody; finalize every unbond before re-registration"
                         .into(),
                 ));
-            }
-            true
-        } else {
-            if state_transaction.world.public_lane_stake_shares.iter().any(
-                |((lane, validator, _), _)| *lane == self.lane_id && validator == &self.validator,
-            ) {
-                return Err(Error::InvariantViolation(
-                    "validator has orphaned public-lane stake shares".into(),
-                ));
-            }
-            false
-        };
-        let existing = state_transaction
-            .world
-            .public_lane_validators
-            .iter()
-            .filter(|(key, record)| {
-                public_lane_validator_record_matches_key(key, record)
-                    && key.0 == self.lane_id
-                    && (!replacing_exited || key.1 != self.validator)
-            })
-            .count();
-        let max_validators = usize::try_from(state_transaction.nexus.staking.max_validators.get())
-            .unwrap_or(usize::MAX);
-        if existing >= max_validators {
+        }
+        true
+    } else {
+        if state_transaction.world.public_lane_stake_shares.iter().any(
+            |((lane, validator, _), _)| {
+                *lane == registration.lane_id && validator == &registration.validator
+            },
+        ) {
             return Err(Error::InvariantViolation(
-                "lane reached maximum validator capacity".into(),
+                "validator has orphaned public-lane stake shares".into(),
             ));
         }
-        if state_transaction
-            .world
-            .public_lane_validators
-            .iter()
-            .any(|(key, record)| {
-                public_lane_validator_record_matches_key(key, record)
-                    && key.0 == self.lane_id
-                    && key.1 != self.validator
-                    && record.peer_id == self.peer_id
-            })
-        {
-            return Err(Error::InvariantViolation(
-                "validator peer is already retained for lane".into(),
-            ));
-        }
-        let initial_stake = self.initial_stake.clone();
-        crate::smartcontracts::isi::asset::isi::execute_staking_bond_transfer(
-            state_transaction,
-            authority,
-            self.lane_id,
-            &self.validator,
-            &self.stake_account,
-            is_genesis_bootstrap,
-            stake_ctx.staker_asset.clone(),
-            stake_ctx.escrow_asset.clone(),
-            initial_stake.clone(),
-        )?;
-        if replacing_exited {
-            let removal_key = validator_key.clone();
-            state_transaction
-                .world
-                .public_lane_validators
-                .remove(removal_key);
-        }
-        // The exact height is assigned while scheduling, not when promotion
-        // happens. Boundary-block transactions cannot alter the already-frozen
-        // successor roster, so they target the following election instead.
-        let pending_status = PublicLaneValidatorStatus::PendingActivation(activation_height);
-        let record = PublicLaneValidatorRecord {
-            lane_id: self.lane_id,
-            validator: self.validator.clone(),
-            peer_id: self.peer_id.clone(),
-            stake_account: self.stake_account.clone(),
-            total_stake: initial_stake.clone(),
-            self_stake: initial_stake.clone(),
-            metadata: self.metadata.clone(),
-            status: pending_status.clone(),
-            activation_height,
-            deactivation_height: None,
-            last_reward_epoch: None,
-        };
+        false
+    };
+    let existing = state_transaction
+        .world
+        .public_lane_validators
+        .iter()
+        .filter(|(key, record)| {
+            public_lane_validator_record_matches_key(key, record)
+                && key.0 == registration.lane_id
+                && (!replacing_exited || key.1 != registration.validator)
+        })
+        .count();
+    let max_validators =
+        usize::try_from(state_transaction.nexus.staking.max_validators.get()).unwrap_or(usize::MAX);
+    if existing >= max_validators {
+        return Err(Error::InvariantViolation(
+            "lane reached maximum validator capacity".into(),
+        ));
+    }
+    if state_transaction
+        .world
+        .public_lane_validators
+        .iter()
+        .any(|(key, record)| {
+            public_lane_validator_record_matches_key(key, record)
+                && key.0 == registration.lane_id
+                && key.1 != registration.validator
+                && record.peer_id == registration.peer_id
+        })
+    {
+        return Err(Error::InvariantViolation(
+            "validator peer is already retained for lane".into(),
+        ));
+    }
+    if candidate_admission.is_none() && !is_genesis_bootstrap {
+        ensure_peer_binding_authority(state_transaction, authority, &registration.peer_id)?;
+    }
+    let initial_stake = registration.initial_stake.clone();
+    // The exact height is assigned while scheduling, not when promotion
+    // happens. Boundary-block transactions cannot alter the already-frozen
+    // successor roster, so they target the following election instead.
+    let pending_status = PublicLaneValidatorStatus::PendingActivation(activation_height);
+    let record = PublicLaneValidatorRecord {
+        lane_id: registration.lane_id,
+        validator: registration.validator.clone(),
+        peer_id: registration.peer_id.clone(),
+        stake_account: registration.stake_account.clone(),
+        total_stake: initial_stake.clone(),
+        self_stake: initial_stake.clone(),
+        metadata: registration.metadata.clone(),
+        status: pending_status.clone(),
+        activation_height,
+        deactivation_height: None,
+        last_reward_epoch: None,
+    };
+    ensure_global_candidate_pool_preserved(
+        state_transaction,
+        &record,
+        "register_public_lane_validator",
+    )?;
+    effects::verify_transfer_plan(
+        state_transaction,
+        &registration.monetary_plan,
+        &stake_ctx.staker_asset,
+        &stake_ctx.escrow_asset,
+        &initial_stake,
+        &PublicLaneMonetaryPreconditionV1::Registration { activation_height },
+    )?;
+    crate::smartcontracts::isi::asset::isi::execute_staking_bond_transfer(
+        state_transaction,
+        authority,
+        registration.lane_id,
+        &registration.validator,
+        &registration.stake_account,
+        is_genesis_bootstrap,
+        stake_ctx.staker_asset.clone(),
+        stake_ctx.escrow_asset.clone(),
+        initial_stake.clone(),
+    )?;
+    if replacing_exited {
+        let removal_key = validator_key.clone();
         state_transaction
             .world
             .public_lane_validators
-            .insert(validator_key, record);
-        let share = PublicLaneStakeShare {
-            lane_id: self.lane_id,
-            validator: self.validator.clone(),
-            staker: self.stake_account.clone(),
-            bonded: initial_stake.clone(),
-            pending_unbonds: BTreeMap::new(),
-            metadata: Metadata::default(),
-        };
-        state_transaction.world.public_lane_stake_shares.insert(
-            stake_key(self.lane_id, &self.validator, &self.stake_account),
-            share,
-        );
-        sumeragi_status::record_public_lane_bonded_delta(self.lane_id, &initial_stake, true);
-        #[cfg(feature = "telemetry")]
-        {
-            state_transaction
-                .telemetry
-                .record_public_lane_validator_status(self.lane_id, None, &pending_status);
-            state_transaction
-                .telemetry
-                .increase_public_lane_bonded(self.lane_id, &initial_stake);
-        }
-        Ok(())
+            .remove(removal_key);
     }
+    state_transaction
+        .world
+        .public_lane_validators
+        .insert(validator_key, record);
+    let share = PublicLaneStakeShare {
+        lane_id: registration.lane_id,
+        validator: registration.validator.clone(),
+        staker: registration.stake_account.clone(),
+        bonded: initial_stake.clone(),
+        pending_unbonds: BTreeMap::new(),
+        metadata: Metadata::default(),
+    };
+    state_transaction.world.public_lane_stake_shares.insert(
+        stake_key(
+            registration.lane_id,
+            &registration.validator,
+            &registration.stake_account,
+        ),
+        share,
+    );
+    sumeragi_status::record_public_lane_bonded_delta(registration.lane_id, &initial_stake, true);
+    #[cfg(feature = "telemetry")]
+    {
+        state_transaction
+            .telemetry
+            .record_public_lane_validator_status(registration.lane_id, None, &pending_status);
+        state_transaction
+            .telemetry
+            .increase_public_lane_bonded(registration.lane_id, &initial_stake);
+    }
+    if let Some(prepared) = candidate_admission.and_then(|candidate| candidate.prepared_peer) {
+        super::world::isi::commit_peer_identity_with_pop(
+            registration.peer_id,
+            prepared,
+            state_transaction,
+        );
+    }
+    Ok(())
 }
 impl Execute for ActivatePublicLaneValidator {
     #[iroha_logger::log(
@@ -739,7 +1181,7 @@ impl Execute for ActivatePublicLaneValidator {
     )]
     fn execute(
         self,
-        _authority: &AccountId,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_lane_allows_staking(
@@ -752,6 +1194,13 @@ impl Execute for ActivatePublicLaneValidator {
             self.lane_id,
             "activate_public_lane_validator",
         )?;
+        if !state_transaction._curr_block.is_genesis() {
+            ensure_validator_authority(
+                authority,
+                &self.validator,
+                "activate_public_lane_validator",
+            )?;
+        }
         finalize_validator_lifecycle(state_transaction)?;
         let validator_key = validator_storage_key(self.lane_id, &self.validator);
         let validator_record = state_transaction
@@ -910,12 +1359,37 @@ impl Execute for RebindPublicLaneValidatorPeer {
                 "validator peer is already registered for lane".into(),
             ));
         }
-        let record = state_transaction
+        if let Some(signature) = &self.peer_signature {
+            let payload = PublicLanePeerBindingAuthorization::new(
+                *state_transaction.network_id(),
+                self.lane_id,
+                self.validator.clone(),
+                self.peer_id.clone(),
+                record.activation_height,
+                record.peer_id.clone(),
+            );
+            signature
+                .verify(self.peer_id.public_key(), &payload)
+                .map_err(|_| {
+                    Error::InvariantViolation(
+                        "replacement peer signature does not authorize this network and validator"
+                            .into(),
+                    )
+                })?;
+        } else if !state_transaction._curr_block.is_genesis() {
+            ensure_peer_binding_authority(state_transaction, authority, &self.peer_id)?;
+        }
+        let mut replacement = record;
+        replacement.peer_id = self.peer_id;
+        ensure_global_candidate_pool_preserved(
+            state_transaction,
+            &replacement,
+            "rebind_public_lane_validator_peer",
+        )?;
+        state_transaction
             .world
             .public_lane_validators
-            .get_mut(&validator_key)
-            .expect("validated above");
-        record.peer_id = self.peer_id;
+            .insert(validator_key, replacement);
         Ok(())
     }
 }
@@ -985,6 +1459,11 @@ impl Execute for ExitPublicLaneValidator {
             PublicLaneValidatorStatus::Exited => return Ok(()),
         }
         schedule_validator_deactivation(&mut record, deactivation_height)?;
+        ensure_global_candidate_pool_preserved(
+            state_transaction,
+            &record,
+            "exit_public_lane_validator",
+        )?;
         state_transaction
             .world
             .public_lane_validators
@@ -1022,7 +1501,6 @@ impl Execute for BondPublicLaneStake {
             &state_transaction.nexus.dataspace_catalog,
             &state_transaction.nexus.staking,
             &self.staker,
-            None,
             state_transaction.block_unix_timestamp_ms(),
         )?;
         assert_stake_amount_matches_spec(
@@ -1070,6 +1548,11 @@ impl Execute for BondPublicLaneStake {
             validator_record.self_stake =
                 quantity_add(validator_record.self_stake.clone(), amount.clone())?;
         }
+        ensure_global_candidate_pool_preserved(
+            state_transaction,
+            &validator_record,
+            "bond_public_lane_stake",
+        )?;
         let share_key = stake_key(self.lane_id, &self.validator, &self.staker);
         let mut share = if let Some(share) = state_transaction
             .world
@@ -1113,6 +1596,17 @@ impl Execute for BondPublicLaneStake {
         };
         share.metadata = self.metadata.clone();
         share.bonded = quantity_add(share.bonded.clone(), amount.clone())?;
+        effects::verify_transfer_plan(
+            state_transaction,
+            &self.monetary_plan,
+            &stake_ctx.staker_asset,
+            &stake_ctx.escrow_asset,
+            &amount,
+            &PublicLaneMonetaryPreconditionV1::Bond {
+                activation_height: validator_record.activation_height,
+                peer_id: validator_record.peer_id.clone(),
+            },
+        )?;
         crate::smartcontracts::isi::asset::isi::execute_staking_bond_transfer(
             state_transaction,
             authority,
@@ -1173,13 +1667,11 @@ impl Execute for SchedulePublicLaneUnbond {
                 "release_at_ms must be in the future or equal to the current block".into(),
             ));
         }
-        let stake_ctx = stake_context(
+        let stake_ctx = retained_stake_context(
             &state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            &state_transaction.nexus.staking,
+            self.lane_id,
+            &self.validator,
             &self.staker,
-            None,
-            block_timestamp_ms,
         )?;
         assert_stake_amount_matches_spec(
             state_transaction,
@@ -1253,6 +1745,11 @@ impl Execute for SchedulePublicLaneUnbond {
             validator_snapshot.self_stake =
                 quantity_sub(validator_snapshot.self_stake.clone(), amount.clone())?;
         }
+        ensure_global_candidate_pool_preserved(
+            state_transaction,
+            &validator_snapshot,
+            "schedule_public_lane_unbond",
+        )?;
         share.bonded = quantity_sub(share.bonded.clone(), amount.clone())?;
         share.pending_unbonds.insert(
             self.request_id,
@@ -1294,11 +1791,6 @@ impl Execute for FinalizePublicLaneUnbond {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_lane_allows_staking(
-            state_transaction,
-            self.lane_id,
-            "finalize_public_lane_unbond",
-        )?;
         ensure_canonical_staking_owner(
             state_transaction,
             self.lane_id,
@@ -1307,13 +1799,11 @@ impl Execute for FinalizePublicLaneUnbond {
         ensure_staker_authority(authority, &self.staker, "finalize_public_lane_unbond")?;
         finalize_validator_lifecycle(state_transaction)?;
         let block_timestamp_ms = state_transaction.block_unix_timestamp_ms();
-        let stake_ctx = stake_context(
+        let stake_ctx = retained_stake_context(
             &state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            &state_transaction.nexus.staking,
+            self.lane_id,
+            &self.validator,
             &self.staker,
-            None,
-            block_timestamp_ms,
         )?;
         let validator_key = validator_storage_key(self.lane_id, &self.validator);
         let validator_record = state_transaction
@@ -1363,6 +1853,20 @@ impl Execute for FinalizePublicLaneUnbond {
             state_transaction,
             &stake_ctx.asset_definition,
             &pending.amount,
+        )?;
+        let request_hash = public_lane_unbonding_commitment(&pending).map_err(|error| {
+            Error::InvariantViolation(format!("unbond monetary commitment failed: {error}").into())
+        })?;
+        effects::verify_transfer_plan(
+            state_transaction,
+            &self.monetary_plan,
+            &stake_ctx.escrow_asset,
+            &stake_ctx.staker_asset,
+            &pending.amount,
+            &PublicLaneMonetaryPreconditionV1::Unbond {
+                activation_height: validator_record.activation_height,
+                request_hash,
+            },
         )?;
         crate::smartcontracts::isi::asset::isi::execute_staking_unbond_transfer(
             state_transaction,
@@ -1428,6 +1932,7 @@ impl Execute for SlashPublicLaneValidator {
             self.slash_id,
             &self.amount,
             recorded_at_ms,
+            &self.monetary_plan,
         )
     }
 }
@@ -1479,9 +1984,14 @@ impl Execute for RecordPublicLaneRewards {
     )]
     fn execute(
         self,
-        _authority: &AccountId,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        if authority != self.reward_asset.account() {
+            return Err(Error::InvariantViolation(
+                "reward distributions must be authorized by the configured fee sink account".into(),
+            ));
+        }
         ensure_lane_allows_staking(
             state_transaction,
             self.lane_id,
@@ -1518,6 +2028,17 @@ impl Execute for RecordPublicLaneRewards {
             shares: self.shares.clone(),
             metadata: self.metadata.clone(),
         };
+        let reserved = state_transaction
+            .world
+            .public_lane_reward_reserves
+            .get(&self.reward_asset)
+            .cloned()
+            .unwrap_or_else(Quantity::zero);
+        let reserved = quantity_add(reserved, self.total_reward.clone())?;
+        state_transaction
+            .world
+            .public_lane_reward_reserves
+            .insert(self.reward_asset.clone(), reserved);
         state_transaction
             .world
             .public_lane_rewards
@@ -1541,110 +2062,12 @@ impl Execute for ClaimPublicLaneRewards {
         skip_all,
         fields(lane_id = %self.lane_id, account = %self.account)
     )]
-    #[allow(clippy::too_many_lines)]
     fn execute(
         self,
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_lane_allows_staking(state_transaction, self.lane_id, "claim_public_lane_rewards")?;
-        finalize_validator_lifecycle(state_transaction)?;
-        if &self.account != authority {
-            return Err(Error::InvariantViolation(
-                "reward claims must be submitted by the recipient account".into(),
-            ));
-        }
-        let upto_epoch = self.upto_epoch.unwrap_or(u64::MAX);
-        let mut claim_totals: BTreeMap<AssetId, (Quantity, u64)> = BTreeMap::new();
-        // Preload last-claimed epochs so we can skip already settled rewards.
-        let mut last_claimed: BTreeMap<AssetId, u64> = BTreeMap::new();
-        for ((lane, account, asset_id), epoch) in
-            state_transaction.world.public_lane_reward_claims.iter()
-        {
-            if *lane != self.lane_id || account != &self.account {
-                continue;
-            }
-            last_claimed.insert(asset_id.clone(), *epoch);
-        }
-        for (key, record) in state_transaction.world.public_lane_rewards.iter() {
-            let (lane, epoch) = key;
-            if *lane != self.lane_id {
-                continue;
-            }
-            if *epoch > upto_epoch {
-                break;
-            }
-            if !public_lane_reward_record_matches_key(key, record) {
-                continue;
-            }
-            let last_seen = *last_claimed.get(&record.asset).unwrap_or(&0);
-            if *epoch <= last_seen {
-                continue;
-            }
-            for share in record.shares.iter().filter(|s| s.account == self.account) {
-                let entry = claim_totals
-                    .entry(record.asset.clone())
-                    .or_insert_with(|| (Quantity::zero(), last_seen));
-                entry.0 = quantity_add(entry.0.clone(), share.amount.clone())?;
-                entry.1 = entry.1.max(*epoch);
-            }
-        }
-        if claim_totals.is_empty() {
-            return Ok(());
-        }
-        let sink_account = crate::block::parse_account_literal_with_world(
-            &state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            &state_transaction.nexus.fees.fee_sink_account_id,
-            state_transaction.block_unix_timestamp_ms(),
-        )
-        .map_err(|error| Error::InvariantViolation(error.to_string().into()))?
-        .ok_or_else(|| {
-            Error::InvariantViolation(
-                "invalid nexus.fees.fee_sink_account_id; expected canonical I105 account id or on-chain alias"
-                    .into(),
-            )
-        })?;
-        let fee_asset = resolve_nexus_fee_asset_definition(state_transaction)?;
-        let dust_threshold = state_transaction
-            .nexus
-            .staking
-            .reward_dust_threshold
-            .clone();
-        for (asset_id, (amount, max_epoch)) in claim_totals {
-            if amount.is_zero() {
-                continue;
-            }
-            if asset_id.account() != &sink_account {
-                return Err(Error::InvariantViolation(
-                    "reward asset owner must match the configured fee sink account".into(),
-                ));
-            }
-            if asset_id.definition() != &fee_asset {
-                return Err(Error::InvariantViolation(
-                    "reward asset definition must match the configured fee asset".into(),
-                ));
-            }
-            if !dust_threshold.is_zero() && amount < dust_threshold {
-                state_transaction
-                    .world
-                    .public_lane_reward_claims
-                    .insert((self.lane_id, self.account.clone(), asset_id), max_epoch);
-                continue;
-            }
-            let transfer =
-                iroha_data_model::isi::Transfer::<
-                    Asset,
-                    Quantity,
-                    iroha_data_model::account::Account,
-                >::asset_quantity(asset_id.clone(), amount, self.account.clone());
-            transfer.execute(&sink_account, state_transaction)?;
-            state_transaction
-                .world
-                .public_lane_reward_claims
-                .insert((self.lane_id, self.account.clone(), asset_id), max_epoch);
-        }
-        Ok(())
+        effects::execute_reward_claim(self, authority, state_transaction)
     }
 }
 fn validator_storage_key(lane_id: LaneId, validator: &AccountId) -> (LaneId, AccountId) {
@@ -1944,6 +2367,12 @@ fn validate_reward_sink(
             "reward asset definition must match the configured fee asset".into(),
         ));
     }
+    let staking_custody = state_transaction
+        .world
+        .public_lane_stake_reserves
+        .get(reward_asset)
+        .cloned()
+        .unwrap_or_else(Quantity::zero);
     let sink_balance = state_transaction
         .world
         .assets
@@ -1954,9 +2383,19 @@ fn validate_reward_sink(
                 "reward asset must exist in the configured fee sink account".into(),
             )
         })?;
-    if sink_balance.as_ref() < total_reward {
+    let committed_rewards = state_transaction
+        .world
+        .public_lane_reward_reserves
+        .get(reward_asset)
+        .cloned()
+        .unwrap_or_else(Quantity::zero);
+    let required = quantity_add(
+        quantity_add(committed_rewards, staking_custody)?,
+        total_reward.clone(),
+    )?;
+    if sink_balance.as_ref() < &required {
         return Err(Error::InvariantViolation(
-            "insufficient balance in reward fee sink for recorded payout".into(),
+            "insufficient unreserved balance in reward fee sink for recorded payout".into(),
         ));
     }
     Ok(())
@@ -2174,6 +2613,27 @@ pub(crate) fn max_slash_amount(total: &Quantity, max_bps: u16) -> Result<Quantit
         .map_err(|_| Error::Math(MathError::Overflow))?;
     Ok(amount)
 }
+fn ensure_peer_binding_authority(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    peer: &PeerId,
+) -> Result<(), Error> {
+    if authority
+        .try_signatory()
+        .is_some_and(|key| key == peer.public_key())
+        || super::world::isi::has_exact_permission(
+            &state_transaction.world,
+            authority,
+            &iroha_executor_data_model::permission::peer::CanManagePeers.into(),
+        )
+    {
+        return Ok(());
+    }
+    Err(Error::InvariantViolation(
+        "distinct consensus peer binding requires its network-bound consent or CanManagePeers"
+            .into(),
+    ))
+}
 fn ensure_validator_peer_registered(
     state_transaction: &StateTransaction<'_, '_>,
     lane_id: LaneId,
@@ -2291,27 +2751,24 @@ fn ensure_validator_peer_registered(
             .into(),
         ));
     }
-    let commit_topology: Vec<_> = state_transaction.commit_topology.iter().cloned().collect();
-    if lane_id == LaneId::SINGLE
-        && !commit_topology.is_empty()
-        && commit_topology
-            .iter()
-            .all(|peer_in_topology| peer_in_topology != validator_peer)
-    {
-        #[cfg(feature = "telemetry")]
-        state_transaction
-            .telemetry
-            .record_public_lane_validator_reject("missing_peer_topology");
-        iroha_logger::warn!(
-            lane_id = %lane_id,
-            validator = %validator,
-            peer = %validator_peer,
-            topology = ?commit_topology,
-            "public-lane validator action rejected: peer not present in commit topology"
+    // Global committee changes require a prepared epoch key transition. A
+    // participant-lane peer does not enter the global topology by staking.
+    let may_enter_global_roster = lane_id == LaneId::SINGLE
+        || crate::state::peer_has_live_consensus_key_for_role(
+            &state_transaction.world,
+            validator_peer,
+            required_live_height,
+            iroha_data_model::consensus::ConsensusKeyRole::Validator,
         );
+    if may_enter_global_roster
+        && !state_transaction.commit_topology.is_empty()
+        && !state_transaction
+            .commit_topology
+            .iter()
+            .any(|peer| peer == validator_peer)
+    {
         return Err(Error::InvariantViolation(
-            "validator peer must be present in the commit topology (with a reachable address) before staking"
-                .into(),
+            "global validator peer must be present in the commit topology; a prepared epoch key transition is required for a fresh peer".into(),
         ));
     }
     Ok(())
@@ -2436,6 +2893,7 @@ pub(crate) fn apply_slash_to_validator(
     slash_id: Hash,
     amount: &Quantity,
     now_ms: u64,
+    monetary_plan: &PublicLaneMonetaryPlanV1,
 ) -> Result<(), Error> {
     apply_slash_to_validator_inner(
         state_transaction,
@@ -2448,6 +2906,7 @@ pub(crate) fn apply_slash_to_validator(
         None,
         true,
         true,
+        Some(monetary_plan),
     )
 }
 /// Apply a slash in a disposable validation transaction without external observability effects.
@@ -2471,6 +2930,7 @@ pub(crate) fn apply_slash_to_validator_without_observability(
         None,
         false,
         false,
+        None,
     )
 }
 /// Apply a finality-owned slash using a complete key slice from one indexed overlay.
@@ -2495,6 +2955,7 @@ pub(crate) fn apply_indexed_consensus_slash_to_validator(
         Some(share_keys),
         false,
         true,
+        None,
     )
 }
 /// Validate a finality-owned slash using a complete key slice without external effects.
@@ -2519,6 +2980,7 @@ pub(crate) fn apply_indexed_slash_to_validator_without_observability(
         Some(share_keys),
         false,
         false,
+        None,
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -2533,6 +2995,7 @@ fn apply_slash_to_validator_inner(
     indexed_share_keys: Option<&[PublicLaneStakeShareKey]>,
     record_execution_evidence: bool,
     record_operational_observability: bool,
+    monetary_plan: Option<&PublicLaneMonetaryPlanV1>,
 ) -> Result<(), Error> {
     ensure_canonical_staking_owner(state_transaction, lane_id, "apply_slash_to_validator")?;
     let deactivation_height = scheduled_validator_deactivation_height(state_transaction)?;
@@ -2557,14 +3020,19 @@ fn apply_slash_to_validator_inner(
         ));
     }
     let stake_account = validator_snapshot.stake_account.clone();
-    let stake_ctx = stake_context(
+    let stake_ctx = retained_stake_context(world, lane_id, validator, &stake_account)?;
+    let slash_sink = parse_staking_account_literal(
         world,
         &dataspace_catalog,
-        &staking_cfg,
-        &stake_account,
-        None,
+        &staking_cfg.slash_sink_account_id,
+        "slash_sink_account_id",
         now_ms,
     )?;
+    let slash_sink_asset = AssetId::with_scope(
+        stake_ctx.asset_definition.clone(),
+        slash_sink,
+        *stake_ctx.escrow_asset.scope(),
+    );
     let spec = world
         .asset_definitions
         .get(&stake_ctx.asset_definition)
@@ -2595,6 +3063,24 @@ fn apply_slash_to_validator_inner(
         return Err(Error::InvariantViolation(
             "slash exceeds stake still held in protocol custody".into(),
         ));
+    }
+    if record_execution_evidence != monetary_plan.is_some() {
+        return Err(Error::InvariantViolation(
+            "transaction slashing requires its exact signed monetary plan".into(),
+        ));
+    }
+    if let Some(plan) = monetary_plan {
+        effects::verify_transfer_plan(
+            state_transaction,
+            plan,
+            &stake_ctx.escrow_asset,
+            &slash_sink_asset,
+            amount,
+            &PublicLaneMonetaryPreconditionV1::Slash {
+                activation_height: validator_snapshot.activation_height,
+                slashable_exposure: slashable_exposure.clone(),
+            },
+        )?;
     }
     let self_pending = pending_unbond_group_total(
         &share_updates,
@@ -2663,7 +3149,7 @@ fn apply_slash_to_validator_inner(
         validator.clone(),
         slash_id,
         stake_ctx.escrow_asset.clone(),
-        stake_ctx.slash_sink_asset.clone(),
+        slash_sink_asset,
         amount.clone(),
         slashable_exposure,
     );
@@ -2709,48 +3195,70 @@ struct StakeEscrowContext {
     asset_definition: AssetDefinitionId,
     staker_asset: AssetId,
     escrow_asset: AssetId,
-    slash_sink_asset: AssetId,
 }
-/// Check that an unbond movement uses the configured stake definition and escrow.
-pub(in crate::smartcontracts::isi) fn is_configured_staking_unbond_movement(
+/// A withdrawal's exact retained source and recipient assets.
+struct RetainedStakeContext {
+    asset_definition: AssetDefinitionId,
+    staker_asset: AssetId,
+    escrow_asset: AssetId,
+}
+
+fn retained_stake_context(
+    world: &impl WorldReadOnly,
+    lane_id: LaneId,
+    validator: &AccountId,
+    staker: &AccountId,
+) -> Result<RetainedStakeContext, Error> {
+    let escrow_asset = retained_stake_custody_asset(world, lane_id, validator)?;
+    Ok(RetainedStakeContext {
+        asset_definition: escrow_asset.definition().clone(),
+        staker_asset: AssetId::with_scope(
+            escrow_asset.definition().clone(),
+            staker.clone(),
+            *escrow_asset.scope(),
+        ),
+        escrow_asset,
+    })
+}
+
+/// Check a matured withdrawal against retained custody, independently of alias drift.
+pub(in crate::smartcontracts::isi) fn is_retained_staking_unbond_movement(
     state_transaction: &StateTransaction<'_, '_>,
+    lane_id: LaneId,
+    validator: &AccountId,
     staker: &AccountId,
     source_id: &AssetId,
     destination_id: &AssetId,
 ) -> Result<bool, Error> {
-    let context = stake_context(
-        &state_transaction.world,
-        &state_transaction.nexus.dataspace_catalog,
-        &state_transaction.nexus.staking,
-        staker,
-        None,
-        state_transaction.block_unix_timestamp_ms(),
-    )?;
+    let context = retained_stake_context(&state_transaction.world, lane_id, validator, staker)?;
     Ok(source_id == &context.escrow_asset && destination_id == &context.staker_asset)
 }
-/// Check that a slash movement uses the configured stake escrow and slash sink.
-pub(in crate::smartcontracts::isi) fn is_configured_staking_slash_movement(
+
+/// Check a slash against its retained source and the governed slash receiver.
+pub(in crate::smartcontracts::isi) fn is_retained_staking_slash_movement(
     state_transaction: &StateTransaction<'_, '_>,
-    stake_account: &AccountId,
+    lane_id: LaneId,
+    validator: &AccountId,
     source_id: &AssetId,
     destination_id: &AssetId,
 ) -> Result<bool, Error> {
-    let context = stake_context(
+    let pinned = retained_stake_custody_asset(&state_transaction.world, lane_id, validator)?;
+    let slash_sink = parse_staking_account_literal(
         &state_transaction.world,
         &state_transaction.nexus.dataspace_catalog,
-        &state_transaction.nexus.staking,
-        stake_account,
-        None,
+        &state_transaction.nexus.staking.slash_sink_account_id,
+        "slash_sink_account_id",
         state_transaction.block_unix_timestamp_ms(),
     )?;
-    Ok(source_id == &context.escrow_asset && destination_id == &context.slash_sink_asset)
+    Ok(source_id == &pinned
+        && destination_id
+            == &AssetId::with_scope(pinned.definition().clone(), slash_sink, *pinned.scope()))
 }
 fn stake_context(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     staking_cfg: &iroha_config::parameters::actual::NexusStaking,
     staker: &AccountId,
-    slash_sink_override: Option<&AccountId>,
     now_ms: u64,
 ) -> Result<StakeEscrowContext, Error> {
     let asset_definition = resolve_configured_asset_definition(
@@ -2766,22 +3274,10 @@ fn stake_context(
         "stake_escrow_account_id",
         now_ms,
     )?;
-    let slash_sink_account: AccountId = if let Some(account) = slash_sink_override {
-        account.clone()
-    } else {
-        parse_staking_account_literal(
-            world,
-            dataspace_catalog,
-            &staking_cfg.slash_sink_account_id,
-            "slash_sink_account_id",
-            now_ms,
-        )?
-    };
     Ok(StakeEscrowContext {
         asset_definition: asset_definition.clone(),
         staker_asset: AssetId::new(asset_definition.clone(), staker.clone()),
         escrow_asset: AssetId::new(asset_definition.clone(), escrow_account),
-        slash_sink_asset: AssetId::new(asset_definition, slash_sink_account),
     })
 }
 fn parse_staking_account_literal(
@@ -2856,6 +3352,7 @@ mod tests {
     };
     use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::query::error::FindError;
     use iroha_data_model::{
         account::{Account, MultisigMember, MultisigPolicy},
         asset::{AssetDefinition, AssetDefinitionId},
@@ -2897,6 +3394,9 @@ mod tests {
         iroha_model_base::peer::PeerId::from(checked_keypair().public_key().clone())
     }
     include!("staking_core_tests.rs");
+    include!("staking_admission_tests.rs");
+    include!("staking_reward_tests.rs");
+    include!("staking_custody_tests.rs");
     #[test]
     fn stake_context_accepts_i105_account_literals() {
         let state = setup_state();
@@ -2912,7 +3412,6 @@ mod tests {
             &stx.nexus.dataspace_catalog,
             &stx.nexus.staking,
             &validator,
-            None,
             stx.block_unix_timestamp_ms(),
         )
         .expect("stake context should accept i105 literals");
@@ -2922,8 +3421,15 @@ mod tests {
             "escrow account should resolve from literal"
         );
         assert_eq!(
-            stake_ctx.slash_sink_asset.account(),
-            &escrow,
+            parse_staking_account_literal(
+                &stx.world,
+                &stx.nexus.dataspace_catalog,
+                &stx.nexus.staking.slash_sink_account_id,
+                "slash_sink_account_id",
+                stx.block_unix_timestamp_ms()
+            )
+            .unwrap(),
+            escrow,
             "slash sink account should resolve from literal"
         );
     }
@@ -3435,7 +3941,7 @@ mod tests {
             lane_id: stake_lane,
             validator: validator.clone(),
         }
-        .execute(&ALICE_ID, &mut activation_tx)
+        .execute(&validator, &mut activation_tx)
         .unwrap();
         activation_tx.apply();
         activation_block.commit_empty_block_for_testing().unwrap();
@@ -3545,7 +4051,7 @@ mod tests {
         assert!(stx.world.peers().iter().all(|peer| peer != &peer_id));
     }
     #[test]
-    fn register_rejects_when_peer_missing_from_topology() {
+    fn register_rejects_global_peer_without_prepared_epoch_transition() {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
@@ -3571,18 +4077,18 @@ mod tests {
         .execute(&validator, &mut stx);
         assert!(
             result.is_err(),
-            "validator registration should fail when commit topology lacks the peer"
+            "global committee changes require prepared epoch keys"
         );
         let escrow_asset = AssetId::new(asset_def_id, escrow);
         assert!(
             stx.world.assets.get(&escrow_asset).is_none(),
-            "rejected registration must not move stake into escrow"
+            "rejected global admission must not escrow stake"
         );
         assert!(
             !stx.commit_topology
                 .iter()
                 .any(|peer| peer == &validator_peer),
-            "validator peer should remain absent from topology in rejection path"
+            "candidate admission must not grant current voting rights"
         );
     }
     #[test]
@@ -3815,10 +4321,10 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
+        seed_participant_consensus_key(&mut stx, &validator_peer_id(&validator));
         let replacement_peer = checked_peer_id();
         let _ = stx.world.peers.push(replacement_peer.clone());
-        seed_validator_consensus_key(&mut stx, &replacement_peer, ConsensusKeyStatus::Active);
-        stx.commit_topology.get_mut().push(replacement_peer.clone());
+        seed_participant_consensus_key(&mut stx, &replacement_peer);
         let lane_id = LaneId::new(45);
         RegisterPublicLaneValidator {
             lane_id,
@@ -3836,6 +4342,10 @@ mod tests {
             .get(&(lane_id, validator.clone()))
             .expect("validator record")
             .clone();
+        stx.world.add_account_permission(
+            &validator,
+            iroha_executor_data_model::permission::peer::CanManagePeers.into(),
+        );
         RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), replacement_peer.clone())
             .execute(&validator, &mut stx)
             .expect("rebind should succeed before validator activation");
@@ -3885,6 +4395,10 @@ mod tests {
 
         let mut safe_block = state.block(block_header_with_height(5));
         let mut safe_stx = safe_block.transaction();
+        safe_stx.world.add_account_permission(
+            &validator,
+            iroha_executor_data_model::permission::peer::CanManagePeers.into(),
+        );
         RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), first_replacement.clone())
             .execute(&validator, &mut safe_stx)
             .expect("height five is before the height-seven roster freeze");
@@ -3990,6 +4504,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, stale_validator, _, _) = prepare_accounts(&mut stx);
+        seed_participant_consensus_key(&mut stx, &validator_peer_id(&validator));
         let lane_id = LaneId::new(147);
         RegisterPublicLaneValidator {
             lane_id,
@@ -4003,8 +4518,7 @@ mod tests {
         .expect("register primary validator");
         let replacement_peer = checked_peer_id();
         let _ = stx.world.peers.push(replacement_peer.clone());
-        seed_validator_consensus_key(&mut stx, &replacement_peer, ConsensusKeyStatus::Active);
-        stx.commit_topology.get_mut().push(replacement_peer.clone());
+        seed_participant_consensus_key(&mut stx, &replacement_peer);
         stx.world.public_lane_validators.insert(
             (lane_id, stale_validator.clone()),
             PublicLaneValidatorRecord {
@@ -4020,6 +4534,10 @@ mod tests {
                 deactivation_height: None,
                 last_reward_epoch: None,
             },
+        );
+        stx.world.add_account_permission(
+            &validator,
+            iroha_executor_data_model::permission::peer::CanManagePeers.into(),
         );
         RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), replacement_peer.clone())
             .execute(&validator, &mut stx)
@@ -4072,10 +4590,10 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
+        seed_participant_consensus_key(&mut stx, &validator_peer_id(&validator));
         let replacement_peer = checked_peer_id();
         let _ = stx.world.peers.push(replacement_peer.clone());
-        seed_validator_consensus_key(&mut stx, &replacement_peer, ConsensusKeyStatus::Active);
-        stx.commit_topology.get_mut().push(replacement_peer.clone());
+        seed_participant_consensus_key(&mut stx, &replacement_peer);
         let lane_id = LaneId::new(48);
         RegisterPublicLaneValidator {
             lane_id,
@@ -4109,10 +4627,10 @@ mod tests {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             let (validator, _, _, _) = prepare_accounts(&mut stx);
+            seed_participant_consensus_key(&mut stx, &validator_peer_id(&validator));
             let replacement_peer = checked_peer_id();
             let _ = stx.world.peers.push(replacement_peer.clone());
-            seed_validator_consensus_key(&mut stx, &replacement_peer, ConsensusKeyStatus::Active);
-            stx.commit_topology.get_mut().push(replacement_peer.clone());
+            seed_participant_consensus_key(&mut stx, &replacement_peer);
             let lane_id = LaneId::new(49 + u32::try_from(index).expect("index fits in u32"));
             RegisterPublicLaneValidator {
                 lane_id,
@@ -4333,7 +4851,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect_err("mismatched validator row must reject explicit activation");
         assert!(
             matches!(err, Error::InvariantViolation(msg) if msg.contains("does not match its storage key"))
@@ -4429,7 +4947,7 @@ mod tests {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
         }
-        .execute(&ALICE_ID, &mut activate_stx)
+        .execute(&validator, &mut activate_stx)
         .expect_err("activation should wait for the next epoch");
         assert!(matches!(
             err,
@@ -4449,7 +4967,7 @@ mod tests {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
         }
-        .execute(&ALICE_ID, &mut activate_stx)
+        .execute(&validator, &mut activate_stx)
         .expect("activate once pending epoch reached");
         let record = activate_stx
             .world
@@ -4539,7 +5057,7 @@ mod tests {
             lane_id: LaneId::SINGLE,
             validator: validator.clone(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("activate validator in genesis");
         let record = stx
             .world
@@ -4612,7 +5130,7 @@ mod tests {
             }],
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&escrow, &mut stx)
         .expect_err("inactive validator should not receive rewards");
         assert!(
             matches!(&err, Error::InvariantViolation(msg) if msg.contains("outside its active tenure")),
@@ -4664,7 +5182,7 @@ mod tests {
             }],
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&_sink, &mut stx)
         .expect_err("mismatched validator row must not receive rewards");
         assert!(
             matches!(err, Error::InvariantViolation(ref msg) if msg.contains("outside its active tenure")),
@@ -4722,7 +5240,7 @@ mod tests {
             shares: vec![validator_share.clone()],
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&_sink, &mut stx)
         .expect("the canonical lane may first record its later epoch");
 
         RecordPublicLaneRewards {
@@ -4733,7 +5251,7 @@ mod tests {
             shares: vec![validator_share],
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&_sink, &mut stx)
         .expect("a serviced sibling may record rewards for the shared validator cohort");
 
         assert!(
@@ -4923,19 +5441,13 @@ mod tests {
         let mut stx = state_block.transaction();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         let (validator, _, _escrow, asset_def_id) = prepare_accounts(&mut stx);
+        seed_participant_consensus_key(&mut stx, &validator_peer_id(&validator));
         let (replacement, _kp) = gen_account_in("nexus");
         Register::account(Account::new(replacement.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         register_peer_for_account(&mut stx, &replacement);
-        stx.commit_topology
-            .get_mut()
-            .push(iroha_model_base::peer::PeerId::from(
-                replacement
-                    .try_signatory()
-                    .expect("replacement is single-signatory")
-                    .clone(),
-            ));
+        seed_participant_consensus_key(&mut stx, &validator_peer_id(&replacement));
         Mint::asset_quantity(
             10_000u32,
             AssetId::new(asset_def_id.clone(), replacement.clone()),
@@ -5456,7 +5968,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
         complete_staking_committee(&mut stx, lane_id);
         stx.apply();
@@ -5529,7 +6041,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
         complete_staking_committee(&mut stx, lane_id);
         stx.apply();
@@ -5605,7 +6117,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
         complete_staking_committee(&mut stx, lane_id);
         stx.apply();
@@ -6115,7 +6627,7 @@ mod tests {
             lane_id: LaneId::new(2),
             validator: validator.clone(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
         stx.apply();
         state_block.commit_world_overlay_for_testing().unwrap();
@@ -6507,7 +7019,7 @@ mod tests {
             lane_id: LaneId::new(31),
             validator: validator.clone(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
         stx.commit_topology
             .get_mut()
@@ -6552,7 +7064,7 @@ mod tests {
             lane_id,
             validator: validator.clone(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
         BondPublicLaneStake {
             lane_id,
@@ -7040,16 +7552,31 @@ mod tests {
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-        let (validator, delegator, _, _) = prepare_accounts(&mut stx);
+        let (validator, delegator, escrow, asset_definition) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(167);
-        insert_validator_record_for_key(
-            &mut stx,
+        RegisterPublicLaneValidator {
             lane_id,
-            LaneId::new(168),
-            &validator,
-            PublicLaneValidatorStatus::Active,
-            Quantity::from(1_000_u64),
-        );
+            peer_id: validator_peer_id(&validator),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Quantity::from(1_000_u64),
+            metadata: Metadata::default(),
+        }
+        .execute(&validator, &mut stx)
+        .expect("seed canonical stake custody before corrupting the validator row");
+        let validator_key = (lane_id, validator.clone());
+        stx.world
+            .public_lane_validators
+            .get_mut(&validator_key)
+            .expect("registered validator")
+            .lane_id = LaneId::new(168);
+        let custody_before = stx
+            .world
+            .public_lane_stake_custody
+            .get(&validator_key)
+            .cloned();
+        let escrow_asset = AssetId::new(asset_definition, escrow);
+        let balance_before = stx.world.assets.get(&escrow_asset).cloned();
         let err = SchedulePublicLaneUnbond {
             lane_id,
             validator: validator.clone(),
@@ -7061,8 +7588,15 @@ mod tests {
         .execute(&delegator, &mut stx)
         .expect_err("mismatched validator row must reject unbond scheduling");
         assert!(
-            matches!(err, Error::InvariantViolation(msg) if msg.contains("does not match its storage key"))
+            matches!(&err, Error::InvariantViolation(msg) if msg.contains("does not match its storage key")),
+            "unexpected unbond rejection: {err}"
         );
+        assert_eq!(
+            stx.world.public_lane_stake_custody.get(&validator_key),
+            custody_before.as_ref(),
+            "corrupt validator rows must not release retained custody"
+        );
+        assert_eq!(stx.world.assets.get(&escrow_asset), balance_before.as_ref());
         let record = stx
             .world
             .public_lane_validators()
@@ -7691,7 +8225,7 @@ mod tests {
             shares: vec![share],
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&_sink, &mut stx)
         .unwrap();
         ClaimPublicLaneRewards {
             lane_id: LaneId::new(0),
@@ -7719,7 +8253,7 @@ mod tests {
         assert_eq!(balance.as_ref(), &Quantity::from(150_u64));
     }
     #[test]
-    fn claim_rewards_skips_dust() {
+    fn claim_rewards_defers_dust_without_marking_paid() {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
@@ -7741,7 +8275,7 @@ mod tests {
             shares: vec![share],
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&_sink, &mut stx)
         .unwrap();
         ClaimPublicLaneRewards {
             lane_id: LaneId::new(11),
@@ -7757,9 +8291,8 @@ mod tests {
             .world
             .public_lane_reward_claims()
             .get(&(LaneId::new(11), validator.clone(), reward_asset.clone()))
-            .copied()
-            .expect("claim marker");
-        assert_eq!(claimed, 1);
+            .copied();
+        assert_eq!(claimed, None, "unpaid dust must remain claimable");
         let validator_asset = AssetId::new(asset_def_id.clone(), validator.clone());
         assert!(
             view.world.assets().get(&validator_asset).is_none(),
@@ -7767,43 +8300,59 @@ mod tests {
         );
     }
     #[test]
-    fn claim_rewards_ignores_mismatched_reward_record_rows() {
+    fn claim_rewards_rejects_mismatched_reward_record_rows_without_releasing_reserves() {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         seed_test_call_hash(&mut stx, 0xD9);
         let lane_id = LaneId::new(13);
-        let (_sink, validator, reward_asset, asset_def_id) =
+        let (sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, lane_id, 50);
         stx.nexus.staking.reward_dust_threshold = Quantity::zero();
-        stx.world.public_lane_rewards.insert(
-            (lane_id, 1),
-            PublicLaneRewardRecord {
-                lane_id: LaneId::new(14),
-                epoch: 1,
-                asset: reward_asset.clone(),
-                total_reward: Quantity::from(25_u64),
-                shares: vec![PublicLaneRewardShare {
-                    account: validator.clone(),
-                    role: PublicLaneRewardRole::Validator,
-                    amount: Quantity::from(25_u64),
-                }],
-                metadata: Metadata::default(),
-            },
-        );
-        ClaimPublicLaneRewards {
+        RecordPublicLaneRewards {
+            lane_id,
+            epoch: 1,
+            reward_asset: reward_asset.clone(),
+            total_reward: Quantity::from(25_u64),
+            shares: vec![PublicLaneRewardShare {
+                account: validator.clone(),
+                role: PublicLaneRewardRole::Validator,
+                amount: Quantity::from(25_u64),
+            }],
+            metadata: Metadata::default(),
+        }
+        .execute(&sink, &mut stx)
+        .expect("record a backed reward before corrupting its storage identity");
+        stx.world
+            .public_lane_rewards
+            .get_mut(&(lane_id, 1))
+            .expect("recorded rewards")
+            .lane_id = LaneId::new(14);
+        let balance_before = stx.world.assets.get(&reward_asset).cloned();
+        let reserve_before = stx
+            .world
+            .public_lane_reward_reserves
+            .get(&reward_asset)
+            .cloned();
+        let error = ClaimPublicLaneRewards {
             lane_id,
             account: validator.clone(),
             upto_epoch: Some(1),
         }
         .execute(&validator, &mut stx)
-        .unwrap();
-        stx.apply();
-        state_block.commit_world_overlay_for_testing().unwrap();
-        let view = state.view();
+        .expect_err("corrupt reward records must reject the entire claim");
         assert!(
-            view.world
+            matches!(error, Error::InvariantViolation(message) if message.contains("non-canonical reward record"))
+        );
+        assert_eq!(stx.world.assets.get(&reward_asset), balance_before.as_ref());
+        assert_eq!(
+            stx.world.public_lane_reward_reserves.get(&reward_asset),
+            reserve_before.as_ref(),
+            "corrupt reward rows must not release promised funds"
+        );
+        assert!(
+            stx.world
                 .public_lane_reward_claims()
                 .get(&(lane_id, validator.clone(), reward_asset))
                 .is_none(),
@@ -7811,7 +8360,7 @@ mod tests {
         );
         let validator_asset = AssetId::new(asset_def_id, validator);
         assert!(
-            view.world.assets().get(&validator_asset).is_none(),
+            stx.world.assets().get(&validator_asset).is_none(),
             "mismatched reward row must not transfer rewards"
         );
     }
@@ -7838,7 +8387,7 @@ mod tests {
             shares: vec![share],
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&_sink, &mut stx)
         .unwrap();
         ClaimPublicLaneRewards {
             lane_id: LaneId::new(12),
@@ -7921,7 +8470,7 @@ mod tests {
             shares: vec![share],
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&_sink, &mut stx);
         assert!(
             res.is_err(),
             "expected underfunded reward record to be rejected"
@@ -7948,7 +8497,7 @@ mod tests {
             shares: vec![share.clone()],
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&_sink, &mut stx)
         .expect("initial record");
         let stale_record = RecordPublicLaneRewards {
             lane_id: LaneId::new(8),
@@ -7958,7 +8507,7 @@ mod tests {
             shares: vec![share],
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&_sink, &mut stx);
         assert!(stale_record.is_err(), "expected stale epoch rejection");
     }
     #[test]
@@ -7982,7 +8531,7 @@ mod tests {
             shares: vec![share],
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&_sink, &mut stx);
         assert!(res.is_err(), "expected zero-share reward to be rejected");
     }
     #[test]

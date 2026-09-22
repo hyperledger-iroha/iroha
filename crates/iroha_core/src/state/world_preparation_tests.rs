@@ -177,7 +177,7 @@ fn world_publication_slot_late_caught_panic_retains_every_writer_until_terminal_
     }));
     assert!(result.is_err());
     assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
-    assert_eq!(probe_fields(held_probes, &world), [0, 278, 0]);
+    assert_eq!(probe_fields(held_probes, &world), [0, 282, 0]);
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.recover_original())).is_err()
     );
@@ -185,7 +185,7 @@ fn world_publication_slot_late_caught_panic_retains_every_writer_until_terminal_
     assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
     drop(slot);
     assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
-    assert_eq!(*callback.counts.lock().unwrap(), Some([278, 0, 0]));
+    assert_eq!(*callback.counts.lock().unwrap(), Some([282, 0, 0]));
     let mut wait = wait.lock().unwrap().take().unwrap();
     assert!(
         Pin::new(&mut wait)

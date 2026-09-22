@@ -68864,14 +68864,14 @@ fn collect_pending_public_lane_rewards<'a>(
         {
             continue;
         }
-        let last = *last_claimed.get(&record.asset).unwrap_or(&0);
-        if *epoch <= last {
+        let last = last_claimed.get(&record.asset).copied();
+        if last.is_some_and(|last| *epoch <= last) {
             continue;
         }
         for share in record.shares.iter().filter(|s| &s.account == account_id) {
             let entry = totals
                 .entry(record.asset.clone())
-                .or_insert_with(|| (Quantity::zero(), last));
+                .or_insert_with(|| (Quantity::zero(), *epoch));
             entry.0 = entry.0.checked_add(&share.amount).map_err(|_| {
                 Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                     iroha_data_model::query::error::QueryExecutionFail::Conversion(
@@ -69057,6 +69057,28 @@ routing_test! { sync public_lane_reward_record_matches_key_rejects_mismatched_ro
     record.lane_id = key.0;
     record.epoch = 9;
     assert!(!public_lane_reward_record_matches_key(&key, &record));
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync collect_pending_public_lane_rewards_includes_unclaimed_epoch_zero
+    let account = AccountId::new(checked_routing_fixture_keypair(
+        0x7D, Algorithm::Ed25519, "derive epoch zero reward fixture",
+    ).public_key().clone());
+    let lane_id = LaneId::SINGLE;
+    let asset = AssetId::new(
+        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bb"), account.clone(),
+    );
+    let mut claims = BTreeMap::new();
+    let rewards = BTreeMap::from([((lane_id, 0), PublicLaneRewardRecord {
+        lane_id, epoch: 0, asset: asset.clone(), total_reward: Quantity::from(25_u64),
+        shares: vec![PublicLaneRewardShare { account: account.clone(), role: PublicLaneRewardRole::Nominator, amount: Quantity::from(25_u64) }],
+        metadata: Metadata::default(),
+    })]);
+    let pending = collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.iter(), rewards.iter()).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].amount, Quantity::from(25_u64));
+    assert_eq!(pending[0].pending_through_epoch, 0);
+    claims.insert((lane_id, account.clone(), asset), 0);
+    assert!(collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.iter(), rewards.iter()).unwrap().is_empty());
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync collect_pending_public_lane_rewards_ignores_mismatched_reward_rows

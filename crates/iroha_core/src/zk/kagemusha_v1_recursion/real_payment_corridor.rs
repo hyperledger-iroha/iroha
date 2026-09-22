@@ -73,7 +73,7 @@ use iroha_data_model::{
     block::consensus_v2::{HeightContextId, ValidatorPower},
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1,
-        KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalitySealBundleV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalitySealBundleV1,
         KagemushaMintFinalitySealMessageV1, KagemushaPastaSchnorrSignatureV1, KagemushaTopUpLeafV1,
         KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
     },
@@ -1051,7 +1051,7 @@ impl MintAuthorizationKeys {
 struct FundingCertificate {
     bootstrap: KagemushaMintCertificateWitnessV1,
     finalized: KagemushaMintCertificateWitnessV1,
-    genesis_roster_id: DigestV1,
+    genesis_authorization_id: DigestV1,
 }
 
 impl FundingCertificate {
@@ -1115,7 +1115,7 @@ impl FundingCertificate {
             0,
             &validators,
         );
-        let genesis_roster_id = roster.finality_epoch_id().expect("finality roster ID");
+        let genesis_authorization_id = roster.authority_id().expect("finality roster ID");
         let leaf = KagemushaTopUpLeafV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             operation_id: digest(b"funding-operation", 0),
@@ -1129,7 +1129,7 @@ impl FundingCertificate {
             .expect("genuine sparse top-up membership tree");
         let message = Self::message(
             &roster,
-            genesis_roster_id,
+            genesis_authorization_id,
             tree.execution_root(),
             tree.leaf_count(),
             None,
@@ -1153,7 +1153,7 @@ impl FundingCertificate {
                 .witness(leaf.operation_id)
                 .expect("funding membership path"),
             seal_bundle: KagemushaMintFinalitySealBundleV1 { message, seals },
-            epoch_roster: roster.clone(),
+            authority_generation: roster.clone(),
         };
         finalized
             .validate_shape()
@@ -1173,14 +1173,14 @@ impl FundingCertificate {
             seal_bundle: KagemushaMintFinalitySealBundleV1 {
                 message: Self::message(
                     &roster,
-                    genesis_roster_id,
+                    genesis_authorization_id,
                     kagemusha_mint_finality_root_v1(empty_root),
                     0,
-                    Some(genesis_roster_id),
+                    Some(genesis_authorization_id),
                 ),
                 seals: Vec::new(),
             },
-            epoch_roster: roster,
+            authority_generation: roster,
         };
         bootstrap
             .validate_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
@@ -1188,12 +1188,12 @@ impl FundingCertificate {
         Self {
             bootstrap,
             finalized,
-            genesis_roster_id,
+            genesis_authorization_id,
         }
     }
 
     fn message(
-        roster: &KagemushaMintFinalityEpochRosterV1,
+        roster: &KagemushaMintFinalityAuthorityGenerationV1,
         epoch_id: DigestV1,
         root: Hash,
         count: u32,
@@ -1372,7 +1372,7 @@ impl MintKeys {
             release_id: generated.release_id,
             profile_digest: test_only_profile_digest,
             artifact_manifest_digest: test_only_manifest_digest,
-            genesis_roster_id: generated.genesis_roster_id,
+            genesis_authorization_id: generated.genesis_authorization_id,
         };
         let ep = KagemushaLoadedEpMintAuthorityArtifactsV1 {
             parameters: ParamsIPA::read(&mut Cursor::new(generated.ep_parameters.as_ref()))
@@ -1407,7 +1407,7 @@ impl MintKeys {
             release_id: generated.release_id,
             profile_digest: test_only_profile_digest,
             artifact_manifest_digest: test_only_manifest_digest,
-            genesis_roster_id: generated.genesis_roster_id,
+            genesis_authorization_id: generated.genesis_authorization_id,
         };
         let eq_protocol = compile(
             &eq.parameters,
@@ -1636,7 +1636,7 @@ impl MintKeys {
             KagemushaMintAuthorityGenerationWitnessV1 {
                 step: KagemushaMintAuthorityStepV1::FinalizedMint,
                 release_id: funding.finalized.statement.lifecycle.release_id,
-                genesis_roster_id: funding.genesis_roster_id,
+                genesis_authorization_id: funding.genesis_authorization_id,
                 eq_protocol_digest: self.eq_digest,
                 ep_protocol_digest: self.ep_digest,
                 eq_deferred_audit: [1; 32],
@@ -1782,7 +1782,7 @@ impl ProvenFunding {
             proof: self.proof.proof.clone(),
             finality_certificate_binding: self.proof.certificate_binding,
             finality_authority_head: self.proof.authority_head,
-            finality_genesis_roster_id: self.proof.genesis_roster_id,
+            finality_genesis_authorization_id: self.proof.genesis_authorization_id,
             finality_proof_binding_digest: self.proof.proof_binding_digest,
             encrypted_credit: material.authorization_relation.encrypted_credit.clone(),
             artifact_manifest_digest: authorization.statement.context.artifact_manifest_digest,
@@ -1843,7 +1843,7 @@ impl MintPadding {
         KagemushaMintAuthorityGenerationWitnessV1 {
             step: KagemushaMintAuthorityStepV1::Bootstrap,
             release_id: funding.bootstrap.statement.lifecycle.release_id,
-            genesis_roster_id: funding.genesis_roster_id,
+            genesis_authorization_id: funding.genesis_authorization_id,
             eq_protocol_digest: native_parent_protocol_digest_v1(eq, KagemushaPastaParityV1::Eq)
                 .expect("Eq mint parent identity"),
             ep_protocol_digest: native_parent_protocol_digest_v1(ep, KagemushaPastaParityV1::Ep)
@@ -1940,7 +1940,7 @@ fn certificate_signature_equations(certificate: &KagemushaMintCertificateWitness
         .signing_digest()
         .expect("fixture signing digest");
     certificate.seal_bundle.seals.iter().all(|seal| {
-        let keys = &certificate.epoch_roster.validators
+        let keys = &certificate.authority_generation.validators
             [usize::try_from(seal.validator_index).expect("fixture signer")];
         signature_equation::<EpAffine>(
             0,
@@ -1970,7 +1970,7 @@ struct RealFundedPrerequisite {
     hash_ep: KagemushaLoadedEpMintHashArtifactsV1,
     authorization_protocols: MintAuthorizationProtocols,
     authorization: ProvenMintAuthorization,
-    genesis_roster_id: DigestV1,
+    genesis_authorization_id: DigestV1,
     mint_protocols: MintProtocols,
     funded: ProvenFunding,
     mint_credit: iroha_data_model::kagemusha::KagemushaMintCreditV1,
@@ -2068,7 +2068,7 @@ fn prove_funded_prerequisite(
     mint_keys.decide(&funded.proof, &funded.eq_history, &funded.ep_history);
     let mint_credit = funded.mint_credit(&material, &authorization.authorization);
     let (mint_protocols, hash_eq, hash_ep) = mint_keys.into_protocols();
-    let genesis_roster_id = funding.genesis_roster_id;
+    let genesis_authorization_id = funding.genesis_authorization_id;
     drop(funding);
     halo2_proofs::release_allocator_slack();
     RealFundedPrerequisite {
@@ -2078,7 +2078,7 @@ fn prove_funded_prerequisite(
         hash_ep,
         authorization_protocols,
         authorization,
-        genesis_roster_id,
+        genesis_authorization_id,
         mint_protocols,
         funded,
         mint_credit,
@@ -2797,7 +2797,7 @@ fn funding_certificate_preflight_has_exact_real_quorum_and_positive_membership()
         "funding must not invent a positive bootstrap balance"
     );
     assert_eq!(funding.finalized.statement.amount, 1_000);
-    assert_eq!(funding.finalized.epoch_roster.validators.len(), 4);
+    assert_eq!(funding.finalized.authority_generation.validators.len(), 4);
     assert_eq!(funding.finalized.seal_bundle.seals.len(), 3);
     assert!(
         certificate_signature_equations(&funding.finalized),
@@ -3279,7 +3279,7 @@ pub(super) fn run_guarded_real_mint_authority_proof_v1() {
                 .expect("real issued mint credit binds the proved recipient authorization");
             assert_eq!(
                 prerequisite.funded.proof.authority_head,
-                prerequisite.genesis_roster_id
+                prerequisite.genesis_authorization_id
             );
             eprintln!(
                 "KAGEMUSHA real positive funding prerequisite wall time: {:?}",

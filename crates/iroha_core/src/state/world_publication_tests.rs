@@ -120,7 +120,7 @@ fn complete_world_preparation_holds_every_inventory_writer_and_matches_direct_co
     mutate(&mut original, 2, "world_publish");
     mutate(&mut reference, 2, "world_publish");
     let prepared = prepare(capture(original), &world);
-    assert_eq!(probes.len(), 278);
+    assert_eq!(probes.len(), 282);
     // Probe each original field separately, so an early busy field cannot hide
     // a missing writer later in the heterogeneous World inventory.
     for probe in probes {
@@ -295,7 +295,7 @@ fn every_busy_world_field_releases_all_earlier_writers_and_retains_complete_retr
             ]
         };
     }
-    let holders: [(&str, for<'a> fn(&'a World) -> Box<dyn WriterHold + 'a>); 278] =
+    let holders: [(&str, for<'a> fn(&'a World) -> Box<dyn WriterHold + 'a>); 282] =
         with_world_overlay_fields!(holders);
     let world = fixture();
     let before = all_images(&world);
@@ -378,7 +378,7 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
             ]
         };
     }
-    let invalidators: [(&str, fn(&World)); 278] = with_world_overlay_fields!(invalidators);
+    let invalidators: [(&str, fn(&World)); 282] = with_world_overlay_fields!(invalidators);
     let (name, invalidate) = invalidators.last().unwrap();
     assert_eq!(*name, last.name);
     let dropped = Arc::new(AtomicBool::new(false));
@@ -579,7 +579,7 @@ fn world_publication_unwind_retains_both_admissions_until_original_fields_drop()
                 })
             })
             .unwrap();
-        assert_eq!(journal.field_count(), 278);
+        assert_eq!(journal.field_count(), 282);
         // A separate read-only capture holds exact original-cut probes for every
         // real field before any unwind can poison its physical writer.
         let probe = capture(world.block());

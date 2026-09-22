@@ -1420,8 +1420,10 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // Public-validator administration has the explicit CanManagePeers gate above.
+    // Self-owned validator lifecycle reaches the exact ownership, lane policy,
+    // consensus-key, custody, and election checks in Core.
     if is_any!(
+        iroha_data_model::isi::staking::RegisterPublicLaneCandidate,
         iroha_data_model::isi::staking::RegisterPublicLaneValidator,
         iroha_data_model::isi::staking::ActivatePublicLaneValidator,
         iroha_data_model::isi::staking::ExitPublicLaneValidator,
@@ -1437,6 +1439,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::staking::SchedulePublicLaneUnbond,
         iroha_data_model::isi::staking::FinalizePublicLaneUnbond,
         iroha_data_model::isi::staking::ClaimPublicLaneRewards,
+        iroha_data_model::isi::staking::RecordPublicLaneRewards,
     ) {
         return true;
     }
@@ -1485,7 +1488,6 @@ fn initial_genesis_instruction_is_explicitly_admitted(instruction: &InstructionB
         iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition,
         iroha_data_model::isi::zk::CancelConfidentialPolicyTransition,
         iroha_data_model::isi::staking::SlashPublicLaneValidator,
-        iroha_data_model::isi::staking::RecordPublicLaneRewards,
     )
 }
 #[allow(clippy::too_many_lines)]
@@ -1681,24 +1683,34 @@ fn validate_initial_native_instruction_authority(
     if !is_genesis && default_denied_administrative_instruction {
         return deny("administrative instruction requires an explicit governed lifecycle");
     }
-    let mutates_public_validator_lifecycle = any
-        .downcast_ref::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>()
-        .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::staking::ActivatePublicLaneValidator>()
-            .is_some()
-        || any
-            .downcast_ref::<iroha_data_model::isi::staking::ExitPublicLaneValidator>()
-            .is_some();
-    if mutates_public_validator_lifecycle
+    let validator_owner = any
+        .downcast_ref::<iroha_data_model::isi::staking::RegisterPublicLaneCandidate>()
+        .map(|isi| &isi.registration.validator)
+        .or_else(|| {
+            any.downcast_ref::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>()
+                .map(|isi| &isi.validator)
+        })
+        .or_else(|| {
+            any.downcast_ref::<iroha_data_model::isi::staking::ActivatePublicLaneValidator>()
+                .map(|isi| &isi.validator)
+        })
+        .or_else(|| {
+            any.downcast_ref::<iroha_data_model::isi::staking::ExitPublicLaneValidator>()
+                .map(|isi| &isi.validator)
+        })
+        .or_else(|| {
+            any.downcast_ref::<iroha_data_model::isi::staking::RebindPublicLaneValidatorPeer>()
+                .map(|isi| &isi.validator)
+        });
+    if !is_genesis && validator_owner.is_some_and(|owner| owner != authority) {
+        return deny("public validator lifecycle requires the validator account authority");
+    }
+    if let Some(rewards) =
+        any.downcast_ref::<iroha_data_model::isi::staking::RecordPublicLaneRewards>()
         && !is_genesis
-        && !initial_authority_has_exact_permission(
-            state_transaction,
-            authority,
-            executor_permission::peer::CanManagePeers.into(),
-        )?
+        && rewards.reward_asset.account() != authority
     {
-        return deny("public validator lifecycle requires CanManagePeers");
+        return deny("public lane rewards require the reward treasury account authority");
     }
     if any
         .downcast_ref::<iroha_data_model::isi::staking::CancelConsensusEvidencePenalty>()

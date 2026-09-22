@@ -292,7 +292,6 @@ pub mod isi {
     use iroha_primitives::{
         json::Json,
         numeric::{Numeric, Quantity},
-        unique_vec::PushResult,
     };
     #[cfg(feature = "telemetry")]
     use iroha_torii_shared::status::GovernanceManifestActivation;
@@ -942,7 +941,7 @@ pub mod isi {
         }
         Ok(())
     }
-    fn has_exact_permission(
+    pub(crate) fn has_exact_permission(
         world: &WorldTransaction<'_, '_>,
         who: &AccountId,
         required: &Permission,
@@ -17006,7 +17005,7 @@ pub mod isi {
         }
     }
     #[allow(clippy::too_many_arguments)]
-    fn register_peer_identity_with_pop(
+    pub(crate) fn register_peer_identity_with_pop(
         peer_id: PeerId,
         pop: Vec<u8>,
         activation_at: Option<u64>,
@@ -17015,6 +17014,29 @@ pub mod isi {
         instruction_name: &'static str,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        if let Some(record) = prepare_peer_identity_with_pop(
+            peer_id.clone(),
+            pop,
+            activation_at,
+            expiry_at,
+            role,
+            instruction_name,
+            state_transaction,
+        )? {
+            commit_peer_identity_with_pop(peer_id, record, state_transaction);
+        }
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_peer_identity_with_pop(
+        peer_id: PeerId,
+        pop: Vec<u8>,
+        activation_at: Option<u64>,
+        expiry_at: Option<u64>,
+        role: ConsensusKeyRole,
+        instruction_name: &'static str,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Option<ConsensusKeyRecord>, Error> {
         // Every lane-consensus identity must support BLS batching.
         if state_transaction.pipeline.signature_batch_max_bls == 0 {
             iroha_logger::error!(
@@ -17060,7 +17082,7 @@ pub mod isi {
             )
         };
         let is_genesis = state_transaction._curr_block.is_genesis();
-        let world = &mut state_transaction.world;
+        let world = &state_transaction.world;
         let block_height = state_transaction._curr_block.height().get();
         let activation_expected = if is_genesis {
             block_height
@@ -17126,7 +17148,7 @@ pub mod isi {
                         instruction = instruction_name,
                         "exact duplicate peer registration during genesis; treating as no-op"
                     );
-                    return Ok(());
+                    return Ok(None);
                 }
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
@@ -17187,24 +17209,20 @@ pub mod isi {
             }
             return Err(err);
         }
-        if let PushResult::Duplicate(duplicate) = world.peers.push(peer_id.clone()) {
-            if is_genesis {
-                iroha_logger::debug!(
-                    %duplicate,
-                    instruction = instruction_name,
-                    "duplicate peer registration during genesis; treating as no-op"
-                );
-                return Ok(());
-            }
-            return Err(RepetitionError {
-                instruction: InstructionType::Register,
-                id: IdBox::PeerId(duplicate),
-            }
-            .into());
-        }
-        upsert_consensus_key(world, &lifecycle_record.id, lifecycle_record.clone());
+        Ok(Some(lifecycle_record))
+    }
+    /// Publish a peer identity whose exact record was prepared in this transaction.
+    pub(crate) fn commit_peer_identity_with_pop(
+        peer_id: PeerId,
+        record: ConsensusKeyRecord,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        // No instruction or trigger executes between preparation and commit.
+        // The preparation proved the peer absent and the identifier unoccupied.
+        let world = &mut state_transaction.world;
+        let _ = world.peers.push(peer_id.clone());
+        upsert_consensus_key(world, &record.id, record.clone());
         world.emit_events(Some(PeerEvent::Added(peer_id)));
-        Ok(())
     }
     /// Register a global-voter peer (BLS-normal with `PoP`).
     impl Execute for iroha_data_model::isi::register::RegisterPeerWithPop {
@@ -19939,6 +19957,31 @@ pub mod isi {
                 .get(&domain_id)
                 .cloned()
                 .unwrap_or_default();
+            // Pinned custody survives staking selector and alias changes. Protect it before
+            // domain teardown stages permission, endorsement or balance removals.
+            if let Some(asset) = state_transaction
+                .world
+                .public_lane_stake_custody
+                .iter()
+                .map(|(_, (asset, _))| asset)
+                .chain(
+                    state_transaction
+                        .world
+                        .public_lane_stake_reserves
+                        .iter()
+                        .map(|(asset, _)| asset),
+                )
+                .find(|asset| remove_asset_definitions.contains(asset.definition()))
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: asset definition {} is referenced by pinned public-lane staking custody; release all held stake first",
+                        asset.definition(),
+                    )
+                    .into(),
+                )
+                .into());
+            }
             // Domain teardown removes balances and definitions directly, so it
             // must preserve the same game reserves as individual unregistration.
             // Check the bounded domain index before staging any teardown writes.
@@ -33286,6 +33329,49 @@ seiyaku GovernanceLifecycle {
                     .get(&target_definition)
                     .is_some()
             );
+        });
+        world_test!(unregister_domain_preserves_pinned_staking_custody_after_config_change {
+            let state = blank_state();
+            let domain_id = DomainId::try_new("custody", "universal").unwrap();
+            state_transaction!(state, block, state_block, stx);
+            Register::domain(Domain::new(domain_id.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "register custody domain");
+            let definition = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "stake".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                definition.clone(),
+                "stake",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "register pinned stake definition");
+            stx.nexus.staking.stake_asset_id = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("replacement", "universal").unwrap(),
+                "stake".parse().unwrap(),
+            ).to_string();
+            let key = (LaneId::SINGLE, ALICE_ID.clone());
+            let asset = AssetId::new(definition.clone(), ALICE_ID.clone());
+            stx.world.public_lane_stake_custody.insert(key.clone(), (asset.clone(), Quantity::one()));
+            for has_custody_row in [true, false] {
+                let reserves_before = stx.world.public_lane_stake_reserves.get(&asset).cloned();
+                let error = Unregister::domain(domain_id.clone())
+                    .expect_execute_err(&ALICE_ID, &mut stx, "pinned stake domain must remain registered");
+                assert_contains!(format!("{error:?}"), "pinned public-lane staking custody", "unexpected error: {error}");
+                assert!(stx.world.domains.get(&domain_id).is_some());
+                assert!(stx.world.asset_definitions.get(&definition).is_some());
+                assert_eq!(stx.world.public_lane_stake_reserves.get(&asset), reserves_before.as_ref());
+                if has_custody_row {
+                    stx.world.public_lane_stake_custody.remove(key.clone());
+                    stx.world.public_lane_stake_reserves.insert(asset.clone(), Quantity::one());
+                }
+            }
+            stx.world.public_lane_stake_reserves.remove(asset);
+            Unregister::domain(domain_id.clone())
+                .expect_execute(&ALICE_ID, &mut stx, "former custody domain may be removed after release");
+            assert!(stx.world.domains.get(&domain_id).is_none());
+            assert!(stx.world.asset_definitions.get(&definition).is_none());
         });
         world_test!(unregister_domain_ignores_mismatched_public_lane_reward_record_for_domain_asset {
             let state = blank_state();

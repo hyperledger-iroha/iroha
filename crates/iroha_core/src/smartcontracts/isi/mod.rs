@@ -516,6 +516,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::nexus::UnenrollFeeSponsorBeneficiary>,
     dispatch_instruction::<iroha_data_model::isi::nexus::FundFeeSponsorProgram>,
     dispatch_instruction::<iroha_data_model::isi::nexus::WithdrawFeeSponsorProgram>,
+    dispatch_instruction::<iroha_data_model::isi::staking::RegisterPublicLaneCandidate>,
     dispatch_instruction::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::BondPublicLaneStake>,
     dispatch_instruction::<iroha_data_model::isi::staking::SchedulePublicLaneUnbond>,
