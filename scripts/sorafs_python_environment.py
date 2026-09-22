@@ -6,10 +6,62 @@ bootstrap, network resolver, caller code or arbitrary pip options are accepted.
 """
 from __future__ import annotations
 
-from pathlib import Path
+import hashlib
+from pathlib import Path, PurePosixPath
+import re
 
-from sorafs_python_consumer_artifact import ArtifactError, canonical_json
+from sorafs_python_consumer_artifact import ArtifactError, canonical_json, _digest, _path
 from sorafs_evidence_json import decode_evidence_json
+
+
+BOOTSTRAP_FILES = frozenset({"pyvenv.cfg", "bin/python", "bin/python3", "bin/python3.12",
+                             "bin/activate", "bin/activate.csh", "bin/activate.fish", "bin/Activate.ps1"})
+_BOOTSTRAP_INTERPRETERS = frozenset({"bin/python", "bin/python3", "bin/python3.12"})
+_MAX_BOOTSTRAP_EXECUTABLE_BYTES = 256 * 1024 * 1024
+_MAX_BOOTSTRAP_CONFIG_BYTES = 64 * 1024
+_MAX_BOOTSTRAP_ACTIVATION_BYTES = 1024 * 1024
+
+
+def verify_environment_bootstrap(files: dict[str, bytes], runtime, environment: Path) -> dict[str, bytes]:
+    """Join the stock POSIX CPython bootstrap without opening historical paths.
+
+    Call inspect_environment independently for startup policy. The caller owns
+    the complete file inventory and must retain/compare this exact subset across
+    installation and execution. Activation files are bounded generated output,
+    not reconstructed source or independently authenticated executable input.
+    """
+    if type(files) is not dict or not BOOTSTRAP_FILES <= files.keys():
+        raise ArtifactError("private environment bootstrap inventory differs")
+    if not isinstance(environment, (Path, PurePosixPath)):
+        raise ArtifactError("private environment bootstrap path is malformed")
+    selected = PurePosixPath(_path(runtime.executable.path, absolute=True))
+    destination = _path(str(environment), absolute=True)
+    if (runtime.platform not in ("darwin", "linux")
+            or selected.name not in ("python", "python3", "python3.12")
+            or type(runtime.version) is not str or len(runtime.version) > 64
+            or re.fullmatch(r"3\.12\.(?:0|[1-9][0-9]*)", runtime.version) is None):
+        raise ArtifactError("private environment bootstrap runtime profile differs")
+    digest = _digest(runtime.executable.sha256)
+    size = runtime.executable.size
+    if type(size) is not int or not 0 < size <= _MAX_BOOTSTRAP_EXECUTABLE_BYTES:
+        raise ArtifactError("private environment bootstrap executable size differs")
+    for name in BOOTSTRAP_FILES:
+        body = files[name]
+        maximum = (size if name in _BOOTSTRAP_INTERPRETERS else
+                   _MAX_BOOTSTRAP_CONFIG_BYTES if name == "pyvenv.cfg" else
+                   _MAX_BOOTSTRAP_ACTIVATION_BYTES)
+        if type(body) is not bytes or not 0 < len(body) <= maximum:
+            raise ArtifactError("private environment bootstrap member exceeds its bound")
+        if name in _BOOTSTRAP_INTERPRETERS and (len(body) != size or hashlib.sha256(body).hexdigest() != digest):
+            raise ArtifactError("private environment bootstrap interpreter differs from original runtime")
+    # CPython's create_configuration renders these five fields in this order.
+    expected = (f"home = {selected.parent}\ninclude-system-site-packages = false\n"
+                f"version = {runtime.version}\nexecutable = {selected}\n"
+                f"command = {selected} -m venv --copies --without-pip {destination}\n").encode("utf-8")
+    if files["pyvenv.cfg"] != expected:
+        raise ArtifactError("private environment bootstrap configuration differs from original runtime")
+    return {name: files[name] for name in sorted(BOOTSTRAP_FILES)}
+
 
 RUNTIME_PROBE = r'''
 import ctypes, json, os, pathlib, sys, sysconfig

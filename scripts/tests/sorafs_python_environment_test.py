@@ -14,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 from sorafs_python_consumer_artifact import ArtifactError, canonical_json
 from sorafs_python_environment import (
-    RUNTIME_PROBE, inspect_environment, pinned_requirements, verify_distributions,
-    verify_runtime_probe,
+    BOOTSTRAP_FILES, RUNTIME_PROBE, inspect_environment, pinned_requirements, verify_distributions,
+    verify_environment_bootstrap, verify_runtime_probe,
 )
 from sorafs_python_process import run_python_process
 from sorafs_python_producer_inputs import OriginalInputs, capture_tree
@@ -153,6 +153,12 @@ def test_actual_without_pip_environment_and_runtime_probe(tmp_path):
                              directory_links=links)
     inspect_environment(files, installed=False)
     assert files["bin/python3.12"] == Path(python).read_bytes()
+    original = Path(python).read_bytes()
+    profile.executable.sha256 = hashlib.sha256(original).hexdigest()
+    profile.executable.size = len(original)
+    bootstrap = verify_environment_bootstrap(files, profile, environment)
+    assert set(bootstrap) == BOOTSTRAP_FILES == set(files)
+    assert all(bootstrap[name] == original for name in ("bin/python", "bin/python3", "bin/python3.12"))
     raw = run("private", [str(environment / "bin/python3.12"), "-I", "-B", "-c", RUNTIME_PROBE])
     verify_runtime_probe(raw, profile, environment=environment)
 

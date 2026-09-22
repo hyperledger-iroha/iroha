@@ -28,7 +28,10 @@ records bounded component ownership changes and their remaining qualification.
 The [current checkout record](../docs/history/2026-09-21/current-optimizations-qualification.md)
 separates newer runtime validation and executing Cell ownership from superseded
 failures, and records [SDK input ownership](sorafs/reference_sdk_package_index.md)
-and the [Python producer](sorafs/python_consumer_producer_v1.md).
+and the [Python producer](sorafs/python_consumer_producer_v1.md) with its
+[original-index verifier](sorafs/python_index_adapter_v1.md). The
+[September 22 checkpoint](../docs/history/2026-09-22/python-index-integration.md)
+records its source-observed component validation; it does not close F12 or SF11.
 
 The component ledgers remain the detailed acceptance authorities:
 [privacy](privacy_first_release_closure.md),

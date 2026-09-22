@@ -16,6 +16,7 @@ import zipfile
 
 from sorafs_python_consumer_artifact import ArtifactError, _VERIFIER as verifier, _require
 from sorafs_python_dependency_inputs import DependencyWheel, MODULES, MAX_WHEEL_BYTES
+from sorafs_python_environment import BOOTSTRAP_FILES
 
 MAX_MEMBERS = verifier.MAX_ARCHIVE_MEMBERS
 MAX_TOTAL_BYTES = verifier.MAX_TOTAL_UNCOMPRESSED_BYTES
@@ -84,6 +85,9 @@ def _console_scripts(payload: bytes | None, module: str) -> tuple[str, ...]:
     if module == "pip":
         _require("pip" in result, "pinned pip wheel omits its canonical console entry point")
         result.update(("pip3", "pip3.12"))
+    reserved = {name.removeprefix("bin/").casefold() for name in BOOTSTRAP_FILES if name.startswith("bin/")}
+    _require(not any(name.casefold() in reserved for name in result),
+             "dependency console script collides with the environment bootstrap")
     _require(len({value.casefold() for value in result}) == len(result), "dependency console scripts alias")
     return tuple(sorted(result))
 

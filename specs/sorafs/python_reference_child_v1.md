@@ -50,7 +50,8 @@ dependencies and all 231 phases. Parsing it alone conveys no producer authority.
 The [source-owned parent](python_consumer_producer_v1.md) supplies full CPython
 runtime/stdlib and original wheel/dependency custody, bounded process execution,
 actual logs, native manifest and candidate-source joins, and publication after
-final original-input verification. TODO: complete its original-index adapter and
-signed aggregate integration, then execute matching-candidate qualification.
+final original-input verification. The [original-index adapter](python_index_adapter_v1.md)
+replays those byte relationships without reopening historical producer paths.
+TODO: complete signed aggregate integration and matching-candidate qualification.
 Synthetic runner controls and the original inert wheel harness are not execution
 of the canonical native assertions, cross-platform or SF11 release qualification.

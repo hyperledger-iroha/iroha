@@ -3,7 +3,8 @@
 The sole V1 inventory is `sorafs.reference_sdk.package_index.v1`, implemented in
 `scripts/sorafs_sdk_artifact_index.py`. It owns actual input files; parsing an
 inventory does not establish execution, signer authority or release readiness.
-The Java adapter is `scripts/sorafs_sdk_java_artifact_verifier.py`.
+The adapters are `scripts/sorafs_sdk_java_artifact_verifier.py` and
+`scripts/sorafs_sdk_python_artifact_verifier.py`.
 
 ## Exact structure
 
@@ -78,9 +79,10 @@ The existing `ci/verify_privacy_python_wheel.py` now provides the sole bounded
 `parse_wheel_bytes` archive/RECORD parser for immutable captured inputs. Its
 `WheelArchive` result carries no file or execution authority; the existing
 `preflight_wheel` owner retains stable-file and expected-seal checks before
-delegating to it. A future Python adapter must use original indexed wheel bytes
-and independently join executed/loaded members, rather than treating this
-structural parse as an execution result.
+delegating to it. The [Python adapter](python_index_adapter_v1.md) consumes the
+original indexed wheel bytes and joins executed/loaded-member observations to
+their complete captured installed content. Structural parsing alone is not an
+execution result.
 
 The [fixed Python child contract](python_reference_child_v1.md) now owns
 same-process installed/loaded-module rechecks and the exact 77 reference cases
@@ -92,13 +94,14 @@ authenticates the recorded digest against every actual log byte preceding the
 final report frame. It does not authenticate the process that supplied those
 observations. The [parent producer](python_consumer_producer_v1.md) now joins
 original native/SDK and dependency bytes, complete CPython/stdlib custody, actual
-process logs and final publication checks. The original-index Python adapter and
-signed producer/aggregate joins remain required before its execution can
+process logs and final publication checks. The original-index Python adapter
+consumes all twenty input roles with independently selected runtime/dependency
+pins. Signed producer/aggregate joins remain required before its execution can
 participate in the aggregate. Its pytest 9.0.3 requirement matches
 `scripts/requirements.txt`; the separate pytest 8.4.2 CI lock is not that input's
 authority. Existing reference assertions and wheel verification are unchanged.
 
-TODO: implement and review the other five concrete executed-package adapters,
+TODO: implement and review the other four concrete executed-package adapters,
 then connect this inventory to the existing signed aggregate, ReleaseManifest
 custody/completion verification and SF11 consumer derivation in one cutover.
 The current SF11 Boolean/digest assertions cannot close these requirements.

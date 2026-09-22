@@ -38,7 +38,8 @@ ordered cases/231 successful phases. Complete installed bytes, source copies,
 native/SDK installed RECORD/direct_url metadata and process observations belong
 to the execution archive. Original wheels remain separate inputs. A separate
 bounded runtime bundle retains executable, shared-runtime and stdlib bytes for
-the future adapter without reopening live host paths.
+the [original-index adapter](python_index_adapter_v1.md) without reopening live
+host paths.
 
 The two exact reviewed package recipes select the complete candidate source/data
 inventory, and each original wheel must match it before installation. The same
@@ -57,7 +58,7 @@ links. Cleanup only closes handles after publication. This does not claim atomic
 power-loss durability or signed producer authority. The nested native Python
 probe explicitly uses `-I -B`, keeping missing bytecode from changing its inputs.
 
-TODO: complete the original-index Python adapter and signed aggregate integration.
+TODO: complete signed aggregate integration of the original-index Python adapter.
 The unsigned producer is not a promotion authority. Component fixtures, process
 controls and fresh-venv mechanics do not execute the canonical native assertions
 or qualify any supported platform. Matching-candidate native execution, all SDK
@@ -87,3 +88,14 @@ and cancellation cleanup. The generic checker reaps its direct child and makes
 no standalone arbitrary-descendant containment claim. Actual Windows execution,
 separate Git/source-manifest collectors and in-process C probes require their
 own qualification; Windows pipe API controls alone do not provide that evidence.
+
+The producer and adapter share the explicit POSIX `_crypto.abi3.so` profile;
+archive admission does not depend on the verifying host's extension suffixes.
+The fresh environment has exactly three original interpreter copies, four
+generated activation files and the exact `pyvenv.cfg`. All eight bootstrap files
+remain byte-identical through installation, execution and publication. Dependency
+console names cannot occupy their reserved paths, including case aliases.
+Activation files are bounded, retained output and never executed or claimed as
+independently reproduced source. The shared report-origin join checks Python,
+pytest, both installed packages and loaded modules against captured original
+bytes; physical file checks stay with the live producer.

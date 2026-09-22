@@ -7,8 +7,9 @@ pytest options or output paths are accepted. Stdout contains bounded captured
 logs followed by one report frame; the parent must retain and authenticate both.
 
 The source-owned parent supplies runtime, dependency and child-process custody.
-TODO: complete the original-index adapter and independently authenticated
-candidate/producer approval. This child is not a sandbox or release authority;
+The original-index adapter consumes the resulting byte relationships.
+TODO: complete independently authenticated candidate/producer approval.
+This child is not a sandbox or release authority;
 synthetic controls cannot qualify actual wheel/native execution.
 """
 from __future__ import annotations

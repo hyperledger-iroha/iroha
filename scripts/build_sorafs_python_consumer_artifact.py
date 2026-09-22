@@ -30,12 +30,13 @@ from sorafs_python_dependency_archive import parse_dependency_wheel
 from sorafs_python_dependency_inputs import parse_dependency_manifest
 from sorafs_python_dependency_install import verify_dependency_install
 from sorafs_python_environment import (
-    inspect_environment, pinned_requirements,
+    BOOTSTRAP_FILES, inspect_environment, pinned_requirements, verify_environment_bootstrap,
     verify_distributions, verify_runtime_probe,
 )
 from sorafs_python_package_source import authenticate_package_source
 from sorafs_python_process import run_python_process
 from sorafs_python_publication import PythonArtifactPublication
+from sorafs_python_report_origins import verify_report_origins
 from sorafs_python_producer_inputs import (
     POSIX_EXTENSION_SUFFIXES, OriginalInputs, capture_tree, child, identity,
     installed_wheel_join, native_member, source_snapshot, verifier, write_fresh,
@@ -51,6 +52,7 @@ TOOLS = ("build_sorafs_python_consumer_artifact.py", "sorafs_python_consumer_art
          "sorafs_python_dependency_inputs.py", "sorafs_python_dependency_archive.py",
          "sorafs_python_dependency_install.py", "sorafs_python_package_source.py",
          "sorafs_python_publication.py", "sorafs_python_archive.py", "sorafs_python_commands.py",
+         "sorafs_python_report_origins.py",
          "sorafs_evidence_json.py",
          "sorafs_evidence_paths.py", "sorafs_evidence_sensitivity.py", "sorafs_path_identity.py",
          "sorafs_sdk_artifact_index.py", "check_native_sdk_abi23_artifact.py",
@@ -182,8 +184,9 @@ def _produce(args: argparse.Namespace, originals: OriginalInputs, copied: Origin
 
     fresh = capture_environment()
     inspect_environment(fresh, installed=False)
-    if identity(fresh["bin/python3.12"]) != {"sha256": runtime.executable.sha256, "size": runtime.executable.size}:
-        raise ArtifactError("new interpreter differs from original executable bytes")
+    bootstrap = verify_environment_bootstrap(fresh, runtime, environment)
+    if set(fresh) != BOOTSTRAP_FILES:
+        raise ArtifactError("new environment differs from the exact bootstrap inventory")
     env_originals.read(selected_python, verifier.MAX_MEMBER_BYTES, hold=True)
     env_originals.read(environment / "pyvenv.cfg", 64 * 1024, hold=True)
     before_env = run("environment-before")
@@ -196,14 +199,22 @@ def _produce(args: argparse.Namespace, originals: OriginalInputs, copied: Origin
     inspect_environment(installed, installed=True)
 
     def authenticate_install(files):
+        if verify_environment_bootstrap(files, runtime, environment) != bootstrap:
+            raise ArtifactError("original bootstrap changed during installation or execution")
         native_sdk = tuple(verifier.verify_installed_files(wheel, verifier.derive_installed_layout(
             environment_root=environment, site_roots={environment / "lib/python3.12/site-packages"},
             wheel=wheel)) for wheel in wheels)
-        return verify_dependency_install(tuple(dependency_archives), files, environment=environment,
-                                         wheel_paths_by_module=dependency_paths,
-                                         native_sdk_content=tuple(value.content for value in native_sdk))
+        content = tuple(value.content for value in native_sdk)
+        dependencies = verify_dependency_install(tuple(dependency_archives), files, environment=environment,
+                                                  wheel_paths_by_module=dependency_paths,
+                                                  native_sdk_content=content)
+        owned = BOOTSTRAP_FILES | {row.path for row in dependencies.files}
+        owned |= {"lib/python3.12/site-packages/" + row.name for value in content for row in value.files}
+        if set(files) != owned:
+            raise ArtifactError("installed environment contains unowned files")
+        return dependencies, content
 
-    installed_dependencies = authenticate_install(installed)
+    installed_dependencies, installed_contents = authenticate_install(installed)
     expected_distributions = {wheel.module: wheel.version for wheel in dependencies.wheels}
     expected_distributions.update({wheel.owner.distribution: wheel.metadata_version for wheel in wheels})
     distribution_output = run("installed-distributions")
@@ -224,6 +235,13 @@ def _produce(args: argparse.Namespace, originals: OriginalInputs, copied: Origin
     for observation, wheel in zip(consumed.observations.wheels, wheels, strict=True):
         for name, raw in installed_wheel_join(observation, wheel, env_originals).items():
             retained["installed-metadata/" + name] = raw
+    metadata = verify_report_origins(consumed.observations, environment=environment,
+                                     snapshot=work / "snapshot", sources=sources, environment_files=installed,
+                                     wheels=tuple(zip(parsed_wheels, installed_contents, strict=True)),
+                                     wheel_paths=tuple(wheel.path for wheel in wheels),
+                                     wheel_seals=tuple(wheel.seal for wheel in wheels), runtime=runtime)
+    if any(retained.get(name) != raw for name, raw in metadata.items()):
+        raise ArtifactError("live and captured report metadata origins differ")
     retained["child-report.json"] = consumed.report_bytes
     if capture_environment() != installed:
         raise ArtifactError("installed environment changed during fixed child execution")
@@ -258,7 +276,8 @@ def _produce(args: argparse.Namespace, originals: OriginalInputs, copied: Origin
     def check_originals():
         # Every owner stays live through publication. No check is deferred until
         # context cleanup after a completed final artifact name becomes visible.
-        if capture_environment() != installed or authenticate_install(installed) != installed_dependencies:
+        if (capture_environment() != installed
+                or authenticate_install(installed) != (installed_dependencies, installed_contents)):
             raise ArtifactError("installed environment changed before publication")
         for parsed, expected in zip(parsed_wheels, package_sources, strict=True):
             if authenticate_package_source(parsed, root, originals) != expected:

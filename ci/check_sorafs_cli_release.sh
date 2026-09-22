@@ -98,6 +98,9 @@ python3 -m pytest -q \
   scripts/tests/python_zip_directory_admission_test.py \
   scripts/tests/sorafs_python_child_input_content_test.py \
   scripts/tests/sorafs_python_posix_profile_test.py \
+  scripts/tests/sorafs_python_bootstrap_origin_test.py \
+  scripts/tests/sorafs_python_report_origins_test.py \
+  scripts/tests/sorafs_sdk_python_artifact_verifier_test.py \
   scripts/tests/sorafs_python_child_runner_test.py \
   scripts/tests/sorafs_python_consumer_artifact_test.py \
   scripts/tests/build_sorafs_python_consumer_artifact_test.py \

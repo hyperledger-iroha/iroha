@@ -424,7 +424,7 @@ def consume_runtime_output(raw: bytes, *, expected_input_sha256: str, test_sourc
     observations = parse_report(report, expected_input_sha256=expected_input_sha256, test_source=test_source)
     _require(observations.captured_output == CapturedOutput(len(output), hashlib.sha256(output).hexdigest()),
              "actual preceding process bytes differ from child captured_output")
-    # TODO: The parent/adapter must independently bind full CPython and dependency
-    # inputs, original indexed wheel bytes and native manifest. These observations
-    # alone carry no original-input, installed-wheel, or process authority.
+    # Parent and original-index adapter own the CPython/dependency/wheel/native
+    # joins. TODO: complete their signed producer/aggregate approval integration.
+    # These observations alone carry no original-input or process authority.
     return RuntimeOutput(output, report, observations)
