@@ -1,6 +1,6 @@
 # FASTPQ production readiness
 
-Updated: 2026-09-12. **Production qualification is unavailable.** The selected
+Updated: 2026-09-22. **Production qualification is unavailable.** The selected
 completion target is succinct verification from bounded authenticated openings.
 A successful local test, feature build, arithmetic calculation, or benchmark
 manifest is not a release qualification decision.
@@ -47,6 +47,25 @@ merged-source complete producer and release resource qualification remain
 required. The fixed-column synthetic AIR exercises framing and openings, not
 release semantics.
 
+The [September 22 parallel-verifier checks](../docs/history/2026-09-22/fastpq-parallel-verification.md)
+pass 49 focused Linux tests, including irregular depth-19 frontiers across the
+serial/parallel threshold, producer admission and the public verification API.
+FASTPQ source stayed unchanged through that build and execution; concurrent
+Halo2 changes prevent a frozen dependency-closure claim. Complete proof execution
+and release performance qualification are separate from those focused checks.
+
+The applied fixed-width row codec separately passes five new byte/canonicality/
+allocation/equivalence tests and 30 resource, producer, API and corrected boundary
+checks. The complete shared-opening test run and new-layout quantity artifacts
+remain pending; the same September 22 record distinguishes those results and
+retains the initial compiler and test failures.
+
+The borrowed hash-body framing also passes 37 focused checks, including exact
+wire/hash equivalence, typed binding, the fixed-row codec and the public API.
+It removes temporary field vectors and digest copies while retaining the same
+canonical BodyV1 bytes. The measured full-producer follow-up remains pending;
+this focused result does not establish a latency improvement.
+
 The fixed geometry has 65,536 rows, 342 columns, 923 slots, 375 unique queries,
 17 binary folds and four terminal values. The 22-message transcript expands 931
 six-word blocks, including the complete fixed 401-candidate query tape. Its
@@ -55,10 +74,15 @@ SHAKE experiment. Earlier proof digests, counts and timing measurements below
 are explicitly prior-snapshot diagnostics and cannot qualify this implementation.
 Compilation is also distinct from complete proof execution and external review.
 
+The fixed row codec stores exactly 342 canonical little-endian u64 cells per
+row, without per-cell lengths or a row-vector count. At 750 opened rows this
+removes 262,501 framed bytes; it changes no authenticated value or mathematical
+profile. The sole fixed-row schema rejects prior variable-row frames.
+
 The current DTO requires at least 1,050,000 raw bytes for its 375 complete rows
 and mixed/quotient pairs, before any framing, indices, roots or FRI openings.
 This exceeds the 512 KiB compact proof target and 1 MiB AXT ceiling. The producer
-requires its fixed valid-shape upper bound of 4,279,877 framed bytes per segment,
+requires its fixed valid-shape upper bound of 4,017,376 framed bytes per segment,
 with a separate 7,791,716-byte internal repeated-opening bound. The replay
 defaults are a different resource policy and cannot admit this offline profile.
 Explicit offline budgets provide no production qualification. The internally

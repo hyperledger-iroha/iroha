@@ -7,8 +7,8 @@ use std::alloc::Layout;
 
 // These layouts describe the concrete Box pointees constructed below. Lifetimes
 // do not change layout; no target owner, value, reader or writer is acquired.
-pub(super) fn storage_shell_layout<K: Key, V: Value>() -> Layout {
-    Layout::new::<PreparedStorage<'static, K, V>>()
+pub(super) fn storage_shell_layout<K: Key, V: Value, M: WorldStorageMode<K, V>>() -> Layout {
+    Layout::new::<PreparedStorage<'static, K, V, M>>()
 }
 
 pub(super) fn cell_shell_layout<V: Value>() -> Layout {
@@ -30,8 +30,8 @@ pub(in crate::state) struct FieldRefusal {
     pub field: &'static str,
     /// Inner TriggerSet component, when that aggregate refused preparation.
     pub trigger_component: Option<&'static str>,
-    /// Busy, changed or poisoned original publication; never a consensus verdict.
-    pub cause: PublicationPreparationError<Infallible>,
+    /// Original physical or pool-scope refusal; never a consensus verdict.
+    pub cause: PublicationPreparationError<mv::storage::AdmittedStorageError>,
 }
 
 /// Local refusal retains the original World journals in their caller-owned slot.
@@ -58,50 +58,50 @@ enum FieldPhase<Slot, Prepared> {
     Recovered,
 }
 
-struct PreparedStorage<'target, K: Key, V: Value> {
-    original: Option<Box<RetainedStorage<K, V>>>,
-    phase: FieldPhase<
-        mv::storage::DetachedPublicationSlot<'target, K, V, (), ()>,
-        mv::storage::PreparedPublication<'target, K, V, (), ()>,
-    >,
-    published: Option<mv::storage::PublishedPublication<K, V, (), ()>>,
-    aborted: Option<mv::PublicationCleanup<()>>,
+struct PreparedStorage<'target, K: Key, V: Value, M: WorldStorageMode<K, V>> {
+    original: Option<Box<RetainedStorage<K, V, M>>>,
+    phase: FieldPhase<M::Slot<'target>, M::Prepared<'target>>,
+    published: Option<M::Published<'target>>,
+    aborted: Option<M::Aborted<'target>>,
     released: bool,
     normal_recovery: bool,
 }
 
-impl<K: Key, V: Value> PreparedWorldField for PreparedStorage<'_, K, V> {
+impl<K: Key, V: Value, M: WorldStorageMode<K, V>> PreparedWorldField
+    for PreparedStorage<'_, K, V, M>
+where
+    M::Charge: Send + Sync + 'static,
+{
     fn try_prepare(&mut self) -> Result<(), FieldRefusal> {
         assert!(!self.released, "original field was terminally released");
         let name = self.original.as_ref().expect("original field box").name;
         let FieldPhase::Preparing(slot) = &mut self.phase else {
             panic!("original field preparation is one-shot");
         };
-        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))
-            .map_err(|cause| FieldRefusal {
-                field: name,
-                trigger_component: None,
-                cause,
-            })?;
+        M::try_prepare(slot).map_err(|cause| FieldRefusal {
+            field: name,
+            trigger_component: None,
+            cause,
+        })?;
         let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)
         else {
             unreachable!("checked original field slot");
         };
-        self.phase = FieldPhase::Prepared(slot.into_prepared());
+        self.phase = FieldPhase::Prepared(M::into_prepared(slot));
         Ok(())
     }
 
     fn release(&mut self) {
         self.released = true;
         if let FieldPhase::Preparing(slot) = &mut self.phase {
-            slot.release_writers();
+            M::release_writers(slot);
         } else if matches!(&self.phase, FieldPhase::Prepared(_)) {
             let FieldPhase::Prepared(journal) =
                 std::mem::replace(&mut self.phase, FieldPhase::Recovered)
             else {
                 unreachable!("original prepared field");
             };
-            let (journal, retirement) = journal.abort();
+            let (journal, retirement) = M::abort(journal);
             self.original.as_mut().expect("original field box").journal = Some(journal);
             self.aborted = Some(retirement);
         }
@@ -117,7 +117,7 @@ impl<K: Key, V: Value> PreparedWorldField for PreparedStorage<'_, K, V> {
         }
         match &mut self.phase {
             FieldPhase::Preparing(slot) => {
-                let journal = slot.recover_original();
+                let journal = M::recover_original(slot);
                 self.original.as_mut().expect("original field box").journal = Some(journal);
             }
             FieldPhase::Prepared(_) => {
@@ -126,7 +126,7 @@ impl<K: Key, V: Value> PreparedWorldField for PreparedStorage<'_, K, V> {
                 else {
                     unreachable!("original prepared field");
                 };
-                let (journal, retirement) = journal.abort();
+                let (journal, retirement) = M::abort(journal);
                 self.original.as_mut().expect("original field box").journal = Some(journal);
                 self.aborted = Some(retirement);
             }
@@ -151,21 +151,25 @@ impl<K: Key, V: Value> PreparedWorldField for PreparedStorage<'_, K, V> {
         else {
             unreachable!("checked original prepared field");
         };
-        self.published = Some(journal.publish());
+        self.published = Some(M::publish(journal));
         self.released = true;
     }
 }
 
-pub(super) fn storage_slot<'target, K: Key, V: Value>(
-    mut original: Box<RetainedStorage<K, V>>,
+pub(super) fn storage_slot<'target, K: Key, V: Value, M: WorldStorageMode<K, V>>(
+    mut original: Box<RetainedStorage<K, V, M>>,
     world: &'target World,
-) -> Box<dyn PreparedWorldField + 'target> {
+    scope: Option<&'target AllocationScope<'target>>,
+) -> Box<dyn PreparedWorldField + 'target>
+where
+    M::Charge: Send + Sync + 'static,
+{
     let target = (original.target)(world);
     let journal = original.journal.take().expect("retained original journal");
     // Inert shell construction precedes every field's physical preparation.
     Box::new(PreparedStorage {
         original: Some(original),
-        phase: FieldPhase::Preparing(journal.publication_slot(target)),
+        phase: FieldPhase::Preparing(M::publication_slot(journal, target, scope)),
         published: None,
         aborted: None,
         released: false,
@@ -196,7 +200,7 @@ impl<V: Value> PreparedWorldField for PreparedCell<'_, V> {
             .map_err(|cause| FieldRefusal {
                 field: name,
                 trigger_component: None,
-                cause,
+                cause: storage_mode::widen_untracked(cause),
             })?;
         let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)
         else {
@@ -313,7 +317,7 @@ impl PreparedWorldField for PreparedTriggers<'_> {
                 SetPublicationError::Component { field, cause } => FieldRefusal {
                     field: name,
                     trigger_component: Some(field),
-                    cause,
+                    cause: storage_mode::widen_untracked(cause),
                 },
             })?;
         let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)
@@ -482,6 +486,7 @@ impl<Admission> DetachedWorld<Admission> {
     pub(in crate::state) fn try_prepare_publication<'target, Installation, E>(
         self,
         target: &'target World,
+        scope: Option<&'target AllocationScope<'target>>,
         admit: impl FnOnce(&Self, &World) -> Result<Installation, E>,
     ) -> Result<
         PreparedWorld<'target, Admission, Installation>,
@@ -491,7 +496,7 @@ impl<Admission> DetachedWorld<Admission> {
             AbortedWorld<'target, Installation>,
         ),
     > {
-        let mut slot = self.publication_slot(target);
+        let mut slot = self.publication_slot(target, scope);
         match slot.try_prepare(admit) {
             Ok(()) => Ok(slot.into_prepared()),
             Err(error) => {

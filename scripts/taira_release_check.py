@@ -2045,6 +2045,14 @@ MV_OWNERSHIP_STAGES = (
         'storage::admitted_tests::fresh_pair_acquisition::admitted_undo_poison_precedes_busy_current_without_policy',
         'storage::admitted_tests::fresh_pair_acquisition::ordinary_undo_poison_does_not_wait_for_current',
     )),
+    ('scoped admitted Storage acquisition retains caller custody', (
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::admitted_scoped_acquisition_rejects_foreign_scope_before_locks_or_policy',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::admitted_scoped_start_and_reset_refusals_retain_original_owners_for_release',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::admitted_scoped_second_provider_failure_defers_all_aggregate_native_wakes',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::admitted_scoped_busy_current_retains_undo_until_caller_release',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::scoped_original_block_capture_releases_scope_and_keeps_replacement_custody',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::ordinary_acquisition_retains_zero_sized_scope_and_original_protocol',
+    )),
     ('original Storage successor publication', (
         'storage::publication_tests::acquired_map_refusal_never_fabricates_foreign_or_busy_release',
         'storage::publication_tests::stale_map_pair_refusal_defers_actual_releases_through_enclosing_fence',
@@ -2139,6 +2147,73 @@ MV_MAP_STAGES = (("original owned map successors across refusal and publication"
 # Native cutover owners run before process/network qualification. These checks
 # retain exact sources and resource obligations; they do not open live ingress.
 CORE_NATIVE_CONNECTION_STAGES = (
+    ('native producer assembly retains exact decisions and independent work', (
+        'state::tests::native_candidate_uses_exact_decisions_and_canonical_recorded_execution',
+        'state::tests::native_candidate_fits_whole_priority_prefix_before_signing',
+        'state::tests::native_candidate_stale_observation_waits_without_signing_or_custody_loss',
+        'state::tests::native_candidate_controls_fit_without_displacing_or_duplicating_economic_input',
+        'state::tests::native_candidate_refuses_unsupported_carrier_controls_before_signing',
+        'state::tests::native_candidate_proof_rejects_foreign_state_and_network',
+        'state::tests::native_candidate_handoff_rejects_retired_merge_before_signing',
+        'state::tests::native_candidate_handoff_rejects_foreign_original_state',
+        'state::tests::native_candidate_partial_atomic_handoff_retains_waits_and_independent_work',
+        'sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback',
+        'state::tests::native_preparation_preserves_local_recorder_conflict',
+    )),
+    ('native preparation and recorded controls preserve original validation', (
+        'state::tests::native_preparation_single_retains_real_suffix_controls_and_unpublished_outputs',
+        'state::tests::native_preparation_atomic_retains_real_suffix_controls_and_unpublished_outputs',
+        'state::tests::native_preparation_single_authenticates_original_durable_sources_under_lease',
+        'state::tests::native_preparation_atomic_authenticates_original_durable_sources_under_lease',
+        'state::tests::native_preparation_rejects_signed_noncanonical_time',
+        'state::tests::native_preparation_rejects_signed_confidential_policy_substitution',
+        'state::tests::native_preparation_rejects_wrong_and_multiple_origin_signatures',
+        'state::tests::native_preparation_rejects_stale_source_without_execution_or_publication',
+        'state::tests::native_preparation_retained_prefix_does_not_authorize_raw_state_commit',
+        'state::tests::native_preparation_refreshes_source_after_actual_finalized_height_advance',
+        'state::tests::native_recorded_control_rejects_changed_opening_and_stale_verified_height',
+        'state::tests::native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon',
+    )),
+    ('native service preparation retains original source and archive owners', (
+        'state::tests::native_service_preparation_single_preserves_original_sources_and_archives',
+        'state::tests::native_service_preparation_atomic_preserves_original_sources_and_archives',
+        'state::tests::native_service_preparation_index_busy_precedes_execution',
+        'state::tests::native_service_preparation_capture_busy_releases_partial_owner',
+        'state::tests::native_service_preparation_stale_source_skips_archives_and_execution',
+        'state::tests::native_service_preparation_foreign_source_and_body_are_rejected',
+        'state::tests::native_service_preparation_recorder_conflict_releases_archives',
+    )),
+    ('native failure provenance retains local dependencies', (
+        'sumeragi::v2_apply::tests::native_preparation_errors::hash_admission_retains_original_release_and_runner_through_all_native_origins',
+        'sumeragi::v2_apply::tests::native_preparation_errors::native_controls_preserve_local_storage_failure_and_semantic_rejection',
+        'sumeragi::v2_apply::tests::native_preparation_errors::metadata_and_recorder_diagnostics_cannot_authorize_negative_markers',
+        'sumeragi::v2_apply::tests::native_preparation_errors::governed_native_batch_limit_remains_a_semantic_body_verdict',
+    )),
+    ('preexecution archive reservation preserves original service and release', (
+        'sumeragi::v2_apply::tests::archive_reservations::acquires_original_pair_without_execution',
+        'sumeragi::v2_apply::tests::archive_reservations::index_busy_wakes_original_runner',
+        'sumeragi::v2_apply::tests::archive_reservations::second_capture_refusal_releases_first',
+        'sumeragi::v2_apply::tests::archive_reservations::original_capture_drop_wakes_runner_and_preserves_old_wait',
+        'sumeragi::v2_apply::tests::archive_reservations::rejects_mismatch_before_acquisition',
+        'sumeragi::v2_apply::tests::archive_reservations::handoff_retains_owner_on_context_wire_and_service_mismatch',
+        'sumeragi::v2_apply::tests::archive_reservations::local_archive_failure_requires_recovery',
+    )),
+    ('archive capture reservations retain exact release identity', (
+        'query::archive_capture::tests::only_the_exact_original_gate_accepts_its_retained_owner',
+        'query::archive_capture::tests::observers_neither_own_nor_cancel_the_reservation',
+        'query::archive_capture::tests::release_before_wait_registration_cannot_be_missed',
+        'query::archive_capture::tests::active_wait_is_woken_by_the_actual_owner_drop',
+        'query::archive_capture::tests::old_wait_remains_released_while_a_new_owner_is_active',
+        'query::archive_capture::tests::move_to_another_worker_preserves_custody_without_retaining_the_archive',
+        'query::archive_capture::tests::concurrent_attempts_retain_exactly_one_original_owner',
+    )),
+    ('retained validation dispatch preserves original request and carrier', (
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_marker_failures_return_exact_wait_and_original_owner',
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_capture_refusal_keeps_exact_wait_without_success_marker',
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cache_and_reproposal_reuse_original_owner',
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_foreign_store_returns_request_before_execution',
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cached_scalar_receipt_cannot_replace_missing_owner',
+    )),
     ('original successor admission and reader readiness', (
         'state::block_hashes_admission::tests::successor_reader_contention_wakes_from_original_reader_release',
         'state::block_hashes_admission::tests::successor_admission_signals_only_actual_writer_after_unlock',
@@ -2173,6 +2248,11 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::world_journals::resources::tests::world_shell_planning_never_reads_targets_or_acquires_held_writers',
         'state::world_journals::resources::tests::world_shell_planning_checks_each_sum_count_and_vector_layout_overflow',
         'state::carrier_preparation::journals::tests::carrier_journal_shell_plan_precedes_execution_and_survives_capture',
+    )),
+    ('scoped original World storage publication', (
+        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_refuses_missing_and_foreign_scope_before_writers',
+        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_preserves_original_pair_through_abort_and_publish',
+        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_busy_retry_keeps_exact_original_values',
     )),
     ('retained candidate descriptors and exact marker custody', (
         'sumeragi::v2_body_store::tests::retained_validation_tests::incomplete_retained_owner_cannot_authorize_a_marker_even_when_resume_reports_success',
@@ -3891,7 +3971,7 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
 def validate_mv_test_registration(root: Path) -> None:
     """Reject stale registered MV names before Cargo; native listing stays authoritative.
 
-    This is a bounded lexical guard for fourteen explicit, flat test modules, not a
+    This is a bounded lexical guard for explicit, flat test modules, not a
     Rust parser or a claim that the selected subset exhausts each module.
     The existing pure lexer runs from the same captured source as this gate.
     """
@@ -3909,6 +3989,7 @@ def validate_mv_test_registration(root: Path) -> None:
         ("storage::detached_tests::", "storage.rs", "storage/detached_tests.rs", "detached_tests"),
         ("storage::admitted_tests::", "storage.rs", "storage/admitted_tests.rs", "admitted_tests"),
         ("storage::admitted_tests::fresh_pair_acquisition::", "storage/admitted_tests.rs", "storage/fresh_pair_acquisition_tests.rs", "fresh_pair_acquisition"),
+        ("storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::", "storage/fresh_pair_acquisition_tests.rs", "storage/scoped_acquisition_tests.rs", "scoped_acquisition"),
         ("storage::touches::tests::", "storage/touches.rs", "storage/touches_tests.rs", "tests"),
     )
     try:

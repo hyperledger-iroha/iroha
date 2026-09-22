@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::{
-    poly::query::{exists_query_collision, Query},
+    poly::query::{Query, exists_query_collision},
     transcript::ChallengeScalar,
 };
 use ff::Field;
@@ -17,26 +17,33 @@ mod verifier;
 pub use prover::{ProverIPA, ProverIPADirect, ProverIPAHybrid};
 pub use verifier::{VerifierIPA, VerifierIPADirect, VerifierIPAHybrid};
 
+#[cfg(test)]
+pub(crate) use prover::stored_oracle;
+
+/// Original IPA multiopening challenge 1 marker.
 #[derive(Clone, Copy, Debug)]
-struct X1 {}
+pub(crate) struct X1 {}
 /// Challenge for compressing openings at the same point sets together.
-type ChallengeX1<F> = ChallengeScalar<F, X1>;
+pub(crate) type ChallengeX1<F> = ChallengeScalar<F, X1>;
 
+/// Original IPA multiopening challenge 2 marker.
 #[derive(Clone, Copy, Debug)]
-struct X2 {}
+pub(crate) struct X2 {}
 /// Challenge for keeping the multi-point quotient polynomial terms linearly independent.
-type ChallengeX2<F> = ChallengeScalar<F, X2>;
+pub(crate) type ChallengeX2<F> = ChallengeScalar<F, X2>;
 
+/// Original IPA multiopening challenge 3 marker.
 #[derive(Clone, Copy, Debug)]
-struct X3 {}
+pub(crate) struct X3 {}
 /// Challenge point at which the commitments are opened.
-type ChallengeX3<F> = ChallengeScalar<F, X3>;
+pub(crate) type ChallengeX3<F> = ChallengeScalar<F, X3>;
 
+/// Original IPA multiopening challenge 4 marker.
 #[derive(Clone, Copy, Debug)]
-struct X4 {}
+pub(crate) struct X4 {}
 /// Challenge for collapsing the openings of the various remaining polynomials at x_3
 /// together.
-type ChallengeX4<F> = ChallengeScalar<F, X4>;
+pub(crate) type ChallengeX4<F> = ChallengeScalar<F, X4>;
 
 #[derive(Debug)]
 struct CommitmentData<F, T: PartialEq> {

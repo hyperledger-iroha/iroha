@@ -17,7 +17,7 @@ use iroha_crypto::{Hash, PublicKey};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::{Ident, IntoSchema};
 
-use mv::json::JsonKeyCodec;
+use norito::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
 use std::str::FromStr;
 /// Hash-version constant for validator set checkpoints.

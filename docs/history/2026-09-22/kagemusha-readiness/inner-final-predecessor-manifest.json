@@ -1,0 +1,16 @@
+{
+  "description": "Exact partial guarded-inner readiness sections, status row and history prose superseded by the final scoped default/no-multicore evidence update. Historical prose, not a signed release or runtime receipt.",
+  "original_files": {
+    "specs/kagemusha_v1_production_readiness.md": "9736063eb2cde28ffcbd43923cc0bbc7857c784c6461d7ead659c2ee9dbf1666",
+    "status.md": "f9e4d89028b175dfb32df7a9b4bcd51bf94d90bbc5963d8446e947106227f947",
+    "docs/history/2026-09-22/kagemusha-readiness/inner-validation.md": "a7a7dd016313ca7d551c24105816db473e593d85dafa3a8fe71cdba771fd6627",
+    "docs/history/2026-09-22/kagemusha-readiness/README.md": "29ebef421ce7ac1afd8f2ae1691dee8d212fc8176544be491bf068b79e7f4404"
+  },
+  "sections": {
+    "inner-final-predecessor-active.md": "1c9d05feb8fd17012e8838610a124fb6e898f74d28963d272595b7c8d02af3aa",
+    "inner-final-predecessor-validation.md": "02b93622bd0933cdd13982d5648055602385a0aad8dc9578ff471b6efac6922a",
+    "inner-final-predecessor-status-row.md": "51cff4672e010c95486b011e7c0464abf5cceccac8fc76045a573926472e7255",
+    "inner-final-predecessor-validation-note.md": "a7a7dd016313ca7d551c24105816db473e593d85dafa3a8fe71cdba771fd6627",
+    "inner-final-predecessor-readme.md": "29ebef421ce7ac1afd8f2ae1691dee8d212fc8176544be491bf068b79e7f4404"
+  }
+}

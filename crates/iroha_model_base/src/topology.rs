@@ -2,7 +2,7 @@
 
 use derive_more::Display;
 use iroha_schema::IntoSchema;
-use mv::json::JsonKeyCodec;
+use norito::json::JsonKeyCodec;
 use norito::{
     codec::{Decode, Encode},
     json,

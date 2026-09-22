@@ -89,7 +89,7 @@ pub enum AdmittedBlockError<E> {
     Callback(E),
 }
 
-fn policy<P: AdmittedStoragePolicy>(
+pub(super) fn policy<P: AdmittedStoragePolicy>(
     budget: &AllocationBudget,
     reservation: AllocationReservation,
     demand: AllocationDemand,
@@ -149,7 +149,7 @@ fn reserve_pair(
 
 // Identity storage belongs to the same admission as both map owners. A failed
 // complete reservation allocates nothing and invokes no policy or user callback.
-fn reserve_owners(
+pub(super) fn reserve_owners(
     budget: &AllocationBudget,
     current: AllocationDemand,
     undo: AllocationDemand,
@@ -181,7 +181,7 @@ fn reserve_owners(
     Ok((current, undo, original))
 }
 
-fn writer_error(
+pub(super) fn writer_error(
     error: MapAdmissionError<AdmittedStorageError>,
     role: StorageRole,
     release: ReleaseWait,
@@ -322,9 +322,9 @@ where
             .allocation
             .as_ref()
             .expect("admitted Storage original pool");
-        budget.with_deferred_refund_notifications(|_| {
+        budget.with_deferred_refund_notifications(|scope| {
             let mut block = self
-                .open_admitted_block(mode)
+                .open_admitted_block(scope, mode)
                 .map_err(AdmittedBlockError::Admission)?;
             let admission = operation(&mut block).map_err(AdmittedBlockError::Callback)?;
             Ok(block.detach_owned(admission))
@@ -410,9 +410,9 @@ where
             .allocation
             .as_ref()
             .expect("admitted Storage original pool");
-        budget.with_deferred_refund_notifications(|_| {
+        budget.with_deferred_refund_notifications(|scope| {
             let mut block = self
-                .open_admitted_block(mode)
+                .open_admitted_block(scope, mode)
                 .map_err(AdmittedBlockError::Admission)?;
             let output = operation(&mut block).map_err(AdmittedBlockError::Callback)?;
             block.assert_admitted_operable();
@@ -492,18 +492,35 @@ where
         Ok(AdmittedWriters { writers, next })
     }
 
-    fn open_admitted_block(
-        &self,
+    fn open_admitted_block<'a>(
+        &'a self,
+        scope: &'a AllocationScope<'a>,
         mode: BlockMode,
-    ) -> Result<Block<'_, K, V, Prepaid<P>>, AdmittedStorageError> {
+    ) -> Result<Block<'a, K, V, Prepaid<P>>, AdmittedStorageError> {
+        let mut slot = self.try_block_acquisition_admitted(scope)?;
+        slot.try_initialize(mode)?;
+        Ok(slot.into_block())
+    }
+}
+
+impl<K, V, P> Block<'_, K, V, Prepaid<P>>
+where
+    K: Key,
+    V: Value,
+    P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    // The caller-owned acquisition slot already owns both writers and their
+    // identity. A refusal or unwind keeps the original partial restoration in
+    // that slot; no payload retirement runs under a sibling aggregate writer.
+    pub(super) fn initialize_admitted_contents(&mut self) -> Result<(), AdmittedStorageError> {
         let budget = self
+            .writers
+            .target
             .allocation
             .as_ref()
             .expect("admitted Storage original pool");
-        let AdmittedWriters { mut writers, next } = self.open_admitted_writers()?;
-        let predecessor = self.publication.capture();
-        let OriginalWriters { revert, blocks } = writers.as_mut();
-        if mode == BlockMode::Replace {
+        let OriginalWriters { revert, blocks } = self.writers.as_mut();
+        if self.mode == BlockMode::Replace {
             for (key, previous) in revert.iter() {
                 if let Some(value) = previous {
                     insert_copy(blocks, key, value, budget)?;
@@ -518,23 +535,10 @@ where
         revert
             .try_clear_admitted(|demand| admit::<P>(budget, demand))
             .map_err(edit_error)?;
-        Ok(Block {
-            writers,
-            dirty: mode == BlockMode::Replace,
-            failed: false,
-            predecessor,
-            next: Some(next),
-            mode,
-        })
+        self.failed = false;
+        Ok(())
     }
-}
 
-impl<K, V, P> Block<'_, K, V, Prepaid<P>>
-where
-    K: Key,
-    V: Value,
-    P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
-{
     pub(super) fn assert_admitted_operable(&self) {
         assert!(
             !self.failed,

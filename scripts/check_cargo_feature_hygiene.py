@@ -80,8 +80,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "dep:crypto-bigint",
             "dep:subtle",
         ),
-        "json": ("norito/json", "mv"),
-        "mv": ("dep:mv",),
+        "json": ("norito/json",),
         "node-crypto": ("application", "consensus", "gost", "sm", "rayon"),
         "pqc": (
             "dep:pqcrypto-traits",
@@ -763,7 +762,6 @@ MANDATORY_MODEL_JSON_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "iroha_crypto": ("json",),
     "iroha_primitives": ("json",),
     "iroha_version": ("json",),
-    "mv": (),
     "norito": ("base-codec",),
     "norito_derive": (),
 }
@@ -900,6 +898,45 @@ def _check_expected_features(
     return errors
 
 
+def _check_model_storage_boundary(
+    documents: dict[str, dict[str, Any]], workspace_dependencies: dict[str, Any]
+) -> list[str]:
+    """Reject storage engines in the model's declared non-dev dependency closure.
+
+    Include optional and target-specific dependencies and build dependencies:
+    no supported feature or platform may reconnect model compilation to storage.
+    Dependency aliases and workspace inheritance use the same resolution as
+    the feature guard. Development dependencies intentionally stay outside it.
+    """
+
+    graph: dict[str, set[str]] = {}
+    for package, document in documents.items():
+        graph[package] = {
+            _dependency_target_and_features(name, spec, workspace_dependencies)[0]
+            for section, dependencies in _dependency_tables(document)
+            if section.rsplit(".", 1)[-1] != "dev-dependencies"
+            for name, spec in dependencies.items()
+        }
+    errors: list[str] = []
+    for origin in ("iroha_model_base", "iroha_data_model"):
+        pending = [(origin,)] if origin in graph else []
+        seen: set[str] = set()
+        while pending:
+            path = pending.pop(0)
+            package = path[-1]
+            if package in seen:
+                continue
+            seen.add(package)
+            if package in {"mv", "concread"}:
+                errors.append(
+                    f"model storage dependency boundary: {' -> '.join(path)}; "
+                    "model codecs must not depend on runtime storage"
+                )
+                continue
+            pending.extend((*path, child) for child in sorted(graph.get(package, ())))
+    return errors
+
+
 def check_repository(root: Path) -> list[str]:
     """Return deterministic feature-hygiene violations for ``root``."""
 
@@ -972,6 +1009,7 @@ def check_repository(root: Path) -> list[str]:
             continue
         valid_allowlist.add((consumer, dependency, feature))
 
+    model_boundary_documents: dict[str, dict[str, Any]] = {}
     workspace_package_names: set[str] = set()
     observed_allowlist_entries: set[tuple[str, str, str]] = set()
     for manifest_path in member_manifests:
@@ -980,6 +1018,7 @@ def check_repository(root: Path) -> list[str]:
         package_name = package.get("name") if isinstance(package, dict) else None
         if isinstance(package_name, str) and package_name:
             workspace_package_names.add(package_name)
+            model_boundary_documents[package_name] = document
             for section, dependency_key, target_package, feature in (
                 _non_dev_explicit_opt_in_dependency_selections(
                     document, workspace_dependencies
@@ -1010,6 +1049,8 @@ def check_repository(root: Path) -> list[str]:
                         f"{manifest_path}: [{section}] `{dependency}` must set "
                         "`default-features = false` and select features locally"
                     )
+
+    errors.extend(_check_model_storage_boundary(model_boundary_documents, workspace_dependencies))
 
     for consumer, dependency, feature in sorted(
         valid_allowlist - observed_allowlist_entries

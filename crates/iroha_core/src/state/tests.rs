@@ -10458,6 +10458,7 @@ include!("native_lane_recorded_execution_tests.rs");
 include!("native_lane_economic_relay_tests.rs");
 include!("native_lane_control_execution_tests.rs");
 include!("native_lane_preparation_tests.rs");
+include!("native_lane_service_preparation_tests.rs");
 include!("lane_instance_tests.rs");
 include!("lane_instance_body_tests.rs");
 include!("lane_instance_persistence_tests.rs");

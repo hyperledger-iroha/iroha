@@ -41,7 +41,7 @@ impl<'target> CarrierPreparation<'target> {
             block_hashes,
         } = original;
         Self {
-            world: Some(world.publication_slot(&target.world)),
+            world: Some(world.publication_slot(&target.world, None)),
             runtime: Some(runtime.publication_slot(target)),
             transactions: Some(transactions.publication_slot(&target.transactions)),
             block_hashes: RetainedHashSlot::new(block_hashes, &target.block_hashes),

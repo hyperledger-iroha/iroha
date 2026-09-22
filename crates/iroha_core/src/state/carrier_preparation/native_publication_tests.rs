@@ -250,6 +250,19 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
         .publish()
         .unwrap_or_else(|(_, error)| panic!("complete genuine Native publication: {error:?}"));
     assert_eq!(state.state_view_generation(), generation + 2);
+    // The production completion boundary moves the whole published owner. Only
+    // after the worker handoff may the original driver borrow Apply authority.
+    let source_allocation = std::ptr::from_ref(published.source.native_for_test().unwrap()).addr();
+    let events_allocation = published.events().as_ptr().addr();
+    let published = handoff_published_carrier(published);
+    assert_eq!(
+        std::ptr::from_ref(published.source.native_for_test().unwrap()).addr(),
+        source_allocation
+    );
+    assert_eq!(published.events().as_ptr().addr(), events_allocation);
+    assert_eq!(capture_released.load(Ordering::SeqCst), 0);
+    assert_eq!(binding_released.load(Ordering::SeqCst), 0);
+    assert_eq!(installation_released.load(Ordering::SeqCst), 1);
     assert_eq!(published.block().encode_wire().unwrap(), wire);
     assert_eq!(published.block().header(), header);
     assert_eq!(published.committed_event.header, header);
@@ -1169,4 +1182,23 @@ fn assert_native_terminal_publication(
     assert_eq!(process.occupancy().instances, 0);
     drop(process);
     pool.shutdown().join().unwrap();
+}
+
+/// Compile and exercise the crate-facing owned handoff on a different worker.
+fn handoff_published_carrier<A, B, I>(
+    published: crate::state::PublishedCarrier<A, B, I>,
+) -> crate::state::PublishedCarrier<A, B, I>
+where
+    A: Send + 'static,
+    B: Send + 'static,
+    I: Send + 'static,
+{
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        assert!(published.native_apply().is_some());
+        assert!(send.send(published).is_ok());
+    });
+    let published = receive.recv().expect("exact owned publication completion");
+    worker.join().expect("publication completion worker");
+    published
 }

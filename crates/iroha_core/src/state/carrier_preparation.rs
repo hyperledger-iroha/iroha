@@ -29,7 +29,7 @@ mod execution_prefix;
 )]
 mod journals;
 pub(super) mod queue_retirement;
-pub(crate) use journals::PublishedNativeApply;
+pub(crate) use journals::{PublishedCarrier, PublishedNativeApply};
 pub(crate) use journals::RetainedCarrier;
 
 /// A prepared candidate with all execution ownership retained and no Apply API.

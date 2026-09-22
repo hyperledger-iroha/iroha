@@ -157,9 +157,10 @@ pub fn create_proof<
     Ok(())
 }
 
-fn collapse_round_vectors<F: Field>(
-    p_prime: &mut Vec<F>,
-    b: &mut Vec<F>,
+/// Fold the two active field-vector halves with the original IPA round challenge.
+pub(crate) fn collapse_round_vectors<F: Field>(
+    p_prime: &mut [F],
+    b: &mut [F],
     half: usize,
     u_j: F,
     u_j_inv: F,
@@ -189,7 +190,8 @@ fn collapse_round_vectors<F: Field>(
     });
 }
 
-fn parallel_generator_collapse<C: CurveAffine>(g: &mut [C], challenge: C::Scalar) {
+/// Fold the active affine generator halves using the original parallel normalization.
+pub(crate) fn parallel_generator_collapse<C: CurveAffine>(g: &mut [C], challenge: C::Scalar) {
     let len = g.len() / 2;
     let (g_lo, g_hi) = g.split_at_mut(len);
 

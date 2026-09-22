@@ -9370,7 +9370,7 @@ fn decode_storage_key<
     }
     Ok(key)
 }
-impl mv::json::JsonKeyCodec for PrivacyActivationKeyV1 {
+impl norito::json::JsonKeyCodec for PrivacyActivationKeyV1 {
     fn encode_json_key(&self, out: &mut String) {
         encode_storage_key(self, out);
     }
@@ -9380,7 +9380,7 @@ impl mv::json::JsonKeyCodec for PrivacyActivationKeyV1 {
 }
 macro_rules! impl_validated_json_key {
     ($key:ty) => {
-        impl mv::json::JsonKeyCodec for $key {
+        impl norito::json::JsonKeyCodec for $key {
             fn encode_json_key(&self, out: &mut String) {
                 encode_storage_key(self, out);
             }
@@ -9433,7 +9433,8 @@ mod tests {
     };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
-    use mv::{json::JsonKeyCodec, storage::Storage};
+    use mv::storage::Storage;
+    use norito::json::JsonKeyCodec;
     use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
     use std::str::FromStr as _;
 

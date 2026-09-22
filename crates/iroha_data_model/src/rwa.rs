@@ -444,7 +444,7 @@ mod tests {
     }
 }
 
-impl mv::json::JsonKeyCodec for RwaId {
+impl norito::json::JsonKeyCodec for RwaId {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(&self.to_string(), out);
     }

@@ -35,26 +35,43 @@ not current achieved measurements or a claim of optimality.
 ## Active implementation — 2026-09-22
 
 Work remains confined to `/Users/takemiyamakoto/dev/iroha`, branch
-`optimizations`. The following is a current-source integration assessment, not a
-new runtime, security-audit or hardware qualification result.
+`optimizations`. The following combines source inspection with the scoped
+component validation below; it is not a security audit or hardware qualification.
 
-The stored IPA implementation now contains the consuming assignment, coefficient,
-lookup, product, vanishing, quotient-numerator, inverse-transform and
-quotient-commitment stages. The last stage retains its original proof owner and
-squeezes `ChallengeX`; it does not return a complete proof. The authenticated Core
-indexed-key owner and encrypted polynomial store are present. These components
-remain separate from the normal production proof entry points: the six direct
-`create_proof` calls and two `create_proof_consuming` calls in
+The stored IPA implementation now continues from consuming assignment through
+scalar evaluation, guarded outer multiopening and guarded inner IPA to final c/f
+writes. `finish_guarded_ipa` returns a closed internal completed-proof owner while
+retaining the original key, parameters, RNG, transcript and stored-source receipts.
+The inner stage reuses P as b, retains guarded S→P' and uses a guarded MSM join;
+its minimum initialized field arrays contain 2n + floor(n/2) + 2 elements and its
+owned affine arrays contain n + floor(n/2) + 2 elements. Admission charges actual
+capacities and explicit headers. Backend representations and worker scratch are
+excluded; these bounds do not establish whole-process erasure, RSS or latency.
+The final 27-function selection passes in both default and no-multicore builds,
+including seven inner tests and six satisfiable generic whole-PLONK cases through
+the guarded inner implementation. The verifier rejects zero round challenges;
+empty/singleton FFT identities and the k0 IPA basis empty product now pass their
+regressions. These are scoped component results, not monetary release evidence.
+
+The crate-private [indexed reader](../vendor/halo2-axiom/src/plonk/structured_key/indexed/reads.rs)
+now fills bounded intervals directly from mask coefficients, constant/bitset/raw
+fixed columns and permutation target IDs. It uses constant-size decoding scratch
+without allocating a full column, and clears the entire output on invalid input,
+I/O failure or unwind. Original-source authentication and failure poisoning remain
+the consuming owner's responsibility; the reader supplies neither proof authority
+nor coefficient/coset transforms. Stored proving and normal Core generation still
+retain dense keys pending consuming indexed-owner integration.
+
+The authenticated Core indexed-key owner and encrypted polynomial store are
+present but remain separate from normal production proof entry points: the six
+direct `create_proof` calls and two `create_proof_consuming` calls in
 [generation.rs](../crates/iroha_core/src/zk/kagemusha_v1_recursion/generation.rs)
-use dense `ProvingKey` owners. The stored prefix, quotient-commitment continuation
-and Core `capture_indexed_proving_key` have only test callers in the inspected
-source. Scalar-evaluation and original advice-blind folding additions are now
-source-only work in progress, without qualification evidence from this reassessment.
-Complete stored opening generation and authenticated Core producer/key integration
-remain required. Incremental scratch bounds do not
-establish whole-process memory or latency compliance. Sources:
-[stored owner](../vendor/halo2-axiom/src/plonk/prover/stored.rs),
-[quotient commitments](../vendor/halo2-axiom/src/plonk/prover/stored/quotient_commitments.rs),
+use dense `ProvingKey` owners. The stored continuation and Core
+`capture_indexed_proving_key` have only test callers in the inspected source.
+Closed internal proof completion does not supply authenticated Core producer/key
+integration. Sources: [stored owner](../vendor/halo2-axiom/src/plonk/prover/stored.rs),
+[guarded outer continuation](../vendor/halo2-axiom/src/plonk/prover/stored/proof_evaluations/opening.rs),
+[guarded inner IPA](../vendor/halo2-axiom/src/plonk/prover/stored/proof_evaluations/opening/inner_ipa.rs),
 [indexed artifact owner](../crates/iroha_core/src/zk/kagemusha_v1_recursion/artifacts/stored_key.rs).
 
 Normal native activation remains unavailable. The only in-repository
@@ -104,7 +121,7 @@ a bootstrap structure fixed-point qualification TODO. Sources:
 [payment corridor](../crates/iroha_core/src/zk/kagemusha_v1_recursion/real_payment_corridor.rs),
 [native verifier](../crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs).
 
-The next completion sequence is: finish and connect the full stored proof path;
+The next completion sequence is: qualify and connect the full stored proof path;
 qualify real funded recursive payments and complete durable native ownership;
 rebuild and exercise SDK/native artifacts; then close release, physical-device
 and independent-review gates. Exact OEM services/profiles for the requested
@@ -113,9 +130,52 @@ activation must stay enforced throughout this work.
 
 ## Current validation boundary — 2026-09-22
 
-This reassessment inspected source and call sites; it ran no Rust, SDK, real-proof
-or physical-device suite. The earlier active/current sections and root status
-row are preserved byte-for-byte in the
+The later indexed-reader candidate passes the same **18 functions in default and
+no-multicore builds (36 executions)**: four new reader tests and fourteen structured
+codec regressions. All 262 captured inputs match across both windows and the
+0.311 s non-test library check, which reuses a fresh Cargo artifact. The
+[indexed-reader note](../docs/history/2026-09-22/kagemusha-readiness/indexed-reader-validation.md)
+records this separate candidate. A consecutive-target regression across the
+n−1→n permutation-coset boundary is staged under the shared vendor-source hold;
+it is not applied or qualified by these tests.
+
+The preceding guarded-inner candidate passes the same **27 distinct test functions in
+default and no-multicore builds: 54 executions, zero failures or ignored tests**.
+All 260 captured source/build inputs match across both windows and the separate
+non-test vendor-library check, which passes in 1.124 s; each test executable remains
+unchanged during its window. The selection includes guarded arithmetic, owner
+failure/erasure controls, ordinary IPA/multiopening regressions, zero-challenge
+rejection, empty/singleton FFT identities and the k0 IPA basis empty product.
+
+The satisfiable square/lookup/copy fixture reaches real whole-PLONK acceptance
+through guarded inner IPA, with dense proof-byte, transcript and next-RNG agreement
+in both Pasta fields and three instance modes (six generic cases). This does not
+qualify final KAGEMUSHA recursive monetary proofs. These checks use the standalone
+vendor manifest/lockfile, not the root-workspace/Core dependency graph.
+
+The [inner validation note](../docs/history/2026-09-22/kagemusha-readiness/inner-validation.md)
+retains every earlier failure: the first window executed 11 functions (10 passed,
+one failed), the accidental unchanged-candidate second window executed 24 (23
+passed, one failed), and the third executed 26 (25 passed, one failed). The third
+window installed the FFT fix but exposed a separate k0 empty-product assertion in
+`compute_s`; the final candidate fixes that assertion and adds its regression.
+The earlier selector/setup failures remain recorded; they are not overall passes.
+
+The earlier guarded-P candidate records 43 distinct passing functions across two
+default windows and 42 passing no-multicore functions, retaining the original
+failed assertion and interrupted first no-multicore attempt. Its positive fixture
+uses a test-only ordinary inner IPA; the new guarded-inner positive fixture above
+is separate. Its deliberately unsatisfied inverse fixture's byte equality and
+opening verification are not positive whole-PLONK acceptance. The
+[opening note](../docs/history/2026-09-22/kagemusha-readiness/opening-validation.md)
+preserves that candidate's exact scope. Earlier default and no-multicore builds
+each passed the same 27 scalar/blind functions (54 executions, 27 distinct); the
+[scalar/blind note](../docs/history/2026-09-22/kagemusha-readiness/scalar-blind-validation.md)
+retains that separate candidate. These earlier receipts do not qualify later
+inner-IPA source changes or final recursive monetary proofs.
+
+The replaced active/current sections and root status row are preserved
+byte-for-byte in the
 [dated archive](../docs/history/2026-09-22/kagemusha-readiness/README.md).
 The previously cited `target/kagemusha-validation/stored-prover-next-window-20260912`,
 `target/kagemusha-validation/20260912-source-window`,
@@ -127,8 +187,9 @@ earlier scoped work records; they are not fresh validation of this source.
 
 Fresh qualification must retain the exact candidate, dependency/lock inputs,
 compiled artifacts, commands and results. Focused vendor or host tests cannot
-replace complete proofs, workspace checks, canonical release provenance,
-measured full-process resources, qualified hardware, or independent review.
+replace authenticated Core/SDK integration, final monetary proofs, workspace
+checks, canonical release provenance, measured full-process resources, qualified
+hardware, or independent review.
 
 ## Requested device scope
 

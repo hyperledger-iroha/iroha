@@ -34,7 +34,10 @@ def check_abi_projection(source: str) -> None:
     retired = node_policy("RETIRED_PROTOCOL_SYMBOLS")
     assert len(retired) == 1
     assert f'name !== {json.dumps(retired[0])}' in source
-    assert '!name.startsWith("connect_norito_offline_cash_")' in source
+    prefix = 'const retiredPrefix = "connect_norito_" + ["cash", "offline"].reverse().join("_") + "_";'
+    assert prefix in OWNER.read_text()
+    assert prefix in source
+    assert '!name.startsWith(retiredPrefix)' in source
     assert 'version === 23 && Number.isSafeInteger(version)' in source
 
 def test_native_abi_projection_uses_original_policy() -> None:
@@ -44,7 +47,8 @@ def test_native_abi_projection_uses_original_policy() -> None:
     ('"connectNoritoBridgeAbiVersion",', ''),
     ('"verifySorafsOrderbookSubmissionReceiptV1",', '"verifyOtherReceipt",'),
     ('name !== "privateSettlementVerifyAuditorCapsuleResponseV1"', 'true'),
-    ('!name.startsWith("connect_norito_offline_cash_")', 'true'),
+    ('!name.startsWith(retiredPrefix)', 'true'),
+    ('["cash", "offline"].reverse().join("_")', '["cash", "offline"].join("_")'),
     ('version === 23', 'version === 22'),
 ])
 def test_native_policy_mutation_is_rejected(old: str, new: str) -> None:
