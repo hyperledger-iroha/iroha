@@ -8,6 +8,8 @@ use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
 };
+#[path = "fixed_frame.rs"]
+mod fixed_frame;
 struct TrackingAllocator;
 thread_local! {
     static TRACKING: Cell<bool> = const { Cell::new(false) };

@@ -388,6 +388,16 @@ mod block {
     mod detached_publication;
     pub(crate) use detached_publication::DetachedTransactionsPublicationSlot;
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "TODO: retain authenticated membership roots in the complete State publisher"
+        )
+    )]
+    #[path = "membership_root.rs"]
+    mod membership_root;
+
     #[cfg(test)]
     #[path = "detached_publication_tests.rs"]
     mod detached_publication_tests;
@@ -924,6 +934,18 @@ mod membership_projection {
             visit: impl FnMut(&Key, Value) -> Result<(), E>,
         ) -> Result<(), E> {
             self.membership_snapshot().visit(false, visit)
+        }
+
+        /// Visit the exact rollback cut of the currently committed tip.
+        /// This cold visit always excludes that tip, independently of whether
+        /// the caller opened an ordinary or replacement block scope. It binds
+        /// older values shadowed by the latest set, which current membership
+        /// alone cannot authenticate for durable restoration.
+        pub(in crate::state) fn visit_committed_predecessor_membership<E>(
+            &self,
+            visit: impl FnMut(&Key, Value) -> Result<(), E>,
+        ) -> Result<(), E> {
+            self.membership_snapshot().visit(true, visit)
         }
 
         /// Visit the exact logical predecessor used by this block scope.

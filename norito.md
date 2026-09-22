@@ -101,6 +101,30 @@ Schema and resource enforcement:
   Zero-filled bytes are valid only as the exact alignment padding between the
   header and payload; a zero-filled logical tail is not a second encoding.
 
+### Fixed framed payloads
+
+`core::FixedFrameLayout<T: NoritoSerialize>` retains one type-derived schema
+identity, explicit flag set, fixed payload length and the existing type-derived
+alignment padding. Construction checks flags, archive-length policy and length
+arithmetic before resolving the schema name once. The original caller must fund
+that construction and retain the layout with its backing buffer and I/O owner.
+
+After construction, `write` and borrowed `payload` validation allocate no codec
+storage on success or malformed-frame errors. They share the existing bare-frame
+header/CRC writer; the V1 bytes do not change. Validation rejects the wrong schema,
+flags, compression, length, padding, checksum, truncation or suffix. Input buffer
+alignment is irrelevant because returned bytes are borrowed without archived
+casts, typed deserialization or a decoder-budget allocation. The exact fixed
+length admitted at construction is retained; these operations do not renegotiate
+ambient flags or a later global archive limit.
+
+The schema owner still defines and validates the fixed fields, discriminants and
+reserved bytes. This API does not infer that schema from a payload or accept a
+caller-provided schema digest. Writer allocations/errors and partial output remain
+with the original I/O owner. Codec success grants no allocation credit, storage
+lease, durability or root-publication authority; those require the enclosing
+funded storage protocol. Generic decoder limits are not a substitute for funding.
+
 ## Header Flags
 
 These flags are ORed into the final header byte. Unknown bits are rejected.
