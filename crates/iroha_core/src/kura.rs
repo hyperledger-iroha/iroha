@@ -19519,19 +19519,19 @@ impl Kura {
         namespace: &BoundProgressNamespace,
         allow_transient: bool,
     ) -> Result<NativeAmxEvidenceInventory> {
-        self.inventory_native_amx_evidence_with_repair_prefix_locked(
+        self.inventory_native_amx_evidence_with_indexed_prefix_locked(
             namespace,
             allow_transient,
             None,
         )
     }
-    // Only the authenticated CompletedRepair preflight supplies an exact manifest
-    // object here. Its actual bytes still count toward every inventory bound.
-    fn inventory_native_amx_evidence_with_repair_prefix_locked(
+    // Only authenticated indexed recovery supplies one exact manifest or receipt
+    // descriptor. Its actual bytes still count toward every inventory bound.
+    fn inventory_native_amx_evidence_with_indexed_prefix_locked(
         &self,
         namespace: &BoundProgressNamespace,
         allow_transient: bool,
-        repair_prefix: Option<&NativeAmxEvidenceFile>,
+        indexed_prefix: Option<&NativeAmxEvidenceFile>,
     ) -> Result<NativeAmxEvidenceInventory> {
         if !Self::progress_mutation_namespace_unchanged(namespace) {
             return Err(Self::invalid_lane_artifact_error(
@@ -19564,10 +19564,10 @@ impl Kura {
                     )
                 })?;
             let len = metadata.file.len();
-            let owned_prefix = repair_prefix.is_some_and(|candidate| {
+            let owned_prefix = indexed_prefix.is_some_and(|candidate| {
                 allow_transient
                     && temporary
-                    && kind == NativeAmxEvidenceKind::Manifest
+                    && candidate.kind == kind
                     && candidate.path == path
                     && candidate.participant_height == participant_height
                     && Self::stable_sidecar_metadata_unchanged(&candidate.metadata, &metadata)
@@ -20296,6 +20296,12 @@ impl Kura {
         }
         let mut temporary = Self::create_new_bound_progress_temp(namespace, temp_path)
             .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+        #[cfg(test)]
+        self.fail_native_amx_publication_temp_prefix_at_path_for_tests(
+            &mut temporary,
+            temp_path,
+            bytes,
+        )?;
         #[cfg(test)]
         if let Some(prefix_len) =
             FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_PREFIX.with(|flag| flag.take())
@@ -24423,6 +24429,13 @@ impl Kura {
         let temp_path = directory.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE);
         let mut temporary = Self::create_new_bound_progress_temp(namespace, &temp_path)
             .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        #[cfg(test)]
+        self.fail_native_amx_publication_temp_prefix_at_path_for_tests(
+            &mut temporary,
+            &temp_path,
+            bytes,
+        )?;
+
         if let Err(error) = temporary
             .write_all(bytes)
             .and_then(|_| temporary.flush())
@@ -37510,7 +37523,7 @@ impl Kura {
     }
     fn preflight_native_amx_incoming_artifacts_locked(
         &self,
-        entry: &LaneStorageEntry,
+        entry: &impl LaneArtifactStorageView,
         namespace: &BoundProgressNamespace,
         inventory: &NativeAmxEvidenceInventory,
         manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
@@ -38074,7 +38087,7 @@ impl Kura {
                 "Native AMX startup repair carrier or manifest changed before publication",
             ));
         }
-        self.recover_native_amx_completed_repair_prefixes_under_publication_guard(block)?;
+        self.recover_native_amx_indexed_publication_prefixes_under_publication_guard(block)?;
         let route_preflights = self
             .preflight_native_amx_participant_application_repair_targets_under_publication_guard(
                 plan,
@@ -38186,7 +38199,7 @@ impl Kura {
             ));
         }
         let permit_cleanup = mode.permits_retention_cleanup();
-        self.recover_native_amx_completed_repair_prefixes_under_publication_guard(block)?;
+        self.recover_native_amx_indexed_publication_prefixes_under_publication_guard(block)?;
         let route_preflights =
             self.preflight_native_amx_participant_application_plan_under_publication_guard(plan)?;
         let all_targets = (0..plan.artifacts.len()).collect::<Vec<_>>();
@@ -40273,6 +40286,17 @@ impl Kura {
                 ));
             }
             latest_child.finish();
+            if expected_can_publish
+                && let Some(receipt) = expected_receipt.as_ref()
+                && let Some(manifest) = validated_manifests
+                    .get(&receipt.participant_proposal.descriptor.lane_block_height)
+            {
+                // Durable physical publication consumes its original allocation
+                // even while post-WSV authority and retention cleanup are pending.
+                self.consume_native_amx_startup_stable_components_locked(
+                    &entry, &namespace, manifest, receipt,
+                )?;
+            }
             // A prepublished tip intentionally has no post-WSV metadata yet.
             // Keep the previous complete pair until State replay commits that
             // tip and the normal repair path authenticates the full join.
@@ -40305,46 +40329,6 @@ impl Kura {
                 self.validate_native_amx_startup_completed_pair_locked(
                     &entry, &namespace, &inventory, manifest, receipt,
                 )?;
-                let carrier = NativeAmxPublicationCarrier {
-                    height: receipt.application_block_height,
-                    block_hash: receipt.application_block_hash,
-                    executed_wire_hash: receipt.executed_block_wire_hash,
-                };
-                // A clean completed pair legitimately has no pending publication or
-                // retention-maintenance owner. The exact protected pair was validated
-                // above; completion below still authenticates latest/WSV and fsyncs the
-                // namespace. Never manufacture an owner merely to consume stable bytes.
-                let descriptor = &receipt.participant_proposal.descriptor;
-                let route = NativeAmxPublicationRoute {
-                    lane_id: descriptor.lane_id,
-                    dataspace_id: descriptor.dataspace_id,
-                    incarnation: descriptor.lane_incarnation,
-                };
-                let owns_capacity = self
-                    .native_amx_publication_capacity_reservations
-                    .lock()
-                    .get(&carrier)
-                    .is_some_and(|owner| owner.routes.contains_key(&route));
-                if owns_capacity {
-                    self.consume_native_amx_publication_component_after_durable_publication(
-                        receipt,
-                        NativeAmxPublicationComponent::Manifest,
-                        manifest.encode_framed()?.len(),
-                    )?;
-                    self.consume_native_amx_publication_component_after_durable_publication(
-                        receipt,
-                        NativeAmxPublicationComponent::Receipt,
-                        receipt.encode_framed()?.len(),
-                    )?;
-                    self.consume_native_amx_publication_component_after_durable_publication(
-                        receipt,
-                        NativeAmxPublicationComponent::Latest,
-                        norito::encode_canonical(
-                            &NativeAmxParticipantReceiptLatestIndexV2::from_receipt(receipt),
-                        )?
-                        .len(),
-                    )?;
-                }
                 self.complete_native_amx_publication_route_capacity_locked(
                     &entry, &namespace, receipt,
                 )?;

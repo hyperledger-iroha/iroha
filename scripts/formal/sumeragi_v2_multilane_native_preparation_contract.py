@@ -477,6 +477,8 @@ PREPARATION_OWNER_BINDINGS = (
   'self.native_amx_route_publication_capacity_with_inventory_locked(',
   'inventory\n                .as_ref()\n                .map(|(namespace, inventory)| (namespace, inventory))')),
     (CAPACITY, "method", "Kura::native_amx_route_publication_capacity_with_inventory_locked", (
+        'latest_prefix: Option<&NativeAmxIndexedPrefixFile>',
+        'self.require_native_amx_indexed_latest_prefix_locked(',
         "self.require_active_lane_artifact(entry, descriptor)?",
         "NativeAmxParticipantReceiptLatestIndexV2::from_receipt(&expected_receipt)",
         "expected_manifest.encode_framed()?.len()", "expected_receipt.encode_framed()?.len()",
@@ -3308,8 +3310,9 @@ def validate_native_preparation_contract(
     ordered("Kura::native_amx_route_publication_capacity_at_target_locked",
             "self.require_active_lane_artifact(entry, &receipt.participant_proposal.descriptor)?;",
             "let inventory = self.native_amx_publication_inventory_locked(entry)?;",
-            "self.native_amx_route_publication_capacity_with_inventory_locked(entry, manifest, receipt, inventory.as_ref().map(|(namespace, inventory)| (namespace, inventory)),)")
+            "self.native_amx_route_publication_capacity_with_inventory_locked(entry, manifest, receipt, inventory.as_ref().map(|(namespace, inventory)| (namespace, inventory)), None,)")
     require("Kura::native_amx_route_publication_capacity_with_inventory_locked",
+            "if let Some(prefix) = latest_prefix { self.require_native_amx_indexed_latest_prefix_locked(entry, namespace, inventory, manifest, receipt, prefix,)?; } else if let Some(bytes) = self.native_amx_latest_index_temp_bytes_locked(&namespace)? {",
             "let route = NativeAmxPublicationRoute { lane_id: descriptor.lane_id, dataspace_id: descriptor.dataspace_id, incarnation: descriptor.lane_incarnation, };",
             "NativeAmxPublicationComponent::Manifest, u64::try_from(expected_manifest.encode_framed()?.len())?",
             "NativeAmxPublicationComponent::Receipt, u64::try_from(expected_receipt.encode_framed()?.len())?",

@@ -29,6 +29,7 @@ std::thread_local! {
     static FAIL_NEXT_BOUND_PROGRESS_APPEND_DATA_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_NEXT_BOUND_PROGRESS_APPEND_INDEX_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_PREFIX: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static FAIL_AFTER_NEXT_NATIVE_AMX_PUBLICATION_TEMP_PREFIX_AT_PATH: std::cell::RefCell<Option<(PathBuf, usize)>> = const { std::cell::RefCell::new(None) };
     static FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_NEXT_NATIVE_AMX_LATEST_INDEX_RECOVERY_TEMP_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_BOUND_PROGRESS_INTENT_DIRECTORY_SYNC: std::cell::Cell<Option<ProgressIntentDirectorySyncFault>> = const { std::cell::Cell::new(None) };

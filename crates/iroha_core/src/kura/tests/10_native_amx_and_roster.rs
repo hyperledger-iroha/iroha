@@ -488,6 +488,7 @@ fn native_amx_latest_index_temporary_failures_retain_exact_forensics() {
     for damage in [
         "malformed",
         "truncated",
+        "truncated-nonprefix",
         "oversized",
         "wrong-route",
         "stale-incarnation",
@@ -518,6 +519,15 @@ fn native_amx_latest_index_temporary_failures_retain_exact_forensics() {
                 let encoded = norito::encode_canonical(&newest)
                     .expect("encode Native latest index before truncation");
                 encoded[..encoded.len().saturating_sub(1)].to_vec()
+            }
+            "truncated-nonprefix" => {
+                let mut encoded = norito::encode_canonical(&newest)
+                    .expect("encode Native latest index before invalid truncation");
+                encoded
+                    .pop()
+                    .expect("non-empty canonical Native latest index");
+                encoded[0] ^= 0xff;
+                encoded
             }
             "oversized" => {
                 vec![0x5A; NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES + 1]
@@ -581,6 +591,71 @@ fn native_amx_latest_index_temporary_failures_retain_exact_forensics() {
             "{damage} must not mutate stable evidence or pointer bytes"
         );
         drop(kura);
+        if damage == "truncated" {
+            // The raw latest-index helper intentionally has no authority to
+            // discard partial bytes. Strict startup first authenticates this
+            // exact completed stable pair, finality and WSV join, then owns
+            // recovery of its canonical proper prefix.
+            let canonical =
+                norito::encode_canonical(&newest).expect("encode exact completed latest pointer");
+            let mut expected = before.clone();
+            assert_eq!(
+                expected.remove(latest_temp_path.strip_prefix(evidence_directory).unwrap()),
+                Some(temp_bytes),
+                "remove only the authenticated proper-prefix temporary"
+            );
+            assert!(
+                expected
+                    .insert(
+                        latest_path
+                            .strip_prefix(evidence_directory)
+                            .unwrap()
+                            .to_path_buf(),
+                        canonical.clone(),
+                    )
+                    .is_none(),
+                "fixture has no stable latest pointer before startup"
+            );
+            let (reopened, _) =
+                Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+                    .expect("Strict startup recovers an authenticated near-complete prefix");
+            assert_eq!(fs::read(&latest_path).unwrap(), canonical);
+            assert!(!latest_temp_path.exists());
+            assert_eq!(
+                snapshot_regular_files_recursively(evidence_directory),
+                expected,
+                "recovery preserves both original manifest/receipt pairs exactly"
+            );
+            assert!(
+                Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+                    .unwrap()
+                    .records
+                    .is_empty()
+            );
+            assert_eq!(
+                reopened
+                    .native_amx_publication_capacity_reserved_bytes()
+                    .unwrap(),
+                0,
+                "durable latest bytes consume the original maintenance reservation"
+            );
+            drop(reopened);
+            let (again, _) =
+                Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+                    .expect("authenticated prefix recovery is idempotent");
+            assert_eq!(
+                snapshot_regular_files_recursively(evidence_directory),
+                expected
+            );
+            assert!(!latest_temp_path.exists());
+            assert_eq!(
+                again
+                    .native_amx_publication_capacity_reserved_bytes()
+                    .unwrap(),
+                0
+            );
+            continue;
+        }
         let reopen_error =
             match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
                 Ok(_) => panic!("{damage} Native latest temp must also fail real startup"),
