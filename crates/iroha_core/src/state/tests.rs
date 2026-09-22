@@ -120,6 +120,8 @@ use std::{
 };
 #[path = "committed_hash_journal_tests.rs"]
 mod committed_hash_journal_tests;
+#[path = "tiered_stack_tests.rs"]
+mod tiered_stack_tests;
 #[path = "transaction_stack_tests.rs"]
 mod transaction_stack_tests;
 #[path = "world_capture_tests.rs"]

@@ -48,7 +48,10 @@ fast transaction validation.
   cold root (pruning older directories according to `max_snapshots`) after
   releasing the world-state write lock. Snapshot processing may be offloaded to
   a background worker to keep block commit latency low while preserving
-  deterministic manifests across peers.
+  deterministic manifests across peers. Capture retains exact overlay values
+  before publication: a complete cold baseline or incremental changes including
+  deletions. Each store is captured in a separate function frame so iterator and
+  value temporaries do not accumulate on the stack across the World inventory.
 - Snapshot directories use a zero-padded 20-digit index (e.g., `00000000000000000001`);
   pruning only targets those canonical snapshot directories so auxiliary folders
   such as `lanes/` and `retired/` remain intact.

@@ -7268,19 +7268,7 @@ impl WorldBlock<'_> {
         let mut payload = TieredSnapshotPayload::with_scope(complete);
         macro_rules! collect_payload {
             ($storage:expr, $variant:ident) => {
-                if complete {
-                    for (key, value) in $storage.iter() {
-                        payload.push_value(
-                            TieredKeyHandle::$variant(key.clone()),
-                            Some(value.clone()),
-                        );
-                    }
-                } else {
-                    for key in $storage.revert_map().keys() {
-                        let value = $storage.get(key).cloned();
-                        payload.push_value(TieredKeyHandle::$variant(key.clone()), value);
-                    }
-                }
+                payload.collect_storage(&$storage, TieredKeyHandle::$variant);
             };
         }
         collect_payload!(self.domains, Domain);
