@@ -53,6 +53,14 @@ test("release-scoped JavaScript tests contain no capability skip declarations", 
   for (const relativePath of [
     "javascript/iroha_js/test/currentRustContractArtifact.test.js",
     "javascript/iroha_js/test/helpers/native.js",
+    "javascript/iroha_js/test/helpers/nativeRequirements.js",
+    "javascript/iroha_js/test/sorafsNativeSuites/cancelAssetLockV1.js",
+    "javascript/iroha_js/test/sorafsNativeSuites/sorafsAppealFinanceValidation.js",
+    "javascript/iroha_js/test/sorafsNativeSuites/sorafsFixtureBundleValidation.js",
+    "javascript/iroha_js/test/sorafsNativeSuites/sorafsOrderbookSubmission.js",
+    "javascript/iroha_js/test/sorafsNativeSuites/sorafsOrchestrator.parity.js",
+    "javascript/iroha_js/test/sorafsNativeSuites/sorafsPdpValidation.js",
+
     "javascript/iroha_js/test/integrationTorii.test.js",
     "javascript/iroha_js/test/nativeBuildProvenance.test.js",
     "javascript/iroha_js/test/sorafsChunker.oneGib.test.js",
@@ -125,6 +133,7 @@ test("release workflows require platform provenance, heavy, and SoraFS native la
   const kotodamaWorkflow = readRepositoryFile(".github/workflows/kotodama_perf.yml");
   for (const required of [
     '      - "javascript/iroha_js/**"',
+    '      - "scripts/sorafs_javascript_native_cache.mjs"',
     "os: [ubuntu-latest, macos-latest, windows-latest]",
     "npm run test:native-provenance --prefix javascript/iroha_js",
   ]) {
@@ -144,6 +153,14 @@ test("release workflows require platform provenance, heavy, and SoraFS native la
     "javascript/iroha_js/src/sorafsOrderbookSubmission.js",
     "javascript/iroha_js/src/sorafsOrderbookSubmission.d.ts",
     "javascript/iroha_js/test/sorafsOrderbookSubmission.test.js",
+    "javascript/iroha_js/test/sorafsNativeSuites/**",
+    "javascript/iroha_js/test/helpers/nativeRequirements.js",
+    "javascript/iroha_js/test/helpers/native.js",
+    "scripts/sorafs_javascript_native_cache.mjs",
+    "javascript/iroha_js/test/sorafsNativeCache.test.js",
+    "javascript/iroha_js/test/sorafsNativeSuiteStructure.test.js",
+    "javascript/iroha_js/test/helpers/sorafsNativeSuiteContract.js",
+    "javascript/iroha_js/test/fixtures/sorafs_native_suite_contract_v1.json",
   ]) {
     assert.ok(privacyWorkflow.includes(`- \"${path}\"`), `${path} must trigger ABI-23 checks`);
   }

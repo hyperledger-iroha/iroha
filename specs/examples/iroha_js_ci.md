@@ -12,8 +12,9 @@ run.
 
 ## Recommended Steps
 
-1. Test the declared minimum Node 18 runtime plus the maintained even-numbered
-   Node release lines via `actions/setup-node` or your CI equivalent.
+1. Test the declared minimum Node 20.19.0 and the existing Node 20, 22 and 24
+   CI lines via `actions/setup-node` or your CI equivalent. Retain exact runtime
+   versions and matching-candidate results; selectors alone are not qualification.
 2. Install the Rust toolchain listed in `rust-toolchain.toml`. We recommend
    `dtolnay/rust-toolchain@v1` in GitHub Actions.
 3. Cache the cargo registry/git indexes and the `target/` directory to avoid
@@ -48,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18, 20, 22, 24]
+        node-version: ["20.19.0", 20, 22, 24]
     steps:
       - uses: actions/checkout@v4
 
@@ -90,7 +91,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20.19.0"
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable

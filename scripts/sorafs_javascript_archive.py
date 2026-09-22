@@ -5,6 +5,9 @@ POSIX ustar members rooted at package/. It never extracts, installs, imports or
 executes package content. Live producers and original-byte consumers must share
 this owner; package/source, dependency, runtime and execution joins are separate.
 No environment variables or filesystem paths are consumed.
+
+TODO: connect this owner to the installed JavaScript producer and original-index
+adapter; archive validity alone must never admit an executed-package report.
 """
 from __future__ import annotations
 
@@ -136,7 +139,13 @@ def _header(block: bytes) -> tuple[str, int, int, int, bytes]:
 
 
 def _path(name: str) -> str:
-    _require(0 < len(name.encode("utf-8")) <= MAX_NAME_BYTES
+    _require(type(name) is str and 0 < len(name) <= MAX_NAME_BYTES,
+             "npm member path exceeds the character bound")
+    try:
+        encoded = name.encode("utf-8", "strict")
+    except UnicodeError as error:
+        raise ArchiveError("npm member path is not strict UTF-8") from error
+    _require(0 < len(encoded) <= MAX_NAME_BYTES
              and name.startswith("package/"), "npm member must have its bounded package/ root")
     _require(unicodedata.normalize("NFC", name) == name
              and not any(ord(char) < 32 or ord(char) == 127 for char in name)
@@ -182,6 +191,40 @@ def _body(reader: _GzipReader, size: int) -> bytes:
     return result
 
 
+class NpmPathInventory:
+    """One bounded namespace owner shared by source projections and tar inputs."""
+    def __init__(self):
+        self.spellings, self.files, self.path_bytes = {}, set(), 0
+        self.failed = False
+
+    def admit(self, name: str) -> None:
+        """Reserve one canonical file; any refusal invalidates this entire owner."""
+        _require(not self.failed, "npm path inventory was invalidated by an earlier refusal")
+        self.failed = True
+        _require(type(name) is str and len(name) <= MAX_NAME_BYTES - len("package/")
+                 and _path("package/" + name) == name,
+                 "npm member path differs from its canonical spelling")
+        _require(len(self.files) < MAX_MEMBERS, "npm member count bound")
+        _require(name.casefold() not in self.files, "npm archive duplicates or aliases a member")
+        parts = name.split("/")
+        for length in range(1, len(parts) + 1):
+            ancestor = "/".join(parts[:length])
+            key = ancestor.casefold()
+            _require(key not in self.spellings or self.spellings[key] == ancestor,
+                     "npm archive aliases a path ancestor")
+            _require(length == len(parts) or key not in self.files,
+                     "npm archive file is also a path ancestor")
+            if length == len(parts):
+                _require(key not in self.spellings, "npm archive replaces a path ancestor with a file")
+            if key not in self.spellings:
+                self.path_bytes += len(ancestor.encode("utf-8"))
+                _require(len(self.spellings) < MAX_PATH_NODES and self.path_bytes <= MAX_PATH_BYTES,
+                         "npm path ownership count or byte bound")
+                self.spellings[key] = ancestor
+        self.files.add(name.casefold())
+        self.failed = False
+
+
 def parse_npm_archive(raw: bytes, *, tar_byte_limit: int | None = None) -> NpmArchive:
     """Validate original gzip/tar bytes before retaining bounded regular content.
 
@@ -195,8 +238,7 @@ def parse_npm_archive(raw: bytes, *, tar_byte_limit: int | None = None) -> NpmAr
     _require(type(limit) is int and 0 < limit <= MAX_TAR_BYTES,
              "npm shared tar budget must be positive and cannot raise the fixed limit")
     reader = _GzipReader(raw, limit)
-    members, spellings, files = [], {}, set()
-    path_bytes, pending = 0, None
+    members, paths, pending = [], NpmPathInventory(), None
     while True:
         block = reader.exact(_BLOCK)
         if not any(block):
@@ -225,21 +267,5 @@ def parse_npm_archive(raw: bytes, *, tar_byte_limit: int | None = None) -> NpmAr
                          for key, value in (("size", size), ("mtime", mtime))),
                      "npm PAX numeric metadata differs from its following header")
             name, pending = pending["path"], None
-        _require(name.casefold() not in files, "npm archive duplicates or aliases a member")
-        parts = name.split("/")
-        for length in range(1, len(parts) + 1):
-            ancestor = "/".join(parts[:length])
-            key = ancestor.casefold()
-            _require(key not in spellings or spellings[key] == ancestor,
-                     "npm archive aliases a path ancestor")
-            _require(length == len(parts) or key not in files,
-                     "npm archive file is also a path ancestor")
-            if length == len(parts):
-                _require(key not in spellings, "npm archive replaces a path ancestor with a file")
-            if key not in spellings:
-                path_bytes += len(ancestor.encode("utf-8"))
-                _require(len(spellings) < MAX_PATH_NODES and path_bytes <= MAX_PATH_BYTES,
-                         "npm path ownership count or byte bound")
-                spellings[key] = ancestor
-        files.add(name.casefold())
+        paths.admit(name)
         members.append(NpmMember(name, _body(reader, size), mode))

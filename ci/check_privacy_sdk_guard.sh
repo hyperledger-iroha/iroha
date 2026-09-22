@@ -1528,6 +1528,34 @@ def _check_jvm_confidential_owner_closure(root_dir, consumers, errors) -> None:
         )
 
 
+def _check_javascript_node_floor_gate(source: str, errors: list[str]) -> None:
+    """Require the selected major20 process to pass the sole floor before build."""
+    boundary = r"""cd "${ROOT_DIR}/javascript/iroha_js"
+NODE_VERSION="$("${NODE_BIN}" --version)"
+printf '%s\n' "${NODE_VERSION}"
+case "${NODE_VERSION}" in
+  v20.*) ;;
+  *)
+    echo "error: privacy JavaScript SDK tests require Node 20; got ${NODE_VERSION}" >&2
+    exit 1
+    ;;
+esac
+
+"${NODE_BIN}" scripts/check-node-engine.mjs
+
+export PYTHONDONTWRITEBYTECODE=1
+
+"${NODE_BIN}" scripts/build-native.mjs
+"${NODE_BIN}" scripts/copy-native.mjs
+"""
+    require(
+        source.count(boundary) == 1
+        and source.count('"${NODE_BIN}" scripts/check-node-engine.mjs') == 1,
+        "privacy JavaScript gate must check the selected Node floor exactly once after major20 and before native build",
+        errors,
+    )
+
+
 def check(overrides: dict[str, str] | None = None) -> None:
     overrides = overrides or {}
     errors: list[str] = []
@@ -1610,6 +1638,8 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "exact12 matrix retired IDs must be unique and outside the registry",
         errors,
     )
+
+    _check_javascript_node_floor_gate(read("ci/check_privacy_js_sdk.sh", overrides), errors)
 
     js_source = read("javascript/iroha_js/src/privacyCapabilities.js", overrides)
     py_catalog = read(
@@ -2255,6 +2285,11 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "scripts/jvm_classfile.py",
         "scripts/tests/check_kotlin_jni_test.py",
         "scripts/tests/check_privacy_python_witness_boundary_test.py",
+        "javascript/iroha_js/package.json",
+        "javascript/iroha_js/package-lock.json",
+        "javascript/iroha_js/scripts/check-node-engine.mjs",
+        "javascript/iroha_js/scripts/node-engine-contract.mjs",
+        "javascript/iroha_js/test/nodeEngineContract.test.js",
         "javascript/iroha_js/test/privacyNative.integration.test.js",
         "python/iroha_python/tests/privacy_native_integration_test.py",
         "python/iroha_python/tests/privacy_wallet_worker_controller_test.py",

@@ -245,6 +245,7 @@
     "test:sorafs-native": "node ./scripts/run-test-profile.mjs sorafs-native",
     "test:heavy": "node ./scripts/run-test-profile.mjs heavy",
     "test:pack-install": "node ./scripts/package-install-smoke.mjs",
+    "check:node-engine": "node ./scripts/check-node-engine.mjs",
     "check:changelog": "node ./scripts/check-changelog.mjs",
     "release:update-docs": "node ./scripts/update-release-docs.mjs",
     "release:provenance": "node ./scripts/record-release-provenance.mjs",
@@ -252,11 +253,11 @@
     "fixtures:axt": "node ./scripts/refresh-axt-fixtures.mjs",
     "release:matrix": "node ./scripts/release-matrix.mjs",
     "release:publish": "npm publish --access public --provenance",
-    "prepublishOnly": "npm run check:changelog && npm run build:dist && npm run lint:test && npm run bundle:check && npm run test:pack-install && npm run release:provenance",
+    "prepublishOnly": "npm run check:node-engine && npm run check:changelog && npm run build:dist && npm run lint:test && npm run bundle:check && npm run test:pack-install && npm run release:provenance",
     "test:integration": "node ./scripts/run_integration.mjs",
     "test:integration:qualification": "node ./scripts/run_integration.mjs --qualification",
     "report:bundle-size": "node ./scripts/report-bundle-size.mjs",
-    "prepack": "npm run build:dist"
+    "prepack": "npm run check:node-engine && npm run build:dist"
   },
   "keywords": [
     "iroha",
@@ -274,7 +275,7 @@
   },
   "homepage": "https://github.com/hyperledger-iroha/iroha/tree/master/javascript/iroha_js",
   "engines": {
-    "node": ">=18"
+    "node": ">=20.19.0"
   },
   "files": [
     "README.md",

@@ -4,7 +4,7 @@ import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateMa
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chacha20orig } from "@noble/ciphers/chacha";
-import { KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
+import { JS_TYPE_BIGINT, JS_TYPE_FUNCTION, JS_TYPE_NUMBER, JS_TYPE_OBJECT, JS_TYPE_STRING, KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
 import { readAccountCapabilitiesResponseV1 } from "./accountCapabilities.js";
 import {
   resolveToriiClientConfig,
@@ -170,6 +170,10 @@ import {
 } from "./sorafsOrderbookSubmission.js";
 export { SorafsOrderbookSubmissionAmbiguousError };
 
+const CANONICAL_AUTH_FIELD = "canonicalAuth";
+const EXPECTED_FINALIZED_HASH_FIELD = "expectedFinalizedBlockHashHex";
+const EXPECTED_FINALIZED_HEIGHT_FIELD = "expectedFinalizedHeight";
+const GOVERNANCE_MANIFEST_ADMISSION_CONTEXT = "governance.manifest_admission";
 const DEFAULT_PAGE_SIZE = 100;
 const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
 const EXPLORER_CURSOR_MAX_LIMIT = 100;
@@ -440,13 +444,13 @@ const IVM_PROVE_WAIT_OPTION_KEYS = new Set([
   "signal",
   "intervalMs",
   "timeoutMs",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
-const ALIAS_CANONICAL_AUTH_OPTION_KEYS = new Set(["canonicalAuth"]);
+const ALIAS_CANONICAL_AUTH_OPTION_KEYS = new Set([CANONICAL_AUTH_FIELD]);
 const ALIAS_BY_ACCOUNT_OPTION_KEYS = new Set([
   "dataspace",
   "domain",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
 
 const RETAIL_RECIPIENT_LOOKUP_REQUEST_KEYS = new Set([
@@ -504,7 +508,7 @@ function decodeTransactionReceiptPayload(payload, nativeRuntime) {
   } catch (cause) {
     rejectError("cannot decode a non-empty Norito transaction receipt: the native decoder is unavailable", { cause });
   }
-  if (typeof native.decodeTransactionReceiptJson !== "function") {
+  if (typeof native.decodeTransactionReceiptJson !== JS_TYPE_FUNCTION) {
     rejectError("cannot decode a non-empty Norito transaction receipt: the native binding does not expose decodeTransactionReceiptJson");
   }
   let json;
@@ -642,11 +646,11 @@ const KAIGI_CALL_SIGNAL_FIELDS = new Set([
 const KAIGI_SIGNAL_SCHEMA_V1 = "iroha-demo-kaigi-chain-signal/v1";
 
 function ownDataMethod(target, name) {
-  if (target === null || (typeof target !== "object" && typeof target !== "function")) {
+  if (target === null || (typeof target !== JS_TYPE_OBJECT && typeof target !== JS_TYPE_FUNCTION)) {
     return null;
   }
   const descriptor = Object.getOwnPropertyDescriptor(target, name);
-  return descriptor && "value" in descriptor && typeof descriptor.value === "function"
+  return descriptor && "value" in descriptor && typeof descriptor.value === JS_TYPE_FUNCTION
     ? descriptor.value
     : null;
 }
@@ -662,7 +666,7 @@ function callIntrinsicOrOwnMethod(target, intrinsic, name, ...args) {
       branded = false;
     }
   }
-  if (typeof intrinsic === "function" && branded) {
+  if (typeof intrinsic === JS_TYPE_FUNCTION && branded) {
     return Reflect.apply(intrinsic, target, args);
   }
   const own = ownDataMethod(target, name);
@@ -741,7 +745,7 @@ function responseStatusTextWithoutUserGetter(response) {
     }
   }
   const descriptor = Object.getOwnPropertyDescriptor(response, "statusText");
-  return descriptor && "value" in descriptor && typeof descriptor.value === "string"
+  return descriptor && "value" in descriptor && typeof descriptor.value === JS_TYPE_STRING
     ? descriptor.value
     : null;
 }
@@ -762,7 +766,7 @@ function responseUrlWithoutUserGetter(response) {
     }
     url = descriptor.value;
   }
-  if (typeof url !== "string" || url.length === 0) {
+  if (typeof url !== JS_TYPE_STRING || url.length === 0) {
     rejectType("Torii response URL must be a non-empty string");
   }
   return url;
@@ -824,7 +828,7 @@ function splitCacheControlDirectives(value) {
 }
 
 function ignoreCancellationResult(result) {
-  if (result && typeof result.then === "function") {
+  if (result && typeof result.then === JS_TYPE_FUNCTION) {
     Promise.resolve(result).catch(() => {});
   }
 }
@@ -987,7 +991,7 @@ function encodeCanonicalVersionedSignedTransactionV1(payload, nativeRuntime) {
   const native = resolveNativeBinding(nativeRuntime);
   if (
     !native ||
-    typeof native.encodeSignedTransactionVersioned !== "function"
+    typeof native.encodeSignedTransactionVersioned !== JS_TYPE_FUNCTION
   ) {
     rejectError("Canonical VersionedSignedTransaction V1 validation requires native encodeSignedTransactionVersioned.");
   }
@@ -1006,7 +1010,7 @@ async function encodeTransactionPayloadBatch(payloads, nativeRuntime) {
   const native = resolveOptionalNativeBinding(nativeRuntime);
   if (
     native &&
-    typeof native.encodeTransactionPayloadBatch === "function"
+    typeof native.encodeTransactionPayloadBatch === JS_TYPE_FUNCTION
   ) {
     const encoded = Buffer.from(
       native.encodeTransactionPayloadBatch(
@@ -1033,7 +1037,7 @@ function isAbsoluteUrl(candidate) {
   if (candidate instanceof URL) {
     return true;
   }
-  if (typeof candidate !== "string") {
+  if (typeof candidate !== JS_TYPE_STRING) {
     return false;
   }
   return /^[a-z][a-z0-9+.-]*:\/\//iu.test(candidate);
@@ -1052,7 +1056,7 @@ const ITERABLE_LIST_OPTION_KEYS = new Set([
   "countMode",
   "count_mode",
   "signal",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
 const ASSET_ID_LIST_OPTION_KEYS = new Set([
   ...ITERABLE_LIST_OPTION_KEYS,
@@ -1062,7 +1066,7 @@ const ACCOUNT_PERMISSIONS_LIST_OPTION_KEYS = new Set([
   "limit",
   "offset",
   "signal",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
 const CONTRACT_ACTIVITY_LIST_OPTION_KEYS = new Set([
   ...ITERABLE_LIST_OPTION_KEYS,
@@ -1128,7 +1132,7 @@ const ITERABLE_OPTION_KEYS = new Set([
   "onlyMissingVerdict",
   "platformPolicy",
   "includeExpired",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
 const SORAFS_ALIAS_ITERATOR_OPTION_KEYS = new Set([
   "namespace",
@@ -1138,15 +1142,15 @@ const SORAFS_ALIAS_ITERATOR_OPTION_KEYS = new Set([
   "pageSize",
   "maxItems",
   "signal",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
 const SORAFS_PIN_ITERATOR_OPTION_KEYS = new Set([
   "status",
   "limit",
   "maxBytes",
   "afterDigestHex",
-  "expectedFinalizedHeight",
-  "expectedFinalizedBlockHashHex",
+  EXPECTED_FINALIZED_HEIGHT_FIELD,
+  EXPECTED_FINALIZED_HASH_FIELD,
   "pageSize",
   "maxItems",
   "signal",
@@ -1159,50 +1163,50 @@ const SORAFS_REPLICATION_ITERATOR_OPTION_KEYS = new Set([
   "pageSize",
   "maxItems",
   "signal",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
 const SORAFS_REPUTATION_CACHE_OPTION_KEYS = new Set([
   "ifNoneMatch",
   "headers",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
 const SORAFS_REPUTATION_EVENT_OPTION_KEYS = new Set([
   "since",
   "limit",
   "ifNoneMatch",
   "headers",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
 const SORAFS_REPUTATION_STREAM_OPTION_KEYS = new Set([
   "since",
   "limit",
   "headers",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
-const SORAFS_HEDGING_BILLING_AUTH_OPTION_KEYS = new Set(["canonicalAuth"]);
+const SORAFS_HEDGING_BILLING_AUTH_OPTION_KEYS = new Set([CANONICAL_AUTH_FIELD]);
 const SORAFS_BILLING_STATEMENT_LIST_OPTION_KEYS = new Set([
   "expectedCheckpointFingerprintHex",
   "afterStatementIdHex",
   "limit",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
 const SORAFS_HEDGING_PROJECTION_OPTION_KEYS = new Set([
   "expectedCheckpointFingerprintHex",
   "afterHex",
   "limit",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
 const SORAFS_ORDERBOOK_READ_OPTION_KEYS = new Set([
   "limit",
-  "expectedFinalizedHeight",
-  "expectedFinalizedBlockHashHex",
+  EXPECTED_FINALIZED_HEIGHT_FIELD,
+  EXPECTED_FINALIZED_HASH_FIELD,
   "afterIdHex",
   "headers",
 ]);
 const SORAFS_ORDERBOOK_EVENT_OPTION_KEYS = new Set([
   "limit",
-  "expectedFinalizedHeight",
-  "expectedFinalizedBlockHashHex",
+  EXPECTED_FINALIZED_HEIGHT_FIELD,
+  EXPECTED_FINALIZED_HASH_FIELD,
   "afterSequence",
   "afterBlockHeight",
   "afterBlockHashHex",
@@ -1212,8 +1216,8 @@ const SORAFS_ORDERBOOK_EVENT_OPTION_KEYS = new Set([
 ]);
 const SORAFS_ORDERBOOK_STREAM_OPTION_KEYS = new Set([
   "limit",
-  "expectedFinalizedHeight",
-  "expectedFinalizedBlockHashHex",
+  EXPECTED_FINALIZED_HEIGHT_FIELD,
+  EXPECTED_FINALIZED_HASH_FIELD,
   "afterSequence",
   "afterBlockHeight",
   "afterBlockHashHex",
@@ -1221,8 +1225,8 @@ const SORAFS_ORDERBOOK_STREAM_OPTION_KEYS = new Set([
 ]);
 const SORAFS_ORDERBOOK_WEBSOCKET_OPTION_KEYS = new Set([
   "limit",
-  "expectedFinalizedHeight",
-  "expectedFinalizedBlockHashHex",
+  EXPECTED_FINALIZED_HEIGHT_FIELD,
+  EXPECTED_FINALIZED_HASH_FIELD,
   "afterSequence",
   "afterBlockHeight",
   "afterBlockHashHex",
@@ -1231,8 +1235,8 @@ const SORAFS_ORDERBOOK_WEBSOCKET_OPTION_KEYS = new Set([
 ]);
 const SORAFS_ORDERBOOK_WEBSOCKET_DIAL_OPTION_KEYS = new Set([
   "limit",
-  "expectedFinalizedHeight",
-  "expectedFinalizedBlockHashHex",
+  EXPECTED_FINALIZED_HEIGHT_FIELD,
+  EXPECTED_FINALIZED_HASH_FIELD,
   "afterSequence",
   "afterBlockHeight",
   "afterBlockHashHex",
@@ -1244,8 +1248,8 @@ const SORAFS_ORDERBOOK_WEBSOCKET_DIAL_OPTION_KEYS = new Set([
 ]);
 const SORAFS_ORDERBOOK_WEBSOCKET_STREAM_OPTION_KEYS = new Set([
   "limit",
-  "expectedFinalizedHeight",
-  "expectedFinalizedBlockHashHex",
+  EXPECTED_FINALIZED_HEIGHT_FIELD,
+  EXPECTED_FINALIZED_HASH_FIELD,
   "afterSequence",
   "afterBlockHeight",
   "afterBlockHashHex",
@@ -1268,7 +1272,7 @@ const ITERABLE_QUERY_OPTION_KEYS = new Set([
   "queryName",
   "select",
   "signal",
-  "canonicalAuth",
+  CANONICAL_AUTH_FIELD,
 ]);
 const TRANSACTION_QUERY_OPTION_KEYS = [
   "assetId",
@@ -1299,7 +1303,7 @@ const EXPLORER_RWA_ITERATOR_OPTION_KEYS = new Set([
   ...EXPLORER_RWA_LIST_OPTION_KEYS,
   "maxItems",
 ]);
-const UPLOAD_ATTACHMENT_OPTION_KEYS = new Set(["contentType", "content_type", "signal", "canonicalAuth"]);
+const UPLOAD_ATTACHMENT_OPTION_KEYS = new Set(["contentType", "content_type", "signal", CANONICAL_AUTH_FIELD]);
 export class TransactionStatusError extends Error {
   constructor(hashHex, status, payload) {
     const statusLabel = status == null ? "unknown" : String(status);
@@ -1398,14 +1402,14 @@ export class ToriiHttpError extends Error {
  * @returns {string | null}
  */
 export function extractPipelineStatusKind(payload) {
-  if (!payload || typeof payload !== "object") {
+  if (!payload || typeof payload !== JS_TYPE_OBJECT) {
     return null;
   }
   const status = payload.status;
-  if (!status || typeof status !== "object" || Array.isArray(status)) {
+  if (!status || typeof status !== JS_TYPE_OBJECT || Array.isArray(status)) {
     return null;
   }
-  return typeof status.kind === "string" ? status.kind : null;
+  return typeof status.kind === JS_TYPE_STRING ? status.kind : null;
 }
 
 export function decodePdpCommitmentHeader(headers) {
@@ -1420,7 +1424,7 @@ export function decodePdpCommitmentHeader(headers) {
   try {
     return strictDecodeBase64(value);
   } catch (err) {
-    const message = err && typeof err.message === "string" ? err.message : String(err);
+    const message = err && typeof err.message === JS_TYPE_STRING ? err.message : String(err);
     rejectError(`Failed to decode Sora-PDP-Commitment header: ${message}`);
   }
 }
@@ -1609,7 +1613,7 @@ export class ToriiClient {
     );
     const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
     const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
-    if (typeof fetchImpl !== "function") {
+    if (typeof fetchImpl !== JS_TYPE_FUNCTION) {
       rejectError("fetch implementation is required");
     }
     Object.defineProperties(this, { _baseUrl: { value: normalizedBaseUrl }, _fetch: { value: fetchImpl } });
@@ -1620,7 +1624,7 @@ export class ToriiClient {
     if (
       opts[TORII_TEST_NATIVE_BINDING] !== undefined &&
       (opts[TORII_TEST_NATIVE_BINDING] === null ||
-        typeof opts[TORII_TEST_NATIVE_BINDING] !== "object")
+        typeof opts[TORII_TEST_NATIVE_BINDING] !== JS_TYPE_OBJECT)
     ) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
@@ -1643,7 +1647,7 @@ export class ToriiClient {
     );
     const sorafsGatewayApi = _createSorafsGatewayApi(this._nativeRuntime);
     const testHooks = opts[TORII_TEST_HOOKS] ?? {};
-    if (testHooks === null || typeof testHooks !== "object" || Array.isArray(testHooks)) {
+    if (testHooks === null || typeof testHooks !== JS_TYPE_OBJECT || Array.isArray(testHooks)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
         "ToriiClient internal test hooks must be an object",
@@ -1652,7 +1656,7 @@ export class ToriiClient {
     }
     if (
       testHooks.sorafsGatewayFetch !== undefined &&
-      typeof testHooks.sorafsGatewayFetch !== "function"
+      typeof testHooks.sorafsGatewayFetch !== JS_TYPE_FUNCTION
     ) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
@@ -1662,7 +1666,7 @@ export class ToriiClient {
     }
     if (
       testHooks.generateDaProofSummary !== undefined &&
-      typeof testHooks.generateDaProofSummary !== "function"
+      typeof testHooks.generateDaProofSummary !== JS_TYPE_FUNCTION
     ) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
@@ -1697,7 +1701,7 @@ export class ToriiClient {
     const allowInsecure =
       opts.allowInsecure ??
       (opts.config &&
-        typeof opts.config === "object" &&
+        typeof opts.config === JS_TYPE_OBJECT &&
         opts.config.allowInsecure) ??
       false;
     this.#allowInsecure = requireExactBoolean(
@@ -1780,7 +1784,7 @@ export class ToriiClient {
       "submitKagemushaTopUp",
     );
     assertSupportedOptionKeys(rest, new Set([]), "submitKagemushaTopUp options");
-    if (typeof operationId === "string") {
+    if (typeof operationId === JS_TYPE_STRING) {
       rejectType("submitKagemushaTopUp operationId must be exact nonzero 32-byte binary data");
     }
     const optional = await loadToriiOptionalModule();
@@ -3560,7 +3564,7 @@ export class ToriiClient {
     );
     assertSupportedOptionKeys(
       normalizedOptions,
-      new Set(["checkpoint", "maxPages", "signal", "canonicalAuth"]),
+      new Set(["checkpoint", "maxPages", "signal", CANONICAL_AUTH_FIELD]),
       "catchUpValidationFeeCurrentPolicyProof options",
     );
     let checkpoint =
@@ -5041,7 +5045,7 @@ export class ToriiClient {
       "getSorafsPinManifest",
     );
     assertSupportedOptionKeys(rest, new Set([
-      "headers", "expectedFinalizedHeight", "expectedFinalizedBlockHashHex",
+      "headers", EXPECTED_FINALIZED_HEIGHT_FIELD, EXPECTED_FINALIZED_HASH_FIELD,
     ]), "getSorafsPinManifest options");
     const expected = { digestHex: normalized };
     const hasHeight = rest.expectedFinalizedHeight !== undefined;
@@ -5052,11 +5056,11 @@ export class ToriiClient {
     let params;
     if (hasHeight) {
       expected.height = normalizeSorafsPinU64(
-        rest.expectedFinalizedHeight, "expectedFinalizedHeight",
+        rest.expectedFinalizedHeight, EXPECTED_FINALIZED_HEIGHT_FIELD,
       );
       if (expected.height === 0) rejectType("expectedFinalizedHeight must be positive");
       expected.blockHashHex = requireNonZeroLowerHex32String(
-        rest.expectedFinalizedBlockHashHex, "expectedFinalizedBlockHashHex",
+        rest.expectedFinalizedBlockHashHex, EXPECTED_FINALIZED_HASH_FIELD,
       );
       params = {
         expected_finalized_height: String(expected.height),
@@ -5309,7 +5313,7 @@ export class ToriiClient {
     }
     const normalized = normalizeDaIngestResponse(payload);
     const pdpHeader =
-      response.headers && typeof response.headers.get === "function"
+      response.headers && typeof response.headers.get === JS_TYPE_FUNCTION
         ? response.headers.get(HEADER_SORA_PDP_COMMITMENT)
         : null;
     if (artifactDir) {
@@ -5959,7 +5963,7 @@ export class ToriiClient {
       if (value === null || value === undefined) {
         return { route };
       }
-      if (typeof value === "object" && !Array.isArray(value)) {
+      if (typeof value === JS_TYPE_OBJECT && !Array.isArray(value)) {
         return { ...value, route };
       }
       return { value, route };
@@ -6074,7 +6078,7 @@ export class ToriiClient {
     if (response.status === 207) {
       try {
         const native = resolveNativeRuntimeBinding(this._nativeRuntime);
-        if (typeof native.hashSignedTransaction !== "function") {
+        if (typeof native.hashSignedTransaction !== JS_TYPE_FUNCTION) {
           throw new TypeError("native transaction identity computation is unavailable");
         }
         const hashes = versionedPayloads.map((payload) => Buffer.from(native.hashSignedTransaction(payload)).toString("hex"));
@@ -6082,12 +6086,12 @@ export class ToriiClient {
           response, 1024 * 1024, "transaction batch outcomes", { signal },
         );
         if (!Array.isArray(outcomes) || outcomes.length !== versionedPayloads.length ||
-            outcomes.some((entry, index) => !entry || typeof entry.signed_transaction_hash !== "string" ||
+            outcomes.some((entry, index) => !entry || typeof entry.signed_transaction_hash !== JS_TYPE_STRING ||
               entry.signed_transaction_hash.toLowerCase() !== hashes[index] ||
               !/^[a-fA-F0-9]{64}$/u.test(entry.signed_transaction_hash) ||
               !Number.isInteger(entry.status) ||
               !(entry.status === 202 || (entry.status >= 400 && entry.status <= 599)) ||
-              !(entry.reject_code === null || typeof entry.reject_code === "string")) ||
+              !(entry.reject_code === null || typeof entry.reject_code === JS_TYPE_STRING)) ||
             outcomes.filter((entry) => entry.status === 202).length !== acceptedCount ||
             acceptedCount === versionedPayloads.length) {
           throw new TypeError("transaction batch outcome identities/statuses/count are malformed");
@@ -6656,7 +6660,7 @@ export class ToriiClient {
 
   async _submitSoracloudAppInfraMutation(path, request, options, context) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
-    if (request == null || typeof request !== "object" || Array.isArray(request)) {
+    if (request == null || typeof request !== JS_TYPE_OBJECT || Array.isArray(request)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
         "request must be an object",
@@ -7731,7 +7735,7 @@ export class ToriiClient {
       normalizedOptions,
       new Set([
         "signal",
-        "canonicalAuth",
+        CANONICAL_AUTH_FIELD,
         "expectedProposalContentId",
         "expectedGovernanceAttemptId",
       ]),
@@ -7910,7 +7914,7 @@ export class ToriiClient {
     assertSupportedOptionKeys(
       normalizedOptions,
       new Set([
-        "signal", "canonicalAuth", "expectedKeySessionId", "expectedIdentityDigest",
+        "signal", CANONICAL_AUTH_FIELD, "expectedKeySessionId", "expectedIdentityDigest",
         "committeeSize",
       ]),
       `${context} options`,
@@ -7955,7 +7959,7 @@ export class ToriiClient {
     const normalizedOptions = ensureRecord(options, `${context} options`);
     assertSupportedOptionKeys(
       normalizedOptions,
-      new Set(["signal", "canonicalAuth", "expectedTransitionDigest"]),
+      new Set(["signal", CANONICAL_AUTH_FIELD, "expectedTransitionDigest"]),
       `${context} options`,
     );
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
@@ -8540,7 +8544,7 @@ export class ToriiClient {
     });
     await this._expectStatus(response, [200]);
     if (asText) {
-      if (typeof response.text === "function") {
+      if (typeof response.text === JS_TYPE_FUNCTION) {
         return response.text();
       }
       const buffer = Buffer.from(await response.arrayBuffer());
@@ -8671,7 +8675,7 @@ export class ToriiClient {
     );
     const params = {};
     const filterValue =
-      options && typeof options === "object" ? options.filter : undefined;
+      options && typeof options === JS_TYPE_OBJECT ? options.filter : undefined;
     const filterPayload = ToriiClient._normalizeEventFilter(filterValue);
     if (filterPayload) {
       params.filter = filterPayload;
@@ -8709,7 +8713,7 @@ export class ToriiClient {
       false,
     );
     const params = {};
-    if (options && typeof options === "object") {
+    if (options && typeof options === JS_TYPE_OBJECT) {
       if (options.authority !== undefined && options.authority !== null) {
         params.authority = ToriiClient._normalizeAccountId(options.authority, "authority");
       }
@@ -9073,7 +9077,7 @@ export class ToriiClient {
    * @returns {Promise<ConnectSessionResponse>}
    */
   async createConnectSession(input) {
-    if (!input || typeof input !== "object") {
+    if (!input || typeof input !== JS_TYPE_OBJECT) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
         "createConnectSession input must be an object",
@@ -9130,7 +9134,7 @@ export class ToriiClient {
    * @returns {Promise<boolean>} True when the session existed.
    */
   async deleteConnectSession(sid) {
-    const input = typeof sid === "object" && sid !== null ? sid : { sid };
+    const input = typeof sid === JS_TYPE_OBJECT && sid !== null ? sid : { sid };
     const normalizedSid = normalizeConnectSid(input.sid, "sid");
     const tokenManagement = requireNonEmptyString(
       input.tokenManagement ?? input.token_management,
@@ -10716,7 +10720,7 @@ export class ToriiClient {
       resolvedOptions.onPoll === undefined || resolvedOptions.onPoll === null
         ? undefined
         : resolvedOptions.onPoll;
-    if (onPoll !== undefined && typeof onPoll !== "function") {
+    if (onPoll !== undefined && typeof onPoll !== JS_TYPE_FUNCTION) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
         "wait.onPoll must be a function",
@@ -11076,7 +11080,7 @@ export class ToriiClient {
     // Sign only after the final URL query and request body are fixed.
     await applyOperatorRequestHeaders(initHeaders, operatorSigningContext, methodUpper, url, init.body);
     const retryProfileName =
-      typeof options.retryProfile === "string" && options.retryProfile
+      typeof options.retryProfile === JS_TYPE_STRING && options.retryProfile
         ? options.retryProfile
         : "default";
     const retryPolicy =
@@ -11084,19 +11088,19 @@ export class ToriiClient {
       this.#config.retryProfiles?.default ||
       null;
     const policyMaxRetries =
-      retryPolicy && typeof retryPolicy.maxRetries === "number"
+      retryPolicy && typeof retryPolicy.maxRetries === JS_TYPE_NUMBER
         ? retryPolicy.maxRetries
         : this.#config.maxRetries;
     const policyBackoffInitial =
-      retryPolicy && typeof retryPolicy.backoffInitialMs === "number"
+      retryPolicy && typeof retryPolicy.backoffInitialMs === JS_TYPE_NUMBER
         ? retryPolicy.backoffInitialMs
         : this.#config.backoffInitialMs;
     const policyBackoffMultiplier =
-      retryPolicy && typeof retryPolicy.backoffMultiplier === "number"
+      retryPolicy && typeof retryPolicy.backoffMultiplier === JS_TYPE_NUMBER
         ? retryPolicy.backoffMultiplier
         : this.#config.backoffMultiplier;
     const policyMaxBackoffMs =
-      retryPolicy && typeof retryPolicy.maxBackoffMs === "number"
+      retryPolicy && typeof retryPolicy.maxBackoffMs === JS_TYPE_NUMBER
         ? retryPolicy.maxBackoffMs
         : this.#config.maxBackoffMs;
     const maxRetries = options.disableRetries === true || hasOneShotAuth
@@ -11210,7 +11214,7 @@ export class ToriiClient {
 
   _emitRetryTelemetry(event) {
     const hook = this.#config.retryTelemetryHook;
-    if (typeof hook !== "function") {
+    if (typeof hook !== JS_TYPE_FUNCTION) {
       return;
     }
     const payload = {
@@ -11226,7 +11230,7 @@ export class ToriiClient {
 
   _emitInsecureTransportTelemetry(event) {
     const hook = this.#config.insecureTransportTelemetryHook;
-    if (typeof hook !== "function") {
+    if (typeof hook !== JS_TYPE_FUNCTION) {
       return;
     }
     try {
@@ -11246,14 +11250,14 @@ export class ToriiClient {
       if (!source) {
         return;
       }
-      if (typeof Headers === "function" && source instanceof Headers) {
+      if (typeof Headers === JS_TYPE_FUNCTION && source instanceof Headers) {
         source.forEach((value, key) => {
           setHeader(headers, key, value);
         });
         return;
       }
       if (
-        typeof source[Symbol.iterator] === "function" &&
+        typeof source[Symbol.iterator] === JS_TYPE_FUNCTION &&
         !isPlainObject(source)
       ) {
         for (const entry of source) {
@@ -11272,7 +11276,7 @@ export class ToriiClient {
         }
         return;
       }
-      if (typeof source === "object") {
+      if (typeof source === JS_TYPE_OBJECT) {
         for (const [key, value] of Object.entries(source)) {
           if (value === null) {
             deleteHeader(headers, key);
@@ -11349,11 +11353,11 @@ export class ToriiClient {
       return timedOut;
     }
     const errorCode =
-      error && typeof error.code === "string"
+      error && typeof error.code === JS_TYPE_STRING
         ? error.code.trim().toUpperCase()
         : "";
     const errorMessage =
-      error && typeof error.message === "string"
+      error && typeof error.message === JS_TYPE_STRING
         ? error.message.toUpperCase()
         : "";
     if (
@@ -11488,27 +11492,27 @@ export class ToriiClient {
   }
 
   _extractErrorCode(payload) {
-    if (!payload || typeof payload !== "object") {
+    if (!payload || typeof payload !== JS_TYPE_OBJECT) {
       return null;
     }
-    if (typeof payload.code === "string" && payload.code) {
+    if (typeof payload.code === JS_TYPE_STRING && payload.code) {
       return payload.code;
     }
-    if (typeof payload.reason === "string" && payload.reason) {
+    if (typeof payload.reason === JS_TYPE_STRING && payload.reason) {
       return payload.reason;
     }
     const detailsRejectCode = this._extractRejectCodeFromDetails(payload.details);
     if (detailsRejectCode) {
       return detailsRejectCode;
     }
-    if (typeof payload.error === "string" && payload.error.startsWith("ERR_")) {
+    if (typeof payload.error === JS_TYPE_STRING && payload.error.startsWith("ERR_")) {
       return payload.error;
     }
     return null;
   }
 
   _extractCodeFromText(text) {
-    if (typeof text !== "string" || !text) {
+    if (typeof text !== JS_TYPE_STRING || !text) {
       return null;
     }
     const match = text.match(/ERR_[A-Z0-9_]+/u);
@@ -11516,7 +11520,7 @@ export class ToriiClient {
   }
 
   _trimErrorBodyText(text, maxLength = 512) {
-    if (typeof text !== "string") {
+    if (typeof text !== JS_TYPE_STRING) {
       return null;
     }
     const trimmed = text.trim();
@@ -11530,7 +11534,7 @@ export class ToriiClient {
   }
 
   _extractErrorMessageValue(value) {
-    if (typeof value === "string") {
+    if (typeof value === JS_TYPE_STRING) {
       return this._trimErrorBodyText(value);
     }
     if (Array.isArray(value)) {
@@ -11542,7 +11546,7 @@ export class ToriiClient {
       }
       return null;
     }
-    if (!value || typeof value !== "object") {
+    if (!value || typeof value !== JS_TYPE_OBJECT) {
       return null;
     }
     const candidateKeys = [
@@ -11594,30 +11598,30 @@ export class ToriiClient {
     if (compact) {
       return compact;
     }
-    if (typeof defaultText === "string" && defaultText.trim()) {
+    if (typeof defaultText === JS_TYPE_STRING && defaultText.trim()) {
       return this._trimErrorBodyText(defaultText);
     }
     return null;
   }
 
   _extractErrorDetails(payload) {
-    if (!payload || typeof payload !== "object") {
+    if (!payload || typeof payload !== JS_TYPE_OBJECT) {
       return null;
     }
     const details = payload.details;
-    return details && typeof details === "object" ? details : null;
+    return details && typeof details === JS_TYPE_OBJECT ? details : null;
   }
 
   _extractRejectCodeFromDetails(details) {
-    if (!details || typeof details !== "object") {
+    if (!details || typeof details !== JS_TYPE_OBJECT) {
       return null;
     }
     const direct = details.reject_code ?? details.rejectCode;
-    if (typeof direct === "string" && direct.trim()) {
+    if (typeof direct === JS_TYPE_STRING && direct.trim()) {
       return direct.trim();
     }
     const axtCode = details.axt?.code;
-    if (typeof axtCode === "string" && axtCode.trim()) {
+    if (typeof axtCode === JS_TYPE_STRING && axtCode.trim()) {
       return axtCode.trim();
     }
     return null;
@@ -11625,7 +11629,7 @@ export class ToriiClient {
 
   _extractRejectCode(response, bodyJson = null) {
     const raw = this._getHeader(response, "x-iroha-reject-code");
-    if (typeof raw === "string") {
+    if (typeof raw === JS_TYPE_STRING) {
       const trimmed = raw.trim();
       if (trimmed) {
         return trimmed;
@@ -11660,7 +11664,7 @@ export class ToriiClient {
         }
         continue;
       }
-      if (spec.type === "string") {
+      if (spec.type === JS_TYPE_STRING) {
         params[key] = normalizeProverFilterString(rawValue, `proverFilters.${rawKey}`);
         continue;
       }
@@ -11789,10 +11793,10 @@ export class ToriiClient {
     if (filter === undefined || filter === null) {
       return undefined;
     }
-    if (typeof filter === "string") {
+    if (typeof filter === JS_TYPE_STRING) {
       return normalizeProductionEventFilterBackendPayload(filter, "eventFilter");
     }
-    if (typeof filter === "object") {
+    if (typeof filter === JS_TYPE_OBJECT) {
       try {
         return JSON.stringify(
           normalizeProductionEventFilterBackendPayload(filter, "eventFilter"),
@@ -12006,7 +12010,7 @@ export class ToriiClient {
       rejectResponse(error);
     }
     if (contentLength !== null) {
-      if (typeof contentLength !== "string") {
+      if (typeof contentLength !== JS_TYPE_STRING) {
         rejectResponse(
           new TypeError(`${context} has a non-string Content-Length header`),
         );
@@ -12212,7 +12216,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     const base = ToriiClient._validateIterablePayload(payload);
-    return typeof normalizePage === "function" ? normalizePage(base) : base;
+    return typeof normalizePage === JS_TYPE_FUNCTION ? normalizePage(base) : base;
   }
 
   async _queryIterable(
@@ -12231,7 +12235,7 @@ export class ToriiClient {
     );
     const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(normalizedOptions, optionContext, ToriiClient, this.#canonicalRequestAuth);
     const envelope = ToriiClient._buildIterableQueryEnvelope(rest);
-    if (typeof envelopeHook === "function") {
+    if (typeof envelopeHook === JS_TYPE_FUNCTION) {
       envelopeHook(envelope, rest);
     }
     const listParamAllowedKeys = new Set([
@@ -12255,12 +12259,12 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     const base = ToriiClient._validateIterablePayload(payload);
-    return typeof normalizePage === "function" ? normalizePage(base) : base;
+    return typeof normalizePage === JS_TYPE_FUNCTION ? normalizePage(base) : base;
   }
 
   _iterateIterable(fetchPage, options = {}) {
     const iteratorLabel =
-      typeof fetchPage === "function" && fetchPage.name
+      typeof fetchPage === JS_TYPE_FUNCTION && fetchPage.name
         ? `${fetchPage.name} iterator options`
         : "iterator options";
     const normalizedOptions = ToriiClient._normalizeIterableOptions(
@@ -12356,7 +12360,7 @@ export class ToriiClient {
     itemKeys = ["items"],
   ) {
     const iteratorLabel =
-      typeof fetchPage === "function" && fetchPage.name
+      typeof fetchPage === JS_TYPE_FUNCTION && fetchPage.name
         ? `${fetchPage.name} iterator options`
         : "iterator options";
     const mergedAllowed = new Set([
@@ -12443,7 +12447,7 @@ export class ToriiClient {
       if (Array.isArray(page)) {
         return page;
       }
-      if (!page || typeof page !== "object") {
+      if (!page || typeof page !== JS_TYPE_OBJECT) {
         return [];
       }
       for (const key of normalizedItemKeys) {
@@ -12462,7 +12466,7 @@ export class ToriiClient {
       if (rawKeys === undefined || rawKeys === null) {
         return ["items"];
       }
-      if (typeof rawKeys === "string") {
+      if (typeof rawKeys === JS_TYPE_STRING) {
         const trimmed = rawKeys.trim();
         if (!trimmed) {
           rejectError(`${contextLabel} item key must be a non-empty string`);
@@ -12474,7 +12478,7 @@ export class ToriiClient {
       }
       const keys = [];
       for (const entry of rawKeys) {
-        if (typeof entry !== "string") {
+        if (typeof entry !== JS_TYPE_STRING) {
           rejectError(`${contextLabel} item keys must be strings`);
         }
         const trimmed = entry.trim();
@@ -12491,7 +12495,7 @@ export class ToriiClient {
 
   _iterateCursorIterable(fetchPage, options = {}) {
     const iteratorLabel =
-      typeof fetchPage === "function" && fetchPage.name
+      typeof fetchPage === JS_TYPE_FUNCTION && fetchPage.name
         ? `${fetchPage.name} iterator options`
         : "iterator options";
     const normalizedOptions = ToriiClient._normalizeIterableOptions(
@@ -12574,7 +12578,7 @@ export class ToriiClient {
 
   _iterateContractInstancePages(fetchPage, options = {}) {
     const iteratorLabel =
-      typeof fetchPage === "function" && fetchPage.name
+      typeof fetchPage === JS_TYPE_FUNCTION && fetchPage.name
         ? `${fetchPage.name} iterator options`
         : "iterator options";
     const normalizedOptions = ToriiClient._normalizeIterableOptions(
@@ -12649,7 +12653,7 @@ export class ToriiClient {
   }
 
   static _validateIterablePayload(payload) {
-    if (!payload || typeof payload !== "object" || !Array.isArray(payload.items)) {
+    if (!payload || typeof payload !== JS_TYPE_OBJECT || !Array.isArray(payload.items)) {
       rejectError("iterable endpoint returned unexpected payload");
     }
     const hasTotal = payload.total !== undefined && payload.total !== null;
@@ -12706,7 +12710,7 @@ export class ToriiClient {
   }
 
   static _requireNonEmptyString(value, name) {
-    if (typeof value !== "string" || value.trim().length === 0) {
+    if (typeof value !== JS_TYPE_STRING || value.trim().length === 0) {
       throw createValidationError(
         ValidationErrorCode.INVALID_STRING,
         `${name} must be a non-empty string`,
@@ -12799,7 +12803,7 @@ export class ToriiClient {
   }
 
   static #normalizePrivateKey(value, context = "canonicalAuth.privateKey") {
-    const path = typeof context === "string" ? context.replace(/\s+/g, ".") : "canonicalAuth";
+    const path = typeof context === JS_TYPE_STRING ? context.replace(/\s+/g, ".") : CANONICAL_AUTH_FIELD;
     if (value === undefined || value === null) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
@@ -12810,7 +12814,7 @@ export class ToriiClient {
     let buffer;
     if (Buffer.isBuffer(value)) {
       buffer = Buffer.from(value);
-    } else if (typeof value === "string") {
+    } else if (typeof value === JS_TYPE_STRING) {
       const trimmed = value.trim();
       const hex = trimmed.startsWith("0x") || trimmed.startsWith("0X")
         ? trimmed.slice(2)
@@ -12845,11 +12849,11 @@ export class ToriiClient {
     return buffer;
   }
 
-  static _normalizeCanonicalAuth(auth, context = "canonicalAuth") {
+  static _normalizeCanonicalAuth(auth, context = CANONICAL_AUTH_FIELD) {
     return ToriiClient.#normalizeCanonicalAuth(auth, context);
   }
 
-  static #normalizeCanonicalAuth(auth, context = "canonicalAuth") {
+  static #normalizeCanonicalAuth(auth, context = CANONICAL_AUTH_FIELD) {
     if (auth === undefined || auth === null) {
       return null;
     }
@@ -13057,7 +13061,7 @@ export class ToriiClient {
     const record = requirePlainObjectOption(options, context);
     assertSupportedOptionKeys(record, TX_STATUS_POLL_OPTION_KEYS, context);
     const signalContext =
-      typeof context === "string" && context.endsWith(" options")
+      typeof context === JS_TYPE_STRING && context.endsWith(" options")
         ? context.slice(0, -8)
         : context;
     const { signal } = normalizeSignalOption(record, signalContext);
@@ -13090,7 +13094,7 @@ export class ToriiClient {
     }
     let onStatus = null;
     if (record.onStatus !== undefined && record.onStatus !== null) {
-      if (typeof record.onStatus !== "function") {
+      if (typeof record.onStatus !== JS_TYPE_FUNCTION) {
         throw createValidationError(
           ValidationErrorCode.INVALID_OBJECT,
           `${context}.onStatus must be a function`,
@@ -13369,7 +13373,7 @@ export class ToriiClient {
     if (value === undefined || value === null) {
       return undefined;
     }
-    if (typeof value !== "string") {
+    if (typeof value !== JS_TYPE_STRING) {
       throw createValidationError(
         ValidationErrorCode.INVALID_STRING,
         `${context} must be a string`,
@@ -13398,7 +13402,7 @@ export class ToriiClient {
     if (filter === undefined || filter === null) {
       return undefined;
     }
-    if (typeof filter === "string") {
+    if (typeof filter === JS_TYPE_STRING) {
       const trimmed = filter.trim();
       if (!trimmed) {
         throw createValidationError(
@@ -13409,7 +13413,7 @@ export class ToriiClient {
       }
       return trimmed;
     }
-    if (typeof filter === "object") {
+    if (typeof filter === JS_TYPE_OBJECT) {
       const plain = ToriiClient._requirePlainObject(filter, "filter");
       try {
         return JSON.stringify(plain);
@@ -13435,7 +13439,7 @@ export class ToriiClient {
     if (sort === undefined || sort === null) {
       return undefined;
     }
-    if (typeof sort === "string") {
+    if (typeof sort === JS_TYPE_STRING) {
       const trimmed = sort.trim();
       if (!trimmed) {
         throw createValidationError(
@@ -13478,7 +13482,7 @@ export class ToriiClient {
         return undefined;
       }
       const parts = sort.map((entry, index) => {
-        if (!entry || typeof entry !== "object" || typeof entry.key !== "string") {
+        if (!entry || typeof entry !== JS_TYPE_OBJECT || typeof entry.key !== JS_TYPE_STRING) {
           throw createValidationError(
             ValidationErrorCode.INVALID_OBJECT,
             `sort[${index}] must provide a key`,
@@ -13563,7 +13567,7 @@ export class ToriiClient {
   }
 
   static _normalizeSelectEntry(entry, context) {
-    if (typeof entry === "string") {
+    if (typeof entry === JS_TYPE_STRING) {
       const fieldPath = entry.trim();
       if (!fieldPath) {
         throw createValidationError(
@@ -13603,7 +13607,7 @@ export class ToriiClient {
     if (filter === undefined || filter === null) {
       return undefined;
     }
-    if (typeof filter === "string") {
+    if (typeof filter === JS_TYPE_STRING) {
       const trimmed = filter.trim();
       if (!trimmed) {
         throw createValidationError(
@@ -13627,7 +13631,7 @@ export class ToriiClient {
       }
       return ToriiClient._requirePlainObject(parsed, "filter");
     }
-    if (typeof filter === "object") {
+    if (typeof filter === JS_TYPE_OBJECT) {
       return ToriiClient._requirePlainObject(filter, "filter");
     }
     throw createValidationError(
@@ -13852,7 +13856,7 @@ export class ToriiClient {
   }
 
   static _assertFilterStringValue(value, context) {
-    if (typeof value !== "string") {
+    if (typeof value !== JS_TYPE_STRING) {
       throw createValidationError(
         ValidationErrorCode.INVALID_STRING,
         `${context} must be a string`,
@@ -13863,7 +13867,7 @@ export class ToriiClient {
   }
 
   static _assertFilterNumberValue(value, context) {
-    if (typeof value !== "number" || !Number.isFinite(value)) {
+    if (typeof value !== JS_TYPE_NUMBER || !Number.isFinite(value)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_NUMERIC,
         `${context} must be numeric`,
@@ -13906,7 +13910,7 @@ export class ToriiClient {
     }
     if (Array.isArray(sort)) {
       return sort.map((entry, index) => {
-        if (!entry || typeof entry !== "object" || typeof entry.key !== "string") {
+        if (!entry || typeof entry !== JS_TYPE_OBJECT || typeof entry.key !== JS_TYPE_STRING) {
           throw createValidationError(
             ValidationErrorCode.INVALID_OBJECT,
             `sort[${index}] must provide a key`,
@@ -13928,7 +13932,7 @@ export class ToriiClient {
         return { key, order };
       });
     }
-    if (typeof sort === "string") {
+    if (typeof sort === JS_TYPE_STRING) {
       return sort
         .split(",")
         .map((token) => token.trim())
@@ -14030,7 +14034,7 @@ export class ToriiClient {
     const min = options.min;
     const max = options.max;
     let numeric;
-    if (typeof value === "number") {
+    if (typeof value === JS_TYPE_NUMBER) {
       if (!Number.isFinite(value) || !Number.isInteger(value)) {
         const qualifier = allowZero ? "non-negative integer" : "positive integer";
         throw createValidationError(
@@ -14055,7 +14059,7 @@ export class ToriiClient {
         );
       }
       numeric = value;
-    } else if (typeof value === "bigint") {
+    } else if (typeof value === JS_TYPE_BIGINT) {
       if (value < 0n || (!allowZero && value === 0n)) {
         const qualifier = allowZero ? "non-negative integer" : "positive integer";
         throw createValidationError(
@@ -14072,7 +14076,7 @@ export class ToriiClient {
         );
       }
       numeric = Number(value);
-    } else if (typeof value === "string") {
+    } else if (typeof value === JS_TYPE_STRING) {
       const trimmed = value.trim();
       if (!/^[0-9]+$/.test(trimmed)) {
         const qualifier = allowZero ? "non-negative integer" : "positive integer";
@@ -14132,7 +14136,7 @@ export class ToriiClient {
 function normalizeUint64DecimalString(value, name, options = {}) {
   const allowZero = options.allowZero !== false;
   let integer;
-  if (typeof value === "number") {
+  if (typeof value === JS_TYPE_NUMBER) {
     if (!Number.isFinite(value) || !Number.isInteger(value) || !Number.isSafeInteger(value)) {
       const qualifier = allowZero ? "non-negative integer" : "positive integer";
       throw createValidationError(
@@ -14142,9 +14146,9 @@ function normalizeUint64DecimalString(value, name, options = {}) {
       );
     }
     integer = BigInt(value);
-  } else if (typeof value === "bigint") {
+  } else if (typeof value === JS_TYPE_BIGINT) {
     integer = value;
-  } else if (typeof value === "string") {
+  } else if (typeof value === JS_TYPE_STRING) {
     const trimmed = value.trim();
     if (!/^[0-9]+$/.test(trimmed)) {
       const qualifier = allowZero ? "non-negative integer" : "positive integer";
@@ -14183,7 +14187,7 @@ function normalizeUint64DecimalString(value, name, options = {}) {
 
 function normalizeGovernanceUint64Integer(value, name, options = {}) {
   let integer;
-  if (typeof value === "number") {
+  if (typeof value === JS_TYPE_NUMBER) {
     if (!Number.isSafeInteger(value) || value < 0) {
       throw createValidationError(
         ValidationErrorCode.INVALID_NUMERIC,
@@ -14192,7 +14196,7 @@ function normalizeGovernanceUint64Integer(value, name, options = {}) {
       );
     }
     integer = BigInt(value);
-  } else if (typeof value === "bigint") {
+  } else if (typeof value === JS_TYPE_BIGINT) {
     integer = value;
   } else {
     throw createValidationError(
@@ -14218,7 +14222,7 @@ function normalizeGovernanceUint64Integer(value, name, options = {}) {
 function normalizeIsoSubmissionResponse(payload, context, options = {}) {
   const record = ToriiClient._requirePlainObject(payload, context);
   const rawMessageId = record.message_id;
-  if (typeof rawMessageId !== "string" || rawMessageId.trim().length === 0) {
+  if (typeof rawMessageId !== JS_TYPE_STRING || rawMessageId.trim().length === 0) {
     rejectError(`${context} did not return a message_id`);
   }
   const messageId = rawMessageId.trim();
@@ -14453,8 +14457,8 @@ function normalizeIsoStatusHistory(value, context) {
 
 function normalizeIsoMessageKind(value, context) {
   const normalizedPath =
-    typeof context === "string" ? context.replace(/\s+/g, ".") : context;
-  if (typeof value !== "string") {
+    typeof context === JS_TYPE_STRING ? context.replace(/\s+/g, ".") : context;
+  if (typeof value !== JS_TYPE_STRING) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
       `${context} must be 'pacs.008' or 'pacs.009'`,
@@ -14508,7 +14512,7 @@ function normalizeIsoSubmissionOptions(options, context, extraAllowedKeys = []) 
   }
   let contentType;
   if (options.contentType !== undefined && options.contentType !== null) {
-    if (typeof options.contentType !== "string") {
+    if (typeof options.contentType !== JS_TYPE_STRING) {
       throw createValidationError(
         ValidationErrorCode.INVALID_STRING,
         `${optionPath}.contentType must be a string`,
@@ -14604,7 +14608,7 @@ function normalizeHealthSnapshot(payload, context) {
   if (payload === null || payload === undefined) {
     rejectType(`${context} must not be empty`);
   }
-  if (typeof payload === "string") {
+  if (typeof payload === JS_TYPE_STRING) {
     return { status: requireNonEmptyString(payload, context) };
   }
   const record = ensureRecord(payload, context);
@@ -14613,7 +14617,7 @@ function normalizeHealthSnapshot(payload, context) {
     source == null ? "" : String(source),
     `${context}.status`,
   );
-  if (typeof record.status === "string" && record.status === status) {
+  if (typeof record.status === JS_TYPE_STRING && record.status === status) {
     return record;
   }
   return { ...record, status };
@@ -14625,7 +14629,7 @@ function normalizeStatusSnapshot(payload, state) {
   }
   const statusPayload = parseStatusPayload(payload);
   const metrics =
-    state && typeof state.record === "function"
+    state && typeof state.record === JS_TYPE_FUNCTION
       ? state.record(statusPayload)
       : computeStatusMetrics(null, statusPayload);
   return {
@@ -14783,7 +14787,7 @@ function parseGovernanceSnapshot(payload) {
   );
   const manifestAdmission = ensureRecord(
     record.manifest_admission,
-    "governance.manifest_admission",
+    GOVERNANCE_MANIFEST_ADMISSION_CONTEXT,
   );
   const manifestQuorum = ensureRecord(
     record.manifest_quorum,
@@ -14825,37 +14829,37 @@ function parseGovernanceSnapshot(payload) {
       total_checks: coerceNestedInt(
         manifestAdmission,
         "total_checks",
-        "governance.manifest_admission",
+        GOVERNANCE_MANIFEST_ADMISSION_CONTEXT,
       ),
       allowed: coerceNestedInt(
         manifestAdmission,
         "allowed",
-        "governance.manifest_admission",
+        GOVERNANCE_MANIFEST_ADMISSION_CONTEXT,
       ),
       missing_manifest: coerceNestedInt(
         manifestAdmission,
         "missing_manifest",
-        "governance.manifest_admission",
+        GOVERNANCE_MANIFEST_ADMISSION_CONTEXT,
       ),
       non_validator_authority: coerceNestedInt(
         manifestAdmission,
         "non_validator_authority",
-        "governance.manifest_admission",
+        GOVERNANCE_MANIFEST_ADMISSION_CONTEXT,
       ),
       quorum_rejected: coerceNestedInt(
         manifestAdmission,
         "quorum_rejected",
-        "governance.manifest_admission",
+        GOVERNANCE_MANIFEST_ADMISSION_CONTEXT,
       ),
       protected_namespace_rejected: coerceNestedInt(
         manifestAdmission,
         "protected_namespace_rejected",
-        "governance.manifest_admission",
+        GOVERNANCE_MANIFEST_ADMISSION_CONTEXT,
       ),
       runtime_hook_rejected: coerceNestedInt(
         manifestAdmission,
         "runtime_hook_rejected",
-        "governance.manifest_admission",
+        GOVERNANCE_MANIFEST_ADMISSION_CONTEXT,
       ),
     },
     manifest_quorum: {
@@ -15287,7 +15291,7 @@ async function parseGovernanceProposalRecord(payload) {
     "governance.proposal.created_height",
   );
   const statusValue = record.status;
-  if (typeof statusValue !== "string" || !GOVERNANCE_PROPOSAL_STATUSES.has(statusValue)) {
+  if (typeof statusValue !== JS_TYPE_STRING || !GOVERNANCE_PROPOSAL_STATUSES.has(statusValue)) {
     rejectType("governance proposal status must be one of Proposed, Rejected, Enacted, Superseded, ExecutionFailed");
   }
   const kindPayload = ensureRecord(record.kind, "governance.proposal.kind");
@@ -16040,7 +16044,7 @@ function parseGovernanceMusubiRelease(payload, context) {
     }
     if (
       identifier.kind === "AlphaNumeric" &&
-      typeof identifier.value === "string" &&
+      typeof identifier.value === JS_TYPE_STRING &&
       identifier.value.length <= 64 &&
       /^(?=.*[A-Za-z-])[A-Za-z0-9-]+$/u.test(identifier.value)
     ) {
@@ -16252,7 +16256,7 @@ function requireExactGovernanceProviderId(value, context) {
 }
 
 function requireExactGovernanceStringTuple(value, context) {
-  if (!Array.isArray(value) || value.length !== 1 || typeof value[0] !== "string") {
+  if (!Array.isArray(value) || value.length !== 1 || typeof value[0] !== JS_TYPE_STRING) {
     rejectType(`${context} must be the exact one-field string tuple`);
   }
   return value[0];
@@ -16269,7 +16273,7 @@ function parseGovernanceUint16Array(value, context) {
 }
 
 function requireExactGovernanceUint64String(value, context, options = {}) {
-  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
+  if (typeof value !== JS_TYPE_STRING || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
     rejectType(`${context} must be a canonical unsigned 64-bit decimal string`);
   }
   const parsed = BigInt(value);
@@ -16298,7 +16302,7 @@ function requireCanonicalGovernanceAssetDefinitionId(value, context) {
 }
 
 function requireCanonicalGovernanceBase64(value, context) {
-  if (typeof value !== "string") {
+  if (typeof value !== JS_TYPE_STRING) {
     rejectType(`${context} must be a canonical base64 string`);
   }
   if (value === "") return value;
@@ -16322,7 +16326,7 @@ function requireExactCanonicalGovernanceQuantity(value, context) {
 }
 
 function requireExactString(value, context) {
-  if (typeof value !== "string") {
+  if (typeof value !== JS_TYPE_STRING) {
     rejectType(`${context} must be a string`);
   }
   return value;
@@ -16407,7 +16411,7 @@ function parseGovernanceUnlockStats(payload) {
 }
 
 function normalizeErrorPath(context) {
-  return typeof context === "string" ? context.replace(/\s+/g, ".") : context;
+  return typeof context === JS_TYPE_STRING ? context.replace(/\s+/g, ".") : context;
 }
 
 function normalizeProtectedNamespaceList(input) {
@@ -16730,7 +16734,7 @@ function normalizeExplorerMetricsResponse(payload) {
 }
 
 const EXPLORER_ACCOUNT_QR_OPTION_KEYS = new Set(["signal"]);
-const VPN_SESSION_OPTION_KEYS = new Set(["signal", "canonicalAuth"]);
+const VPN_SESSION_OPTION_KEYS = new Set(["signal", CANONICAL_AUTH_FIELD]);
 const {
   VPN_HELPER_TICKET_BYTES,
   VPN_HELPER_TICKET_HEX_LENGTH,
@@ -16873,7 +16877,7 @@ function requireVpnNumericConstant(value, context, expected) {
 }
 
 function requireVpnUnsignedInteger(value, context, options = {}) {
-  if (typeof value !== "number") {
+  if (typeof value !== JS_TYPE_NUMBER) {
     throw createValidationError(
       ValidationErrorCode.INVALID_NUMERIC,
       `${context} must be a JSON integer`,
@@ -17605,7 +17609,7 @@ function normalizeSnsAuction(payload, context) {
 }
 
 function normalizeSnsNameStatus(payload, context) {
-  if (typeof payload === "string") {
+  if (typeof payload === JS_TYPE_STRING) {
     if (!SNS_NAME_STATUS_VALUES.has(payload)) {
       rejectType(`${context} must be one of ${Array.from(SNS_NAME_STATUS_VALUES).join(", ")}`);
     }
@@ -17812,7 +17816,7 @@ function normalizeExplorerAccountQrResponse(payload, context) {
 
 function normalizeExplorerCursorValue(value, context, { nullable = false } = {}) {
   if (value === null && nullable) return null;
-  if (typeof value !== "string" || value.length === 0) {
+  if (typeof value !== JS_TYPE_STRING || value.length === 0) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
       `${context} must be a non-empty base64url string`,
@@ -18225,7 +18229,7 @@ function coerceBoolean(value, context) {
   if (value === 0 || value === "0") {
     return false;
   }
-  if (typeof value === "string") {
+  if (typeof value === JS_TYPE_STRING) {
     const lower = value.toLowerCase();
     if (lower === "true") {
       return true;
@@ -18259,7 +18263,7 @@ function parseStringArray(value, context) {
     rejectType(`${context} must be an array of strings`);
   }
   return value.map((entry, index) => {
-    if (entry === undefined || entry === null || typeof entry !== "string") {
+    if (entry === undefined || entry === null || typeof entry !== JS_TYPE_STRING) {
       rejectType(`${context}[${index}] must be a string`);
     }
     return entry;
@@ -18267,7 +18271,7 @@ function parseStringArray(value, context) {
 }
 
 function isPlainObject(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (value === null || typeof value !== JS_TYPE_OBJECT || Array.isArray(value)) {
     return false;
   }
   const proto = Object.getPrototypeOf(value);
@@ -18278,7 +18282,7 @@ function optionalString(value, context) {
   if (value === undefined || value === null) {
     return null;
   }
-  if (typeof value === "string") {
+  if (typeof value === JS_TYPE_STRING) {
     return value;
   }
   rejectType(`${context} must be a string when present`);
@@ -18296,7 +18300,7 @@ function requireStringArray(value, context) {
     rejectType(`${context} must be an array`);
   }
   return value.map((entry, index) => {
-    if (typeof entry !== "string") {
+    if (typeof entry !== JS_TYPE_STRING) {
       rejectType(`${context}[${index}] must be a string`);
     }
     return entry;
@@ -18341,7 +18345,7 @@ function requireExactUaidRecord(
     (field) => !Object.prototype.hasOwnProperty.call(record, field),
   );
   const unexpected = Reflect.ownKeys(record).filter(
-    (field) => typeof field !== "string" || !allowed.has(field),
+    (field) => typeof field !== JS_TYPE_STRING || !allowed.has(field),
   );
   if (missing.length > 0 || unexpected.length > 0) {
     const details = [];
@@ -18364,7 +18368,7 @@ function requireExactEnumString(value, allowed, context) {
 
 function requireJsonNullableString(value, context) {
   if (value === null) return null;
-  if (typeof value !== "string") {
+  if (typeof value !== JS_TYPE_STRING) {
     rejectType(`${context} must be a string or null`);
   }
   return value;
@@ -18824,7 +18828,7 @@ function normalizeUaidManifestEntry(value, context) {
     if (record.notes === null) {
       rejectType(`${context}.notes must be omitted instead of null`);
     }
-    if (typeof record.notes !== "string") {
+    if (typeof record.notes !== JS_TYPE_STRING) {
       rejectType(`${context}.notes must be a string`);
     }
     normalized.notes = record.notes;
@@ -18907,7 +18911,7 @@ function normalizeUaidManifestEffect(value, context) {
     if (denial.reason === null) {
       rejectType(`${context}.Deny.reason must be omitted instead of null`);
     }
-    if (typeof denial.reason !== "string") {
+    if (typeof denial.reason !== JS_TYPE_STRING) {
       rejectType(`${context}.Deny.reason must be a string`);
     }
     normalized.reason = denial.reason;
@@ -18919,7 +18923,7 @@ function normalizeProverFilterBoolean(value, name) {
   if (typeof value === "boolean") {
     return value;
   }
-  if (typeof value === "number") {
+  if (typeof value === JS_TYPE_NUMBER) {
     if (value === 1) {
       return true;
     }
@@ -18927,7 +18931,7 @@ function normalizeProverFilterBoolean(value, name) {
       return false;
     }
   }
-  if (typeof value === "string") {
+  if (typeof value === JS_TYPE_STRING) {
     const normalized = value.trim().toLowerCase();
     if (normalized === "true" || normalized === "1" || normalized === "yes") {
       return true;
@@ -18940,7 +18944,7 @@ function normalizeProverFilterBoolean(value, name) {
 }
 
 function normalizeProverFilterString(value, name) {
-  if (typeof value !== "string") {
+  if (typeof value !== JS_TYPE_STRING) {
     rejectType(`${name} must be a string`);
   }
   const trimmed = value.trim();
@@ -18959,7 +18963,7 @@ function normalizeProverFilterEnum(value, name, allowed) {
 }
 
 function isTruthyFilter(filters, key) {
-  if (!filters || typeof filters !== "object") {
+  if (!filters || typeof filters !== JS_TYPE_OBJECT) {
     return false;
   }
   if (key in filters) {
@@ -19038,16 +19042,16 @@ export function isStatusQueueStalled(status, stallThresholdMs) {
 
 function monotonicTimestamp() {
   if (
-    typeof performance === "object" &&
+    typeof performance === JS_TYPE_OBJECT &&
     performance &&
-    typeof performance.now === "function"
+    typeof performance.now === JS_TYPE_FUNCTION
   ) {
     return performance.now();
   }
   if (
-    typeof process === "object" &&
+    typeof process === JS_TYPE_OBJECT &&
     process &&
-    typeof process.hrtime === "function"
+    typeof process.hrtime === JS_TYPE_FUNCTION
   ) {
     const [seconds, nanoseconds] = process.hrtime();
     return seconds * 1_000 + nanoseconds / 1_000_000;
@@ -19062,9 +19066,9 @@ const PROVER_FILTER_DEFINITIONS = {
   ids_only: { type: "boolean", aliases: ["idsOnly"] },
   messages_only: { type: "boolean", aliases: ["messagesOnly"] },
   latest: { type: "boolean", aliases: ["latest"] },
-  content_type: { type: "string", aliases: ["contentType"] },
-  has_tag: { type: "string", aliases: ["hasTag"] },
-  id: { type: "string", aliases: ["id"] },
+  content_type: { type: JS_TYPE_STRING, aliases: ["contentType"] },
+  has_tag: { type: JS_TYPE_STRING, aliases: ["hasTag"] },
+  id: { type: JS_TYPE_STRING, aliases: ["id"] },
   limit: { type: "integer", aliases: ["limit"], allowZero: false },
   offset: { type: "integer", aliases: ["offset"], allowZero: true },
   since_ms: { type: "integer", aliases: ["sinceMs"], allowZero: true },
@@ -19095,7 +19099,7 @@ async function* readBodyChunks(body) {
   if (!body) {
     return;
   }
-  if (typeof body.getReader === "function") {
+  if (typeof body.getReader === JS_TYPE_FUNCTION) {
     const reader = body.getReader();
     try {
       while (true) {
@@ -19108,13 +19112,13 @@ async function* readBodyChunks(body) {
         }
       }
     } finally {
-      if (typeof reader.releaseLock === "function") {
+      if (typeof reader.releaseLock === JS_TYPE_FUNCTION) {
         reader.releaseLock();
       }
     }
     return;
   }
-  if (typeof body[Symbol.asyncIterator] === "function") {
+  if (typeof body[Symbol.asyncIterator] === JS_TYPE_FUNCTION) {
     for await (const chunk of body) {
       yield chunk;
     }
@@ -19176,7 +19180,7 @@ function normalizeByteArray(value, context) {
 }
 
 function toXmlBuffer(value, name) {
-  if (typeof value === "string") {
+  if (typeof value === JS_TYPE_STRING) {
     if (!value.trim()) {
       rejectType(`${name} must be a non-empty string or binary payload`);
     }
@@ -19186,10 +19190,10 @@ function toXmlBuffer(value, name) {
 }
 
 function attachHeaderAccessors(headers) {
-  if (!headers || typeof headers !== "object") {
+  if (!headers || typeof headers !== JS_TYPE_OBJECT) {
     return;
   }
-  if (typeof headers.get !== "function") {
+  if (typeof headers.get !== JS_TYPE_FUNCTION) {
     Object.defineProperty(headers, "get", {
       value(name) {
         const key = findHeaderKey(headers, name);
@@ -19198,7 +19202,7 @@ function attachHeaderAccessors(headers) {
       enumerable: false,
     });
   }
-  if (typeof headers.has !== "function") {
+  if (typeof headers.has !== JS_TYPE_FUNCTION) {
     Object.defineProperty(headers, "has", {
       value(name) {
         return findHeaderKey(headers, name) !== null;
@@ -19209,7 +19213,7 @@ function attachHeaderAccessors(headers) {
 }
 
 function findHeaderKey(headers, name) {
-  if (!headers || typeof headers !== "object" || name == null) {
+  if (!headers || typeof headers !== JS_TYPE_OBJECT || name == null) {
     return null;
   }
   const target = String(name).toLowerCase();
@@ -19244,7 +19248,7 @@ function hasHeader(headers, name) {
 
 function cloneHeadersForFetch(headers) {
   const clone = {};
-  if (headers && typeof headers === "object") {
+  if (headers && typeof headers === JS_TYPE_OBJECT) {
     for (const [key, value] of Object.entries(headers)) {
       clone[key] = value;
     }
@@ -19253,7 +19257,7 @@ function cloneHeadersForFetch(headers) {
 }
 
 function headersContainCredentials(headers) {
-  if (!headers || typeof headers !== "object") {
+  if (!headers || typeof headers !== JS_TYPE_OBJECT) {
     return false;
   }
   return [
@@ -19277,12 +19281,12 @@ function bodyContainsSensitiveKeyMaterial(body, headers) {
       ? String(headers[contentTypeKey]).toLowerCase()
       : null;
   const shouldInspectAsText =
-    typeof body === "string" || Boolean(contentType && contentType.includes("json"));
+    typeof body === JS_TYPE_STRING || Boolean(contentType && contentType.includes("json"));
   if (!shouldInspectAsText) {
     return false;
   }
   let text;
-  if (typeof body === "string") {
+  if (typeof body === JS_TYPE_STRING) {
     text = body;
   } else if (Buffer.isBuffer(body)) {
     text = body.toString("utf8");
@@ -19302,10 +19306,10 @@ function bodyContainsSensitiveKeyMaterial(body, headers) {
 
 function composeRequestSignal(callerSignal, timeoutMs) {
   if (
-    typeof AbortControllerConstructor !== "function" ||
-    typeof abortControllerAbort !== "function" ||
-    typeof abortControllerSignalGetter !== "function" ||
-    !(typeof timeoutMs === "number" && timeoutMs > 0)
+    typeof AbortControllerConstructor !== JS_TYPE_FUNCTION ||
+    typeof abortControllerAbort !== JS_TYPE_FUNCTION ||
+    typeof abortControllerSignalGetter !== JS_TYPE_FUNCTION ||
+    !(typeof timeoutMs === JS_TYPE_NUMBER && timeoutMs > 0)
   ) {
     return {
       signal: callerSignal,
@@ -19371,7 +19375,7 @@ function delay(ms, signal) {
 }
 
 function createAbortError() {
-  if (typeof DOMException === "function") {
+  if (typeof DOMException === JS_TYPE_FUNCTION) {
     return new DOMException("The operation was aborted", "AbortError");
   }
   const error = new Error("The operation was aborted");
@@ -19486,7 +19490,7 @@ function decodeBase64UrlBody(body) {
 }
 
 function requireNonEmptyString(value, name) {
-  if (typeof value !== "string") {
+  if (typeof value !== JS_TYPE_STRING) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
       `${name} must be a string`,
@@ -19553,7 +19557,7 @@ function requireExactAsciiTokenString(value, name) {
 }
 
 function requireCanonicalQuantity(value, name) {
-  if (typeof value !== "string") {
+  if (typeof value !== JS_TYPE_STRING) {
     throw createValidationError(
       ValidationErrorCode.INVALID_NUMERIC,
       `${name} must be a canonical Kotodama V1 quantity string`,
@@ -19577,10 +19581,10 @@ function normalizeQuantityInput(value, name) {
     if (value instanceof KotodamaQuantity) {
       return NumericV1.encodeQuantityJson(value);
     }
-    if (typeof value === "string") {
+    if (typeof value === JS_TYPE_STRING) {
       return NumericV1.decodeQuantityJson(value).toString();
     }
-    if (typeof value === "bigint") {
+    if (typeof value === JS_TYPE_BIGINT) {
       return new KotodamaQuantity(value, 0).toString();
     }
     throw createValidationError(
@@ -19612,7 +19616,7 @@ function requireExactBoolean(value, name) {
 function requireExactJsonUnsignedInteger(value, name, options = {}) {
   const minimum = options.allowZero === false ? 1 : 0;
   if (
-    typeof value !== "number" ||
+    typeof value !== JS_TYPE_NUMBER ||
     !Number.isSafeInteger(value) ||
     value < minimum
   ) {
@@ -19688,7 +19692,7 @@ function requireExactLowerEvenHexString(value, name) {
 
 function requireVpnHelperTicketHex(value, name) {
   if (
-    typeof value !== "string" ||
+    typeof value !== JS_TYPE_STRING ||
     value.length !== VPN_HELPER_TICKET_HEX_LENGTH ||
     !/^[0-9a-f]+$/u.test(value)
   ) {
@@ -19702,7 +19706,7 @@ function requireVpnHelperTicketHex(value, name) {
 }
 
 function requireHexString(value, name) {
-  if (typeof value !== "string") {
+  if (typeof value !== JS_TYPE_STRING) {
     throw createValidationError(
       ValidationErrorCode.INVALID_HEX,
       `${name} must be a hex string`,
@@ -19756,20 +19760,20 @@ function normalizeStorageTicketHex(value, name) {
 }
 
 function coerceIntegerLike(value, context) {
-  if (typeof value === "number") {
+  if (typeof value === JS_TYPE_NUMBER) {
     if (!Number.isFinite(value) || !Number.isSafeInteger(value)) {
       rejectRange(`${context} must be a safe integer`);
     }
     return value;
   }
-  if (typeof value === "bigint") {
+  if (typeof value === JS_TYPE_BIGINT) {
     const numeric = Number(value);
     if (!Number.isSafeInteger(numeric)) {
       rejectRange(`${context} must be a safe integer`);
     }
     return numeric;
   }
-  if (typeof value === "string") {
+  if (typeof value === JS_TYPE_STRING) {
     const trimmed = value.trim();
     if (!trimmed) {
       rejectType(`${context} must be an integer`);
@@ -19795,7 +19799,7 @@ function requireNonNegativeIntegerLike(value, context) {
 }
 
 function pickOverride(source, snakeName, camelName) {
-  if (!source || typeof source !== "object") {
+  if (!source || typeof source !== JS_TYPE_OBJECT) {
     return undefined;
   }
   if (Object.prototype.hasOwnProperty.call(source, snakeName)) {
@@ -19856,7 +19860,7 @@ function normalizeSecretFreeAuthority(source, context) {
 function resolveAuthorityPrivateKey(record, context) {
   const direct = pickOverride(record, "private_key", "privateKey");
   if (direct !== undefined && direct !== null) {
-    if (typeof direct === "string") {
+    if (typeof direct === JS_TYPE_STRING) {
       return requireNonEmptyString(direct, `${context}.privateKey`);
     }
     return formatAuthorityPrivateKeyBytes(direct, record, context);
@@ -19920,7 +19924,7 @@ function exactManifestResponseRecord(value, allowedFields, context) {
   const record = ensureRecord(value, context);
   const allowed = new Set(allowedFields);
   const unknownFields = Reflect.ownKeys(record).filter(
-    (field) => typeof field !== "string" || !allowed.has(field),
+    (field) => typeof field !== JS_TYPE_STRING || !allowed.has(field),
   );
   if (unknownFields.length !== 0) {
     rejectType(`${context} contains unsupported fields: ${unknownFields
@@ -20420,7 +20424,7 @@ function normalizeManifestKotobaTranslationsPayload(value, context) {
     return {
       lang: requireExactNonEmptyString(record.lang, `${context}[${index}].lang`),
       text:
-        typeof record.text === "string"
+        typeof record.text === JS_TYPE_STRING
           ? record.text
           : (() => {
               rejectType(`${context}[${index}].text must be a string`);
@@ -21041,7 +21045,7 @@ function normalizeOptionalExactBase64Payload(value, name) {
 }
 
 function normalizeRequiredBase64Payload(value, name) {
-  if (typeof value === "string") {
+  if (typeof value === JS_TYPE_STRING) {
     const trimmed = value.trim();
     if (!trimmed) {
       throw createValidationError(
@@ -21074,7 +21078,7 @@ function normalizeRequiredBase64Payload(value, name) {
 }
 
 function normalizeRequiredExactBase64Payload(value, name) {
-  if (typeof value === "string") {
+  if (typeof value === JS_TYPE_STRING) {
     if (!value || value.trim() !== value || /\s/u.test(value)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_STRING,
@@ -21132,7 +21136,7 @@ function normalizeHex32String(value, name, options = {}) {
     const allowScheme = options.allowScheme === true;
     const exactString = options.exactString === true;
   const schemeName =
-    typeof options.scheme === "string" && options.scheme.trim()
+    typeof options.scheme === JS_TYPE_STRING && options.scheme.trim()
       ? options.scheme.trim().toLowerCase()
       : "blake2b32";
   if (Buffer.isBuffer(value)) {
@@ -21307,21 +21311,21 @@ function cloneJsonValueInternal(value, path, state, depth) {
   }
   if (
     value === null ||
-    typeof value === "string" ||
+    typeof value === JS_TYPE_STRING ||
     typeof value === "boolean"
   ) {
     return value;
   }
-  if (typeof value === "number") {
+  if (typeof value === JS_TYPE_NUMBER) {
     if (!Number.isFinite(value)) {
       rejectType(`${path} must not contain non-finite numbers`);
     }
     return value;
   }
-  if (typeof value === "bigint") {
+  if (typeof value === JS_TYPE_BIGINT) {
     return value.toString(10);
   }
-  if (typeof value !== "object") {
+  if (typeof value !== JS_TYPE_OBJECT) {
     rejectType(`${path} contains unsupported value type: ${typeof value}`);
   }
   if (state.ancestors.has(value)) {
@@ -21366,7 +21370,7 @@ function cloneJsonValueInternal(value, path, state, depth) {
     }
     const result = state.nullPrototype ? Object.create(null) : {};
     for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== "string") {
+      if (typeof key !== JS_TYPE_STRING) {
         rejectType(`${path} keys must be strings without symbols`);
       }
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -21441,7 +21445,7 @@ function normalizePublishSpaceDirectoryManifestRequest(input) {
     if (record.reason === null) {
       rejectType("publishSpaceDirectoryManifest.reason must be omitted instead of null");
     }
-    if (typeof record.reason !== "string") {
+    if (typeof record.reason !== JS_TYPE_STRING) {
       rejectType("publishSpaceDirectoryManifest.reason must be a string");
     }
     payload.reason = record.reason;
@@ -21485,7 +21489,7 @@ function normalizeRevokeSpaceDirectoryManifestRequest(input) {
     if (record.reason === null) {
       rejectType("revokeSpaceDirectoryManifest.reason must be omitted instead of null");
     }
-    if (typeof record.reason !== "string") {
+    if (typeof record.reason !== JS_TYPE_STRING) {
       rejectType("revokeSpaceDirectoryManifest.reason must be a string");
     }
     payload.reason = record.reason;
@@ -22355,7 +22359,7 @@ function exactEnumerableDataRecord(value, expectedKeys, context) {
   const ownKeys = Reflect.ownKeys(record);
   if (
     ownKeys.length !== expectedKeys.length ||
-    ownKeys.some((key) => typeof key !== "string" || !expected.has(key))
+    ownKeys.some((key) => typeof key !== JS_TYPE_STRING || !expected.has(key))
   ) {
     rejectType(`${context} must contain exactly: ${expectedKeys.join(", ")}`);
   }
@@ -22392,7 +22396,7 @@ function normalizeZkIvmProofAttachment(value, context) {
   const ownKeys = Reflect.ownKeys(candidate);
   if (
     requiredKeys.some((key) => !ownKeys.includes(key)) ||
-    ownKeys.some((key) => typeof key !== "string" || !allowed.has(key))
+    ownKeys.some((key) => typeof key !== JS_TYPE_STRING || !allowed.has(key))
   ) {
     rejectType(`${context} must contain backend, proof, vk_ref, and only supported optional fields`);
   }
@@ -22416,7 +22420,7 @@ function normalizeZkIvmProofAttachment(value, context) {
     hasCompactBytes === hasLegacyBytes ||
     proofKeys.some(
       (key) =>
-        typeof key !== "string" ||
+        typeof key !== JS_TYPE_STRING ||
         !new Set(["backend", "bytes_b64", "bytes"]).has(key),
     )
   ) {
@@ -22551,7 +22555,7 @@ function normalizeExactJsonByteArray(
     const byte = descriptor && "value" in descriptor ? descriptor.value : null;
     if (
       !descriptor?.enumerable ||
-      typeof byte !== "number" ||
+      typeof byte !== JS_TYPE_NUMBER ||
       !Number.isInteger(byte) ||
       byte < 0 ||
       byte > 0xff
@@ -22743,7 +22747,7 @@ function normalizeMultisigProposalsQueryRequest(input, context) {
 
 function normalizeMultisigProposeInstructionInput(value, context) {
   if (
-    typeof value === "string" ||
+    typeof value === JS_TYPE_STRING ||
     Buffer.isBuffer(value) ||
     ArrayBuffer.isView(value) ||
     value instanceof ArrayBuffer ||
@@ -22751,7 +22755,7 @@ function normalizeMultisigProposeInstructionInput(value, context) {
   ) {
     return value;
   }
-  if (value && typeof value === "object") {
+  if (value && typeof value === JS_TYPE_OBJECT) {
     return value;
   }
   throw createValidationError(
@@ -23425,7 +23429,7 @@ function normalizeBoundedCanonicalBase64String(
   maxBytes,
   limitLabel = "payload",
 ) {
-  if (typeof value !== "string") {
+  if (typeof value !== JS_TYPE_STRING) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
       `${name} must be a base64 string`,
@@ -23464,7 +23468,7 @@ function isGenuineSharedArrayBuffer(value) {
 }
 
 function normalizeIvmArtifactBytecodeInput(value, name) {
-  if (typeof value === "string") {
+  if (typeof value === JS_TYPE_STRING) {
     return normalizeIvmArtifactBase64String(value, name);
   }
   if (isGenuineSharedArrayBuffer(value)) {
@@ -23539,7 +23543,7 @@ function normalizeManifestEntrypointKind(value, name) {
   if (value === undefined || value === null) {
     rejectType(`${name} is required`);
   }
-  if (typeof value === "string") {
+  if (typeof value === JS_TYPE_STRING) {
     const canonical = requireExactNonEmptyString(value, name);
     return { kind: canonicalManifestEntrypointKind(canonical, name), value: null };
   }
@@ -24942,9 +24946,9 @@ function encodeNoritoBfvIdentifierCiphertext(ciphertext, compact = false) {
 function requireBfvUint(value, name, options = {}) {
   const allowZero = options.allowZero !== false;
   let integer;
-  if (typeof value === "bigint") {
+  if (typeof value === JS_TYPE_BIGINT) {
     integer = value;
-  } else if (typeof value === "number") {
+  } else if (typeof value === JS_TYPE_NUMBER) {
     if (!Number.isFinite(value) || !Number.isInteger(value) || !Number.isSafeInteger(value)) {
       throw createValidationError(
         ValidationErrorCode.VALUE_OUT_OF_RANGE,
@@ -24953,7 +24957,7 @@ function requireBfvUint(value, name, options = {}) {
       );
     }
     integer = BigInt(value);
-  } else if (typeof value === "string") {
+  } else if (typeof value === JS_TYPE_STRING) {
     const trimmed = value.trim();
     if (!/^[0-9]+$/.test(trimmed)) {
       throw createValidationError(
@@ -26294,8 +26298,8 @@ function buildSorafsPinListParams(options = {}) {
       "limit",
       "maxBytes",
       "afterDigestHex",
-      "expectedFinalizedHeight",
-      "expectedFinalizedBlockHashHex",
+      EXPECTED_FINALIZED_HEIGHT_FIELD,
+      EXPECTED_FINALIZED_HASH_FIELD,
     ]),
     "listSorafsPinManifests options",
   );
@@ -26427,7 +26431,7 @@ function normalizeSorafsReputationProviderId(value, context) {
 }
 
 function normalizeReputationSnapshotIdHex(value, context) {
-  if (typeof value !== "string" || !/^[0-9a-f]{32}$/u.test(value)) {
+  if (typeof value !== JS_TYPE_STRING || !/^[0-9a-f]{32}$/u.test(value)) {
     throw createValidationError(
       ValidationErrorCode.INVALID_HEX,
       `${context} must be exactly 32 lowercase hexadecimal characters`,
@@ -26458,7 +26462,7 @@ function normalizeSorafsHedgingBillingDigest(value, context) {
 
 function normalizeSorafsHedgingBillingLimit(value, context) {
   if (
-    typeof value !== "number" ||
+    typeof value !== JS_TYPE_NUMBER ||
     !Number.isSafeInteger(value) ||
     value < 1 ||
     value > 100
@@ -26586,7 +26590,7 @@ function buildSorafsReputationRequestAuth(
       `${context}.canonicalAuth`,
     );
   }
-  if (typeof witness.value !== "string") {
+  if (typeof witness.value !== JS_TYPE_STRING) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
       `${context}.headers.X-Iroha-Witness must be exact standard-base64`,
@@ -26674,7 +26678,7 @@ function normalizeSorafsReputationDecimal(
   { allowZero, max = MAX_UINT64_BIGINT },
 ) {
   let integer;
-  if (typeof value === "number") {
+  if (typeof value === JS_TYPE_NUMBER) {
     if (!Number.isSafeInteger(value)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_NUMERIC,
@@ -26683,10 +26687,10 @@ function normalizeSorafsReputationDecimal(
       );
     }
     integer = BigInt(value);
-  } else if (typeof value === "bigint") {
+  } else if (typeof value === JS_TYPE_BIGINT) {
     integer = value;
   } else if (
-    typeof value === "string" &&
+    typeof value === JS_TYPE_STRING &&
     /^(?:0|[1-9][0-9]*)$/u.test(value)
   ) {
     integer = BigInt(value);
@@ -27138,7 +27142,7 @@ async function* normalizeSorafsOrderbookWebSocketEventStream(events) {
 }
 
 function normalizeSorafsXorQuantity(value, context) {
-  if (typeof value === "string" && value.length > SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH) {
+  if (typeof value === JS_TYPE_STRING && value.length > SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH) {
     throw createValidationError(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
       `${context} exceeds the canonical XOR quantity text bound`,
@@ -27292,12 +27296,12 @@ function parseSorafsReputationU64(
 ) {
   let integer;
   if (
-    typeof value === "number" &&
+    typeof value === JS_TYPE_NUMBER &&
     Number.isSafeInteger(value) &&
     !Object.is(value, -0)
   ) {
     integer = BigInt(value);
-  } else if (typeof value === "bigint") {
+  } else if (typeof value === JS_TYPE_BIGINT) {
     integer = value;
   } else {
     rejectType(`${context} must be a canonical unsigned integer`);
@@ -27341,7 +27345,7 @@ function parseSorafsReputationOptionalSnapshotId(value, context) {
 }
 
 function parseSorafsReputationDigest(value, context) {
-  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+  if (typeof value !== JS_TYPE_STRING || !/^[0-9a-f]{64}$/u.test(value)) {
     rejectType(`${context} must be exactly 64 lowercase hexadecimal characters`);
   }
   return value;
@@ -27497,7 +27501,7 @@ function parseSorafsReputationProvider(value, context) {
     if (flag.value !== null) {
       rejectType(`${flagContext}.value must be null`);
     }
-    if (typeof flag.flag !== "string") {
+    if (typeof flag.flag !== JS_TYPE_STRING) {
       rejectType(`${flagContext}.flag must be a string`);
     }
     const flagIndex = SORAFS_REPUTATION_DEGRADATION_FLAG_INDEX.get(flag.flag);
@@ -27820,7 +27824,7 @@ function parseSorafsReputationOptionalU64(value, context, options = {}) {
 }
 
 function sorafsReputationU64BigInt(value) {
-  return typeof value === "bigint" ? value : BigInt(value);
+  return typeof value === JS_TYPE_BIGINT ? value : BigInt(value);
 }
 
 function parseSorafsReputationEventPage(value, context, options = {}) {
@@ -27916,7 +27920,7 @@ function parseSorafsReputationEventPage(value, context, options = {}) {
 
 function parseSorafsReputationSseU64(raw, context) {
   if (
-    typeof raw !== "string" ||
+    typeof raw !== JS_TYPE_STRING ||
     !/^[1-9][0-9]{0,19}$/u.test(raw)
   ) {
     rejectType(`${context} must be a positive canonical u64`);
@@ -27934,7 +27938,7 @@ async function* validateSorafsReputationSseStream(events, requestedSince) {
     }
     if (event.event === "reputation_snapshot") {
       if (
-        typeof event.raw !== "string" ||
+        typeof event.raw !== JS_TYPE_STRING ||
         event.raw.length === 0 ||
         /\s/u.test(event.raw)
       ) {
@@ -28089,7 +28093,7 @@ function buildSorafsPorExportParams(options = {}) {
 
 function normalizeSorafsPorCursor(value, context) {
   if (
-    typeof value !== "string" ||
+    typeof value !== JS_TYPE_STRING ||
     value.length === 0 ||
     value.length > SORAFS_POR_CURSOR_MAX_LENGTH ||
     value.length % 4 === 1 ||
@@ -28447,7 +28451,7 @@ function classifyPipelineTransactionStatusResolution(
   const status = ensureRecord(record.status, `${context}.status`);
   const kind = status.kind;
   if (
-    typeof kind !== "string" ||
+    typeof kind !== JS_TYPE_STRING ||
     !AUTHORITATIVE_PIPELINE_STATUS_KINDS.has(kind)
   ) {
     throw createValidationError(
@@ -28457,7 +28461,7 @@ function classifyPipelineTransactionStatusResolution(
     );
   }
   const resolvedFrom = record.resolved_from;
-  if (typeof resolvedFrom !== "string") {
+  if (typeof resolvedFrom !== JS_TYPE_STRING) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
       `${context}.resolved_from must be a string`,
@@ -29056,7 +29060,7 @@ function normalizeChunkFetchPlanV1(plan, context) {
     rejectType(`${context}.schema must be ${CHUNK_FETCH_PLAN_SCHEMA_V1}`);
   }
   if (
-    typeof plan.payload_digest_blake3_hex !== "string" ||
+    typeof plan.payload_digest_blake3_hex !== JS_TYPE_STRING ||
     !/^[0-9a-f]{64}$/.test(plan.payload_digest_blake3_hex) ||
     /^0{64}$/.test(plan.payload_digest_blake3_hex)
   ) {
@@ -29070,7 +29074,7 @@ function normalizeChunkFetchPlanV1(plan, context) {
 
 function normalizeChunkPlanForPersistence(plan, expectedPayloadDigestHex = null) {
   let normalized;
-  if (typeof plan === "string") {
+  if (typeof plan === JS_TYPE_STRING) {
     let parsed;
     try {
       parsed = JSON.parse(plan);
@@ -29127,7 +29131,7 @@ function normaliseChunkPlanPayload(plan, context) {
   if (plan === undefined || plan === null) {
     rejectType(`${context} must be provided`);
   }
-  if (typeof plan === "string") {
+  if (typeof plan === JS_TYPE_STRING) {
     const trimmed = plan.trim();
     if (!trimmed) {
       rejectType(`${context} must not be an empty string`);
@@ -29168,18 +29172,18 @@ function normaliseChunkerHandle(
     return handle;
   }
   const bundleHandle =
-    manifestBundle && typeof manifestBundle === "object"
+    manifestBundle && typeof manifestBundle === JS_TYPE_OBJECT
       ? manifestBundle.chunker_handle ??
         manifestBundle.chunkerHandle ??
         manifestBundle.chunk_profile_handle ??
         manifestBundle.chunkProfileHandle ??
         null
       : null;
-  if (bundleHandle && typeof bundleHandle === "string" && bundleHandle.trim()) {
+  if (bundleHandle && typeof bundleHandle === JS_TYPE_STRING && bundleHandle.trim()) {
     return bundleHandle.trim();
   }
   const manifestJson =
-    manifestBundle && typeof manifestBundle === "object"
+    manifestBundle && typeof manifestBundle === JS_TYPE_OBJECT
       ? manifestBundle.manifest_json ?? manifestBundle.manifest ?? null
       : null;
   const inferred = inferChunkerHandleFromManifest(manifestJson);
@@ -29231,7 +29235,7 @@ function normalizeProofSummaryOption(value, context) {
 }
 
 function extractManifestBytesForProof(bundle, context) {
-  if (!bundle || typeof bundle !== "object") {
+  if (!bundle || typeof bundle !== JS_TYPE_OBJECT) {
     rejectType(`${context} requires a manifest bundle object`);
   }
   const direct =
@@ -29241,10 +29245,10 @@ function extractManifestBytesForProof(bundle, context) {
   }
   let manifestB64 = null;
   let manifestField = null;
-  if (typeof bundle.manifest_b64 === "string" && bundle.manifest_b64.trim()) {
+  if (typeof bundle.manifest_b64 === JS_TYPE_STRING && bundle.manifest_b64.trim()) {
     manifestB64 = bundle.manifest_b64;
     manifestField = "manifest_b64";
-  } else if (typeof bundle.manifestB64 === "string" && bundle.manifestB64.trim()) {
+  } else if (typeof bundle.manifestB64 === JS_TYPE_STRING && bundle.manifestB64.trim()) {
     manifestB64 = bundle.manifestB64;
     manifestField = "manifestB64";
   }
@@ -29279,13 +29283,13 @@ function inferChunkerHandleFromManifest(manifestJson) {
     return null;
   }
   if (
-    typeof manifestJson.chunker_handle === "string" &&
+    typeof manifestJson.chunker_handle === JS_TYPE_STRING &&
     manifestJson.chunker_handle.trim()
   ) {
     return manifestJson.chunker_handle.trim();
   }
   if (
-    typeof manifestJson.chunk_profile_handle === "string" &&
+    typeof manifestJson.chunk_profile_handle === JS_TYPE_STRING &&
     manifestJson.chunk_profile_handle.trim()
   ) {
     return manifestJson.chunk_profile_handle.trim();
@@ -29314,11 +29318,11 @@ function inferChunkerHandleFromManifest(manifestJson) {
       chunking.rev ??
       chunking.release;
     if (
-      typeof namespace === "string" &&
+      typeof namespace === JS_TYPE_STRING &&
       namespace.trim() &&
-      typeof name === "string" &&
+      typeof name === JS_TYPE_STRING &&
       name.trim() &&
-      typeof version === "string" &&
+      typeof version === JS_TYPE_STRING &&
       version.trim()
     ) {
       return `${namespace.trim()}.${name.trim()}@${version.trim()}`;
@@ -29458,7 +29462,7 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
   let pdpCommitmentBytes = null;
   let pdpCommitmentB64 = null;
   if (pdpCommitment !== null && pdpCommitment !== undefined) {
-    if (typeof pdpCommitment !== "string") {
+    if (typeof pdpCommitment !== JS_TYPE_STRING) {
       rejectType(`${context}.pdp_commitment must be a base64 string when present`);
     }
     const trimmed = pdpCommitment.trim();
@@ -29742,7 +29746,7 @@ function normalizeExplorerDurationMs(value, context) {
 }
 
 function requireFiniteNumber(value, context) {
-  if (typeof value !== "number" || Number.isNaN(value) || !Number.isFinite(value)) {
+  if (typeof value !== JS_TYPE_NUMBER || Number.isNaN(value) || !Number.isFinite(value)) {
     rejectType(`${context} must be a finite number`);
   }
   return value;
@@ -29768,12 +29772,12 @@ function requireKaigiResponseObject(
 function normalizeKaigiU64(value, context) {
   let integer;
   if (
-    typeof value === "number"
+    typeof value === JS_TYPE_NUMBER
     && Number.isSafeInteger(value)
     && !Object.is(value, -0)
   ) {
     integer = BigInt(value);
-  } else if (typeof value === "bigint") {
+  } else if (typeof value === JS_TYPE_BIGINT) {
     integer = value;
   } else {
     rejectType(`${context} must be a canonical unsigned integer`);
@@ -29801,7 +29805,7 @@ function requireKaigiMarkedHash(value, context) {
 }
 
 function parseKaigiSseEventPayload(event, context) {
-  if (typeof event?.raw !== "string" || event.raw.length === 0) {
+  if (typeof event?.raw !== JS_TYPE_STRING || event.raw.length === 0) {
     rejectType(`${context}.data must be a JSON object`);
   }
   return parseStrictLosslessIntegerJson(event.raw, `${context}.data`);
@@ -29955,7 +29959,7 @@ function normalizeKaigiRelayDetail(payload) {
   }
   let notes = null;
   if (hasNotes) {
-    if (typeof record.notes !== "string") {
+    if (typeof record.notes !== JS_TYPE_STRING) {
       rejectType("kaigi relay detail.notes must be a string");
     }
     notes = record.notes;
@@ -30264,7 +30268,7 @@ function normalizeKaigiCallSignal(payload, context, expectedCallId) {
   if (callId !== expectedCallId) {
     rejectType(`${context}.call_id must match the requested call id`);
   }
-  if (typeof record.signal_kind !== "string") {
+  if (typeof record.signal_kind !== JS_TYPE_STRING) {
     rejectType(`${context}.signal_kind must be a string`);
   }
   const signalKind = record.signal_kind;
@@ -30585,7 +30589,7 @@ function buildKaigiCallSignalsQuery(options = {}) {
         "limit",
         "cursor",
         "signal",
-        "canonicalAuth",
+        CANONICAL_AUTH_FIELD,
       ]),
       "kaigi call signals options",
     );
@@ -30842,7 +30846,7 @@ function normalizeSignalOnlyOption(options, context) {
 }
 
 function normalizeSccpMessageIdPath(value, context) {
-  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value) || /^0+$/u.test(value)) {
+  if (typeof value !== JS_TYPE_STRING || !/^[0-9a-f]{64}$/u.test(value) || /^0+$/u.test(value)) {
     rejectType(`${context} must be canonical lowercase nonzero 32-byte hex`);
   }
   return value;
@@ -30874,7 +30878,7 @@ function normalizeSccpSoraOutboundMaterialRoute(value, context) {
     rejectType(`${context}.sourceProfile is not one exact external SCCP profile`);
   }
   for (const field of ["routeId", "assetKey"]) {
-    if (typeof record[field] !== "string" || !SCCP_ROUTE_KEY_SEGMENT.test(record[field])) {
+    if (typeof record[field] !== JS_TYPE_STRING || !SCCP_ROUTE_KEY_SEGMENT.test(record[field])) {
       rejectType(`${context}.${field} must be canonical lowercase route text`);
     }
   }
@@ -30940,7 +30944,7 @@ async function readSccpNoritoResponse(
     throw error;
   }
   const body = await readBoundedSccpResponseBytes(response, maximumBodyBytes, label);
-  const closedTypeNames = typeof expectedTypeNames === "string"
+  const closedTypeNames = typeof expectedTypeNames === JS_TYPE_STRING
     ? [expectedTypeNames]
     : expectedTypeNames;
   if (!Array.isArray(closedTypeNames) || closedTypeNames.length === 0) {
@@ -30981,7 +30985,7 @@ async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
   const rawContentLength = response.headers?.get?.("content-length");
   if (rawContentLength !== null && rawContentLength !== undefined) {
     if (
-      typeof rawContentLength !== "string" ||
+      typeof rawContentLength !== JS_TYPE_STRING ||
       !/^(?:0|[1-9][0-9]*)$/u.test(rawContentLength)
     ) {
       const error = new TypeError(
@@ -31003,7 +31007,7 @@ async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
   if (response.body === null || response.body === undefined) {
     return new Uint8Array(0);
   }
-  if (typeof response.body.getReader !== "function") {
+  if (typeof response.body.getReader !== JS_TYPE_FUNCTION) {
     const error = new TypeError(
       `${label} response body is not readable as a byte stream`,
     );
@@ -31046,7 +31050,7 @@ async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
       chunks.push(result.value);
     }
   } catch (error) {
-    if (!cancelled && typeof reader.cancel === "function") {
+    if (!cancelled && typeof reader.cancel === JS_TYPE_FUNCTION) {
       cancelled = true;
       try {
         await reader.cancel(error);
@@ -31056,7 +31060,7 @@ async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
     }
     throw error;
   } finally {
-    if (typeof reader.releaseLock === "function") {
+    if (typeof reader.releaseLock === JS_TYPE_FUNCTION) {
       reader.releaseLock();
     }
   }
@@ -31072,7 +31076,7 @@ async function readBoundedSccpResponseBytes(response, maximumBodyBytes, label) {
 
 async function cancelSccpResponseBody(response, reason) {
   const body = response?.body;
-  if (!body || body.locked || typeof body.cancel !== "function") {
+  if (!body || body.locked || typeof body.cancel !== JS_TYPE_FUNCTION) {
     return;
   }
   try {
@@ -31093,7 +31097,7 @@ function decodeSccpUtf8(bytes, label) {
 function requirePlainObjectOption(value, context, { message } = {}) {
   if (!isPlainObject(value)) {
     const normalizedPath =
-      typeof context === "string" ? context.replace(/\s+/g, ".") : context;
+      typeof context === JS_TYPE_STRING ? context.replace(/\s+/g, ".") : context;
     const normalizedMessage = message ?? "must be a plain object";
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
@@ -31107,7 +31111,7 @@ function requirePlainObjectOption(value, context, { message } = {}) {
 function assertSupportedOptionKeys(record, allowedKeys, context) {
   const extras = Object.keys(record).filter((key) => !allowedKeys.has(key));
   if (extras.length > 0) {
-    const path = typeof context === "string" ? context.replace(/\s+/g, ".") : context;
+    const path = typeof context === JS_TYPE_STRING ? context.replace(/\s+/g, ".") : context;
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
       `${context} contains unsupported fields: ${extras.join(", ")}`,
@@ -31156,7 +31160,7 @@ function normalizeTransactionQuerySort(sort) {
   if (sort === undefined || sort === null) {
     return undefined;
   }
-  if (typeof sort === "string") {
+  if (typeof sort === JS_TYPE_STRING) {
     const normalized = sort.trim().toLowerCase();
     if (normalized === "newest") {
       return [
@@ -31279,7 +31283,7 @@ function normalizeEventStreamOptions(
 }
 
 function normalizeProductionEventFilterBackendPayload(filter, context) {
-  if (typeof filter === "string") {
+  if (typeof filter === JS_TYPE_STRING) {
     const trimmed = filter.trim();
     if (!trimmed || (trimmed[0] !== "{" && trimmed[0] !== "[")) {
       return filter;
@@ -31300,7 +31304,7 @@ function normalizeProductionEventFilterBackendPayload(filter, context) {
   }
   if (
     filter === null ||
-    typeof filter !== "object" ||
+    typeof filter !== JS_TYPE_OBJECT ||
     Array.isArray(filter)
   ) {
     return filter;
@@ -31309,13 +31313,13 @@ function normalizeProductionEventFilterBackendPayload(filter, context) {
   let normalized = filter;
   for (const eventKind of ["VerifyingKey", "Proof"]) {
     const body = filter[eventKind];
-    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    if (body === null || typeof body !== JS_TYPE_OBJECT || Array.isArray(body)) {
       continue;
     }
     const matcher = body.id_matcher;
     if (
       matcher === null ||
-      typeof matcher !== "object" ||
+      typeof matcher !== JS_TYPE_OBJECT ||
       Array.isArray(matcher) ||
       !Object.prototype.hasOwnProperty.call(matcher, "backend")
     ) {
@@ -31372,7 +31376,7 @@ function normalizeVerifyingKeyEventMatcherName(value, context) {
 }
 
 function isAbortSignalLike(value) {
-  if (typeof value !== "object" || value === null) return false;
+  if (typeof value !== JS_TYPE_OBJECT || value === null) return false;
   if (hasAbortSignalBrand(value)) return true;
   try {
     return (
@@ -31538,7 +31542,7 @@ function normalizeAttachmentMetadataList(payload, context = "attachment list res
 }
 
 function normalizeAttachmentUploadPayload(value, context) {
-  if (typeof value === "string") {
+  if (typeof value === JS_TYPE_STRING) {
     return Buffer.from(value, "utf8");
   }
   if (
@@ -31600,7 +31604,7 @@ let verifyingKeyClientPromise;
 function loadVerifyingKeyClient() {
   return (verifyingKeyClientPromise ??= import(VERIFYING_KEY_CLIENT_URL).then(
       (module) => {
-        if (typeof module.createVerifyingKeyClient !== "function") {
+        if (typeof module.createVerifyingKeyClient !== JS_TYPE_FUNCTION) {
           rejectType("invalid verifying-key module");
         }
         const client = module.createVerifyingKeyClient(
@@ -31642,7 +31646,7 @@ const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
 ]);
 
 function assertProductionVerifyBackendLabel(value, context) {
-  if (typeof value !== "string" || value.trim() === "") {
+  if (typeof value !== JS_TYPE_STRING || value.trim() === "") {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
       `${context} must be a non-empty string`,
@@ -31686,7 +31690,7 @@ function decodeVerifyingKeyDraftBase64(
   context,
   { maxBytes = null, exactBytes = null, limitLabel = "payload" } = {},
 ) {
-  if (typeof value !== "string") {
+  if (typeof value !== JS_TYPE_STRING) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
       `${context} must be exact standard-base64`,
@@ -31755,7 +31759,7 @@ function normalizeProverReportList(payload, filters, context) {
   const idsOnlyRequested = isTruthyFilter(filters, "ids_only");
   const messagesOnlyRequested = isTruthyFilter(filters, "messages_only");
   const first = payload[0];
-  if (typeof first === "string") {
+  if (typeof first === JS_TYPE_STRING) {
     if (!idsOnlyRequested) {
       rejectError("Torii returned id-only prover report projection; pass { ids_only: true } to listProverReports to consume this payload");
     }
@@ -31889,18 +31893,18 @@ function assertExactSumeragiEvidenceFields(record, context, fields) {
 function requireSumeragiEvidenceUnsigned(value, context, maximum = MAX_UINT64_BIGINT) {
   let integer;
   if (
-    typeof value === "number"
+    typeof value === JS_TYPE_NUMBER
     && Number.isSafeInteger(value)
     && value >= 0
     && !Object.is(value, -0)
   ) {
     integer = BigInt(value);
-  } else if (typeof value === "bigint" && value >= 0n) {
+  } else if (typeof value === JS_TYPE_BIGINT && value >= 0n) {
     integer = value;
   } else {
     rejectType(`${context} must be an unsigned JSON integer`);
   }
-  const maximumInteger = typeof maximum === "bigint" ? maximum : BigInt(maximum);
+  const maximumInteger = typeof maximum === JS_TYPE_BIGINT ? maximum : BigInt(maximum);
   if (integer > maximumInteger) {
     rejectRange(`${context} must be at most ${maximumInteger}`);
   }
@@ -32348,7 +32352,7 @@ function normalizeTriggerUpsertPayload(input) {
   if (actionValue === undefined || actionValue === null) {
     rejectType("registerTrigger.action is required");
   }
-  if (typeof actionValue === "string") {
+  if (typeof actionValue === JS_TYPE_STRING) {
     const trimmed = actionValue.trim();
     if (trimmed.length === 0) {
       rejectType("registerTrigger.action must be a non-empty string when provided as base64");
@@ -32359,7 +32363,7 @@ function normalizeTriggerUpsertPayload(input) {
     } catch {
       rejectType("registerTrigger.action must be a valid base64 string");
     }
-  } else if (!Array.isArray(actionValue) && typeof actionValue === "object") {
+  } else if (!Array.isArray(actionValue) && typeof actionValue === JS_TYPE_OBJECT) {
     payload.action = cloneJsonValue(actionValue, "registerTrigger.action");
   } else {
     rejectType("registerTrigger.action must be an object or base64 string produced by Norito serialization");
@@ -32372,7 +32376,7 @@ function normalizeTriggerUpsertPayload(input) {
   if (payload.metadata === null || payload.metadata === undefined) {
     delete payload.metadata;
   } else if (
-    typeof payload.metadata !== "object" ||
+    typeof payload.metadata !== JS_TYPE_OBJECT ||
     Array.isArray(payload.metadata)
   ) {
     rejectType("registerTrigger.metadata must be an object when provided");
@@ -32848,7 +32852,7 @@ function toConnectAppWritePayload(record, context) {
 function normalizeConnectAppPolicyControls(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const policyPayload =
-    record.policy && typeof record.policy === "object" ? record.policy : record;
+    record.policy && typeof record.policy === JS_TYPE_OBJECT ? record.policy : record;
   const relayEnabled = optionalBoolean(
     policyPayload.relay_enabled ?? policyPayload.relayEnabled,
     `${context}.relay_enabled`,
@@ -33408,16 +33412,16 @@ async function* streamWebSocketJsonEvents(socket, options = {}) {
 }
 
 function addWebSocketListener(socket, eventName, listener, context) {
-  if (socket && typeof socket.addEventListener === "function") {
+  if (socket && typeof socket.addEventListener === JS_TYPE_FUNCTION) {
     socket.addEventListener(eventName, listener);
     return () => socket.removeEventListener?.(eventName, listener);
   }
-  if (socket && typeof socket.on === "function") {
+  if (socket && typeof socket.on === JS_TYPE_FUNCTION) {
     socket.on(eventName, listener);
     return () => {
-      if (typeof socket.off === "function") {
+      if (typeof socket.off === JS_TYPE_FUNCTION) {
         socket.off(eventName, listener);
-      } else if (typeof socket.removeListener === "function") {
+      } else if (typeof socket.removeListener === JS_TYPE_FUNCTION) {
         socket.removeListener(eventName, listener);
       }
     };
@@ -33430,7 +33434,7 @@ function extractWebSocketMessageData(args) {
   if (
     args.length === 1 &&
     first &&
-    typeof first === "object" &&
+    typeof first === JS_TYPE_OBJECT &&
     Object.prototype.hasOwnProperty.call(first, "data")
   ) {
     return first.data;
@@ -33439,7 +33443,7 @@ function extractWebSocketMessageData(args) {
 }
 
 async function decodeWebSocketMessageText(data, context) {
-  if (typeof data === "string") {
+  if (typeof data === JS_TYPE_STRING) {
     return data;
   }
   if (data instanceof ArrayBuffer) {
@@ -33448,7 +33452,7 @@ async function decodeWebSocketMessageText(data, context) {
   if (ArrayBuffer.isView(data)) {
     return new TextDecoder().decode(data);
   }
-  if (data && typeof data.text === "function") {
+  if (data && typeof data.text === JS_TYPE_FUNCTION) {
     return data.text();
   }
   rejectType(`${context}: WebSocket message must be text or bytes`);
@@ -33484,7 +33488,7 @@ function websocketErrorFromEvent(event, context) {
 }
 
 function closeWebSocketQuietly(socket) {
-  if (socket && typeof socket.close === "function") {
+  if (socket && typeof socket.close === JS_TYPE_FUNCTION) {
     try {
       socket.close();
     } catch {
@@ -33533,7 +33537,7 @@ function buildConnectWebSocketDescriptor(baseUrl, options, context) {
   const allowInsecure =
     params.allowInsecure ??
     (params.config &&
-      typeof params.config === "object" &&
+      typeof params.config === JS_TYPE_OBJECT &&
       params.config.allowInsecure) ??
     false;
   requireExactBoolean(allowInsecure, `${context}.allowInsecure`);
@@ -33605,7 +33609,7 @@ function openConnectWebSocketInternal(options, context) {
   const resolvedOptions =
     websocketOptions === undefined || websocketOptions === null ? {} : { ...websocketOptions };
   const headerContainer =
-    resolvedOptions.headers && typeof resolvedOptions.headers === "object"
+    resolvedOptions.headers && typeof resolvedOptions.headers === JS_TYPE_OBJECT
       ? { ...resolvedOptions.headers }
       : {};
   if (token && supportsHeaders) {
@@ -33636,7 +33640,7 @@ function openConnectWebSocketInternal(options, context) {
 }
 
 function emitConnectInsecureTelemetry(hook, event) {
-  if (typeof hook !== "function") {
+  if (typeof hook !== JS_TYPE_FUNCTION) {
     return;
   }
   if (!event.allowInsecure || !event.hasCredentials || isSecureProtocol(event.protocol)) {
@@ -33679,7 +33683,7 @@ function attachProtocolToken(protocols, tokenProtocol, context) {
   if (protocols === undefined || protocols === null) {
     return [tokenProtocol];
   }
-  if (typeof protocols === "string") {
+  if (typeof protocols === JS_TYPE_STRING) {
     return protocols === tokenProtocol ? protocols : [tokenProtocol, protocols];
   }
   if (Array.isArray(protocols)) {
@@ -33702,7 +33706,7 @@ function encodeBase64Url(value) {
 
 function resolveWebSocketImplementation(candidate, context) {
   const impl = candidate ?? globalThis.WebSocket;
-  if (typeof impl !== "function") {
+  if (typeof impl !== JS_TYPE_FUNCTION) {
     rejectError(`${context}: WebSocket implementation is required`);
   }
   return impl;
@@ -33788,7 +33792,7 @@ function identifierCanonicalU32(value) {
 }
 
 function identifierNormalizeUnsignedBigInt(value, context) {
-  if (typeof value === "bigint") {
+  if (typeof value === JS_TYPE_BIGINT) {
     if (value < 0n) {
       throw createValidationError(
         ValidationErrorCode.INVALID_NUMERIC,
@@ -33798,7 +33802,7 @@ function identifierNormalizeUnsignedBigInt(value, context) {
     }
     return value;
   }
-  if (typeof value === "number") {
+  if (typeof value === JS_TYPE_NUMBER) {
     if (!Number.isInteger(value) || value < 0 || !Number.isSafeInteger(value)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_NUMERIC,
@@ -33808,7 +33812,7 @@ function identifierNormalizeUnsignedBigInt(value, context) {
     }
     return BigInt(value);
   }
-  if (typeof value === "string" && /^[0-9]+$/.test(value)) {
+  if (typeof value === JS_TYPE_STRING && /^[0-9]+$/.test(value)) {
     return BigInt(value);
   }
   throw createValidationError(
@@ -34086,7 +34090,7 @@ function identifierAccountIdPayload(accountId, context) {
   const literal = requireExactAccountId(accountId, context);
   const address = AccountAddress.fromI105(literal);
   const controller = address.controllerInfo();
-  if (!controller || typeof controller.tag !== "number") {
+  if (!controller || typeof controller.tag !== JS_TYPE_NUMBER) {
     rejectError(`${context} could not resolve account controller information`);
   }
   switch (controller.tag) {

@@ -43,7 +43,7 @@ _SCRIPT_DIRECTORY = Path(os.path.abspath(__file__)).parent
 _MAX_BOOTSTRAP_MODULE_BYTES = 2 * 1024 * 1024
 _BOOTSTRAP_RELEASE_MODULE_SHA256 = {
     "release_artifact_contract": "ae28b33969b6b9cc201877fc860b6936d0a162f3474fcabba9882f44339b3965",
-    "release_manifest_signing": "c7dbbbd6f3b21e05cff934f2a9db47d331988c4fc3141e7ad7b2e2edfe7cab4a",
+    "release_manifest_signing": "4966d0b408f7d67d154b578875a1b0cb77584de77b4b1561e8704043b99b60fd",
     "publish_plan": "a9d15abb6eaea794f4c8fa27283667b5d75165fee60cd081a1373dab00257d70",
     # This source owns the reviewed surface seal. Its one literal digest is
     # normalized before hashing so resealing does not create a hash cycle with

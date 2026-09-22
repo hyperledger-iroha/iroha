@@ -26,6 +26,7 @@ def _copy_workflows(target: Path) -> None:
         *automation.RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS,
         *automation.RELEASE_VERSION_MAP_CONTRACT_MARKERS,
         automation.SORAFS_CLI_RELEASE_GATE_SCRIPT,
+        automation.SORAFS_JAVASCRIPT_PARITY_RUNNER,
         automation.SORAFS_NATIVE_AUTHORITY_RUNTIME_SCRIPT,
         automation.SORAFS_COSIGN_QUALIFICATION_HELPER,
         automation.SORAFS_COSIGN_VERIFIER_POLICY,
@@ -38,6 +39,80 @@ def _copy_workflows(target: Path) -> None:
     for relative in automation.RELEASE_AUTH_ROOT_DOCUMENTS:
         destination = target / relative
         destination.write_text("# Release-auth test fixture\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("relative", automation.SORAFS_JAVASCRIPT_CHILD_WORKFLOWS)
+def test_javascript_test_event_workflow_contract_accepts_fixed_execution(relative):
+    source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    assert not automation._javascript_child_controls_workflow_errors(relative, source)
+
+
+@pytest.mark.parametrize("relative", automation.SORAFS_JAVASCRIPT_CHILD_WORKFLOWS)
+@pytest.mark.parametrize("trigger", sorted(automation.SORAFS_JAVASCRIPT_CHILD_PATHS))
+@pytest.mark.parametrize("mutation", ("remove", "comment_decoy", "duplicate"))
+def test_javascript_test_event_workflow_requires_actual_triggers(relative, trigger, mutation):
+    source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    original = f'      - "{trigger}"\n'
+    assert source.count(original) == 1
+    changed = source.replace(original, original * 2 if mutation == "duplicate" else "", 1)
+    if mutation == "comment_decoy":
+        changed += f'\n# - "{trigger}"\n'
+    errors = automation._validate_workflow_source(relative, changed)
+    assert any("JavaScript child-custody pull_request paths" in error for error in errors)
+
+
+@pytest.mark.parametrize("mutation", (
+    "remove", "comment_decoy", "duplicate", "conditional", "conditional_job", "filter",
+    "ignore_failure", "wrong_directory", "echo", "comment_block", "late", "wrong_node", "extra_command",
+    "omit_events", "omit_files", "omit_input", "omit_loads", "omit_session",
+))
+def test_javascript_test_event_workflow_requires_unconditional_node24_step(mutation):
+    relative = ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    step = automation.SORAFS_JAVASCRIPT_CHILD_STEP + "\n"
+    command = automation.SORAFS_JAVASCRIPT_CHILD_COMMAND
+    assert source.count(step) == 1
+    replacement = {
+        "remove": "", "comment_decoy": "", "duplicate": step * 2,
+        "omit_events": step.replace(" scripts/tests/sorafs_javascript_test_events_test.mjs", ""),
+        "omit_files": step.replace(" scripts/tests/sorafs_javascript_child_files_test.mjs", ""),
+        "omit_input": step.replace(" scripts/tests/sorafs_javascript_child_input_test.mjs", ""),
+        "omit_loads": step.replace(" scripts/tests/sorafs_javascript_child_loads_test.mjs", ""),
+        "omit_session": step.replace(" scripts/tests/sorafs_javascript_child_session_test.mjs", ""),
+        "conditional": step.replace("        run:", "        if: false\n        run:"),
+        "conditional_job": step, "wrong_node": step,
+        "filter": step.replace(command, command + " --test-name-pattern nonexistent"),
+        "ignore_failure": step.replace(command, command + " || true"),
+        "wrong_directory": step.replace("        run:", "        working-directory: elsewhere\n        run:"),
+        "echo": step.replace("run: node", "run: echo node"),
+        "comment_block": step.replace("run: " + command, "run: |\n          # " + command + "\n          true"),
+        "late": "      - name: Interposed step\n        run: true\n" + step,
+        "extra_command": step + step.replace("Verify fixed JavaScript child-custody ownership", "Repeat event command"),
+    }[mutation]
+    changed = source.replace(step, replacement, 1)
+    if mutation == "comment_decoy":
+        changed += "\n# " + command + "\n"
+    if mutation == "conditional_job":
+        changed = changed.replace("  sdk-parity:\n", "  sdk-parity:\n    if: false\n", 1)
+    if mutation == "wrong_node":
+        changed = changed.replace('node-version: "24"', 'node-version: "20"', 1)
+    errors = automation._validate_workflow_source(relative, changed)
+    assert any("JavaScript child-custody controls must run unconditionally" in error for error in errors)
+
+
+@pytest.mark.parametrize("trigger", sorted(automation.SORAFS_JAVASCRIPT_CONTENT_PATHS))
+@pytest.mark.parametrize("mutation", ("remove", "comment_decoy", "duplicate"))
+def test_installed_javascript_tools_require_actual_release_triggers(trigger, mutation):
+    """The installed-content owner and its controls must reach the release gate."""
+    relative = ".github/workflows/sorafs-cli-release.yml"
+    source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    marker = f'      - "{trigger}"\n'
+    assert source.count(marker) == 1
+    changed = source.replace(marker, marker * 2 if mutation == "duplicate" else "", 1)
+    if mutation == "comment_decoy":
+        changed += f'\n# - "{trigger}"\n'
+    assert any("JavaScript content source/test triggers" in error
+               for error in automation._validate_workflow_source(relative, changed))
 
 
 def test_validate_release_automation_accepts_repository_contract() -> None:
@@ -2758,12 +2833,21 @@ def test_cli_release_gate_runs_supply_chain_and_topology_adversarial_suites() ->
     )
     for relative in (
         "scripts/tests/check_sorafs_mobile_parity_reports_test.py",
+        "scripts/tests/release_output_parent_cleanup_test.py",
+        "scripts/tests/release_output_transaction_cleanup_test.py",
         "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py",
         "scripts/tests/sorafs_reference_sdk_supply_chain_test.py",
         "scripts/tests/sorafs_reference_sdk_signed_manifest_test.py",
         "scripts/tests/sorafs_java_consumer_artifact_test.py",
         "scripts/tests/sorafs_java_dependency_origins_test.py",
         "scripts/tests/sorafs_sdk_artifact_index_test.py",
+        "scripts/tests/sorafs_javascript_archive_test.py",
+        "scripts/tests/sorafs_javascript_archive_bounds_test.py",
+        "scripts/tests/sorafs_javascript_dependencies_test.py",
+        "scripts/tests/sorafs_javascript_package_source_test.py",
+        "scripts/tests/sorafs_javascript_package_bounds_test.py",
+        "scripts/tests/sorafs_javascript_installed_test.py",
+        "scripts/tests/sorafs_javascript_qualification_source_test.py",
         "scripts/tests/python_wheel_byte_owner_test.py",
         "scripts/tests/python_installed_content_owner_test.py",
         "scripts/tests/python_zip_directory_admission_test.py",
@@ -2831,3 +2915,20 @@ def test_release_workflow_script_dependencies_are_exactly_pinned() -> None:
     dependabot = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
     assert 'package-ecosystem: "pip"' in dependabot
     assert "      - /scripts" in dependabot
+
+
+@pytest.mark.parametrize("test", (
+    "scripts/tests/release_output_parent_cleanup_test.py",
+    "scripts/tests/release_output_transaction_cleanup_test.py",
+    "scripts/tests/sorafs_javascript_qualification_source_test.py",
+    "scripts/tests/sorafs_javascript_child_abi_contract_test.py",
+    "scripts/tests/sorafs_javascript_installed_test.py",
+))
+def test_release_parent_cleanup_controls_have_an_executable_registration(test):
+    """The content and descriptor suites run in the strict pytest batch."""
+    source = (REPO_ROOT / "ci/check_sorafs_cli_release.sh").read_text()
+    batch = re.search(r"(?m)^python3 -m pytest -q \\\n((?:  [^\n]+\n)+)", source)
+    assert batch is not None
+    assert batch.group(1).splitlines().count("  " + test + " \\") == 1
+    workflow = (REPO_ROOT / ".github/workflows/sorafs-cli-release.yml").read_text()
+    assert automation._pull_request_path_entries(workflow).count(test) == 1

@@ -10,7 +10,7 @@ The [State effect lock correction](../docs/history/2026-09-22/state-effect-lock-
 
 The [membership prerequisites](../docs/history/2026-09-22/membership-allocation-prerequisites.md) add one funded typed buffer and the native owned-generation allocation floor, with both MV layouts and corrected 884-control Core scope qualified. Integrate the original finite pool before membership construction, capture and restore; a late committed-state capacity error is not a progress design. The [indexed-publication and maintenance correction](../docs/history/2026-09-22/native-indexed-publication-recovery.md) extends the [partial-write repair correction](../docs/history/2026-09-22/native-repair-partial-write.md) through actual initial publication and completed latest-pointer maintenance; 1,004 selected Core, 21 Torii and 165 copied formal controls pass in their recorded scopes. The next State/Kura membership milestone is authenticated durable lookup at the exact original State cut and incremental checkpoint construction before resident-cache cutover; the current production Apply path materializes the full membership history twice per fresh height, so a bounded lookup cache alone is insufficient. Missing or untrusted history must produce a typed local refusal, never a non-membership answer. Qualify eviction/cold restart, sealed aliases, old/replacement cuts and Kura-before-WSV interruption before that cutover. These corrections do not close L1–L6.
 
-Current integration location: `/Users/takemiyamakoto/dev/iroha`, branch
+Current integration location: `/Users/takemiyamakoto/devstuff/iroha`, branch
 `optimizations`. All ongoing source integration and validation use this checkout;
 no other branch or worktree is authorized for this work.
 

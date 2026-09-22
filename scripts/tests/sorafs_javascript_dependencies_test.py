@@ -177,8 +177,12 @@ def test_immutable_projection_must_rederive_original_lock(projection):
     {"name": "foreign"}, {"version": "1.8.0"}, {"dependencies": {}},
     {"dependencies": {"@noble/hashes": "1.8.0", "@scure/base": "2.2.0"}},
     {"engines": {"node": "*"}}, {"scripts": []},
-    *({key: {}} for key in sorted(dependencies._INSTALL_FIELDS)),
-    *({"scripts": {key: "exit 0"}} for key in sorted(dependencies._INSTALL_SCRIPTS)),
+    *({key: {}} for key in ("optionalDependencies", "peerDependencies", "peerDependenciesMeta",
+                           "bundleDependencies", "bundledDependencies", "workspaces", "bin", "gypfile", "man")),
+    {"directories": {"bin": "review-bin"}}, {"acceptDependencies": {"@noble/hashes": "*"}},
+    {"overrides": {"@noble/hashes": "1.8.0"}}, {"unknown_future_resolution": True},
+    {"os": ["darwin"]}, {"cpu": ["arm64"]}, {"libc": ["glibc"]},
+    *({"scripts": {key: "exit 0"}} for key in ("preinstall", "install", "postinstall", "prepare", "prepublish")),
 ))
 def test_resealed_archive_metadata_cannot_change_resolution_or_install_handlers(change):
     def alter(package, files):
@@ -189,7 +193,8 @@ def test_resealed_archive_metadata_cannot_change_resolution_or_install_handlers(
 
 
 @pytest.mark.parametrize("name", ("node_modules/@noble/hashes/index.js", "lib/NODE_MODULES/foreign.js",
-                                     ".npmrc", "lib/.NPMRC", "native.node", "program.wasm", "program.wasi",
+                                     ".npmrc", "lib/.NPMRC", "npm-shrinkwrap.json", "package-lock.json",
+                                     "native.node", "program.wasm", "program.wasi",
                                      "addon.so", "addon.dll", "addon.dylib", "binding.gyp"))
 def test_pinned_packages_cannot_preseed_other_dependency_or_startup_owners(name):
     lock, originals = _originals(alter=lambda package, files: files.update({name: b"unowned"}))

@@ -40,7 +40,12 @@ DEPENDENCIES = {
 }
 _LOCK_FIELDS = {"version", "resolved", "integrity", "license", "engines", "funding", "dependencies"}
 _INSTALL_FIELDS = {"optionalDependencies", "peerDependencies", "peerDependenciesMeta",
-                   "bundleDependencies", "bundledDependencies", "workspaces", "bin", "gypfile"}
+                   "bundleDependencies", "bundledDependencies", "workspaces", "bin", "gypfile",
+                   "directories", "man", "acceptDependencies"}
+_PACKAGE_FIELDS = {"author", "browser", "bugs", "contributors", "dependencies", "description",
+                   "devDependencies", "engines", "exports", "files", "funding", "homepage", "jspm",
+                   "keywords", "license", "main", "module", "name", "repository", "scripts",
+                   "sideEffects", "standard", "type", "types", "typings", "version"}
 _INSTALL_SCRIPTS = {"preinstall", "install", "postinstall", "prepare", "prepublish"}
 
 
@@ -141,12 +146,13 @@ def _package(archive: NpmArchive, dependency: Dependency) -> None:
              and row.get("engines", {}) == dict(dependency.engines),
              "npm dependency metadata differs from its exact lock-owned identity")
     _require(not set(row) & _INSTALL_FIELDS, "npm dependency introduces install-time resolution or executables")
+    _require(set(row) <= _PACKAGE_FIELDS, "npm dependency metadata exceeds the reviewed fixed profile")
     scripts = row.get("scripts", {})
     _require(type(scripts) is dict and not set(scripts) & _INSTALL_SCRIPTS,
              "npm dependency introduces an install lifecycle script")
     for name in files:
         parts = name.casefold().split("/")
-        _require(not {"node_modules", ".npmrc"} & set(parts)
+        _require(not {"node_modules", ".npmrc", "npm-shrinkwrap.json", "package-lock.json"} & set(parts)
                  and not name.casefold().endswith((".node", ".wasm", ".wasi", ".dll", ".dylib", ".so", ".gyp")),
                  "npm dependency contains a bundled, startup, native or retired VM artifact")
 
