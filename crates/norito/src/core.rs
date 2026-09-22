@@ -34,6 +34,7 @@ pub use encoder::Encoder;
 mod encode_fields;
 mod encode_frames;
 mod encode_writers;
+mod fixed_frame;
 #[doc(hidden)]
 pub use encode_fields::{PackedField, write_packed_fields};
 use encode_frames::write_frame_to_writer_with_flags;
@@ -41,6 +42,7 @@ use encode_frames::write_frame_to_writer_with_flags;
 pub use encode_frames::write_frame_with_prefix;
 pub(crate) use encode_writers::ExactSliceWriter;
 use encode_writers::{ExactLengthWriter, LengthCountingWriter};
+pub use fixed_frame::FixedFrameLayout;
 mod sequence_length;
 pub use sequence_length::SequencePayloadLength;
 #[cfg(test)]
@@ -4153,15 +4155,6 @@ const fn payload_alignment_padding_for_align(align: usize) -> usize {
 pub(crate) fn payload_alignment_padding_for<T>() -> usize {
     payload_alignment_padding_for_align(archived_payload_align::<T>())
 }
-#[inline]
-fn append_payload_with_padding<T>(out: &mut Vec<u8>, payload: &[u8]) {
-    let padding = payload_alignment_padding_for::<T>();
-    if padding != 0 {
-        let len = out.len();
-        out.resize(len + padding, 0);
-    }
-    out.extend_from_slice(payload);
-}
 impl Default for Header {
     fn default() -> Self {
         Self::new([0; 16], 0, 0)
@@ -7204,27 +7197,21 @@ impl Write for FixedCapacityVecWriter<'_> {
         Ok(())
     }
 }
-/// Frame a bare payload (produced by `codec::Encode::encode_to`) with a Norito header
-/// using the layout flags recorded by the most recent encode/decode context.
+/// Frame a bare payload with a Norito header and explicitly supplied layout flags.
 ///
-/// This helper consumes the thread-local layout metadata populated by the adaptive
-/// encoder and therefore only succeeds when the payload was produced (or is currently
-/// being decoded) on the same thread. Callers that need to frame arbitrary bytes must
-/// obtain explicit flags and use [`frame_bare_with_header_flags`].
+/// The caller supplies the flags of the payload's one declared encoding. This
+/// helper does not infer them from ambient state or validate the payload's fields.
 pub fn frame_bare_with_header_flags<T: NoritoSerialize>(
     payload: &[u8],
     flags: u8,
 ) -> Result<Vec<u8>, Error> {
-    let mut header = Header::new(
-        crate::schema::identity::frame_hash::<T>(),
-        payload.len() as u64,
-        crc64(payload),
-    );
-    header.flags |= flags;
     let padding = payload_alignment_padding_for::<T>();
-    let mut out = Vec::with_capacity(Header::SIZE + padding + payload.len());
-    header.write(&mut out)?;
-    append_payload_with_padding::<T>(&mut out, payload);
+    let frame_len = Header::SIZE
+        .checked_add(padding)
+        .and_then(|len| len.checked_add(payload.len()))
+        .ok_or(Error::LengthMismatch)?;
+    let mut out = Vec::with_capacity(frame_len);
+    write_bare_frame_with_header_flags::<T, _>(&mut out, payload, flags)?;
     Ok(out)
 }
 /// Write a bare payload with a Norito header directly to `writer`.
@@ -7241,24 +7228,13 @@ where
     T: NoritoSerialize,
     W: Write + ?Sized,
 {
-    let mut header = Header::new(
+    fixed_frame::write_bare_frame(
+        writer,
+        payload,
         crate::schema::identity::frame_hash::<T>(),
-        payload.len() as u64,
-        crc64(payload),
-    );
-    header.flags |= flags;
-    header.write(&mut *writer)?;
-    let mut padding = payload_alignment_padding_for::<T>();
-    if padding != 0 {
-        const ZEROS: [u8; 64] = [0; 64];
-        while padding != 0 {
-            let chunk = padding.min(ZEROS.len());
-            writer.write_all(&ZEROS[..chunk])?;
-            padding -= chunk;
-        }
-    }
-    writer.write_all(payload)?;
-    Ok(())
+        payload_alignment_padding_for::<T>(),
+        flags,
+    )
 }
 /// Convenience: frame the currently-decoding bare payload (from payload context) with a Norito
 /// header using the active decode flags so it can be decoded via `from_bytes`. Returns

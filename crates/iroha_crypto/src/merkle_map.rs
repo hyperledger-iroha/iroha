@@ -4,7 +4,8 @@
 //! split bit, the shared key prefix, and its ordered children. Its shape depends
 //! only on the current keys, never insertion order. This is a separate commitment
 //! format from the indexed `MerkleTree` and the full-depth sparse Merkle tree.
-//! It has no wire encoding or externally supplied nodes/proofs.
+//! Fixed-size node descriptors support authenticated external lookup and updates. The map
+//! defines no wire encoding or durable-storage owner.
 //!
 //! Clones share immutable nodes. A mutation copies at most one 256-bit search
 //! path; it never scans unrelated entries. Allocator failure is not recoverable
@@ -14,6 +15,13 @@
 use std::sync::Arc;
 
 use crate::Hash;
+
+#[path = "merkle_map/external.rs"]
+mod external;
+pub use external::{
+    MerkleMapEdit, MerkleMapNode, MerkleMapNodeRef, MerkleMapNodeStore, MerkleMapReadError,
+    MerkleMapRoot, MerkleMapUpdateError, MerkleMapUpdateWorkspace, MerkleMapValueRef,
+};
 
 const EMPTY: &[u8] = b"iroha:merkle-map:empty:v1\0";
 const LEAF: &[u8] = b"iroha:merkle-map:leaf:v1\0";
@@ -81,11 +89,7 @@ impl MerkleMap {
 
     /// Bind the exact current key/value set and its entry count in constant time.
     pub fn root(&self) -> Hash {
-        let node = self
-            .node
-            .as_ref()
-            .map_or_else(|| Hash::new(EMPTY), |n| n.hash);
-        Hash::new_from_chunks(&[ROOT, &self.len.to_le_bytes(), node.as_ref()])
+        root_hash(self.len, self.node.as_ref().map(|node| node.hash))
     }
 
     /// Look up a public key without copying any nodes or encoded values.
@@ -141,7 +145,11 @@ impl MerkleMap {
 
 /// MSB-first shared prefix length, including all 256 bits for equal keys.
 fn common_bits(a: &Hash, b: &Hash) -> u16 {
-    for (index, (&a, &b)) in (0_u16..).zip(a.as_ref().iter().zip(b.as_ref())) {
+    common_prefix(a.as_ref(), b.as_ref())
+}
+
+fn common_prefix(a: &[u8; Hash::LENGTH], b: &[u8; Hash::LENGTH]) -> u16 {
+    for (index, (&a, &b)) in (0_u16..).zip(a.iter().zip(b)) {
         let differing = a ^ b;
         if differing != 0 {
             return index * 8
@@ -169,9 +177,28 @@ fn prefix(key: &Hash, bit: u16) -> [u8; Hash::LENGTH] {
     prefix
 }
 
+fn root_hash(len: u64, node: Option<Hash>) -> Hash {
+    let node = node.unwrap_or_else(|| Hash::new(EMPTY));
+    Hash::new_from_chunks(&[ROOT, &len.to_le_bytes(), node.as_ref()])
+}
+
+fn leaf_hash(key: Hash, value: Hash) -> Hash {
+    Hash::new_from_chunks(&[LEAF, key.as_ref(), value.as_ref()])
+}
+
+fn branch_hash(bit: u16, prefix: &[u8; Hash::LENGTH], left: Hash, right: Hash) -> Hash {
+    Hash::new_from_chunks(&[
+        BRANCH,
+        &bit.to_le_bytes(),
+        prefix,
+        left.as_ref(),
+        right.as_ref(),
+    ])
+}
+
 fn leaf(key: Hash, value: Hash) -> Arc<Node> {
     Arc::new(Node {
-        hash: Hash::new_from_chunks(&[LEAF, key.as_ref(), value.as_ref()]),
+        hash: leaf_hash(key, value),
         first: key,
         kind: NodeKind::Leaf(value),
     })
@@ -179,13 +206,7 @@ fn leaf(key: Hash, value: Hash) -> Arc<Node> {
 
 fn branch(bit: u16, left: Arc<Node>, right: Arc<Node>) -> Arc<Node> {
     Arc::new(Node {
-        hash: Hash::new_from_chunks(&[
-            BRANCH,
-            &bit.to_le_bytes(),
-            &prefix(&left.first, bit),
-            left.hash.as_ref(),
-            right.hash.as_ref(),
-        ]),
+        hash: branch_hash(bit, &prefix(&left.first, bit), left.hash, right.hash),
         first: left.first,
         kind: NodeKind::Branch { bit, left, right },
     })

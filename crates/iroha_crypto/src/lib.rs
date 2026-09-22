@@ -149,7 +149,11 @@ use iroha_macro::ffi_impl_opaque;
 use iroha_primitives::const_vec::{ConstVec, ToConstVec};
 use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId};
 pub use merkle::{CompactMerkleProof, MerkleError, MerkleProof, MerkleTree, MerkleTreeCommitment};
-pub use merkle_map::{MerkleMap, MerkleMapError};
+pub use merkle_map::{
+    MerkleMap, MerkleMapEdit, MerkleMapError, MerkleMapNode, MerkleMapNodeRef, MerkleMapNodeStore,
+    MerkleMapReadError, MerkleMapRoot, MerkleMapUpdateError, MerkleMapUpdateWorkspace,
+    MerkleMapValueRef,
+};
 pub use privacy::{
     CommitmentScheme, LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness,
     PrivacyError, PrivacyWitness, lane_merkle_leaf_hash, lane_merkle_node_hash,
