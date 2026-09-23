@@ -36535,6 +36535,91 @@ impl State {
                 ))
             })
     }
+    /// Return whether Kura still owns a fully authenticated, live certificate for
+    /// this exact signed QueuePlan transaction before its carrier is committed.
+    ///
+    /// The bounded inventory is authenticated in full, including records for
+    /// other entrypoints. A conflicting binding for the requested entrypoint or
+    /// corrupt durable record cannot turn a retry into a success. This read never
+    /// treats an applied WSV transaction as pending.
+    ///
+    /// # Errors
+    /// Returns an error for unreadable, malformed, conflicting, or stale durable
+    /// evidence, or for an inconsistent canonical marker.
+    pub fn pending_queue_plan_admission_for_transaction(
+        &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        signed_transaction_hash: HashOf<SignedTransaction>,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let _admission_persistence = self.queue_plan_admission_persistence_lock.lock();
+        let pending = self
+            .kura
+            .pending_queue_plan_admission_certificates_bounded(
+                self.kura.pending_queue_plan_admission_capacity(),
+            )?;
+        let mut exact: Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1> =
+            Vec::new();
+        for (_, bytes) in pending {
+            let admission = self.authenticate_pending_queue_plan_admission(&bytes)?;
+            if admission.registry_key.entrypoint_hash != entrypoint_hash {
+                continue;
+            }
+            if admission
+                .certificate
+                .binding
+                .signed_transaction_hash
+                .as_ref()
+                != Some(&signed_transaction_hash)
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "pending QueuePlan admission binds a different signed transaction".to_owned(),
+                ));
+            }
+            if let Some(first) = exact.first() {
+                if first.certificate.binding != admission.certificate.binding {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                        "conflicting pending QueuePlan bindings own the same transaction"
+                            .to_owned(),
+                    ));
+                }
+            }
+            exact.push(admission);
+        }
+        if exact.is_empty() {
+            return Ok(false);
+        }
+
+        let _state_commit = self.state_commit_lock.lock();
+        let state_view = self.view();
+        let carrier_height = u64::try_from(state_view.height())
+            .ok()
+            .and_then(|height| height.checked_add(1))
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "pending QueuePlan replay carrier height overflowed".to_owned(),
+                )
+            })?;
+        for admission in &exact {
+            match Self::classify_pending_queue_plan_admission_in_view(
+                &state_view,
+                admission,
+                carrier_height,
+            )? {
+                PendingQueuePlanAdmissionDisposition::ExactPending
+                | PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                | PendingQueuePlanAdmissionDisposition::Future { .. }
+                | PendingQueuePlanAdmissionDisposition::DeferredCarrier => {}
+                PendingQueuePlanAdmissionDisposition::Applied => return Ok(false),
+                PendingQueuePlanAdmissionDisposition::DefinitiveConflict
+                | PendingQueuePlanAdmissionDisposition::Stale => {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                        "pending QueuePlan admission is no longer live".to_owned(),
+                    ));
+                }
+            }
+        }
+        Ok(true)
+    }
     #[cfg(test)]
     pub(crate) fn pending_queue_plan_admission_registry_lookup(
         &self,

@@ -13287,6 +13287,11 @@ fn verify_prepared_transaction_context_v1_py(
     signed.verify_signature().map_err(|_| {
         PyValueError::new_err("prepared transaction has an invalid authority signature")
     })?;
+    if signed.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err(PyValueError::new_err(
+            "prepared transaction requires QueuePlanSynced admission",
+        ));
+    }
     if signed.network_id() != Some(network_id.as_inner())
         || signed.authority() != &expected_authority
         || signed.payload().fee_payment != expected_fee_payment

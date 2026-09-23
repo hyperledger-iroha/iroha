@@ -18136,7 +18136,9 @@ pub(crate) fn prepare_contract_call_request(
         arguments,
     };
     let builder = builder
-        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
+        .with_admission_intent(
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        )
         .with_metadata(metadata)
         .with_fee_payment_intent(fee_payment.clone())
         .with_executable(dm::Executable::ContractCall(executable));
@@ -59308,6 +59310,7 @@ mod prepared_transaction_signature_fixture_tests {
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
+        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
         .with_metadata(metadata)
         .with_instructions(instructions);
         builder.set_creation_time(Duration::from_millis(4_000_000_000_000));
@@ -60912,12 +60915,13 @@ fn revalidate_onboarding_prepared_work(
 
 fn prepared_submit_outcome(
     app: &crate::SharedAppState,
-    transaction_hash: &HashOf<SignedTransaction>,
+    transaction: &SignedTransaction,
 ) -> Result<Option<&'static str>> {
+    let transaction_hash = transaction.hash();
     let entrypoint_hash =
         iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone());
     if app.state.has_committed_entrypoint(entrypoint_hash) {
-        let status = crate::pipeline_status_from_state(&app.state, &app.kura, transaction_hash)?
+        let status = crate::pipeline_status_from_state(&app.state, &app.kura, &transaction_hash)?
             .ok_or(Error::AppServiceUnavailable {
                 code: "prepared_transaction_status_unavailable",
                 message: "the exact prepared transaction is committed but its canonical outcome is unavailable"
@@ -60925,7 +60929,16 @@ fn prepared_submit_outcome(
             })?;
         return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
-    if let Some(status) = app.pipeline_status_cache.lookup(transaction_hash) {
+    // A local Queue entry or cached Queued event is only one authority's claim.
+    // It cannot acknowledge a QueuePlanSynced prepared mutation before the
+    // global f+1 certificate has been durably persisted. Its replay must enter
+    // the same strict public admission path as a fresh submission.
+    if transaction.admission_intent()
+        == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    {
+        return Ok(None);
+    }
+    if let Some(status) = app.pipeline_status_cache.lookup(&transaction_hash) {
         return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
     if app
@@ -60935,6 +60948,166 @@ fn prepared_submit_outcome(
         return Ok(Some("Pending"));
     }
     Ok(None)
+}
+
+/// Admit one exact prepared transaction through the public QueuePlan quorum owner.
+/// An accepted response means the complete certificate crossed its durable
+/// publication boundary; local Queue custody alone is not a public success.
+async fn submit_prepared_queue_plan_transaction(
+    app: &crate::SharedAppState,
+    transaction: SignedTransaction,
+    telemetry: &MaybeTelemetry,
+) -> Result<Response> {
+    let compute_permit = crate::try_acquire_transaction_ingress_compute(
+        &app.transaction_ingress_compute_inflight,
+    )?;
+    let state = app.state.clone();
+    let telemetry = telemetry.clone();
+    let (accepted, compute_permit) = crate::run_transaction_ingress_compute_job(
+        compute_permit,
+        "prepared_transaction_admission_worker_failed",
+        move || accept_transaction_for_ingress(state, transaction, &telemetry),
+    )
+    .await?;
+    drop(compute_permit);
+    let prepared = crate::prepare_fresh_transaction_ingress(app, accepted)?;
+    crate::submit_prepared_transaction_ingress(
+        app,
+        prepared,
+        true,
+        crate::utils::ResponseFormat::Json,
+    )
+    .await
+}
+
+#[cfg(feature = "connect")]
+pub(crate) async fn certified_prepared_queue_plan_response(
+    app: &crate::SharedAppState,
+    transaction: &SignedTransaction,
+) -> Result<Option<Response>> {
+    let compute_permit = crate::try_acquire_transaction_ingress_compute(
+        &app.transaction_ingress_compute_inflight,
+    )?;
+    let app = app.clone();
+    let transaction = transaction.clone();
+    let (response, compute_permit) = crate::run_transaction_ingress_compute_job(
+        compute_permit,
+        "prepared_transaction_retry_worker_failed",
+        move || {
+            let Some(authenticated) = crate::AuthenticatedQueuePlanRetry::from_signed(
+                app.state.network_id_ref(),
+                &transaction,
+            )? else {
+                return Ok(None);
+            };
+            if let Some(response) = crate::canonical_queue_plan_submission_response(
+                app.as_ref(),
+                &authenticated,
+                true,
+                crate::utils::ResponseFormat::Json,
+            ) {
+                return Ok(Some(response));
+            }
+            let entrypoint_hash = authenticated.entrypoint_hash();
+            let signed_transaction_hash = authenticated.signed_transaction_hash();
+            match app.state.pending_queue_plan_admission_for_transaction(
+                entrypoint_hash,
+                signed_transaction_hash,
+            ) {
+                Ok(false) => Ok(crate::canonical_queue_plan_submission_response(
+                    app.as_ref(),
+                    &authenticated,
+                    true,
+                    crate::utils::ResponseFormat::Json,
+                )),
+                Ok(true) => Ok(Some(crate::transaction_submission_receipt_response(
+                    app.as_ref(),
+                    entrypoint_hash,
+                    Some(signed_transaction_hash),
+                    true,
+                    crate::utils::ResponseFormat::Json,
+                ))),
+                Err(error) => Ok(Some(crate::queue_plan_admission_registry_conflict_response(
+                    entrypoint_hash,
+                    format!("pending QueuePlan admission cannot be authenticated: {error}"),
+                ))),
+            }
+        },
+    )
+    .await?;
+    drop(compute_permit);
+    Ok(response)
+}
+
+fn prepared_queue_plan_submit_response(
+    submission: Response,
+    binding: PreparedOperationBindingV1,
+    operation: &str,
+    transaction_hash_hex: String,
+) -> Response {
+    if submission.status() != StatusCode::ACCEPTED {
+        return submission;
+    }
+    let mut response = prepared_submit_response(binding, operation, transaction_hash_hex, "Pending");
+    *response.status_mut() = StatusCode::ACCEPTED;
+    for (name, value) in submission.headers() {
+        if name.as_str().starts_with("x-iroha-") {
+            response.headers_mut().insert(name.clone(), value.clone());
+        }
+    }
+    response
+}
+
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { async prepared_queue_plan_submit_response_requires_real_acceptance
+    let binding = PreparedOperationBindingV1 {
+        schema: PreparedOperationBindingV1::SCHEMA.to_owned(),
+        semantic_hash_hex: "11".repeat(32),
+        kind: AccountOnboardingPreparedTransactionDto::OPERATION.to_owned(),
+        request_id: "22".repeat(32),
+        execution_expires_at_unix_ms: u64::MAX,
+    };
+    let mut accepted = Response::new(Body::empty());
+    *accepted.status_mut() = StatusCode::ACCEPTED;
+    accepted.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-iroha-entrypoint-hash"),
+        axum::http::HeaderValue::from_static("certified-entrypoint"),
+    );
+    let accepted = prepared_queue_plan_submit_response(
+        accepted,
+        binding.clone(),
+        AccountOnboardingPreparedTransactionDto::OPERATION,
+        "33".repeat(32),
+    );
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        accepted
+            .headers()
+            .get("x-iroha-entrypoint-hash")
+            .and_then(|value| value.to_str().ok()),
+        Some("certified-entrypoint")
+    );
+    let body = axum::body::to_bytes(accepted.into_body(), usize::MAX)
+        .await
+        .expect("prepared accepted body");
+    let accepted: PreparedTransactionSubmitResponseDto =
+        norito::json::from_slice(&body).expect("prepared accepted envelope");
+    assert_eq!(accepted.outcome, "Pending");
+    assert_eq!(accepted.binding, binding);
+
+    let mut unavailable = Response::new(Body::from("quorum unavailable"));
+    *unavailable.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+    let unavailable = prepared_queue_plan_submit_response(
+        unavailable,
+        binding,
+        AccountOnboardingPreparedTransactionDto::OPERATION,
+        "33".repeat(32),
+    );
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(unavailable.into_body(), usize::MAX)
+        .await
+        .expect("prepared unavailable body");
+    assert_eq!(body.as_ref(), b"quorum unavailable");
 }
 
 fn prepared_outcome_from_pipeline_status(kind: crate::PipelineStatusKind) -> &'static str {
@@ -61048,6 +61221,9 @@ pub async fn handle_v1_accounts_onboard_prepare(
         signer.authority.clone(),
         request.fee_payment.clone(),
     )
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
     .with_metadata(metadata)
     .with_instructions(work.instructions);
     let creation_ms = current_time_millis();
@@ -61135,6 +61311,13 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
+    if transaction.admission_intent()
+        != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    {
+        return Err(prepared_transaction_invalid(
+            "prepared onboarding transaction requires QueuePlanSynced admission",
+        ));
+    }
     // A known hash is still scoped to the credential that prepared its signed receipt. Only the
     // time-sensitive/live-state checks below are skipped while reconciling response-loss replay.
     validate_onboarding_prepared_receipt_context(
@@ -61142,7 +61325,7 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
         &authenticated_scope,
         &prepared.receipt,
     )?;
-    if let Some(outcome) = prepared_submit_outcome(&app, &transaction.hash())? {
+    if let Some(outcome) = prepared_submit_outcome(&app, &transaction)? {
         return Ok((
             StatusCode::OK,
             prepared_submit_response(
@@ -61152,6 +61335,18 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
                 outcome,
             ),
         ));
+    }
+    // A certified retry has already crossed the durable f+1 boundary. Serve it before
+    // the live expiry and state checks, which apply only to fresh admission.
+    #[cfg(feature = "connect")]
+    if let Some(submission) = certified_prepared_queue_plan_response(&app, &transaction).await? {
+        let response = prepared_queue_plan_submit_response(
+            submission,
+            prepared.binding,
+            AccountOnboardingPreparedTransactionDto::OPERATION,
+            prepared.transaction_hash_hex,
+        );
+        return Ok((response.status(), response));
     }
     validate_prepared_mutation_binding(
         &prepared.binding,
@@ -61187,44 +61382,14 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
             "prepared onboarding transaction no longer matches its receipt, binding, result identity, or exact fee intent",
         ));
     }
-    let transaction_hash = transaction.hash();
-    let submission = handle_transaction_with_metrics(
-        app.queue.clone(),
-        app.state.clone(),
-        transaction,
-        telemetry,
-        ENDPOINT_ACCOUNTS_ONBOARD,
-    )
-    .await;
-    let outcome = match submission {
-        Ok(_) => "Pending",
-        Err(Error::PushIntoQueue { source, .. })
-            if matches!(source.as_ref(), iroha_core::queue::Error::IsInQueue) =>
-        {
-            "Pending"
-        }
-        Err(Error::PushIntoQueue { source, .. })
-            if matches!(source.as_ref(), iroha_core::queue::Error::InBlockchain) =>
-        {
-            prepared_submit_outcome(&app, &transaction_hash)?.ok_or(
-                Error::AppServiceUnavailable {
-                    code: "prepared_transaction_status_unavailable",
-                    message: "the exact prepared onboarding transaction is committed but its outcome is unavailable"
-                        .to_owned(),
-                },
-            )?
-        }
-        Err(error) => return Err(error),
-    };
-    Ok((
-        StatusCode::ACCEPTED,
-        prepared_submit_response(
-            prepared.binding,
-            AccountOnboardingPreparedTransactionDto::OPERATION,
-            prepared.transaction_hash_hex,
-            outcome,
-        ),
-    ))
+    let submission = submit_prepared_queue_plan_transaction(&app, transaction, &telemetry).await?;
+    let response = prepared_queue_plan_submit_response(
+        submission,
+        prepared.binding,
+        AccountOnboardingPreparedTransactionDto::OPERATION,
+        prepared.transaction_hash_hex,
+    );
+    Ok((response.status(), response))
 }
 /// Advertise the operator's exact faucet issuer, asset and amount before account registration.
 #[iroha_futures::telemetry_future]
@@ -61498,6 +61663,9 @@ pub async fn handle_v1_accounts_faucet_prepare(
         faucet.authority.clone(),
         request.fee_payment.clone(),
     )
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
     .with_metadata(metadata)
     .with_instructions(work.instructions);
     let creation_ms = current_time_millis();
@@ -61587,7 +61755,14 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
-    if let Some(outcome) = prepared_submit_outcome(&app, &transaction.hash())? {
+    if transaction.admission_intent()
+        != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    {
+        return Err(prepared_transaction_invalid(
+            "prepared faucet transaction requires QueuePlanSynced admission",
+        ));
+    }
+    if let Some(outcome) = prepared_submit_outcome(&app, &transaction)? {
         return Ok((
             StatusCode::OK,
             prepared_submit_response(
@@ -61597,6 +61772,16 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
                 outcome,
             ),
         ));
+    }
+    #[cfg(feature = "connect")]
+    if let Some(submission) = certified_prepared_queue_plan_response(&app, &transaction).await? {
+        let response = prepared_queue_plan_submit_response(
+            submission,
+            prepared.binding,
+            AccountFaucetPreparedTransactionDto::OPERATION,
+            prepared.transaction_hash_hex,
+        );
+        return Ok((response.status(), response));
     }
     validate_prepared_mutation_binding(
         &prepared.binding,
@@ -61635,44 +61820,14 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
             "prepared faucet transaction no longer matches its claim, binding, result identity, or exact fee intent",
         ));
     }
-    let transaction_hash = transaction.hash();
-    let submission = handle_transaction_with_metrics(
-        app.queue.clone(),
-        app.state.clone(),
-        transaction,
-        telemetry,
-        ENDPOINT_ACCOUNTS_FAUCET,
-    )
-    .await;
-    let outcome = match submission {
-        Ok(_) => "Pending",
-        Err(Error::PushIntoQueue { source, .. })
-            if matches!(source.as_ref(), iroha_core::queue::Error::IsInQueue) =>
-        {
-            "Pending"
-        }
-        Err(Error::PushIntoQueue { source, .. })
-            if matches!(source.as_ref(), iroha_core::queue::Error::InBlockchain) =>
-        {
-            prepared_submit_outcome(&app, &transaction_hash)?.ok_or(
-                Error::AppServiceUnavailable {
-                    code: "prepared_transaction_status_unavailable",
-                    message: "the exact prepared faucet transaction is committed but its outcome is unavailable"
-                        .to_owned(),
-                },
-            )?
-        }
-        Err(error) => return Err(error),
-    };
-    Ok((
-        StatusCode::ACCEPTED,
-        prepared_submit_response(
-            prepared.binding,
-            AccountFaucetPreparedTransactionDto::OPERATION,
-            prepared.transaction_hash_hex,
-            outcome,
-        ),
-    ))
+    let submission = submit_prepared_queue_plan_transaction(&app, transaction, &telemetry).await?;
+    let response = prepared_queue_plan_submit_response(
+        submission,
+        prepared.binding,
+        AccountFaucetPreparedTransactionDto::OPERATION,
+        prepared.transaction_hash_hex,
+    );
+    Ok((response.status(), response))
 }
 pub async fn handle_v1_account_aliases(
     app: crate::SharedAppState,

@@ -23,8 +23,13 @@ use crate::{
     },
 };
 use iroha_data_model::block::{SignedBlock, consensus_v2 as wire};
+use iroha_data_model::{
+    isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1,
+    transaction::{Executable, TransactionAdmissionIntent, TransactionEntrypoint},
+};
+use iroha_model_base::topology::DataSpaceId;
 use mv::allocation::{AllocationCharge, AllocationRefusal, AllocationReservation};
-use std::{alloc::Layout, convert::Infallible, sync::Arc};
+use std::{alloc::Layout, collections::BTreeSet, convert::Infallible, sync::Arc};
 
 #[cfg(test)]
 std::thread_local! {
@@ -432,6 +437,115 @@ impl V2ApplyService {
 }
 
 impl OwnedNativeCarrierValidator {
+    /// A lifecycle certificate is the sole external control allowed to execute
+    /// directly at its quorum-certified next global height. Reauthenticate it
+    /// here: a Torii admission decision is never voting authority for peers.
+    fn authenticate_lifecycle_control(&self, body: &SignedBlock) -> Result<(), V2ApplyError> {
+        let invalid = |reason: &str| V2ApplyError::Validation(reason.to_owned());
+        let [entrypoint] = body.external_entrypoints_slice() else {
+            return Err(invalid(
+                "lifecycle control must be the sole external entrypoint",
+            ));
+        };
+        let TransactionEntrypoint::External(transaction) = entrypoint else {
+            return Err(invalid(
+                "lifecycle control must be a signed external transaction",
+            ));
+        };
+        if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary
+            || transaction.attachments().is_some()
+            || transaction.multisig_signatures().is_some()
+            || !transaction.metadata().is_empty()
+        {
+            return Err(invalid(
+                "lifecycle control has noncanonical transaction attachments",
+            ));
+        }
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return Err(invalid(
+                "lifecycle control must contain one certificate instruction",
+            ));
+        };
+        if instructions.len() != 1 {
+            return Err(invalid(
+                "lifecycle control must contain one certificate instruction",
+            ));
+        }
+        let certificate = &instructions[0]
+            .as_any()
+            .downcast_ref::<ApplyThresholdKeyLifecycleCertificateV1>()
+            .ok_or_else(|| invalid("lifecycle control has a non-certificate instruction"))?
+            .certificate;
+        let context = self.context.context();
+        if certificate.effective_height != context.height
+            || certificate.network_id != context.network_id
+            || body.header().height().get() != context.height
+        {
+            return Err(invalid(
+                "lifecycle certificate differs from the authenticated height",
+            ));
+        }
+        let bundle = body
+            .execution_context()
+            .ok_or_else(|| invalid("lifecycle control lacks its global route context"))?;
+        let [external] = bundle.external.as_slice() else {
+            return Err(invalid(
+                "lifecycle control requires one global route context",
+            ));
+        };
+        if external.entrypoint_hash != entrypoint.hash() {
+            return Err(invalid(
+                "lifecycle route context differs from its entrypoint",
+            ));
+        }
+        let plan = crate::queue::routing_plan_from_execution_context(external)
+            .map_err(|reason| invalid(&reason))?;
+        let crate::queue::RoutingPlan::Single(leg) = &plan else {
+            return Err(invalid("lifecycle control requires one global route"));
+        };
+        if leg.role != crate::queue::RouteLegRole::Coordinator
+            || leg.route.dataspace_id != DataSpaceId::UNIVERSAL
+        {
+            return Err(invalid("lifecycle control has a non-global route"));
+        }
+        let (parent_hash, roster) = self
+            .service
+            .state
+            .verify_next_height_threshold_key_lifecycle_certificate_v1(certificate)
+            .map_err(|reason| invalid(&reason))?;
+        if body.header().prev_block_hash() != Some(parent_hash)
+            || context
+                .roster
+                .iter()
+                .map(|validator| &validator.validator)
+                .ne(roster.iter())
+        {
+            return Err(invalid(
+                "lifecycle control differs from its authenticated parent or roster",
+            ));
+        }
+        let route = self
+            .service
+            .queue
+            .plan_admission_context_with_state(&self.service.state, &plan)
+            .map_err(|error| invalid(&error.to_string()))?;
+        if route.proposal_height != context.height
+            || route.predecessor_block_hash != Some(parent_hash)
+            || route.route_incarnations.len() != 1
+            || route.route_incarnations[0].leg != *leg
+            || route.route_incarnations[0]
+                .validator_set
+                .iter()
+                .collect::<BTreeSet<_>>()
+                != roster.iter().collect::<BTreeSet<_>>()
+        {
+            return Err(invalid(
+                "lifecycle control route lacks authenticated global authority",
+            ));
+        }
+        Ok(())
+    }
+
     // These are disjoint first-release producers. Failed Native authentication
     // never enters the genesis/control producer or a second execution attempt.
     fn classify_source(
@@ -465,9 +579,14 @@ impl OwnedNativeCarrierValidator {
             return Ok(CurrentCarrierSourceClass::Genesis);
         }
         if !body.external_entrypoints_slice().is_empty() {
-            return Err(V2ApplyError::Validation(
-                "current economic inputs require their authenticated Native Decision batch".into(),
-            ));
+            if native {
+                return Err(V2ApplyError::Validation(
+                    "Native Decisions cannot share a carrier with direct external entrypoints"
+                        .into(),
+                ));
+            }
+            self.authenticate_lifecycle_control(body)?;
+            return Ok(CurrentCarrierSourceClass::Control);
         }
         Ok(if native {
             CurrentCarrierSourceClass::Native
@@ -597,6 +716,19 @@ impl OwnedNativeCarrierValidator {
         }
         LocalValidationRefusal::RecoveryRequired(error.to_string())
     }
+}
+
+/// Exercise the production source classifier without allocating a retained
+/// candidate or promoting a BodyStore validation marker.
+#[cfg(test)]
+pub(super) fn classify_current_carrier_for_test(
+    service: Arc<V2ApplyService>,
+    context: VerifiedHeightContext,
+    body: &SignedBlock,
+) -> Result<(), V2ApplyError> {
+    OwnedNativeCarrierValidator { service, context }
+        .classify_source(body)
+        .map(|_| ())
 }
 
 impl CarrierValidator for OwnedNativeCarrierValidator {

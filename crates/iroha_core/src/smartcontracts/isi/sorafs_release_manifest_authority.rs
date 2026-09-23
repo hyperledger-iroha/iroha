@@ -61,7 +61,7 @@ fn authorized(
                     .any(|role| role.permissions().any(|token| token == &permission)))
     };
     let required = match &instruction.action {
-        Action::Configure(_) | Action::Enroll(_) | Action::Revoke { .. } => {
+        Action::Configure(_) | Action::Enroll(_) | Action::Revoke(_) => {
             CanManageSorafsReleaseManifestCustody {
                 deployment_id: deployment.clone(),
             }

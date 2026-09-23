@@ -39,7 +39,7 @@ Options:
   --sccache-dir DIR       Set SCCACHE_DIR; otherwise use sccache's default
   --incremental           Set CARGO_INCREMENTAL=1; suppress configured sccache
                           Set RUSTC_WRAPPER explicitly to retain instrumentation
-  --no-incremental        Set CARGO_INCREMENTAL=0 for sccache-heavy builds
+  --no-incremental        Set CARGO_INCREMENTAL=0 (also automatic with sccache)
   --stable-local-metadata Set VERGEN_GIT_SHA=local-fast-build
                           Reject an inherited IROHA_GIT_COMMIT_HASH before Cargo
   --zero-debug            Set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
@@ -514,6 +514,16 @@ if [[ -n "${RUSTC_WRAPPER:-}" ]] && [[ "${RUSTC_WRAPPER}" == *sccache* ]]; then
 	sccache_active=true
 fi
 
+# The workspace's dev profile enables incremental compilation by default.
+# sccache rejects incremental rustc jobs, so an active sccache wrapper needs
+# an explicit Cargo override even when the caller did not request either mode.
+# A caller's explicit value remains authoritative; 1 suppresses sccache above.
+sccache_disabled_implicit_incremental=false
+if [[ "${sccache_active}" == true ]] && [[ -z "${CARGO_INCREMENTAL:-}" ]]; then
+	export CARGO_INCREMENTAL=0
+	sccache_disabled_implicit_incremental=true
+fi
+
 active_sccache_dir="${SCCACHE_DIR:-}"
 if [[ "${sccache_active}" == true ]]; then
 	if [[ -n "${sccache_dir}" ]]; then
@@ -576,8 +586,12 @@ if [[ "${zero_debug}" == true ]]; then
 	echo "[cargo-fast] CARGO_PROFILE_DEV_DEBUG=${CARGO_PROFILE_DEV_DEBUG}"
 	echo "[cargo-fast] CARGO_PROFILE_TEST_DEBUG=${CARGO_PROFILE_TEST_DEBUG}"
 fi
-if [[ "${incremental}" == true ]] || [[ "${no_incremental}" == true ]]; then
-	echo "[cargo-fast] CARGO_INCREMENTAL=${CARGO_INCREMENTAL}"
+if [[ -n "${CARGO_INCREMENTAL:-}" ]]; then
+	if [[ "${sccache_disabled_implicit_incremental}" == true ]]; then
+		echo "[cargo-fast] CARGO_INCREMENTAL=0 (sccache selected)"
+	else
+		echo "[cargo-fast] CARGO_INCREMENTAL=${CARGO_INCREMENTAL}"
+	fi
 fi
 if [[ "${stable_local_metadata}" == true ]]; then
 	echo "[cargo-fast] VERGEN_GIT_SHA=${VERGEN_GIT_SHA}"

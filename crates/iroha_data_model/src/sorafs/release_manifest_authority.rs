@@ -199,6 +199,22 @@ pub struct ReleaseManifestCheckV1 {
     pub phase: ReleaseManifestCheckPhaseV1,
 }
 
+/// Governed emergency revocation flags for the active signer custody.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
+    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestRevokeV1"
+)]
+#[norito(deny_unknown_fields)]
+pub struct ReleaseManifestRevokeV1 {
+    /// Revoke the current signer key generation.
+    pub signer: bool,
+    /// Revoke the current independent attester generation.
+    pub attester: bool,
+}
+
 /// Closed action surface, not yet an InstructionBox or production authorization path.
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
@@ -217,12 +233,7 @@ pub enum ReleaseManifestActionV1 {
     Enroll(Vec<u8>),
     /// Governed emergency revocation invalidates the active operation.
     #[codec(index = 2)]
-    Revoke {
-        /// Revoke the current signer key generation.
-        signer: bool,
-        /// Revoke the current independent attester generation.
-        attester: bool,
-    },
+    Revoke(ReleaseManifestRevokeV1),
     /// Reserve one exact original operation before key I/O.
     #[codec(index = 3)]
     Reserve(ReleaseManifestReserveV1),

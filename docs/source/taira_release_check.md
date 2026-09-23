@@ -71,6 +71,15 @@ This group runs immediately after configuration and MV ownership checks in both
 scopes. Any failure stops qualification before other startup groups, shipping binary builds
 or network execution; it reuses the same compiled harness and runs each case once.
 
+After startup checks, the gate runs the exact reset-scope CLI control and Torii
+canonical outcome, transaction-visibility and prepared-account admission tests
+before the production binary metadata check. It then runs the real four-peer
+beacon fixture before the long independent regression census. This order
+exposes a fresh-network liveness or prepared-account failure early without
+dropping any selected check or changing
+the immutable evidence graph. A failed four-peer fixture stops qualification;
+no release or live cutover is admitted from the earlier passing groups alone.
+
 Both scopes run their selected MV ownership checks after configuration and
 before PendingKura: finite allocation credits, exact release/poison wakes, charged
 Cell generations, original map/undo retention, actual epoch reclamation and
@@ -88,6 +97,17 @@ Configuration must still pass before the overall diagnostic succeeds, including
 portable-only requests. Each phase reports its own feature graph; these results
 provide no release qualification or independent-checkpoint credit. Immutable
 qualification continues to compile and test its complete graph.
+
+Focused development checks validate an explicitly forwarded `TMPDIR` in the
+execution environment before invoking the compiler. Set it to an existing,
+writable absolute directory visible to the build guest; a host-only path fails
+immediately with the path in the diagnostic. An unset `TMPDIR` keeps the
+platform default. When the exact four-peer beacon regression is focused, the
+diagnostic audits the complete shipping binary table but compiles only its
+runtime inputs: `iroha3d`, `iroha`, `iroha3d_taira`, and `kagami`, plus the
+separate message-control daemon. A future different network runtime selection
+uses the complete shipping build. Immutable qualification and signed release
+continue to compile and capture `sorafs-node` with all shipping binaries.
 
 Both scopes also require the signed stopped-predecessor controls: strict state
 decoding, retained directory identity across archive/restore, complete process

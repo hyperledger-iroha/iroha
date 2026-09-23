@@ -13,6 +13,7 @@ import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.RegisterAccountWirePayloadEncoder;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
@@ -94,6 +95,10 @@ public final class AccountFaucetPreparedVerifier {
           "prepared faucet transaction hash differs from the envelope");
     }
     final TransactionPayload payload = SignedTransactionEncoder.decodeCanonicalPayload(transaction);
+    if (payload.admissionIntent() != TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
+      throw new IllegalArgumentException(
+          "prepared faucet transaction must use QueuePlanSynced admission");
+    }
     binding.requireTransactionLifetime(payload);
     if (!AccountOnboardingReceiptVerifier.verifyAuthoritySignature(
         payload.authority(),

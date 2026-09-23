@@ -14,6 +14,7 @@ before transfers and again before apply; no cleanup or alternate route is inferr
 pinned Mac SSH route and VM backing directory; it contacts no host.
 """
 import argparse
+import contextlib
 import fcntl
 from urllib.parse import urlsplit
 import taira_retry as retry
@@ -30,15 +31,48 @@ import shlex
 import stat
 import subprocess
 import sys
+import threading
+import time
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 GUEST_OPERATION_TIMEOUT_SECONDS = COHORT_MAX_TIMEOUT_SECONDS + 60 * 60 + MAX_FAILED_START_ATTEMPTS * 4 * 20
+GUEST_PROGRESS_SECONDS = 30
 
 
 def need(value, reason):
     if not value:
         raise RuntimeError(reason)
+
+
+def guest_progress(output, started, status, **fields):
+    """Report only phase, elapsed time and the owner-private evidence path."""
+    value = {'phase':'guest-apply', 'status':status,
+             'elapsed_seconds':round(time.monotonic() - started, 3),
+             'private_log':str(output), **fields}
+    try:
+        print(json.dumps(value, sort_keys=True), file=sys.stderr, flush=True)
+    except (BrokenPipeError, OSError):
+        # A disconnected observer must not stop an already submitted update.
+        pass
+
+
+@contextlib.contextmanager
+def guest_update_heartbeat(output, started):
+    stopped = threading.Event()
+    guest_progress(output, started, 'started')
+
+    def heartbeat():
+        while not stopped.wait(GUEST_PROGRESS_SECONDS):
+            guest_progress(output, started, 'running')
+
+    watcher = threading.Thread(target=heartbeat, daemon=True)
+    watcher.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        watcher.join(timeout=1)
 
 
 def sha(raw):
@@ -445,13 +479,24 @@ def apply_plan(args):
     verify_prepared_remote(plan, argv, args.output)
     guest_source = read_public(HERE / 'taira_update_guest.py')
     payload = guest_source + b'\napply_locked(' + repr(plan).encode() + b',' + repr(capacity_source(plan)).encode() + b')\n'
+    started = time.monotonic()
     with (args.output / 'stdout.json').open('xb') as out, (args.output / 'stderr.log').open('xb') as err:
+        os.fchmod(out.fileno(), 0o600)
+        os.fchmod(err.fileno(), 0o600)
         # Bound the complete guest operation beyond its individual preflight,
         # stop/start, progress-bounded catch-up, doctor and final observation budgets.
-        process = subprocess.run(argv, input=payload, stdout=out, stderr=err,
-                                 timeout=GUEST_OPERATION_TIMEOUT_SECONDS)
+        try:
+            with guest_update_heartbeat(args.output, started):
+                process = subprocess.run(argv, input=payload, stdout=out, stderr=err,
+                                         timeout=GUEST_OPERATION_TIMEOUT_SECONDS)
+        except Exception as error:
+            guest_progress(args.output, started, 'failed', error_type=type(error).__name__)
+            raise
     write_new(args.output / 'exit.json', json.dumps({'exit_code': process.returncode}).encode())
-    need(process.returncode == 0, 'guest update failed; inspect owner-private attempt, never blindly reapply')
+    if process.returncode != 0:
+        guest_progress(args.output, started, 'failed', exit_code=process.returncode)
+    need(process.returncode == 0, 'guest update failed; inspect owner-private attempt '
+         + str(args.output) + ', never blindly reapply')
     result = json.loads(read_public(args.output / 'stdout.json'))
     need(result.get('runtime_update_complete') is True and result.get('commit') == plan['commit']
          and result.get('network_id') == plan['network_id']

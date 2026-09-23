@@ -660,6 +660,77 @@ impl Canary<'_> {
             proved_height.ok_or_else(|| eyre!("missing native canary proof receipt"))?,
         ))
     }
+
+    fn assert_committed_prepared_replay(
+        &self,
+        operation: &str,
+        client: &iroha::client::Client,
+    ) -> Result<()> {
+        let envelope_path = self.directory.join(format!("{operation}.prepared.json"));
+        let envelope: Value = json::from_slice(&fs::read(&envelope_path)?)?;
+        let prepared_operation = field(&envelope, "operation")?;
+        let prepared = field(prepared_operation, "envelope")?;
+        let (response, transaction_hash_hex) = match operation {
+            "onboarding" => {
+                ensure!(
+                    text(prepared_operation, "kind")? == "onboarding_prepared",
+                    "retained onboarding envelope has the wrong operation"
+                );
+                let prepared: iroha::client::AccountOnboardingPreparedTransactionV1 =
+                    json::from_value(prepared.clone())?;
+                let token = fs::read_to_string(self.directory.join("runtime/onboarding.token"))?;
+                let response = client.post_prepared_account_onboarding(
+                    &prepared.receipt.body.request,
+                    &prepared,
+                    &prepared.fee_payment,
+                    &token,
+                )?;
+                (response, prepared.transaction_hash_hex)
+            }
+            "faucet" => {
+                ensure!(
+                    text(prepared_operation, "kind")? == "faucet_prepared",
+                    "retained faucet envelope has the wrong operation"
+                );
+                let prepared: iroha::client::AccountFaucetPreparedTransactionV1 =
+                    json::from_value(prepared.clone())?;
+                let policy = iroha::client::AccountFaucetPolicyV1::try_new(
+                    AccountId::parse_encoded(&self.faucet[0])?,
+                    self.faucet[1].parse()?,
+                    self.faucet[2].parse()?,
+                )?;
+                let response = client.post_prepared_account_faucet(
+                    &prepared,
+                    &prepared.fee_payment,
+                    &policy,
+                )?;
+                (response, prepared.transaction_hash_hex)
+            }
+            _ => {
+                return Err(eyre!(
+                    "committed prepared replay requires onboarding or faucet"
+                ));
+            }
+        };
+        let replay_path = self
+            .directory
+            .join(format!("{operation}-committed-replay.json"));
+        private_file(&replay_path, response.body())?;
+        ensure!(
+            response.status().as_u16() == 200,
+            "committed {operation} prepared-envelope replay returned HTTP {}; retained response: {}",
+            response.status(),
+            replay_path.display()
+        );
+        let replay: Value = json::from_slice(response.body())?;
+        ensure!(
+            text(&replay, "outcome")? == "Applied"
+                && text(&replay, "transaction_hash_hex")? == transaction_hash_hex,
+            "committed {operation} replay did not return Applied for the exact retained transaction; retained response: {}",
+            replay_path.display()
+        );
+        Ok(())
+    }
 }
 
 fn install_provider_configs(
@@ -1499,6 +1570,24 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
             last_proved_height = proved_height;
             writeln!(height_write, "{proved_height}")?;
             height_write.flush()?;
+            if matches!(operation, "onboarding" | "faucet") {
+                // The SDK's synchronous HTTP client refuses a Tokio runtime
+                // thread. Replay the retained envelope on a scoped OS thread
+                // so the test still checks the exact committed transaction.
+                std::thread::scope(|scope| {
+                    scope
+                        .spawn(|| {
+                            // The network discriminant override is thread-local;
+                            // scoped workers do not inherit the Tokio task's
+                            // configured testnet profile.
+                            let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+                            canary.assert_committed_prepared_replay(operation, &clients[0])
+                        })
+                        .join()
+                        .map_err(|_| eyre!("committed prepared replay worker panicked"))?
+                })?;
+                wait_for_exact_height(&clients, proved_height, ceremony_deadline).await?;
+            }
         }
         drop(height_write);
         let status = timeout_at(ceremony_deadline, provision.wait()).await??;

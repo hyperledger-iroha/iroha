@@ -5,7 +5,7 @@ Run from a normal checkout with python3 scripts/tests/taira_update_test.py.
 import argparse
 import ast
 import base64
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import copy
 import fcntl
 import importlib.util
@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -1698,9 +1699,16 @@ class CohortProgressTests(unittest.TestCase):
         tree = ast.parse(Path(runner.__file__).read_text())
         apply = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'apply_plan')
         remote = [node for node in ast.walk(apply) if isinstance(node, ast.Call)
-                  and any(keyword.arg == 'input' and isinstance(keyword.value, ast.Name)
-                          and keyword.value.id == 'payload' for keyword in node.keywords)]
+                  and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+                  and node.func.value.id == 'subprocess' and node.func.attr == 'run']
+        self.assertFalse(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                             and isinstance(node.func.value, ast.Name)
+                             and node.func.value.id == 'subprocess' and node.func.attr == 'Popen'
+                             for node in ast.walk(apply)))
         self.assertEqual(len(remote), 1)
+        payload = next(keyword.value for keyword in remote[0].keywords if keyword.arg == 'input')
+        self.assertIsInstance(payload, ast.Name)
+        self.assertEqual(payload.id, 'payload')
         deadline = next(keyword.value for keyword in remote[0].keywords if keyword.arg == 'timeout')
         self.assertIsInstance(deadline, ast.Name)
         self.assertEqual(deadline.id, 'GUEST_OPERATION_TIMEOUT_SECONDS')
@@ -2474,6 +2482,68 @@ class StorageAdmissionTests(unittest.TestCase):
                     runner.apply_plan(args)
             self.assertEqual(admit.call_args.args[1], 'apply')
             dispatch.assert_not_called(); verify.assert_not_called()
+
+    def test_guest_apply_heartbeat_keeps_one_timeout_bound_submission_and_private_output(self):
+        for timeout in (False, True):
+            with self.subTest(timeout=timeout), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                build, _ = fixture()
+                raw_build = json.dumps(build).encode()
+                build_path = root / 'build.json'
+                build_path.write_bytes(raw_build)
+                plan = dict(self.plan, build_result_path=str(build_path),
+                            build_result_sha256=runner.sha(raw_build))
+                plan_path = root / 'plan.json'
+                raw_plan = json.dumps(plan).encode()
+                plan_path.write_bytes(raw_plan)
+                args = SimpleNamespace(plan=plan_path, plan_sha256=runner.sha(raw_plan),
+                                       output=root / 'attempt')
+                heartbeat_seen = threading.Event()
+                private = io.StringIO()
+                original_progress = runner.guest_progress
+
+                def progress(*values, **fields):
+                    original_progress(*values, **fields)
+                    if values[2] == 'running':
+                        heartbeat_seen.set()
+
+                def child(argv, **kwargs):
+                    self.assertEqual(argv, ['pinned'])
+                    self.assertEqual(kwargs['timeout'], runner.GUEST_OPERATION_TIMEOUT_SECONDS)
+                    self.assertEqual(kwargs['input'][:len((SCRIPTS / 'taira_update_guest.py').read_bytes())],
+                                     (SCRIPTS / 'taira_update_guest.py').read_bytes())
+                    kwargs['stderr'].write(b'private-secret\n')
+                    self.assertTrue(heartbeat_seen.wait(2), 'heartbeat did not fire while guest was running')
+                    if timeout:
+                        raise subprocess.TimeoutExpired(argv, kwargs['timeout'])
+                    return subprocess.CompletedProcess(argv, 17)
+
+                with patch.object(runner, 'retained_artifacts'), \
+                     patch.object(runner.retry, 'validate_ssh', return_value=['pinned']), \
+                     patch.object(runner, 'admit_storage'), \
+                     patch.object(runner, 'verify_prepared_remote'), \
+                     patch.object(runner, 'GUEST_PROGRESS_SECONDS', 0.01), \
+                     patch.object(runner, 'guest_progress', side_effect=progress), \
+                     patch.object(runner.subprocess, 'run', side_effect=child) as dispatch, \
+                     redirect_stderr(private):
+                    with self.assertRaises(subprocess.TimeoutExpired if timeout else RuntimeError):
+                        runner.apply_plan(args)
+                self.assertEqual(dispatch.call_count, 1)
+                events = [json.loads(line) for line in private.getvalue().splitlines()]
+                self.assertEqual(events[0]['status'], 'started')
+                self.assertTrue(any(row['status'] == 'running' for row in events))
+                self.assertEqual(events[-1]['status'], 'failed')
+                self.assertEqual(events[-1]['private_log'], str(args.output))
+                self.assertEqual(events[-1].get('error_type') if timeout else events[-1].get('exit_code'),
+                                 'TimeoutExpired' if timeout else 17)
+                self.assertNotIn('private-secret', private.getvalue())
+                self.assertEqual((args.output / 'stderr.log').read_bytes(), b'private-secret\n')
+                self.assertEqual(stat.S_IMODE((args.output / 'stderr.log').stat().st_mode), 0o600)
+                if timeout:
+                    self.assertFalse((args.output / 'exit.json').exists())
+                else:
+                    self.assertEqual(json.loads((args.output / 'exit.json').read_bytes()),
+                                     {'exit_code': 17})
 
     def test_storage_refusal_prevents_artifact_transfer(self):
         with tempfile.TemporaryDirectory() as directory:

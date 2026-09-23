@@ -108,10 +108,10 @@ fn release_manifest_actions_have_one_bounded_canonical_norito_surface() {
     let actions = [
         ReleaseManifestActionV1::Configure(vec![1, 2, 3]),
         ReleaseManifestActionV1::Enroll(vec![4, 5, 6]),
-        ReleaseManifestActionV1::Revoke {
+        ReleaseManifestActionV1::Revoke(ReleaseManifestRevokeV1 {
             signer: true,
             attester: false,
-        },
+        }),
         ReleaseManifestActionV1::Reserve(fixture_review()),
         ReleaseManifestActionV1::Complete(fixture_completion()),
         ReleaseManifestActionV1::Expire(ReleaseManifestExpireV1 {

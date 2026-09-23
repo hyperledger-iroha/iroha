@@ -5,11 +5,12 @@ use axum::{body::to_bytes, http::Request, response::Response};
 use http::StatusCode;
 use iroha_core::{
     block::BlockBuilder,
+    governance::manifest::LaneManifestRegistry,
     kiso::KisoHandle,
     kura::Kura,
     query::store::LiveQueryStore,
     queue::Queue,
-    state::{State, StateReadOnly, World, WorldReadOnly},
+    state::{LaneAuthorityRoute, State, StateReadOnly, World, WorldReadOnly},
     tx::{AcceptedTransaction, TransactionBuilder},
 };
 use iroha_crypto::{Algorithm, KeyPair};
@@ -17,17 +18,31 @@ use iroha_data_model::{
     Registrable,
     account::AccountId,
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
+    isi::{
+        ActivatePublicLaneValidator, RegisterPublicLaneValidator, register::RegisterPeerWithPop,
+    },
     level::Level,
-    prelude::{Account, AssetDefinition, Domain, InstructionBox, Log, Mint, SignedTransaction},
+    nexus::PublicLaneMonetaryPlanV1,
+    parameter::{Parameter, system::SumeragiNposParameters},
+    prelude::{
+        Account, Asset, AssetDefinition, Domain, InstructionBox, Log, Mint, SignedTransaction,
+    },
+    transaction::TransactionAdmissionIntent,
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::{DataSpaceId, LaneId};
+use iroha_primitives::numeric::Quantity;
 use iroha_torii::{Torii, json_entry, json_object};
 use iroha_version::codec::DecodeVersioned as _;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest as _, Sha256};
-use std::{borrow::Cow, num::NonZeroU8, sync::Arc};
+use std::{
+    borrow::Cow,
+    num::{NonZeroU8, NonZeroU64},
+    sync::Arc,
+};
 use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
@@ -137,10 +152,17 @@ fn build_faucet_test_context_with_enabled(
         .sorafs_por
         .state_dir
         .join(iroha_config::parameters::defaults::sorafs::por::VRF_STATE_FILE);
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
+    let validator_keys: Vec<_> = (0xD2..=0xD5)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("derive faucet validator fixture")
+        })
+        .collect();
+    cfg.common.key_pair = validator_keys[0].clone();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain id");
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
@@ -167,12 +189,47 @@ fn build_faucet_test_context_with_enabled(
     if register_user {
         accounts.push(Account::new(user_id.clone()).build(&authority_id));
     }
+    accounts.extend(validator_keys.iter().map(|key_pair| {
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        Account::new(account_id.clone()).build(&account_id)
+    }));
+    let staking = iroha_config::parameters::actual::NexusStaking::default();
+    let stake_asset_id: AssetDefinitionId = staking.stake_asset_id.parse().expect("stake asset");
+    let stake_domain = Domain::new(DomainId::try_new("nexus", "universal").expect("stake domain"))
+        .build(&authority_id);
+    let stake_definition = AssetDefinition::numeric(
+        stake_asset_id.clone(),
+        "Staked XOR".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority_id);
+    let escrow_id =
+        AccountId::parse_encoded(&staking.stake_escrow_account_id).expect("stake escrow");
+    accounts.push(Account::new(escrow_id.clone()).build(&escrow_id));
+    let stake_assets = validator_keys.iter().map(|key_pair| {
+        Asset::new(
+            AssetId::new(
+                stake_asset_id.clone(),
+                AccountId::new(key_pair.public_key().clone()),
+            ),
+            Quantity::from(1_000_u32),
+        )
+    });
     let chain_id = iroha_model_base::chain::ChainId::from("test-chain");
     let network_id = iroha_torii::test_utils::signed_query_network_id();
-    let mut world = World::with([domain], accounts, [asset_definition]);
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
+    let mut world = World::with_assets(
+        [domain, stake_domain],
+        accounts,
+        [asset_definition, stake_definition],
+        stake_assets,
+        [],
+    );
     {
         let mut block = world.block();
+        block.parameters.get_mut().set_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ));
         let (key_record, pulse) = signed_faucet_beacon_fixture(network_id);
         block
             .install_global_beacon_fixture_for_testing(key_record, pulse)
@@ -200,6 +257,13 @@ fn build_faucet_test_context_with_enabled(
         chain_id.clone(),
         network_id,
     ));
+    let nexus = state.nexus_snapshot();
+    let lane_manifests = Arc::new(LaneManifestRegistry::from_config(
+        &nexus.lane_catalog,
+        &nexus.governance,
+        &nexus.registry,
+    ));
+    state.install_lane_manifests(&lane_manifests);
     {
         let mut seed_instructions: Vec<InstructionBox> = vec![
             Mint::asset_quantity(
@@ -217,6 +281,40 @@ fn build_faucet_test_context_with_enabled(
                 .into(),
             );
         }
+        for key_pair in &validator_keys {
+            seed_instructions.push(
+                RegisterPeerWithPop::new(
+                    PeerId::new(key_pair.public_key().clone()),
+                    iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                        .expect("validator proof of possession"),
+                )
+                .into(),
+            );
+            let validator = AccountId::new(key_pair.public_key().clone());
+            seed_instructions.push(
+                RegisterPublicLaneValidator {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    peer_id: PeerId::new(key_pair.public_key().clone()),
+                    stake_account: validator.clone(),
+                    initial_stake: Quantity::from(1_000_u32),
+                    metadata: Default::default(),
+                    monetary_plan: PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_asset_id.clone(), validator.clone()),
+                        AssetId::new(stake_asset_id.clone(), escrow_id.clone()),
+                        Quantity::from(1_000_u32),
+                    ),
+                }
+                .into(),
+            );
+            seed_instructions.push(
+                ActivatePublicLaneValidator {
+                    lane_id: LaneId::SINGLE,
+                    validator,
+                }
+                .into(),
+            );
+        }
         fixtures::commit_genesis_fixture(
             &state,
             &authority_id,
@@ -225,6 +323,14 @@ fn build_faucet_test_context_with_enabled(
             iroha_primitives::time::TimeSource::new_system(),
         );
     }
+    let committee = state
+        .resolve_lane_committee(LaneAuthorityRoute::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ))
+        .expect("committed faucet fixture resolves real lane authority");
+    assert_eq!(committee.validators().len(), 4);
+    assert!(committee.validators().contains(&local_peer_id));
     advance_faucet_state_chain(
         &state,
         &chain_id,
@@ -233,6 +339,13 @@ fn build_faucet_test_context_with_enabled(
         4,
         "reach faucet beacon pulse height",
     );
+    let current_committee = state
+        .resolve_lane_committee(LaneAuthorityRoute::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ))
+        .expect("faucet beacon anchor retains four-validator authority");
+    assert_eq!(current_committee.validators().len(), 4);
     let pow_difficulty_bits = 5;
     let pow_scrypt_log_n = 4;
     let pow_scrypt_r = 1;
@@ -261,6 +374,7 @@ fn build_faucet_test_context_with_enabled(
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
+    queue.install_lane_manifests_with_state(&lane_manifests, &state);
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
@@ -394,6 +508,21 @@ async fn prepare_and_submit_faucet(app: &axum::Router, claim_body: String) -> Re
     let body = to_bytes(prepared.into_body(), usize::MAX)
         .await
         .expect("prepared faucet body");
+    let prepared_json: norito::json::Value =
+        norito::json::from_slice(&body).expect("prepared faucet JSON");
+    let prepared_wire = hex::decode(
+        prepared_json["signed_transaction_wire_hex"]
+            .as_str()
+            .expect("prepared transaction wire"),
+    )
+    .expect("decode prepared transaction wire");
+    let prepared_tx =
+        SignedTransaction::decode_all_versioned(&prepared_wire).expect("decode prepared tx");
+    assert_eq!(
+        prepared_tx.admission_intent(),
+        TransactionAdmissionIntent::QueuePlanSynced,
+        "prepared faucet writes require strict quorum admission"
+    );
     app.clone()
         .oneshot(faucet_post_request(
             "/v1/accounts/faucet",
@@ -401,6 +530,47 @@ async fn prepare_and_submit_faucet(app: &axum::Router, claim_body: String) -> Re
         ))
         .await
         .expect("faucet submit response")
+}
+
+async fn expect_faucet_submit_without_quorum(resp: Response) {
+    let resp = expect_status(resp, StatusCode::SERVICE_UNAVAILABLE).await;
+    let body = to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("strict faucet response body");
+    let payload: norito::json::Value =
+        norito::json::from_slice(&body).expect("strict faucet response JSON");
+    assert!(
+        payload
+            .as_object()
+            .and_then(|object| object.get("outcome"))
+            .is_none(),
+        "an uncertified faucet write must not claim Pending"
+    );
+}
+
+fn register_faucet_user_for_test(
+    state: &Arc<State>,
+    user_id: &AccountId,
+    authority_id: &AccountId,
+) {
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(u64::try_from(state.committed_height()).expect("height") + 1)
+            .expect("fixture height"),
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    tx.world_mut_for_testing().insert_account_for_testing(
+        user_id.clone(),
+        Account::new(user_id.clone()).build(authority_id),
+    );
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("install existing account without a synthetic block");
 }
 fn faucet_pow_challenge(state: &State, account_id: &AccountId, anchor_height: u64) -> [u8; 32] {
     let anchor_block = state
@@ -485,13 +655,12 @@ fn advance_faucet_chain(context: &FaucetTestContext, blocks: u64) {
     );
 }
 #[tokio::test]
-async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
+async fn accounts_faucet_prepared_transfer_fails_closed_without_quorum() {
     let FaucetTestContext {
         _data_dir,
         app,
         state,
         queue,
-        chain_id,
         asset_definition_id,
         authority_id,
         user_id,
@@ -510,42 +679,31 @@ async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
         json_entry("pow_nonce_hex", pow_nonce_hex),
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
+    let height_before = state.committed_height();
     let resp = prepare_and_submit_faucet(&app, body).await;
-    let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
-    let expected_height = u64::try_from(state.view().height())
-        .unwrap_or(0)
-        .saturating_add(1);
-    let applied = iroha_torii::test_utils::apply_queued_in_one_block(
-        &state,
-        &queue,
-        &chain_id,
-        expected_height,
-    );
-    assert!(applied > 0);
+    expect_faucet_submit_without_quorum(resp).await;
+    assert_eq!(queue.active_len(), 0);
+    assert_eq!(state.committed_height(), height_before);
     let view = state.view();
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
-    let user_asset = view
-        .world()
-        .asset(&user_asset_id)
-        .expect("user faucet asset");
-    assert_eq!(user_asset.value().as_ref().to_string(), "25000");
+    assert!(view.world().asset(&user_asset_id).is_err());
     let authority_asset_id = AssetId::new(asset_definition_id, authority_id);
     let authority_asset = view
         .world()
         .asset(&authority_asset_id)
         .expect("authority faucet asset");
-    assert_eq!(authority_asset.value().as_ref().to_string(), "25000");
+    assert_eq!(authority_asset.value().as_ref().to_string(), "50000");
     app.shutdown().await;
 }
 #[tokio::test]
-async fn accounts_faucet_registers_missing_account_before_transfer() {
+async fn accounts_faucet_prepares_registration_without_mutating_unfunded_account() {
     let FaucetTestContext {
         _data_dir,
         app,
         state,
         queue,
-        chain_id,
         asset_definition_id,
+        authority_id,
         user_id,
         pow_difficulty_bits,
         pow_scrypt_log_n,
@@ -582,6 +740,10 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
     .expect("decode prepared transaction wire");
     let prepared_tx =
         SignedTransaction::decode_all_versioned(&prepared_wire).expect("decode prepared tx");
+    assert_eq!(
+        prepared_tx.admission_intent(),
+        TransactionAdmissionIntent::QueuePlanSynced
+    );
     let marker_key: Name = iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
         .parse()
         .expect("marker metadata key");
@@ -623,30 +785,17 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
         .oneshot(faucet_post_request("/v1/accounts/faucet", prepared_body))
         .await
         .expect("faucet submit response");
-    let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
-    let expected_height = u64::try_from(state.view().height())
-        .unwrap_or(0)
-        .saturating_add(1);
-    let applied = iroha_torii::test_utils::apply_queued_in_one_block(
-        &state,
-        &queue,
-        &chain_id,
-        expected_height,
-    );
-    assert!(applied > 0);
+    expect_faucet_submit_without_quorum(resp).await;
+    assert_eq!(queue.active_len(), 0);
     let view = state.view();
-    assert!(
-        view.world().account(&user_id).is_ok(),
-        "user account should exist"
-    );
+    assert!(view.world().account(&user_id).is_err());
     let user_asset_id = AssetId::new(asset_definition_id, user_id.clone());
-    let user_asset = view
-        .world()
-        .asset(&user_asset_id)
-        .expect("user faucet asset");
-    assert_eq!(user_asset.value().as_ref().to_string(), "25000");
+    assert!(view.world().asset(&user_asset_id).is_err());
     drop(view);
 
+    // Seed only the account fixture so preparation's one-instruction form can
+    // be checked without inventing a QueuePlanSynced carrier block.
+    register_faucet_user_for_test(&state, &user_id, &authority_id);
     let (pow_anchor_height, pow_nonce_hex) = solve_faucet_pow(
         &state,
         &user_id,
@@ -685,6 +834,10 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
     let post_tx =
         SignedTransaction::decode_all_versioned(&post_wire).expect("decode post-onboarding tx");
     assert_eq!(
+        post_tx.admission_intent(),
+        TransactionAdmissionIntent::QueuePlanSynced
+    );
+    assert_eq!(
         post_tx.instructions().explicit_instructions().count(),
         1,
         "post-onboarding faucet preparation must not be interchangeable with registration"
@@ -692,13 +845,12 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
     app.shutdown().await;
 }
 #[tokio::test]
-async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
+async fn accounts_faucet_preserves_prefunded_balance_without_quorum() {
     let FaucetTestContext {
         _data_dir,
         app,
         state,
         queue,
-        chain_id,
         asset_definition_id,
         authority_id,
         user_id,
@@ -718,40 +870,30 @@ async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let resp = prepare_and_submit_faucet(&app, body).await;
-    let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
-    let expected_height = u64::try_from(state.view().height())
-        .unwrap_or(0)
-        .saturating_add(1);
-    let applied = iroha_torii::test_utils::apply_queued_in_one_block(
-        &state,
-        &queue,
-        &chain_id,
-        expected_height,
-    );
-    assert!(applied > 0);
+    expect_faucet_submit_without_quorum(resp).await;
+    assert_eq!(queue.active_len(), 0);
     let view = state.view();
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
     let user_asset = view
         .world()
         .asset(&user_asset_id)
         .expect("user faucet asset");
-    assert_eq!(user_asset.value().as_ref().to_string(), "25001");
+    assert_eq!(user_asset.value().as_ref().to_string(), "1");
     let authority_asset_id = AssetId::new(asset_definition_id, authority_id);
     let authority_asset = view
         .world()
         .asset(&authority_asset_id)
         .expect("authority faucet asset");
-    assert_eq!(authority_asset.value().as_ref().to_string(), "25000");
+    assert_eq!(authority_asset.value().as_ref().to_string(), "50000");
     app.shutdown().await;
 }
 #[tokio::test]
-async fn accounts_faucet_allows_repeated_claims_for_same_account() {
+async fn accounts_faucet_repeated_claims_do_not_spend_without_quorum() {
     let FaucetTestContext {
         _data_dir,
         app,
         state,
         queue,
-        chain_id,
         asset_definition_id,
         authority_id,
         user_id,
@@ -773,42 +915,28 @@ async fn accounts_faucet_allows_repeated_claims_for_same_account() {
         ]);
         let body = norito::json::to_json(&body).expect("serialize faucet request");
         let resp = prepare_and_submit_faucet(&app, body).await;
-        let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
-        let expected_height = u64::try_from(state.view().height())
-            .unwrap_or(0)
-            .saturating_add(1);
-        let applied = iroha_torii::test_utils::apply_queued_in_one_block(
-            &state,
-            &queue,
-            &chain_id,
-            expected_height,
-        );
-        assert!(applied > 0);
+        expect_faucet_submit_without_quorum(resp).await;
+        assert_eq!(queue.active_len(), 0);
     }
     let view = state.view();
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
-    let user_asset = view
-        .world()
-        .asset(&user_asset_id)
-        .expect("user faucet asset");
-    assert_eq!(user_asset.value().as_ref().to_string(), "50000");
+    assert!(view.world().asset(&user_asset_id).is_err());
     let authority_asset_id = AssetId::new(asset_definition_id, authority_id);
     let authority_balance = view
         .world()
         .asset(&authority_asset_id)
         .map(|asset| asset.value().as_ref().to_string())
         .unwrap_or_else(|_| "0".to_owned());
-    assert_eq!(authority_balance, "0");
+    assert_eq!(authority_balance, "50000");
     app.shutdown().await;
 }
 #[tokio::test]
-async fn accounts_faucet_accepts_alias_selector_config() {
+async fn accounts_faucet_prepares_alias_selector_config_but_needs_quorum() {
     let FaucetTestContext {
         _data_dir,
         app,
         state,
         queue,
-        chain_id,
         asset_definition_id,
         authority_id,
         user_id,
@@ -828,35 +956,22 @@ async fn accounts_faucet_accepts_alias_selector_config() {
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let resp = prepare_and_submit_faucet(&app, body).await;
-    let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
-    let expected_height = u64::try_from(state.view().height())
-        .unwrap_or(0)
-        .saturating_add(1);
-    let applied = iroha_torii::test_utils::apply_queued_in_one_block(
-        &state,
-        &queue,
-        &chain_id,
-        expected_height,
-    );
-    assert!(applied > 0);
+    expect_faucet_submit_without_quorum(resp).await;
+    assert_eq!(queue.active_len(), 0);
     let view = state.view();
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
-    let user_asset = view
-        .world()
-        .asset(&user_asset_id)
-        .expect("user faucet asset");
-    assert_eq!(user_asset.value().as_ref().to_string(), "25000");
+    assert!(view.world().asset(&user_asset_id).is_err());
     let authority_asset_id = AssetId::new(asset_definition_id, authority_id);
     let authority_asset = view
         .world()
         .asset(&authority_asset_id)
         .expect("authority faucet asset");
-    assert_eq!(authority_asset.value().as_ref().to_string(), "25000");
+    assert_eq!(authority_asset.value().as_ref().to_string(), "50000");
     app.shutdown().await;
 }
 
 #[tokio::test]
-async fn faucet_prepared_envelope_survives_pow_anchor_aging() {
+async fn faucet_prepared_envelope_aging_reaches_quorum_gate() {
     let context = build_faucet_test_context(false);
     let scrypt_params = faucet_pow_scrypt_params(
         context.pow_scrypt_log_n,
@@ -897,13 +1012,13 @@ async fn faucet_prepared_envelope_survives_pow_anchor_aging() {
         ))
         .await
         .expect("aged faucet submit response");
-    let _submitted = expect_status(submitted, StatusCode::ACCEPTED).await;
-    assert_eq!(context.queue.active_len(), 1);
+    expect_faucet_submit_without_quorum(submitted).await;
+    assert_eq!(context.queue.active_len(), 0);
     context.app.shutdown().await;
 }
 
 #[tokio::test]
-async fn faucet_submit_rejects_old_and_tampered_shapes_and_deduplicates_exact_replay() {
+async fn faucet_submit_rejects_old_tampered_and_uncertified_exact_retries() {
     let context = build_faucet_test_context(false);
     let scrypt_params = faucet_pow_scrypt_params(
         context.pow_scrypt_log_n,
@@ -943,6 +1058,18 @@ async fn faucet_submit_rejects_old_and_tampered_shapes_and_deduplicates_exact_re
         .expect("prepared faucet body");
     let prepared_json: norito::json::Value =
         norito::json::from_slice(&prepared_body).expect("prepared faucet JSON");
+    let prepared_wire = hex::decode(
+        prepared_json["signed_transaction_wire_hex"]
+            .as_str()
+            .expect("prepared transaction wire"),
+    )
+    .expect("decode prepared transaction wire");
+    let prepared_tx =
+        SignedTransaction::decode_all_versioned(&prepared_wire).expect("decode prepared tx");
+    assert_eq!(
+        prepared_tx.admission_intent(),
+        TransactionAdmissionIntent::QueuePlanSynced
+    );
     for field in [
         "transaction_hash_hex",
         "signed_transaction_wire_sha256",
@@ -976,7 +1103,7 @@ async fn faucet_submit_rejects_old_and_tampered_shapes_and_deduplicates_exact_re
         ))
         .await
         .expect("faucet submit response");
-    let _submitted = expect_status(submitted, StatusCode::ACCEPTED).await;
+    expect_faucet_submit_without_quorum(submitted).await;
     let response_loss_replay = context
         .app
         .clone()
@@ -986,55 +1113,10 @@ async fn faucet_submit_rejects_old_and_tampered_shapes_and_deduplicates_exact_re
         ))
         .await
         .expect("faucet replay response");
-    let replay = expect_status(response_loss_replay, StatusCode::OK).await;
-    let replay_body = to_bytes(replay.into_body(), usize::MAX)
-        .await
-        .expect("faucet replay body");
-    let replay_json: norito::json::Value =
-        norito::json::from_slice(&replay_body).expect("faucet replay JSON");
-    assert_eq!(replay_json["outcome"].as_str(), Some("Pending"));
-    assert_eq!(context.queue.active_len(), 1);
-
-    let expected_height = u64::try_from(context.state.view().height())
-        .unwrap_or(0)
-        .saturating_add(1);
-    assert_eq!(
-        iroha_torii::test_utils::apply_queued_in_one_block(
-            &context.state,
-            &context.queue,
-            &context.chain_id,
-            expected_height,
-        ),
-        1
-    );
-    let applied_replay = context
-        .app
-        .clone()
-        .oneshot(faucet_post_request("/v1/accounts/faucet", exact_body))
-        .await
-        .expect("applied faucet replay response");
-    let applied_replay = expect_status(applied_replay, StatusCode::OK).await;
-    let applied_body = to_bytes(applied_replay.into_body(), usize::MAX)
-        .await
-        .expect("applied replay body");
-    let applied_json: norito::json::Value =
-        norito::json::from_slice(&applied_body).expect("applied replay JSON");
-    assert_eq!(applied_json["outcome"].as_str(), Some("Applied"));
+    expect_faucet_submit_without_quorum(response_loss_replay).await;
     assert_eq!(context.queue.active_len(), 0);
     let destination = AssetId::new(context.asset_definition_id.clone(), context.user_id.clone());
-    assert_eq!(
-        context
-            .state
-            .view()
-            .world()
-            .asset(&destination)
-            .expect("funded destination")
-            .value()
-            .as_ref()
-            .to_string(),
-        "25000",
-        "exact replay must not charge or transfer twice"
-    );
+    assert!(context.state.view().world().asset(&destination).is_err());
     context.app.shutdown().await;
 }
 
@@ -1328,7 +1410,7 @@ async fn accounts_faucet_rejects_missing_pow_when_required() {
     app.shutdown().await;
 }
 #[tokio::test]
-async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
+async fn accounts_faucet_puzzle_ignores_uncertified_claim() {
     let FaucetTestContext {
         _data_dir,
         app,
@@ -1352,7 +1434,7 @@ async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
     let initial_claim_body =
         norito::json::to_json(&initial_claim_body).expect("serialize initial faucet request");
     let resp = prepare_and_submit_faucet(&app, initial_claim_body).await;
-    let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
+    expect_faucet_submit_without_quorum(resp).await;
     let resp = app
         .clone()
         .oneshot(
@@ -1375,7 +1457,7 @@ async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
         object
             .get("difficulty_bits")
             .and_then(norito::json::Value::as_u64),
-        Some(u64::from(pow_difficulty_bits.saturating_add(1)))
+        Some(u64::from(pow_difficulty_bits))
     );
     assert_eq!(
         object
@@ -1383,11 +1465,7 @@ async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
             .and_then(norito::json::Value::as_u64),
         Some(u64::try_from(state.committed_height()).expect("height fits"))
     );
-    let queued = {
-        let state_view = state.view();
-        queue.all_transactions(&state_view).count()
-    };
-    assert!(queued > 0);
+    assert_eq!(queue.active_len(), 0);
     app.shutdown().await;
 }
 

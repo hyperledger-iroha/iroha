@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     isi::sorafs::MutateSorafsReleaseManifestAuthority,
-    sorafs::release_manifest_authority::ReleaseManifestActionV1,
+    sorafs::release_manifest_authority::{ReleaseManifestActionV1, ReleaseManifestRevokeV1},
 };
 
 #[test]
@@ -11,10 +11,10 @@ fn release_manifest_authority_instruction_has_one_canonical_wire_identity() {
         deployment_id: "release-primary".into(),
         expected_control_revision: 7,
         expected_control_digest: [9; 32],
-        action: ReleaseManifestActionV1::Revoke {
+        action: ReleaseManifestActionV1::Revoke(ReleaseManifestRevokeV1 {
             signer: true,
             attester: false,
-        },
+        }),
     };
     let boxed: InstructionBox = instruction.clone().into();
     let expected = "iroha.instruction.v1::sorafs::MutateSorafsReleaseManifestAuthority";

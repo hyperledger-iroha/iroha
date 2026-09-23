@@ -605,10 +605,48 @@ class TairaPrepareTests(unittest.TestCase):
             os.write(kwargs["stdout"], b"error: fixture compiler failure\n")
             return FailedChild()
         log = self.root / "cargo.log"
-        with patch.object(release.subprocess, "Popen", side_effect=spawn):
-            with self.assertRaisesRegex(release.PrepareError, "Linux build failed"):
+        with patch.object(release.subprocess, "Popen", side_effect=spawn) as popen:
+            with self.assertRaisesRegex(release.PrepareError, "first error: error: fixture compiler failure"):
                 release.run_build(self.root, ["fixture"], {}, log)
+        popen.assert_called_once()
         self.assertEqual(log.read_bytes(), b"error: fixture compiler failure\n")
+        self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
+
+    def test_failed_build_reports_first_error_without_relaying_later_private_output(self):
+        class FailedChild:
+            pid = 123
+            def wait(self, timeout=None):
+                return 101
+            def poll(self):
+                return 101
+        transcript = (b"warning: fixture warning\n"
+                      b"\x1b[31merror[E0123]: first compile failure\x1b[0m\n"
+                      b"error: later private-secret diagnostic\n")
+        def spawn(_command, **kwargs):
+            os.write(kwargs["stdout"], transcript)
+            return FailedChild()
+        log = self.root / "cargo.log"
+        with patch.object(release.subprocess, "Popen", side_effect=spawn) as popen, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            with self.assertRaises(release.PrepareError) as caught:
+                release.run_build(self.root, ["fixture"], {}, log)
+        self.assertEqual(popen.call_count, 1)
+        self.assertIn("first error: error[E0123]: first compile failure", str(caught.exception))
+        self.assertNotIn("private-secret", str(caught.exception))
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(log.read_bytes(), transcript)
+
+    def test_first_build_error_accepts_cargo_json_and_bounds_excerpt(self):
+        log = self.root / "cargo.log"
+        diagnostic = "first compiler failure " + "x" * 400
+        log.write_text(json.dumps({"reason": "compiler-message", "message":
+                                   {"level": "warning", "message": "not the failure"}}) + "\n"
+                       + json.dumps({"reason": "compiler-message", "message":
+                                     {"level": "error", "message": diagnostic}}) + "\n")
+        excerpt = release.first_build_error(log)
+        self.assertTrue(excerpt.startswith("first compiler failure"))
+        self.assertEqual(len(excerpt), 243)
+        self.assertTrue(excerpt.endswith("..."))
 
     def test_unsigned_wrong_repository_branch_or_signer_source_is_rejected(self):
         def response(_root, *args):

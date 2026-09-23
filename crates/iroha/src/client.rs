@@ -5629,6 +5629,11 @@ pub fn verify_account_onboarding_prepared_transaction_v1(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
+    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err(eyre!(
+            "prepared onboarding transaction requires QueuePlanSynced admission"
+        ));
+    }
     validate_public_prepared_transaction_lifetime(&transaction, binding)?;
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(eyre!(
@@ -5717,6 +5722,11 @@ pub fn verify_account_faucet_prepared_transaction_v1(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
+    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err(eyre!(
+            "prepared faucet transaction requires QueuePlanSynced admission"
+        ));
+    }
     validate_public_prepared_transaction_lifetime(&transaction, binding)?;
     let expected_metadata = expected_prepared_transaction_metadata(
         binding,
@@ -28416,6 +28426,80 @@ mod tests {
         assert!(
             store.lock().expect("snapshot store").is_empty(),
             "request substitution must not dispatch submit HTTP"
+        );
+    }
+    #[test]
+    fn prepared_account_verifiers_reject_signed_ordinary_admission() {
+        let mut client = client_with_base_url(base_url());
+        let mut onboarding = onboarding_prepared_signature_fixture(&mut client);
+        let onboarding_request = onboarding.receipt.body.request.clone();
+        let onboarding_signed = client
+            .verify_account_onboarding_prepared_transaction(
+                &onboarding_request,
+                &onboarding,
+                &onboarding.receipt,
+                &onboarding.binding,
+                &onboarding.fee_payment,
+            )
+            .expect("canonical prepared onboarding uses QueuePlanSynced");
+        let onboarding_signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
+            .expect("onboarding fixture signer");
+        let ordinary_onboarding =
+            TransactionBuilder::from_payload(onboarding_signed.payload().clone())
+                .expect("rebuild onboarding payload")
+                .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+                .sign(onboarding_signer.private_key());
+        replace_onboarding_prepared_transaction(
+            &mut onboarding,
+            &ordinary_onboarding,
+            &onboarding_signer,
+        );
+        let onboarding_error = client
+            .verify_account_onboarding_prepared_transaction(
+                &onboarding_request,
+                &onboarding,
+                &onboarding.receipt,
+                &onboarding.binding,
+                &onboarding.fee_payment,
+            )
+            .expect_err("signed Ordinary onboarding must fail verification");
+        assert!(
+            onboarding_error
+                .to_string()
+                .contains("QueuePlanSynced admission")
+        );
+
+        let mut faucet = faucet_prepared_signature_fixture(&mut client);
+        let policy = faucet_policy_fixture();
+        let faucet_signed = client
+            .verify_account_faucet_prepared_transaction(
+                &faucet,
+                &faucet.claim,
+                &faucet.binding,
+                &faucet.fee_payment,
+                &policy,
+            )
+            .expect("canonical prepared faucet uses QueuePlanSynced");
+        let faucet_signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
+            .expect("faucet fixture signer");
+        let ordinary_faucet = TransactionBuilder::from_payload(faucet_signed.payload().clone())
+            .expect("rebuild faucet payload")
+            .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+            .sign(faucet_signer.private_key());
+        replace_faucet_prepared_transaction(&mut faucet, &ordinary_faucet, &faucet_signer);
+        let faucet_error = client
+            .verify_account_faucet_prepared_transaction(
+                &faucet,
+                &faucet.claim,
+                &faucet.binding,
+                &faucet.fee_payment,
+                &policy,
+            )
+            .expect_err("signed Ordinary faucet payout must fail verification");
+        assert!(
+            faucet_error
+                .to_string()
+                .contains("QueuePlanSynced admission")
         );
     }
     #[test]

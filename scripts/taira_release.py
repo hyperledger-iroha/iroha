@@ -808,10 +808,54 @@ def build_command(root: Path, target_dir: Path, cargo: str) -> list[str]:
     return command
 
 
+def first_build_error(log: Path) -> str | None:
+    """Project one bounded compiler error from a completed private Cargo log."""
+    try:
+        fd = os.open(log, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as source:
+        while raw := source.readline(256 * 1024):
+            # A malformed or enormous child line must not consume unbounded memory.
+            if not raw.endswith(b"\n"):
+                while tail := source.readline(256 * 1024):
+                    if tail.endswith(b"\n"):
+                        break
+            line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw.decode("utf-8", "replace")).strip()
+            if line.startswith("{"):
+                try:
+                    value = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                message = value.get("message") if isinstance(value, dict) else None
+                if (isinstance(value, dict)
+                        and value.get("reason") == "compiler-message"
+                        and isinstance(message, dict)
+                        and message.get("level") == "error"):
+                    line = message.get("message", "")
+                else:
+                    continue
+            elif not re.match(
+                r"^(?:error(?:\[[^]]+\])?:|(?:ld(?:\.lld)?|rust-lld|collect2|clang(?:-\d+)?|cc|gcc): error:)",
+                line,
+            ):
+                continue
+            if not isinstance(line, str):
+                continue
+            # Keep diagnostics useful without relaying control sequences or a full
+            # compiler transcript into the operator-facing failure message.
+            line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line)
+            line = " ".join("".join(char if char.isprintable() else " " for char in line).split())
+            if line:
+                return line[:240] + ("..." if len(line) > 240 else "")
+    return None
+
+
 def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
               *, lock_fd: int | None = None, lane_lock_fd: int | None = None,
               mode_lock_fd: int | None = None) -> None:
     failure = None
+    code = None
     started = time.monotonic()
     # Commit diagnostic output even on compiler failure; the result is published
     # only after a successful build and independent source/tool revalidation.
@@ -842,6 +886,14 @@ def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
         except BaseException as error:
             failure = error
     if failure is not None:
+        if code is not None and code != 0 and isinstance(failure, PrepareError):
+            try:
+                diagnostic = first_build_error(log)
+            except Exception:
+                # Diagnostics must never replace the original build failure.
+                diagnostic = None
+            if diagnostic:
+                raise PrepareError(str(failure) + "; first error: " + diagnostic) from failure
         raise failure
 
 

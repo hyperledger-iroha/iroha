@@ -2424,9 +2424,10 @@ mod tests {
         NetworkId,
         block::BlockHeader,
         kagemusha::{
-            KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
-            KagemushaHardwareCredentialV1, KagemushaHardwarePlatformClassV1,
-            KagemushaHardwareProfileV1, kagemusha_device_key_reference_v1,
+            KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+            KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1,
+            KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1,
+            kagemusha_device_key_reference_v1,
         },
     };
     use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};

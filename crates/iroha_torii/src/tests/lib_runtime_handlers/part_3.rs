@@ -5049,6 +5049,101 @@ fn canonical_queue_plan_retry_fixture_with_entrypoint(
 
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prepared_queue_plan_retry_recovers_durable_pending_after_fresh_expiry() {
+    let seed = 0x5a_u8;
+    let signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                seed.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "pending prepared retry admission authority",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (app, mut request) = incoming_proxy_submit_fixture_with_validator_signers(
+        seed,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
+    );
+    let transaction_signer =
+        checked_torii_test_ed25519_keypair(seed, "expired prepared retry signer");
+    let ToriiProxyRequestKindV1::SubmitTransaction {
+        transaction,
+        admission_binding: Some(binding),
+        ..
+    } = &mut request.request
+    else {
+        panic!("exact prepared retry fixture");
+    };
+    let TransactionEntrypoint::External(original) = transaction else {
+        panic!("prepared retry fixture has a signed external entrypoint");
+    };
+    let mut builder = TransactionBuilder::from_payload(original.payload().clone()).unwrap();
+    builder.set_creation_time(Duration::from_millis(1));
+    builder.set_ttl(Duration::from_secs(1));
+    *transaction = TransactionEntrypoint::External(builder.sign(transaction_signer.private_key()));
+    *binding = iroha_core::torii_proxy::new_queue_plan_admission_binding(
+        app.state.network_id_ref(),
+        transaction,
+        &binding.routing_plan().unwrap(),
+        binding.admission_context.clone(),
+        1,
+    )
+    .unwrap();
+    request.request_id = binding.request_id;
+    let receipts = signers
+        .iter()
+        .take(2)
+        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 1))
+        .collect();
+    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, receipts);
+    let complete = queue_plan_synced_test_complete_input(&request, &snapshot.body);
+    assert!(matches!(
+        app.state
+            .persist_classified_queue_plan_admission(
+                &complete,
+                iroha_core::state::QueuePlanAdmissionPersistenceScope::Admission,
+            )
+            .expect("persist real quorum before a carrier commits"),
+        iroha_core::state::PendingQueuePlanAdmissionPersistenceOutcome::Durable { .. }
+    ));
+    let TransactionEntrypoint::External(signed) = queue_plan_synced_test_entrypoint(&request)
+    else {
+        panic!("signed prepared retry entrypoint");
+    };
+    assert!(
+        !app.state
+            .queue_plan_admission_registry_entrypoint_present(signed.hash_as_entrypoint())
+            .unwrap()
+    );
+    assert!(matches!(
+        routing::accept_transaction_for_ingress(
+            app.state.clone(),
+            TransactionEntrypoint::External(signed.clone()),
+            &app.telemetry,
+        ),
+        Err(Error::AcceptTransaction(
+            AcceptTransactionFail::TransactionExpired { .. }
+        ))
+    ));
+    let response = routing::certified_prepared_queue_plan_response(&app, signed)
+        .await
+        .expect("authenticated retry worker")
+        .expect("durable pending certificate authorizes retry");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-entrypoint-hash"),
+        Some(signed.hash_as_entrypoint().to_string().as_str())
+    );
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-signed-transaction-hash"),
+        Some(signed.hash().to_string().as_str())
+    );
+    assert_eq!(app.queue.active_len(), 0);
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queue_plan_canonical_peer_retry_returns_original_certificate_without_fresh_admission() {
     let (mut app, request, original) = canonical_queue_plan_retry_fixture(0x61);
     let route_calls = install_counting_route_queue(&mut app, None);
