@@ -4450,8 +4450,6 @@ fn append_localnet_npos_bootstrap(
         gas_account_id,
         stake_amount,
         taira,
-        &stake_asset_id,
-        gas_account_id,
     )
     .build_raw()
 }
@@ -4503,8 +4501,6 @@ fn append_localnet_permissioned_lane_authority_bootstrap(
         escrow_account_id,
         stake_amount,
         taira,
-        &stake_asset_id,
-        escrow_account_id,
     )
     .build_raw()
 }
@@ -4516,8 +4512,6 @@ fn append_public_lane_validator_registrations(
     escrow_account_id: &AccountId,
     stake_amount: &Quantity,
     taira: bool,
-    stake_asset_id: &AssetDefinitionId,
-    escrow_account_id: &AccountId,
 ) -> GenesisBuilder {
     for &lane_id in lanes {
         builder = builder.next_transaction();

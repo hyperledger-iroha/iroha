@@ -89,7 +89,6 @@ mod host;
 #[path = "taira_public_reset_validator_config.rs"]
 mod validator_config;
 pub(crate) use host::maintenance::StoppedOwnerMaintenance;
-pub(crate) use host::{epoch_worker_process_identity, epoch_worker_process_identity_for};
 #[path = "taira_public_reset_deployment_profile.rs"]
 mod deployment_profile;
 #[path = "taira_public_reset_inputs.rs"]
