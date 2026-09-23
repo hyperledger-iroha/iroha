@@ -1039,7 +1039,7 @@ CORE_ADMISSION_STARTUP_STAGES += (("governed replay and signed snapshot restart"
 )),)
 
 CORE_ADMISSION_STARTUP_STAGES += (("paired Commit signature completion", (
-    "sumeragi::v2::tests::epoch_boundary_commit_signer_completion_verifies_bls_and_pasta_seal",
+    "sumeragi::v2_effects::tests::epoch_boundary_commit_signer_completion_verifies_bls_and_pasta_seal",
 )),)
 
 CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay geometry and deferred startup writers", (
