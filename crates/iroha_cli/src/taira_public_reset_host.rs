@@ -27,7 +27,7 @@ use super::{
     validator_operator_public_key, verify_execution_authorization,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use eyre::{Context as _, Result, eyre};
+use eyre::{Context as _, Result, ensure, eyre};
 use iroha::{
     client::{
         AccountFaucetPolicyV1, AccountFaucetPreparedTransactionV1, AccountOnboardingPlanReceiptV1,
@@ -11750,6 +11750,117 @@ fn wait_for_validator_http_readiness(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ValidatorMeshStatus {
+    blocks: u64,
+    peers: u64,
+    queue_size: u64,
+}
+
+fn parse_validator_mesh_status(body: &[u8]) -> Result<ValidatorMeshStatus> {
+    let value: norito::json::Value =
+        json::from_slice(body).wrap_err("validator /status is not canonical JSON")?;
+    let field = |name: &str| {
+        value
+            .get(name)
+            .and_then(norito::json::Value::as_u64)
+            .ok_or_else(|| eyre!("validator /status lacks numeric {name}"))
+    };
+    Ok(ValidatorMeshStatus {
+        blocks: field("blocks")?,
+        peers: field("peers")?,
+        queue_size: field("queue_size")?,
+    })
+}
+
+fn shared_drained_mesh_height(statuses: &[ValidatorMeshStatus]) -> Option<u64> {
+    let first = statuses.first()?;
+    (statuses.len() == 4
+        && first.blocks > 0
+        && statuses.iter().all(|status| {
+            status.blocks == first.blocks && status.peers == 3 && status.queue_size == 0
+        }))
+    .then_some(first.blocks)
+}
+
+/// A bound Torii listener can accept writes before its P2P admission quorum
+/// exists. Hold the first canary write until all four direct validator origins
+/// report a fully connected, drained checkpoint at one shared height.
+fn wait_for_validator_mesh(
+    origins: &[String],
+    deadline: Instant,
+    mut check_authorization: impl FnMut() -> Result<()>,
+) -> Result<u64> {
+    ensure!(
+        origins.len() == 4,
+        "validator mesh requires four direct Torii origins"
+    );
+    let urls = origins
+        .iter()
+        .map(|origin| Url::parse(origin)?.join("status"))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let http = HttpClient::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(2))
+        .build()
+        .wrap_err("failed to build validator mesh HTTP client")?;
+    let mut last = Vec::new();
+    loop {
+        check_authorization()?;
+        let mut statuses = Vec::with_capacity(4);
+        for url in &urls {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(eyre!(
+                    "four-validator mesh deadline elapsed; latest /status={last:?}"
+                ));
+            }
+            match http
+                .get(url.clone())
+                .header(ACCEPT, "application/json")
+                .timeout(Duration::from_secs(2).min(remaining))
+                .send()
+            {
+                Ok(response) if response.status() == StatusCode::OK => {
+                    let mut body = Vec::new();
+                    response
+                        .take(64 * 1024 + 1)
+                        .read_to_end(&mut body)
+                        .wrap_err("failed to read validator /status")?;
+                    ensure!(
+                        body.len() <= 64 * 1024,
+                        "validator /status exceeds mesh response bound"
+                    );
+                    statuses.push(parse_validator_mesh_status(&body)?);
+                }
+                Ok(response)
+                    if matches!(response.status().as_u16(), 408 | 429 | 502 | 503 | 504) => {}
+                Ok(response) => {
+                    return Err(eyre!(
+                        "validator /status returned permanent HTTP status {}",
+                        response.status()
+                    ));
+                }
+                Err(error) if error.is_connect() || error.is_timeout() => {}
+                Err(error) => return Err(error).wrap_err("validator /status request failed"),
+            }
+        }
+        last = statuses;
+        if let Some(height) = shared_drained_mesh_height(&last) {
+            check_authorization()?;
+            return Ok(height);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(eyre!(
+                "four-validator mesh deadline elapsed; latest /status={last:?}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(250).min(remaining));
+    }
+}
+
 #[derive(Debug)]
 struct LocalArtifactClosure {
     files: BTreeMap<(String, String), StagedArtifact>,
@@ -16106,12 +16217,27 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 let deadline = Instant::now()
                     .checked_add(Duration::from_secs(inventory.timeouts.canary_secs))
                     .ok_or_else(|| eyre!("beacon bootstrap deadline overflow"))?;
+                let origins = inventory
+                    .validator_clients
+                    .iter()
+                    .map(|client| client.probe_origin.clone())
+                    .collect::<Vec<_>>();
+                if next_mutation < 4 {
+                    wait_for_validator_mesh(&origins, deadline, || {
+                        ensure_authorization_current(self.admitted)
+                    })?;
+                }
                 self.run_beacon_prefix(
                     progress,
                     next_mutation,
                     super::recovery_ready_to_resume_beacon_activation(intent, step),
                     deadline,
                 )?;
+                // Provider activation restarts validators one at a time. A
+                // resumed canary may also begin directly at the write loop.
+                wait_for_validator_mesh(&origins, deadline, || {
+                    ensure_authorization_current(self.admitted)
+                })?;
                 for (index, kind) in inventory
                     .qualification_scope
                     .canary_kinds()
@@ -16157,11 +16283,14 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                         .iter()
                         .map(|client| client.probe_origin.clone())
                         .collect::<Vec<_>>();
+                    let restart_deadline = Instant::now()
+                        .checked_add(Duration::from_secs(inventory.timeouts.restart_secs))
+                        .ok_or_else(|| eyre!("restart mesh deadline overflow"))?;
                     let admitted = self.admitted;
                     if restart_index >= next_mutation {
                         run_restart_with_validator_http_readiness(
                             &origins,
-                            Duration::from_secs(inventory.timeouts.restart_secs),
+                            restart_deadline.saturating_duration_since(Instant::now()),
                             || ensure_authorization_current(admitted),
                             |deadline| {
                                 progress.mark_submitted(restart_index)?;
@@ -16174,6 +16303,9 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                             },
                         )?;
                     }
+                    wait_for_validator_mesh(&origins, restart_deadline, || {
+                        ensure_authorization_current(self.admitted)
+                    })?;
                     let phase = format!("restart-wave-{wave}");
                     for (offset, kind) in ["onboarding", "faucet", "write_canary"]
                         .into_iter()
@@ -18593,6 +18725,139 @@ mod tests {
             count
         });
         (origin, worker)
+    }
+
+    fn mesh_status_http_server(
+        statuses: Vec<ValidatorMeshStatus>,
+    ) -> (String, std::thread::JoinHandle<usize>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("mesh listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking mesh listener");
+        let origin = format!("http://{}/", listener.local_addr().expect("mesh address"));
+        let worker = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let count = statuses.len();
+            for status in statuses {
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "missing mesh request");
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("mesh accept failed: {error}"),
+                    }
+                };
+                stream.set_nonblocking(false).expect("blocking mesh stream");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("mesh read deadline");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = stream.read(&mut buffer).expect("mesh request");
+                    assert!(read > 0 && request.len() < 8192);
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                assert!(request.starts_with(b"GET /status HTTP/1.1\r\n"));
+                assert!(
+                    String::from_utf8_lossy(&request)
+                        .to_ascii_lowercase()
+                        .contains("accept: application/json")
+                );
+                let body = format!(
+                    "{{\"blocks\":{},\"peers\":{},\"queue_size\":{}}}",
+                    status.blocks, status.peers, status.queue_size
+                );
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .expect("mesh response");
+            }
+            count
+        });
+        (origin, worker)
+    }
+
+    #[test]
+    fn validator_mesh_waits_for_all_four_connected_and_drained_before_canary() {
+        let disconnected = ValidatorMeshStatus {
+            blocks: 8,
+            peers: 0,
+            queue_size: 0,
+        };
+        let connected = ValidatorMeshStatus {
+            blocks: 8,
+            peers: 3,
+            queue_size: 0,
+        };
+        let (origin, worker) = mesh_status_http_server(
+            [disconnected; 4]
+                .into_iter()
+                .chain([connected; 4])
+                .collect(),
+        );
+        let mut authorization_checks = 0;
+        let height = wait_for_validator_mesh(
+            &vec![origin; 4],
+            Instant::now() + Duration::from_secs(3),
+            || {
+                authorization_checks += 1;
+                Ok(())
+            },
+        )
+        .expect("mesh must become connected before the write");
+        assert_eq!(height, 8);
+        assert_eq!(worker.join().expect("mesh server"), 8);
+        assert!(authorization_checks >= 3);
+    }
+
+    #[test]
+    fn validator_mesh_requires_one_shared_nonzero_drained_height() {
+        let ready = ValidatorMeshStatus {
+            blocks: 8,
+            peers: 3,
+            queue_size: 0,
+        };
+        assert_eq!(shared_drained_mesh_height(&[ready; 4]), Some(8));
+        assert_eq!(shared_drained_mesh_height(&[ready; 3]), None);
+        assert_eq!(
+            shared_drained_mesh_height(&[
+                ready,
+                ValidatorMeshStatus { peers: 2, ..ready },
+                ready,
+                ready
+            ]),
+            None
+        );
+        assert_eq!(
+            shared_drained_mesh_height(&[
+                ready,
+                ValidatorMeshStatus { blocks: 9, ..ready },
+                ready,
+                ready
+            ]),
+            None
+        );
+        assert_eq!(
+            shared_drained_mesh_height(&[
+                ready,
+                ValidatorMeshStatus {
+                    queue_size: 1,
+                    ..ready
+                },
+                ready,
+                ready
+            ]),
+            None
+        );
+        assert!(parse_validator_mesh_status(br#"{"blocks":8,"peers":3}"#).is_err());
     }
 
     #[test]
