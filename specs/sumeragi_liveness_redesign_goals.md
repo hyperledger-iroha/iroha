@@ -20,12 +20,12 @@ memory ceiling; the historical allocator milestones below do not imply otherwise
 The production ownership requirement is unchanged: retain the actual source,
 execution, exact finality and original State/Kura/Queue owners, preserve the same
 carrier on local refusal, and publish once without rerunning execution. Cache and
-recovery markers cannot replace that owner. The consuming facade and production
-adapter candidate implement this custody path; their presence is not live
-activation or network qualification. Complete and validate the runtime handoff,
-original Apply settlement and recovery integration, preserve all protocol and
-deterministic correctness gates below, and qualify the unchanged four/seven-
-validator campaigns. No L1–L6 outcome or release is marked complete here.
+recovery markers cannot replace that owner. The current production runner connects the process-lived Native reducer,
+Decision candidate, State-owned economic execution and original publication/Apply
+settlement. This source connection does not establish network qualification.
+Validate the runtime handoff, original Apply settlement and recovery integration,
+preserve all protocol and deterministic correctness gates below, and qualify
+the unchanged four/seven-validator campaigns. No L1–L6 outcome or release is marked complete here.
 
 Current retained-execution prerequisite: [admitted Storage restoration](../docs/history/2026-09-21/admitted-storage-restoration.md) now reconstructs exact current/undo images with per-edit funding and generic borrowed history. Replacement and ordinary blocks retain one original pool and both writers inside their callback. [Publication identities](../docs/history/2026-09-21/funded-publication-identities.md) now share that original admission, retain successor storage before execution and refund old versions only after publication unlock; exact startup and writer demands include those layouts. [Scoped detached capture](../docs/history/2026-09-21/funded-detached-storage.md) now retains original prepaid journals without writers and borrows the original refund scope for reattachment; native capture/abort signals follow both writer releases. [Executing-block abandonment](../docs/history/2026-09-21/executing-block-abandonment.md) now shares the prepared pair's original writer owner through ordinary/admitted opening, replacement, execution and snapshot restore; both locks release before callbacks and actual mutex poison survives payload and wake unwind. [Native reader readiness](../docs/history/2026-09-21/native-reader-readiness.md) now binds BlockHashes refusals to the actual blocking reader mutex and retains published native notifications through retirement. [Complete component preparation](../docs/history/2026-09-21/prepared-component-retirement.md) now retains native prepared map/Cell owners and identity before transfer, with successful World/runtime/membership cleanup held through State fences and original State/Kura/Queue completion notifications retained until commit unlock. [Fully acquired carrier abort](../docs/history/2026-09-21/prepared-component-abort.md) now keeps original component cleanup through all fences on explicit abort and Drop. [Returned preparation refusals](../docs/history/2026-09-21/prepared-refusal-cleanup.md) now return original MV/runtime/TriggerSet/World cleanup through the enclosing consumer. [Prepared runtime/trigger abandonment](../docs/history/2026-09-21/prepared-aggregate-abandonment.md) now releases all sibling writers before callbacks on Drop and unwind, retaining both original capacities. [Successor hash admission](../docs/history/2026-09-21/successor-acquisition-readiness.md) now binds the actual fresh writer before callbacks and waits on the native reader mutex when reader observation is contended. [Fresh MV pair construction](../docs/history/2026-09-21/fresh-pair-acquisition.md) now owns both actual mutexes and notifications before either constructor or policy can unwind. [Cell pair custody](../docs/history/2026-09-21/cell-pair-custody.md) now retains both raw guards before cloning and keeps joint release through complete Block/CurrentReplacement abandonment, detachment and publication-lock refusal. [World acquisition and abandonment](../docs/history/2026-09-21/world-acquisition-custody.md) now retains caller-owned field slots and releases all siblings before cleanup; its candidate validation is recorded separately. The [World/TriggerSet capture candidate](../docs/history/2026-09-21/world-capture-custody.md) now retains original slots and deferred notifications through all sibling captures; its qualification is separate. The [State capture correction](../docs/history/2026-09-21/state-capture-custody.md) composes those original World slots with all runtime and membership writers through refusal and unwind. The [State acquisition candidate](../docs/history/2026-09-22/state-acquisition-custody.md) now keeps partial acquisitions and executing blocks jointly armed through refusal and unwind; its qualification remains separate. The [direct State publication candidate](../docs/history/2026-09-22/direct-state-publication.md) passes its consumer test-target check; the [retained hash correction](../docs/history/2026-09-22/retained-hash-preparation.md) passes 636 distinct Core controls, 474 native unit tests and the canonical structural gate in their captured scopes. The complete participant candidate below covers sibling preparation. Complete process-memory accounting and production qualification remain open under the scoped admission boundary above; concrete nested World payloads, native control storage, decoding and aggregate execution/restore admission are not funded by the shell pool. The original Apply service already survives startup; unfinished-height recovery must retain its original executed owner and the named allocation charges before exposing validation markers. The later State effect-lock and aggregate cleanup records describe their actual custody corrections. This does not activate the retained production validator or close L1–L6.
 
@@ -152,22 +152,23 @@ execution carrier commits its actual execution base and results. Electing
 another author from local FIFO contents cannot substitute for that immutable
 input. The shared-reducer design avoids a second consensus algorithm.
 
-This work is part of L1–L5, and `network-checkpoint-05` remains an L6 failure.
-Native counterexample/control tests record the current missing transition;
-passing those tests must not be described as a liveness fix. Replace the
-counterexample expectation with bounded certified progress after integration,
-then exercise silent/equivocating authors, partial payload delivery, competing
-locks, restart cuts, cross-lane progress and committee reconfiguration.
+This work is part of L1–L5, and the retained `network-checkpoint-05` run remains
+an L6 failure. The current shared reducer has a pre-payload timeout owner;
+source controls cover silent-author progress without a global view change.
+Those controls do not replace unchanged real-process qualification. Exercise
+silent/equivocating authors, partial payload delivery, competing locks, restart
+cuts, cross-lane progress and committee reconfiguration.
 
-The compiled native transport and the existing global candidate assembler now
-share authenticated Decision inputs, exact complete-carrier fitting and current
-State checks. Their [scoped integration evidence](../docs/history/2026-09-20/native-candidate-and-transport.md)
-does not activate the runner. The [physical ingress owner](../docs/history/2026-09-20/native-ingress-rollover.md)
-now survives global-roster reset with its original allocation, coalescing entries
-and bounded accounting. Native ingress remains closed until its process-lived
-consumer and global rollover drain are connected, the canonical prepared execution
-survives Validate through Apply, and actual publication settles the original
-native Apply effect. These remain one production cutover.
+The current production runner constructs the process-lived Native owner, polls
+it independently of ingress, consumes authenticated Decisions through the global
+candidate assembler, executes the State-owned economic source and settles the
+original Apply through actual publication. The [earlier transport evidence](../docs/history/2026-09-20/native-candidate-and-transport.md)
+and [physical ingress evidence](../docs/history/2026-09-20/native-ingress-rollover.md)
+record prerequisites; their then-inactive status is historical. Preserve the
+original allocation, bounded ingress accounting and global-rollover custody in
+this connected path. Qualify its retained Validate-to-Apply handoff, interruption
+recovery and finite-input progress on real four/seven-validator networks. This
+source connection closes no L1–L6 outcome by itself.
 
 The [publication completion seam](../docs/history/2026-09-20/native-published-apply.md)
 now binds that original Apply to actual State publication, allowing different

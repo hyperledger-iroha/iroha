@@ -31,7 +31,7 @@ const NATIVE_AMX_FAULT_FORMAT_VERSION: u64 = 1;
 const PRIVATE_SETTLEMENT_ROUTE_COMMAND_FILE: &str = "private-settlement-route-command.norito.json";
 const PRIVATE_SETTLEMENT_ROUTE_ACK_FILE: &str = "private-settlement-route-ack.norito.json";
 const PRIVATE_SETTLEMENT_ROUTE_FORMAT_VERSION: u64 = 1;
-const FORMAT_VERSION: u64 = 5;
+const FORMAT_VERSION: u64 = 6;
 const MAX_CONTROL_BYTES: usize = 64 * 1024;
 const MAX_ACK_BYTES: usize = 1024 * 1024;
 const MAX_RULES: usize = 256;
@@ -71,8 +71,38 @@ pub enum ConsensusMessageControlKind {
     CommitCertificateResponse,
     /// Global threshold-beacon partial signature.
     GlobalBeaconPartialSignature,
+    /// Native lane proposal.
+    NativeProposal,
+    /// Native lane Prepare vote.
+    NativePrepareVote,
+    /// Native lane Commit vote.
+    NativeCommitVote,
+    /// Native lane Prepare quorum certificate.
+    NativePrepareCertificate,
+    /// Native lane Commit quorum certificate.
+    NativeCommitCertificate,
+    /// Native lane timeout vote.
+    NativeTimeoutVote,
+    /// Native lane timeout certificate.
+    NativeTimeoutCertificate,
+    /// Native lane Decision carried by its distinct wire family.
+    NativeDecision,
 }
 impl ConsensusMessageControlKind {
+    const fn is_native_lane(self) -> bool {
+        matches!(
+            self,
+            Self::NativeProposal
+                | Self::NativePrepareVote
+                | Self::NativeCommitVote
+                | Self::NativePrepareCertificate
+                | Self::NativeCommitCertificate
+                | Self::NativeTimeoutVote
+                | Self::NativeTimeoutCertificate
+                | Self::NativeDecision
+        )
+    }
+
     const fn as_str(self) -> &'static str {
         match self {
             Self::Proposal => "proposal",
@@ -88,6 +118,14 @@ impl ConsensusMessageControlKind {
             Self::CommitCertificateRequest => "commit_certificate_request",
             Self::CommitCertificateResponse => "commit_certificate_response",
             Self::GlobalBeaconPartialSignature => "global_beacon_partial_signature",
+            Self::NativeProposal => "native_proposal",
+            Self::NativePrepareVote => "native_prepare_vote",
+            Self::NativeCommitVote => "native_commit_vote",
+            Self::NativePrepareCertificate => "native_prepare_certificate",
+            Self::NativeCommitCertificate => "native_commit_certificate",
+            Self::NativeTimeoutVote => "native_timeout_vote",
+            Self::NativeTimeoutCertificate => "native_timeout_certificate",
+            Self::NativeDecision => "native_decision",
         }
     }
     fn parse(value: &str) -> Result<Self> {
@@ -105,6 +143,14 @@ impl ConsensusMessageControlKind {
             "commit_certificate_request" => Ok(Self::CommitCertificateRequest),
             "commit_certificate_response" => Ok(Self::CommitCertificateResponse),
             "global_beacon_partial_signature" => Ok(Self::GlobalBeaconPartialSignature),
+            "native_proposal" => Ok(Self::NativeProposal),
+            "native_prepare_vote" => Ok(Self::NativePrepareVote),
+            "native_commit_vote" => Ok(Self::NativeCommitVote),
+            "native_prepare_certificate" => Ok(Self::NativePrepareCertificate),
+            "native_commit_certificate" => Ok(Self::NativeCommitCertificate),
+            "native_timeout_vote" => Ok(Self::NativeTimeoutVote),
+            "native_timeout_certificate" => Ok(Self::NativeTimeoutCertificate),
+            "native_decision" => Ok(Self::NativeDecision),
             _ => Err(eyre!("unknown consensus message-control kind `{value}`")),
         }
     }
@@ -343,12 +389,14 @@ pub struct ConsensusMessageControlRule {
     pub authenticated_via: PeerId,
     /// Exact v2 payload kind.
     pub kind: ConsensusMessageControlKind,
-    /// Exact block height, or zero for a payload-chunk selector whose wire
+    /// Exact global block or Native lane height, or zero for a payload-chunk selector whose wire
     /// payload has no directly encoded round.
     pub height: u64,
-    /// Exact consensus view, or zero for a payload-chunk selector or a
+    /// Exact global or Native voting view, or zero for a payload-chunk selector or a
     /// height-only commit-certificate request.
     pub view: u64,
+    /// Exact Native lane instance; required only for Native message kinds.
+    pub native_instance_id: Option<CryptoHash>,
     /// Optional exact proposal block hash.
     pub block_hash: Option<HashOf<BlockHeader>>,
     /// Exact manifest committed by a payload-chunk selector, populated after
@@ -379,6 +427,7 @@ impl ConsensusMessageControlRule {
             kind,
             height,
             view,
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: None,
             chunk_index: None,
@@ -402,6 +451,7 @@ impl ConsensusMessageControlRule {
             kind,
             height,
             view,
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: None,
             chunk_index: None,
@@ -424,6 +474,7 @@ impl ConsensusMessageControlRule {
             kind: ConsensusMessageControlKind::PayloadChunk,
             height: 0,
             view: 0,
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: Some(manifest_hash),
             chunk_index: Some(chunk_index),
@@ -448,6 +499,7 @@ impl ConsensusMessageControlRule {
             kind: ConsensusMessageControlKind::PayloadChunk,
             height: 0,
             view: 0,
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: None,
             chunk_index: Some(chunk_index),
@@ -471,6 +523,7 @@ impl ConsensusMessageControlRule {
             kind: ConsensusMessageControlKind::PayloadChunk,
             height: 0,
             view: 0,
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: Some(manifest_hash),
             chunk_index: Some(chunk_index),
@@ -500,12 +553,55 @@ impl ConsensusMessageControlRule {
             kind: ConsensusMessageControlKind::CommitCertificateRequest,
             height,
             view: 0,
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: None,
             chunk_index: None,
             proposal_height: None,
             proposal_view: None,
             action,
+        }
+    }
+    /// Construct an exact Native rule using its lane slot and voting view.
+    /// The instance is mandatory; it is never inferred from a global height.
+    pub fn native_lane(
+        sender: PeerId,
+        kind: ConsensusMessageControlKind,
+        instance_id: CryptoHash,
+        lane_height: u64,
+        voting_view: u64,
+        action: ConsensusMessageControlAction,
+    ) -> Self {
+        Self::relayed_native_lane(
+            sender.clone(),
+            sender,
+            kind,
+            instance_id,
+            lane_height,
+            voting_view,
+            action,
+        )
+    }
+    /// Construct an exact Native rule for one authenticated relay copy.
+    pub fn relayed_native_lane(
+        sender: PeerId,
+        authenticated_via: PeerId,
+        kind: ConsensusMessageControlKind,
+        instance_id: CryptoHash,
+        lane_height: u64,
+        voting_view: u64,
+        action: ConsensusMessageControlAction,
+    ) -> Self {
+        Self {
+            native_instance_id: Some(instance_id),
+            ..Self::relayed(
+                sender,
+                authenticated_via,
+                kind,
+                lane_height,
+                voting_view,
+                action,
+            )
         }
     }
     /// Further restrict this rule to one exact proposal block hash.
@@ -516,6 +612,12 @@ impl ConsensusMessageControlRule {
     }
 
     fn has_valid_coordinates(&self) -> bool {
+        if self.kind.is_native_lane() != self.native_instance_id.is_some()
+            || self.native_instance_id == Some(CryptoHash::prehashed([0; CryptoHash::LENGTH]))
+            || self.kind.is_native_lane() && self.block_hash.is_some()
+        {
+            return false;
+        }
         if self.kind == ConsensusMessageControlKind::PayloadChunk {
             let proposal_binding_valid = match (self.proposal_height, self.proposal_view) {
                 (None, None) => true,
@@ -551,6 +653,7 @@ impl ConsensusMessageControlRule {
         if self.sender != other.sender
             || self.authenticated_via != other.authenticated_via
             || self.kind != other.kind
+            || self.native_instance_id != other.native_instance_id
         {
             return false;
         }
@@ -605,6 +708,8 @@ pub struct ConsensusMessageControlHeld {
     pub height: Option<u64>,
     /// Message view, absent when the wire payload does not encode it directly.
     pub view: Option<u64>,
+    /// Exact Native lane instance carried by its signed round, when present.
+    pub native_instance_id: Option<CryptoHash>,
     /// Proposal block hash, when carried by the message.
     pub block_hash: Option<HashOf<BlockHeader>>,
     /// Exact payload manifest hash carried by the message, when present.
@@ -1357,6 +1462,12 @@ fn rule_value(rule: &ConsensusMessageControlRule) -> Value {
         ),
         ("kind", Value::from(rule.kind.as_str())),
         (
+            "native_instance_id",
+            rule.native_instance_id
+                .as_ref()
+                .map_or(Value::Null, |hash| Value::from(hash.to_string())),
+        ),
+        (
             "manifest_hash",
             rule.manifest_hash
                 .as_ref()
@@ -1782,6 +1893,7 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
             "height",
             "kind",
             "manifest_hash",
+            "native_instance_id",
             "sender",
             "sequence",
             "signer",
@@ -1803,6 +1915,12 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
         return Err(eyre!("held descriptor has a zero required integer"));
     }
     let kind = ConsensusMessageControlKind::parse(kind)?;
+    let native_instance_id = parse_optional_native_instance_id(object)?;
+    if kind.is_native_lane() != native_instance_id.is_some() {
+        return Err(eyre!(
+            "held descriptor has incompatible Native instance and kind"
+        ));
+    }
     let manifest_hash = parse_optional_canonical_manifest_hash(object, "manifest_hash")?;
     let chunk_index = optional_u64(object, "chunk_index")?
         .map(u32::try_from)
@@ -1870,6 +1988,10 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
             | ConsensusMessageControlKind::TimeoutVote
             | ConsensusMessageControlKind::PayloadChunk
             | ConsensusMessageControlKind::GlobalBeaconPartialSignature
+            | ConsensusMessageControlKind::NativeProposal
+            | ConsensusMessageControlKind::NativePrepareVote
+            | ConsensusMessageControlKind::NativeCommitVote
+            | ConsensusMessageControlKind::NativeTimeoutVote
     );
     if requires_single_signer != signer.is_some() {
         return Err(eyre!(
@@ -1904,6 +2026,18 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
     let has_manifest_hash = manifest_hash.is_some();
     let has_chunk_index = chunk_index.is_some();
     let valid_payload_shape = match kind {
+        ConsensusMessageControlKind::NativeProposal
+        | ConsensusMessageControlKind::NativePrepareVote
+        | ConsensusMessageControlKind::NativeCommitVote
+        | ConsensusMessageControlKind::NativeTimeoutVote => {
+            has_no_subject_or_execution && has_single_signer && !has_certificate_signers
+        }
+        ConsensusMessageControlKind::NativePrepareCertificate
+        | ConsensusMessageControlKind::NativeCommitCertificate
+        | ConsensusMessageControlKind::NativeTimeoutCertificate
+        | ConsensusMessageControlKind::NativeDecision => {
+            has_no_subject_or_execution && !has_single_signer && has_certificate_signers
+        }
         ConsensusMessageControlKind::Proposal => {
             subject.is_some()
                 && execution_commitment.is_none()
@@ -1980,6 +2114,7 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
         kind,
         height,
         view,
+        native_instance_id,
         block_hash,
         manifest_hash,
         chunk_index,
@@ -2012,6 +2147,7 @@ fn parse_ack_rules(object: &Map) -> Result<Vec<ConsensusMessageControlRule>> {
                 "height",
                 "kind",
                 "manifest_hash",
+                "native_instance_id",
                 "proposal_height",
                 "proposal_view",
                 "sender",
@@ -2046,6 +2182,7 @@ fn parse_ack_rules(object: &Map) -> Result<Vec<ConsensusMessageControlRule>> {
             kind,
             height: height.unwrap_or(0),
             view: view.unwrap_or(0),
+            native_instance_id: parse_optional_native_instance_id(object)?,
             block_hash: parse_optional_canonical_hash(object, "block_hash")?,
             manifest_hash,
             chunk_index,
@@ -2165,6 +2302,19 @@ fn parse_optional_canonical_manifest_hash(
         return Err(eyre!("message-control hash `{field}` is not canonical"));
     }
     Ok(Some(parsed))
+}
+fn parse_optional_native_instance_id(object: &Map) -> Result<Option<CryptoHash>> {
+    let value = object
+        .get("native_instance_id")
+        .ok_or_else(|| eyre!("message-control record lacks Native instance"))?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    let hash = parse_canonical_crypto_hash(object, "native_instance_id")?;
+    if hash == CryptoHash::prehashed([0; CryptoHash::LENGTH]) {
+        return Err(eyre!("message-control Native instance is zero"));
+    }
+    Ok(Some(hash))
 }
 fn parse_canonical_crypto_hash(object: &Map, field: &str) -> Result<CryptoHash> {
     let literal = object
@@ -2446,6 +2596,28 @@ mod tests {
             _ => (Value::Null, Value::Null),
         };
         let (height, view, subject, execution, signer, certificate_signers) = match kind {
+            ConsensusMessageControlKind::NativeProposal
+            | ConsensusMessageControlKind::NativePrepareVote
+            | ConsensusMessageControlKind::NativeCommitVote
+            | ConsensusMessageControlKind::NativeTimeoutVote => (
+                Value::from(9_u64),
+                Value::from(2_u64),
+                Value::Null,
+                Value::Null,
+                Value::from(0_u64),
+                Vec::new(),
+            ),
+            ConsensusMessageControlKind::NativePrepareCertificate
+            | ConsensusMessageControlKind::NativeCommitCertificate
+            | ConsensusMessageControlKind::NativeTimeoutCertificate
+            | ConsensusMessageControlKind::NativeDecision => (
+                Value::from(9_u64),
+                Value::from(2_u64),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                vec![Value::from(0_u64), Value::from(1_u64), Value::from(2_u64)],
+            ),
             ConsensusMessageControlKind::Proposal => (
                 Value::from(9_u64),
                 Value::from(2_u64),
@@ -2543,6 +2715,14 @@ mod tests {
             ("height", height),
             ("kind", Value::from(kind.as_str())),
             ("manifest_hash", manifest_hash),
+            (
+                "native_instance_id",
+                if kind.is_native_lane() {
+                    Value::from(CryptoHash::new(b"native descriptor instance").to_string())
+                } else {
+                    Value::Null
+                },
+            ),
             ("sender", Value::from(peer)),
             ("sequence", Value::from(1_u64)),
             ("signer", signer),
@@ -3506,6 +3686,7 @@ mod tests {
             ("execution_commitment", Value::Null),
             ("height", Value::Null),
             ("kind", Value::from("payload_chunk")),
+            ("native_instance_id", Value::Null),
             (
                 "manifest_hash",
                 Value::from(descriptor_manifest_hash().to_string()),
@@ -3699,6 +3880,14 @@ mod tests {
             ConsensusMessageControlKind::CommitCertificateRequest,
             ConsensusMessageControlKind::CommitCertificateResponse,
             ConsensusMessageControlKind::GlobalBeaconPartialSignature,
+            ConsensusMessageControlKind::NativeProposal,
+            ConsensusMessageControlKind::NativePrepareVote,
+            ConsensusMessageControlKind::NativeCommitVote,
+            ConsensusMessageControlKind::NativePrepareCertificate,
+            ConsensusMessageControlKind::NativeCommitCertificate,
+            ConsensusMessageControlKind::NativeTimeoutVote,
+            ConsensusMessageControlKind::NativeTimeoutCertificate,
+            ConsensusMessageControlKind::NativeDecision,
         ] {
             let parsed = parse_held(&held_descriptor(kind))
                 .unwrap_or_else(|error| panic!("daemon {kind:?} descriptor failed: {error:#}"));
@@ -3780,5 +3969,120 @@ mod tests {
             read_bounded_private_file(&symlink_path, MAX_ACK_BYTES, control.root_identity.owner)
                 .is_err()
         );
+    }
+    #[test]
+    fn native_rules_and_descriptors_bind_the_instance_without_global_aliases() {
+        let sender = descriptor_peer();
+        let instance = CryptoHash::new(b"native descriptor instance");
+        for kind in [
+            ConsensusMessageControlKind::NativeProposal,
+            ConsensusMessageControlKind::NativePrepareVote,
+            ConsensusMessageControlKind::NativeCommitVote,
+            ConsensusMessageControlKind::NativePrepareCertificate,
+            ConsensusMessageControlKind::NativeCommitCertificate,
+            ConsensusMessageControlKind::NativeTimeoutVote,
+            ConsensusMessageControlKind::NativeTimeoutCertificate,
+            ConsensusMessageControlKind::NativeDecision,
+        ] {
+            let rule = ConsensusMessageControlRule::native_lane(
+                sender.clone(),
+                kind,
+                instance,
+                9,
+                2,
+                ConsensusMessageControlAction::Hold,
+            );
+            assert!(rule.has_valid_coordinates());
+            let object = object_value([("rules", Value::Array(vec![rule_value(&rule)]))]);
+            assert_eq!(
+                parse_ack_rules(object.as_object().unwrap()).unwrap(),
+                vec![rule.clone()]
+            );
+            let held = parse_held(&held_descriptor(kind)).unwrap();
+            assert_eq!(held.native_instance_id, Some(instance));
+            assert_eq!((held.height, held.view), (Some(9), Some(2)));
+            let foreign = ConsensusMessageControlRule {
+                native_instance_id: Some(CryptoHash::new(b"foreign instance")),
+                ..rule.clone()
+            };
+            assert!(!rule.overlaps(&foreign));
+            for invalid in [
+                ConsensusMessageControlRule {
+                    native_instance_id: None,
+                    ..rule.clone()
+                },
+                ConsensusMessageControlRule {
+                    native_instance_id: Some(CryptoHash::prehashed([0; CryptoHash::LENGTH])),
+                    ..rule.clone()
+                },
+                ConsensusMessageControlRule {
+                    kind: ConsensusMessageControlKind::CommitVote,
+                    ..rule.clone()
+                },
+                ConsensusMessageControlRule {
+                    block_hash: Some(descriptor_subject().block_hash),
+                    ..rule.clone()
+                },
+            ] {
+                assert!(!invalid.has_valid_coordinates());
+                let encoded = object_value([("rules", Value::Array(vec![rule_value(&invalid)]))]);
+                assert!(parse_ack_rules(encoded.as_object().unwrap()).is_err());
+            }
+            for (field, value) in [
+                ("native_instance_id", Value::Null),
+                (
+                    "native_instance_id",
+                    Value::from(CryptoHash::prehashed([0; CryptoHash::LENGTH]).to_string()),
+                ),
+                ("kind", Value::from("commit_vote")),
+            ] {
+                let mut forged = held_descriptor(kind);
+                forged
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(field.to_owned(), value);
+                assert!(parse_held(&forged).is_err());
+            }
+            let digest = CryptoHash::new(b"native exact command");
+            let expected = ExpectedAck {
+                revision: 2,
+                command_digest: digest,
+                rules: std::slice::from_ref(&rule),
+                queue_capacity: DEFAULT_QUEUE_CAPACITY,
+                drain: false,
+            };
+            let mut ack = empty_ack(digest);
+            ack.rules = vec![rule.clone()];
+            assert!(ack_matches_expected(&ack, &expected));
+            ack.rules = vec![foreign];
+            assert!(!ack_matches_expected(&ack, &expected));
+        }
+        let mut global = held_descriptor(ConsensusMessageControlKind::CommitVote);
+        global.as_object_mut().unwrap().insert(
+            "native_instance_id".to_owned(),
+            Value::from(instance.to_string()),
+        );
+        assert!(
+            parse_held(&global).is_err(),
+            "global descriptors cannot claim a Native instance"
+        );
+        let relay = PeerId::new(
+            KeyPair::try_from_seed(vec![95; 32], Algorithm::Ed25519)
+                .unwrap()
+                .public_key()
+                .clone(),
+        );
+        let relayed = ConsensusMessageControlRule::relayed_native_lane(
+            sender.clone(),
+            relay.clone(),
+            ConsensusMessageControlKind::NativeDecision,
+            instance,
+            9,
+            2,
+            ConsensusMessageControlAction::Drop,
+        );
+        assert!(relayed.has_valid_coordinates());
+        assert_eq!(relayed.sender, sender);
+        assert_eq!(relayed.authenticated_via, relay);
     }
 }

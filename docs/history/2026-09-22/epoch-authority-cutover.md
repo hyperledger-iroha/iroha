@@ -299,3 +299,79 @@ stale artifacts. Current controller coverage lacks Native Control/Decision
 selectors, so existing global network cases cannot qualify Native loss/recovery.
 The bounded controller extension is being prepared separately; no network pass
 or release claim follows from the Core fixture tests.
+
+
+`checkpoint-build20` completes all nine library test builds in 84.31 seconds
+with the 7,665 listed inputs, HEAD and index unchanged. Final source/binary joins
+pass for **364/364 expanded Core review controls**, all **22/22 urgent Core
+controls**, model **435/435**, Config **651/651** and Torii **153/153**. The Core
+review retains all original 58 reported-regression controls and every QueuePlan
+control; the urgent selection includes the three repaired unpaid-accrual
+diagnostic expectations without weakening custody or post-settlement assertions.
+Original failing runs remain preserved. These captures cover their listed inputs
+and actual compiler feature closures, not every environment/compiler input.
+
+The real-network integration target is being checked separately. No daemon or
+network campaign has run in this checkpoint. Release/evidence builds must use
+the repository's release/deploy profiles, not diagnostic `local-release`, and
+the production source seal must not bypass the current active Git operation.
+Complete resource admission, successor activation and unchanged four/seven-
+validator qualification remain open; no L1–L6 or release goal is closed.
+
+
+The fresh canonical pending-membership formal regression run passes **124 tests**
+(625 deselected) in 298.33 seconds, including the original current-owner ledger
+acceptance control. `checkpoint-network-check21` checks the actual isolated
+network target successfully in 460.06 seconds with every listed source unchanged.
+HEAD/index changed independently during that check; the merge marker subsequently
+disappeared. The native-artifact source manifest now succeeds, but no clean
+release identity, sealed build or live-network result is claimed.
+
+The feature-isolated Native fault-controller extension is applied for validation:
+exact instance/height/view/phase/family selectors, one strict command/ack format
+6, and real signed Control/Decision hold/release/drop custody tests. Existing
+global selector tests and four integration descriptor fixtures migrate together;
+there is no old-format decoder. Formatting, diff whitespace and retired-codec
+gates pass. Its daemon/client test compilation and runtime are still pending.
+
+
+A fresh production-path review confirms the Native cutover is connected:
+`v2_runner` creates `NativeRunnerProcess`, the physical loop services its sources
+and polls it, the native candidate consumes driver Decisions, and the owned
+validator executes and publishes the economic source before settling the original
+lane Apply. Current status/goals now distinguish this implemented connection from
+its still-open real-process qualification. Stale inactive-module comments are not
+a reason to add a second implementation. The next Native network regression must
+establish the actual initial-author fault without racing rule installation or
+substituting the global leader for the independently selected Native leader.
+
+
+Controller build22 preserves a real feature-specific compilation failure: the
+daemon read-only-config fixture omitted `test_network_production_beacon_custody`
+from `Args`. It now supplies the same cfg-gated `false` as the other initializers,
+without changing its byte/mode/inode preservation assertions. The test-client
+controller selection passes 21/21 on build22's emitted executable; aggregate
+compilation did not pass. The `iroha3d` wrapper has zero tests and the strict
+runner refused it; actual daemon tests belong to the `irohad` library. Build23
+compiles both actual libraries and requires the repaired config control alongside
+every original global and new Native controller test. Its results are pending.
+
+
+`checkpoint-native-controller23` passes both actual library test builds in
+46.94 seconds with all listed source, HEAD and index unchanged. Final source/
+binary joins pass for **30/30 daemon controls** (every controller test plus the
+repaired read-only config fixture) and **21/21 test-client controller controls**.
+This includes all eight Native wire kinds, real signed Control/Decision custody,
+exact instance/height/view/phase/family separation, malformed-coordinate refusal
+and the existing global selector/acknowledgement cases. The updated integration
+consumer target is being checked separately. These are unit/runtime controls,
+not a four-validator packet-loss or silent-author network result.
+
+
+`checkpoint-network-check24` successfully checks the updated isolated integration
+consumer with its four strict descriptor fixture updates; captured source and Git
+metadata remain unchanged. The next build uses the normal `release` daemon profile
+and actual build metadata, without the local-fast metadata override. It will
+capture the official native-artifact workspace manifest and retain its binary
+identity. This is preparation for real-process regressions, not a clean signed
+release/source-seal claim.
