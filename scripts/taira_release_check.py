@@ -630,6 +630,7 @@ CLIENT_STAGES += (("strict native parameters response", (
 
 CLIENT_STAGES += (("canonical executed block execution commitments", (
     "client::evidence_http_tests::canonical_executed_block_reader_binds_route_wire_and_committed_evidence",
+    "client::evidence_http_tests::canonical_executed_block_reader_retries_with_fresh_account_signature",
     "client::evidence_http_tests::canonical_executed_block_reader_rejects_trailing_wire_and_wrong_carrier_hash",
     "client::evidence_http_tests::canonical_executed_block_reader_requires_authenticated_execution_commitment",
 )),)
