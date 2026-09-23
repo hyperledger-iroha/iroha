@@ -95,6 +95,9 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
     LifecycleValidateLocalWaiting,
     /// The original local-waiting dispatch re-entered the same keyed worker queue.
     LifecycleValidateLocalRequeued,
+    /// Finalized State superseded the unexecuted candidate and its exact
+    /// Waiting Validate row was durably cancelled.
+    LifecycleValidateLocalSuperseded,
     /// A missing-sidecar Validate remains parked under its immutable registration owner.
     LifecycleValidateDeferred,
     /// A registered sidecar wait is externally parked and ordinary ingress may resume.
@@ -192,6 +195,7 @@ impl ProductionLifecycleCompletionSelectionV1 {
             | Self::LifecycleValidateDeferred
             | Self::LifecycleValidateLocalWaiting
             | Self::LifecycleValidateLocalRequeued
+            | Self::LifecycleValidateLocalSuperseded
             | Self::LifecycleValidateSidecarWaiting
             | Self::LifecycleValidateSidecarWoken { .. }
             | Self::LifecycleValidateSidecarSuperseded
@@ -1167,10 +1171,57 @@ impl LaunchedProductionLifecycleV1 {
         Ok(Claim::Eligible)
     }
 
+    fn cancel_superseded_local_validate(
+        &mut self,
+        retained: RetainedLocalLifecycleValidateV1,
+    ) -> ProductionLifecycleCompletionSelectionV1 {
+        let subject = retained.dispatch_for_supersession().subject();
+        match self
+            .owner
+            .coordinator
+            .cancel_superseded_durable_validate_dispatch(
+                &mut self.owner.registry,
+                retained.dispatch_for_supersession(),
+            ) {
+            Ok(()) => {
+                self.services.retire_superseded_native_source_wait(subject);
+                retained.acknowledge_superseded();
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalSuperseded
+            }
+            Err(reason) => {
+                self.services
+                    .lifecycle_output_guard()
+                    .retain_effect_failure(reason);
+                self.pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::LocalValidate(retained));
+                self.close_output_for_restart();
+                ProductionLifecycleCompletionSelectionV1::RestartRequired
+            }
+        }
+    }
+
     fn retry_local_lifecycle_validate(
         &mut self,
         mut retained: RetainedLocalLifecycleValidateV1,
     ) -> ProductionLifecycleCompletionSelectionV1 {
+        if retained.awaits_native_source() {
+            match self
+                .services
+                .native_proposal_superseded(retained.dispatch_for_supersession().round().height)
+            {
+                Ok(Some(true)) => return self.cancel_superseded_local_validate(retained),
+                Ok(Some(false) | None) => {}
+                Err(reason) => {
+                    self.pending_lifecycle_completion =
+                        Some(PendingLifecycleCompletionV1::LocalValidate(retained));
+                    self.services
+                        .lifecycle_output_guard()
+                        .retain_effect_failure(reason);
+                    self.close_output_for_restart();
+                    return ProductionLifecycleCompletionSelectionV1::RestartRequired;
+                }
+            }
+        }
         if let Err(reason) = self.services.drive_native_source_wait(&mut retained) {
             self.pending_lifecycle_completion =
                 Some(PendingLifecycleCompletionV1::LocalValidate(retained));
@@ -1188,6 +1239,9 @@ impl LaunchedProductionLifecycleV1 {
             }
             LocalLifecycleValidateRetryV1::Requeued => {
                 ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalRequeued
+            }
+            LocalLifecycleValidateRetryV1::Superseded(retained) => {
+                self.cancel_superseded_local_validate(retained)
             }
             LocalLifecycleValidateRetryV1::RecoveryRequired(retained) => {
                 self.pending_lifecycle_completion =

@@ -90,7 +90,7 @@ struct AwaitingNativeSource {
     recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>,
     pending: Option<PendingNativeSource>,
     // Payloads retire before the original shell reservation is refunded.
-    shell_admission: CarrierShellAdmission,
+    shell_admission: Option<CarrierShellAdmission>,
 }
 
 enum NativeValidationPhase {
@@ -612,7 +612,10 @@ impl OwnedNativeCarrierValidator {
             let prepared = self.service.prepare_current_control_source_admitted(
                 &waiting.proposal,
                 &waiting.context,
-                waiting.shell_admission,
+                waiting
+                    .shell_admission
+                    .take()
+                    .expect("control source retains its original shell admission"),
             )?;
             return Self::detach_prepared(prepared);
         }
@@ -634,25 +637,21 @@ impl OwnedNativeCarrierValidator {
                 return Ok(NativeValidationPhase::AwaitingSource(waiting));
             }
             NativeLaneBatchSourcePreparationV1::ObservationChanged => {
-                return Err(LocalValidationRefusal::RecoveryRequired(
-                    "Native source observation changed before execution".into(),
-                )
-                .into());
+                return Ok(NativeValidationPhase::AwaitingSource(waiting));
+            }
+            NativeLaneBatchSourcePreparationV1::Superseded => {
+                return Err(LocalValidationRefusal::Superseded.into());
             }
         };
-        let prepared = self
-            .service
-            .prepare_native_source_admitted(
-                &waiting.proposal,
-                source,
-                waiting.context,
-                waiting.shell_admission,
-            )?
-            .ok_or_else(|| {
-                LocalValidationRefusal::RecoveryRequired(
-                    "Native source observation changed before execution".into(),
-                )
-            })?;
+        let prepared = self.service.prepare_native_source_admitted(
+            &waiting.proposal,
+            source,
+            waiting.context.clone(),
+            &mut waiting.shell_admission,
+        )?;
+        let Some(prepared) = prepared else {
+            return Ok(NativeValidationPhase::AwaitingSource(waiting));
+        };
         Self::detach_prepared(prepared)
     }
 
@@ -764,7 +763,7 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
             proposal: body.clone(),
             recovered: Vec::new(),
             pending: None,
-            shell_admission,
+            shell_admission: Some(shell_admission),
         });
         let phase = match result {
             Ok(phase) => phase,
@@ -781,6 +780,14 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                 return Err(error);
             }
             Err(error) if error.rejection_identity().is_some() => return Err(error),
+            Err(error)
+                if matches!(
+                    error.local_refusal(),
+                    Some(LocalValidationRefusal::Superseded)
+                ) =>
+            {
+                return Err(error);
+            }
             // Fatal journal/capture failure after execution must occupy the same slot:
             // a later marker attempt must never manufacture a second execution.
             Err(error) => NativeValidationPhase::Stopped {
@@ -826,6 +833,19 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                 };
                 match self.execute_source(waiting) {
                     Ok(phase) => phase,
+                    Err(error)
+                        if matches!(
+                            error.local_refusal(),
+                            Some(LocalValidationRefusal::Superseded)
+                        ) =>
+                    {
+                        *owner.phase = Some(NativeValidationPhase::Stopped {
+                            context_id,
+                            proposal_hash,
+                            reason: "superseded before Native execution".into(),
+                        });
+                        return Err((owner, LocalValidationRefusal::Superseded));
+                    }
                     Err(error) => {
                         // Execution failure is fail-stop once the descriptor is retained;
                         // it cannot release that descriptor for a second execution.
@@ -860,14 +880,16 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                 Err((owner, refusal))
             }
             NativeValidationPhase::AwaitingSource(waiting) => {
-                let pending = waiting
-                    .pending
-                    .as_ref()
-                    .expect("source recovery has exact request");
-                let refusal = LocalValidationRefusal::NativeSourceRecovery {
-                    execution_index: pending.execution_index,
-                    authenticated_source: Arc::clone(&pending.source),
-                    wake: self.service.queue.sumeragi_waker(),
+                let refusal = if let Some(pending) = waiting.pending.as_ref() {
+                    LocalValidationRefusal::NativeSourceRecovery {
+                        execution_index: pending.execution_index,
+                        authenticated_source: Arc::clone(&pending.source),
+                        wake: self.service.queue.sumeragi_waker(),
+                    }
+                } else {
+                    LocalValidationRefusal::ObservationChanged {
+                        wake: self.service.queue.sumeragi_waker(),
+                    }
                 };
                 *owner.phase = Some(NativeValidationPhase::AwaitingSource(waiting));
                 Err((owner, refusal))

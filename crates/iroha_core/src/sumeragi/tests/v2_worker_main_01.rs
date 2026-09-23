@@ -3683,6 +3683,59 @@ fn certified_fetch_success_commit_retires_backpressured_request() {
     );
 }
 #[test]
+fn block_sync_retry_retires_stalled_fanout_without_losing_signed_request() {
+    let (mut service, keys) = fixture();
+    let mut discovery = super::super::v2_block_sync::V2BlockSyncDiscovery::new(
+        service.context.clone(),
+        service.local_peer.clone(),
+        1,
+    )
+    .expect("open current-height CommitQC discovery");
+    let _ranked_tickets = install_applied_height_ranked_backpressure(&mut service);
+    let output_guard = service.lifecycle_output_guard();
+    let now = Instant::now();
+    let retry_interval = Duration::from_secs(1);
+    let mut next_attempt = now;
+    let mut request_hash = None;
+    super::super::v2_runner::drive_block_sync(
+        now,
+        &mut next_attempt,
+        retry_interval,
+        &mut request_hash,
+        &mut discovery,
+        &keys[0],
+        output_guard.as_ref(),
+        &service,
+    )
+    .expect("retain first backpressured discovery attempt");
+    let signed_hash = request_hash.expect("discovery source retains signed request");
+    let first_fifo = {
+        let pending = service.lock_pending_exact_output().unwrap();
+        pending.fanouts[0].fifo_id
+    };
+
+    super::super::v2_runner::drive_block_sync(
+        now + retry_interval,
+        &mut next_attempt,
+        retry_interval,
+        &mut request_hash,
+        &mut discovery,
+        &keys[0],
+        output_guard.as_ref(),
+        &service,
+    )
+    .expect("retry replaces the stalled transport attempt");
+    let second_fifo = {
+        let pending = service.lock_pending_exact_output().unwrap();
+        assert_eq!(pending.fanouts.len(), 1);
+        pending.fanouts[0].fifo_id
+    };
+    assert_ne!(first_fifo, second_fifo, "the old fanout must not coalesce the retry");
+    assert_eq!(request_hash, Some(signed_hash));
+    assert!(discovery.retransmit(signed_hash).is_some());
+}
+
+#[test]
 fn decided_height_retires_backpressured_block_sync_request() {
     let (mut service, keys) = fixture();
     let mut discovery = super::super::v2_block_sync::V2BlockSyncDiscovery::new(

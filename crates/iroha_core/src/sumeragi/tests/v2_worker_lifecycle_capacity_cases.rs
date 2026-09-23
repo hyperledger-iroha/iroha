@@ -1812,10 +1812,54 @@ pub(in crate::sumeragi) fn exercise_local_validate_queue_retry_for_test(
         panic!("foreign retry command")
     };
     assert_eq!(task.key, key);
+    let (error, original) = task
+        .dispatch
+        .execute(store, |_| {
+            Err::<wire::ExecutionCommitment, _>(LocalValidationRefusal::ObservationChanged {
+                wake: lane_queue.sumeragi_waker(),
+            })
+        })
+        .expect_err("changed State observation retains the original dispatch");
+    let V2BodyStoreError::LocalValidation(refusal) = error else {
+        panic!("lost observation refresh")
+    };
+    let guarded = Box::new(GuardedLifecycleValidateWorkerResultV1::deferred(
+        key,
+        original,
+        refusal,
+        Arc::clone(&output_guard),
+    ));
+    rx.complete_lifecycle_validate_result(key, guarded.result())
+        .expect("same completion index after State refresh");
+    admission.retain_completion(
+        false,
+        Some(key.lifecycle_ordinal()),
+        None,
+        None,
+        None,
+        Some(key),
+        None,
+    );
+    let completion = PreparedLifecycleValidateCompletionV1::new(guarded, Arc::clone(&rx.queue), 0)
+        .expect("retain original physical completion for refresh");
+    let retained = match completion.into_local_or_publication() {
+        Err(retained) => retained,
+        Ok(_) => panic!("an observation refresh cannot publish a validation marker"),
+    };
+    assert!(matches!(
+        retained.retry(),
+        LocalLifecycleValidateRetryV1::Requeued
+    ));
+    assert!(!output_guard.restart_required());
+    let V2IoCommand::LifecycleValidate(task) = rx.try_recv().expect("refreshed exact dispatch")
+    else {
+        panic!("State refresh changed the dispatch kind")
+    };
+    assert_eq!(task.key, key);
     let executed = task
         .dispatch
         .execute(store, |_| Ok::<_, String>(commitment))
-        .expect("the same retained dispatch executes after actual release");
+        .expect("the same retained dispatch executes after State refresh");
     rx.complete_lifecycle_validate(key, &executed)
         .expect("same completion index after retry");
     admission.retain_completion(

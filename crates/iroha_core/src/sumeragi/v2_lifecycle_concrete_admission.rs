@@ -4,7 +4,8 @@ use super::work_registry::{ConcreteLifecycleWork, RegistryPublicationError};
 use super::{
     AdmissionDecision, AdmissionRequest, CandidateAdmission, CoordinatorFault,
     LifecycleCoordinator, LifecycleDigest, LifecycleStageKind, LifecycleState, LifecycleWorkClass,
-    PredecessorScope, ProductionLifecycleOwnerV1, TurnLease, TurnOutcome, WaitSource, WaitToken,
+    PredecessorScope, ProductionLifecycleOwnerV1, TerminalOutcome, TurnLease, TurnOutcome,
+    WaitSource, WaitToken,
     body_pipeline_transition::durable_validate_payload_is_exact,
     projection::AdapterEffectAdmissionError,
     schema::AttestedReadyValidateDemand,
@@ -14,8 +15,8 @@ use super::{
         ConcreteLifecycleWorkRegistry, ConcreteWorkAddress, DurableValidateCompletionAuthority,
         DurableValidateCompletionPublication, DurableValidateCompletionPublicationError,
         DurableValidateDispatch, DurableValidateExecutionError,
-        DurableValidateRegistryPublicationErrorV1, ExecutedDurableValidateDispatch,
-        LifecycleDecisionApplyDispatchProjectionErrorV1,
+        DurableValidateRegistryPublicationErrorV1, DurableValidateWaitingAuthority,
+        ExecutedDurableValidateDispatch, LifecycleDecisionApplyDispatchProjectionErrorV1,
         LifecycleDecisionApplyPendingOutputCensusErrorV1,
         LifecycleDecisionApplyPendingOutputCensusV1, LifecycleOutputRegistryJoinV1,
         LiveLifecycleDecisionApplyReconciliationAuthorityV1,
@@ -638,6 +639,39 @@ impl LifecycleCoordinator {
         *self = next;
         Ok(dispatch)
     }
+    /// Durably cancel the exact original Waiting Validate after finalized
+    /// State supersedes its unexecuted Native source. The retained worker
+    /// acknowledgement is released by the caller only after this succeeds.
+    pub(super) fn cancel_superseded_durable_validate_dispatch(
+        &mut self,
+        registry: &mut LifecycleWorkRegistryHolder,
+        dispatch: &DurableValidateDispatch,
+    ) -> Result<(), String> {
+        let authority = dispatch
+            .waiting_authority()
+            .ok_or_else(|| "superseded Validate lost its durable body payload".to_owned())?;
+        if self.fault.is_some()
+            || !waiting_durable_validate_record_is_exact(self, authority)
+            || !registry
+                .registry
+                .exactly_matches_waiting_validate_dispatch(dispatch)
+        {
+            return Err("superseded Validate changed its exact waiting owner".into());
+        }
+        let mut next = self.stage_durable_transaction();
+        next.finish_terminal(authority.address.ordinal, TerminalOutcome::Cancelled)
+            .map_err(|error| format!("{error:?}"))?;
+        self.persist_exact_staged_successor(&next)
+            .map_err(|error| error.to_string())?;
+        let retired = registry.registry.retire_waiting_validate_dispatch(dispatch);
+        debug_assert!(retired, "preflighted Validate carrier remains exact");
+        *self = next;
+        if !retired {
+            self.fault = Some(super::CoordinatorFault::DurabilityFailure);
+            return Err("durable superseded Validate retained its carrier".into());
+        }
+        Ok(())
+    }
     /// Atomically publish one exact executable Validate result across the
     /// volatile coordinator and concrete registry.
     ///
@@ -675,7 +709,7 @@ impl LifecycleCoordinator {
             .registry
             .prepare_executed_durable_validate_completion(dispatch)?;
         let authority = prepared.authority();
-        if !waiting_durable_validate_record_is_exact(self, authority) {
+        if !waiting_durable_validate_record_is_exact(self, authority.waiting_authority()) {
             return Err(
                 prepared.fail(DurableValidateCompletionPublicationError::InvalidWaitingState)
             );
@@ -1690,26 +1724,26 @@ impl ProductionLifecycleOwnerV1 {
 }
 fn waiting_durable_validate_record_is_exact(
     coordinator: &LifecycleCoordinator,
-    authority: DurableValidateCompletionAuthority,
+    authority: DurableValidateWaitingAuthority,
 ) -> bool {
-    let Some(record) = coordinator.records.get(&authority.ordinal()) else {
+    let Some(record) = coordinator.records.get(&authority.address.ordinal) else {
         return false;
     };
     let mut exact_slots = std::collections::BTreeSet::new();
-    exact_slots.insert(authority.slot());
-    let wait_token = authority.wait_token();
+    exact_slots.insert(authority.address.slot);
+    let wait_token = authority.wait_token;
     coordinator.active_lease.is_none()
-        && record.ordinal == authority.ordinal()
-        && record.owner == authority.owner()
-        && record.key == authority.lifecycle_key()
+        && record.ordinal == authority.address.ordinal
+        && record.owner == authority.address.owner
+        && record.key == authority.lifecycle_key
         && record.work_class == LifecycleWorkClass::Validate
         && record.key.phase().is_validate()
-        && record.stage == authority.lifecycle_stage()
+        && record.stage == authority.lifecycle_stage
         && record.stage.kind() == LifecycleStageKind::ValidateBody
         && record.stage.predecessor_scope() == PredecessorScope::Independent
         && record.state == LifecycleState::Waiting(wait_token)
         && record.physical_slots.len() == 1
-        && record.physical_slots.get(&authority.slot()) == Some(&authority.incumbent_digest())
+        && record.physical_slots.get(&authority.address.slot) == Some(&authority.digest)
         && record.episode.slot_universe == exact_slots
         && record.episode.consumed_slots == exact_slots
         && record.episode.frozen_predecessors.is_empty()
@@ -1764,7 +1798,8 @@ fn waiting_durable_validate_record_is_exact(
             .is_some_and(|metadata| {
                 metadata.reconstruction_source == record.owner.causal_root().digest()
                     && durable_validate_payload_is_exact(record.key, metadata.payload)
-                    && authority.matches_durable_payload(metadata.payload)
+                    && authority.payload == metadata.payload
+                    && durable_validate_payload_is_exact(authority.lifecycle_key, authority.payload)
             })
 }
 #[allow(clippy::too_many_lines)]

@@ -1336,6 +1336,18 @@ pub(crate) enum LocalValidationRefusal {
     /// An actual mutex must release before the original dispatch retries.
     #[error(transparent)]
     PhysicalBusy(BodyValidationBusy),
+    /// A concurrent State publication invalidated a read-only source snapshot.
+    /// The original validation owner retries from a fresh observation; no
+    /// semantic verdict, replacement execution owner, or restart is authorized.
+    #[error("proposal validation must refresh its State observation")]
+    ObservationChanged {
+        /// Original runner wake destination for the retained dispatch.
+        wake: std::task::Waker,
+    },
+    /// Finalized State passed this proposed carrier before its Native source
+    /// executed. The original lifecycle Validate must be durably cancelled.
+    #[error("proposal validation was superseded by finalized State")]
+    Superseded,
     /// Exact Queue ownership must release before the original dispatch retries.
     #[error("proposal validation awaits local Queue ownership release")]
     QueueRelease {

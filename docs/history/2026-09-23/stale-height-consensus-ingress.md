@@ -38,28 +38,43 @@ requires one real-network start attempt and retains peer stores and logs.
   QueuePlan carries the exact complete admitted transaction as an attachment;
   its account instruction executes in the successor. The test checks both the
   committed attachment and eventual account visibility.
-- The ignored nine-peer signed-observer pressure case remains under correction.
-  The first run exposed a fixed-view startup race; the next showed that all
-  validators had locally timed out but no timeout certificate could form while
-  authenticated remote votes were held. Moving absence queries before pausing
-  slow-reader relays removed a signed-query timeout. The latest retained run,
-  `observer-pressure-released-local4`, delivered exactly two distinct held
-  timeout votes to each of four validators (controller revision 2, zero fatal or
-  overflow). All four validators durably stored height 2 while five paused
-  observers remained at height 1. One `/status` request returned a transient
-  503 and the test's single-read witness failed before observer recovery was
-  measured. The witness now retries status errors within its original deadline;
-  the final exact-source rerun is still required.
+- The earlier nine-peer attempts exposed a fixed-view startup race, held-vote
+  quorum timing, and a transient `/status` 503 in the single-read witness.
+  Moving absence queries before pausing relays and retrying status reads within
+  the original deadline reached the actual recovery boundary. The retained
+  `observer-pressure-p2p-debug-local8` run then failed after 371.86 seconds:
+  four validators advanced to block 3 while all five observers stayed at block
+  1. Their first height-2 CommitQC requests reached validators before finality,
+  when no response existed. Later same-request retries were absorbed by the
+  incumbent exact-output fanout instead of producing fresh outbound frames.
+  Independently, the logs showed a valid complete admission publication rejected
+  by Norito's cumulative allocation limit (`2,228,224` bytes) inside its signed
+  relay. This run did not establish observer catch-up.
+- The discovery source now retires only the prior transport fanout before each
+  retry and retains the same signed request for late authenticated responses.
+  Admission-publication classification checks the raw byte-sequence count
+  against the 1 MiB complete-input cap before decoding, permits the bounded
+  owned relay graph in the cumulative allocation budget, and still enforces the
+  wire cap. The signed-relay maximum and one-byte-oversize regression passes.
+- On one unchanged `optimizations` source and joined daemon/harness binaries,
+  `observer-pressure-retry-local9` passes the real four-validator/five-observer
+  slow-reader case in 179.03 seconds. The test checks forced later-view
+  finality, all nine peers' account visibility and exact committed block hash,
+  cryptographic finality proof, and an exact 3-of-4 validator CommitQC excluding
+  observers. The same binaries pass `same-subject-retry-local10` in 89.76 seconds
+  and `distinct-subject-retry-local11` in 182.60 seconds. Each runner records one
+  real-network start attempt, one pass, unchanged source/Git inputs and unchanged
+  retained binaries.
 
-The focused Core admission test, 48 fair-ingress controls and 40 leader-wire
-controls pass on the captured production candidate. The canonical multilane
-structural gate passes on the latest complete source before the status-witness
-change. Formatting and scoped diff checks pass. These checks establish neither
-general liveness nor clean release readiness. The full four/seven-validator
-loss, reordering, backpressure, restart and final-transaction campaign remains
-open, as do two older NPoS fail-stops with unattributed initiating errors.
+The focused Core admission, retry and ingress controls pass; the current
+canonical multilane structural gate, Rust formatting and diff checks pass.
+These local development checks establish neither general liveness nor clean
+release readiness. The full unchanged four/seven-validator loss, reordering,
+backpressure, restart and final-transaction campaign remains open, as do two
+older NPoS fail-stops with unattributed initiating errors.
 
-At the time of the next build, another operation started an unmerged repository
-merge and changed unrelated Rust inputs. That attempt is intentionally excluded
-from exact-source qualification; the merge conflicts must clear before the
-status-witness build and nine-peer rerun can be trusted.
+The subsequent [Native source-observation refresh](native-source-observation-refresh.md)
+records a silent-author fail-stop on this preliminary candidate, its retained
+validation correction, a later source-joined network matrix, and one unresolved
+controlled-drain timeout. The preliminary passes above do not qualify that later
+source by themselves.
