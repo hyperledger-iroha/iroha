@@ -12,7 +12,7 @@ use crate::{
     telemetry::StateTelemetry,
 };
 use iroha_data_model::{
-    asset::{Asset, AssetDefinitionId, AssetId},
+    asset::{AssetDefinitionId, AssetId},
     block::consensus::EvidencePenaltyStatus,
     consensus::ConsensusKeyRole,
     isi::{
@@ -26,11 +26,10 @@ use iroha_data_model::{
         },
     },
     nexus::{
+        PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+        PublicLaneMonetaryRegistrationV1, PublicLaneMonetarySlashV1, PublicLaneMonetaryUnbondV1,
         PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
         PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
-        PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
-        PublicLaneRegistrationPreconditionV1, PublicLaneBondPreconditionV1,
-        PublicLaneUnbondPreconditionV1, PublicLaneSlashPreconditionV1,
         public_lane_unbonding_commitment,
     },
     prelude::AccountId,
@@ -1116,7 +1115,9 @@ fn register_public_lane_validator(
         &stake_ctx.staker_asset,
         &stake_ctx.escrow_asset,
         &initial_stake,
-        &PublicLaneMonetaryPreconditionV1::Registration(PublicLaneRegistrationPreconditionV1 { activation_height }),
+        &PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
+            activation_height,
+        }),
     )?;
     crate::smartcontracts::isi::asset::isi::execute_staking_bond_transfer(
         state_transaction,
@@ -1604,7 +1605,7 @@ impl Execute for BondPublicLaneStake {
             &stake_ctx.staker_asset,
             &stake_ctx.escrow_asset,
             &amount,
-            &PublicLaneMonetaryPreconditionV1::Bond(PublicLaneBondPreconditionV1 {
+            &PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
                 activation_height: validator_record.activation_height,
                 peer_id: validator_record.peer_id.clone(),
             }),
@@ -1865,7 +1866,7 @@ impl Execute for FinalizePublicLaneUnbond {
             &stake_ctx.escrow_asset,
             &stake_ctx.staker_asset,
             &pending.amount,
-            &PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneUnbondPreconditionV1 {
+            &PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
                 activation_height: validator_record.activation_height,
                 request_hash,
             }),
@@ -3078,7 +3079,7 @@ fn apply_slash_to_validator_inner(
             &stake_ctx.escrow_asset,
             &slash_sink_asset,
             amount,
-            &PublicLaneMonetaryPreconditionV1::Slash(PublicLaneSlashPreconditionV1 {
+            &PublicLaneMonetaryPreconditionV1::Slash(PublicLaneMonetarySlashV1 {
                 activation_height: validator_snapshot.activation_height,
                 slashable_exposure: slashable_exposure.clone(),
             }),
@@ -3443,6 +3444,11 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(1),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -3503,6 +3509,11 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(81),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -3528,6 +3539,11 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let err = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(81),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -3565,6 +3581,11 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let err = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(delegator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(82),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -3615,6 +3636,11 @@ mod tests {
         );
         seed_validator_consensus_key(&mut stx, &validator_peer, ConsensusKeyStatus::Disabled);
         let result = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(14),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -3655,6 +3681,11 @@ mod tests {
             None,
         );
         let result = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(22),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -3695,6 +3726,11 @@ mod tests {
             Some(expiry_height),
         );
         let result = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(23),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -3730,6 +3766,11 @@ mod tests {
         );
 
         let result = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(24),
             peer_id: validator_peer,
             validator: validator.clone(),
@@ -3778,6 +3819,11 @@ mod tests {
             iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let result = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -3832,6 +3878,11 @@ mod tests {
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let err = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: future_lane,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -3904,6 +3955,11 @@ mod tests {
                 .clone(),
         );
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: stake_lane,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -3914,6 +3970,11 @@ mod tests {
         .execute(&validator, &mut stx)
         .expect("stake-elected lane should accept staking");
         let err = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(delegator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: admin_lane,
             peer_id: validator_peer_id(&delegator),
             validator: delegator.clone(),
@@ -4069,6 +4130,11 @@ mod tests {
         stx.commit_topology.get_mut().clear();
         stx.commit_topology.get_mut().push(foreign_peer);
         let result = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::SINGLE,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -4116,6 +4182,11 @@ mod tests {
         let lane_id = LaneId::new(42);
 
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: peer.clone(),
             validator: validator.clone(),
@@ -4154,6 +4225,11 @@ mod tests {
             None,
         );
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(43),
             peer_id: participant_peer.clone(),
             validator: validator.clone(),
@@ -4182,6 +4258,11 @@ mod tests {
         );
         stx.commit_topology.get_mut().push(global_peer.clone());
         let global_error = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(delegator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::SINGLE,
             peer_id: global_peer,
             validator: delegator.clone(),
@@ -4211,6 +4292,11 @@ mod tests {
         stx.commit_topology.get_mut().clear();
         stx.commit_topology.get_mut().push(foreign_peer.clone());
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(43),
             peer_id: foreign_peer.clone(),
             validator: validator.clone(),
@@ -4239,6 +4325,11 @@ mod tests {
         stx.commit_topology.get_mut().clear();
         stx.commit_topology.get_mut().push(shared_peer.clone());
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(44),
             peer_id: shared_peer.clone(),
             validator: validator.clone(),
@@ -4254,6 +4345,11 @@ mod tests {
             .expect("first validator record")
             .status = PublicLaneValidatorStatus::Exited;
         let err = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(replacement.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(44),
             peer_id: shared_peer,
             validator: replacement.clone(),
@@ -4295,6 +4391,11 @@ mod tests {
             },
         );
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: shared_peer,
             validator: validator.clone(),
@@ -4329,6 +4430,11 @@ mod tests {
         seed_participant_consensus_key(&mut stx, &replacement_peer);
         let lane_id = LaneId::new(45);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -4381,6 +4487,11 @@ mod tests {
         }
         let lane_id = LaneId::new(145);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &registration_stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -4434,6 +4545,11 @@ mod tests {
         let lane_id = LaneId::new(46);
         let peer_id = validator_peer_id(&validator);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: peer_id.clone(),
             validator: validator.clone(),
@@ -4467,6 +4583,11 @@ mod tests {
         let (validator, replacement, _, _) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(47);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -4477,6 +4598,11 @@ mod tests {
         .execute(&validator, &mut stx)
         .expect("register primary validator");
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(replacement.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
@@ -4509,6 +4635,11 @@ mod tests {
         seed_participant_consensus_key(&mut stx, &validator_peer_id(&validator));
         let lane_id = LaneId::new(147);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -4598,6 +4729,11 @@ mod tests {
         seed_participant_consensus_key(&mut stx, &replacement_peer);
         let lane_id = LaneId::new(48);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -4635,6 +4771,11 @@ mod tests {
             seed_participant_consensus_key(&mut stx, &replacement_peer);
             let lane_id = LaneId::new(49 + u32::try_from(index).expect("index fits in u32"));
             RegisterPublicLaneValidator {
+                monetary_plan: fixture_registration_plan(
+                    &stx,
+                    &(validator.clone()),
+                    &(Quantity::from(1_000_u64)),
+                ),
                 lane_id,
                 peer_id: validator_peer_id(&validator),
                 validator: validator.clone(),
@@ -4685,6 +4826,11 @@ mod tests {
             .get_mut()
             .retain(|peer| peer != &validator_peer);
         let result = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(99),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -4921,6 +5067,11 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(1),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -5005,6 +5156,11 @@ mod tests {
         let (validator, _, _, _) = prepare_accounts(&mut stx);
 
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(1),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -5035,6 +5191,11 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, _delegator, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::SINGLE,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -5102,6 +5263,11 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(1),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -5324,6 +5490,11 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(1),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -5402,6 +5573,11 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(11),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -5457,6 +5633,11 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(7),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -5467,6 +5648,11 @@ mod tests {
         .execute(&validator, &mut stx)
         .expect("first validator should register");
         let second_attempt = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(replacement.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(7),
             peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
@@ -5491,6 +5677,11 @@ mod tests {
             "unexpected unregistration rejection: {unregister_error}"
         );
         let error = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(replacement.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(7),
             peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
@@ -5536,6 +5727,11 @@ mod tests {
         let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(0);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -5574,6 +5770,11 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         let error = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(replacement.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
@@ -5631,6 +5832,11 @@ mod tests {
         .expect("fund replacement stake account");
         let lane_id = LaneId::new(13);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(500_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -5678,6 +5884,13 @@ mod tests {
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
         FinalizePublicLaneUnbond {
+            monetary_plan: fixture_unbond_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                &(validator.clone()),
+                request_id,
+            ),
             lane_id,
             validator: validator.clone(),
             staker: validator.clone(),
@@ -5693,6 +5906,11 @@ mod tests {
             "zero-custody exited records must be pruned at the deactivation boundary"
         );
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(replacement.clone()),
+                &(Quantity::from(500_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
@@ -5711,9 +5929,14 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         stx.nexus.staking.max_validators = nonzero!(1u32);
-        let (validator, _delegator, escrow, _asset_def_id) = prepare_accounts(&mut stx);
+        let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(12);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -5729,9 +5952,17 @@ mod tests {
         let mut state_block = state.block(block2.as_ref().header());
         let mut stx = state_block.transaction();
         stx.nexus.staking.max_validators = nonzero!(1u32);
+        stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
         SlashPublicLaneValidator {
+            monetary_plan: fixture_slash_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                1,
+                &(Quantity::from(100_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             offence_height: 1,
@@ -5767,9 +5998,15 @@ mod tests {
         let mut state_block = state.block(block3.as_ref().header());
         let mut stx = state_block.transaction();
         stx.nexus.staking.max_validators = nonzero!(1u32);
+        stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
         let err = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -5816,6 +6053,11 @@ mod tests {
         let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(10);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -5869,6 +6111,11 @@ mod tests {
             stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
             stx.nexus.staking.slash_sink_account_id = escrow.to_string();
             let err = RegisterPublicLaneValidator {
+                monetary_plan: fixture_registration_plan(
+                    &stx,
+                    &(replacement.clone()),
+                    &(Quantity::from(1_000_u64)),
+                ),
                 lane_id,
                 peer_id: validator_peer_id(&replacement),
                 validator: replacement.clone(),
@@ -5898,6 +6145,11 @@ mod tests {
             finalize_validator_lifecycle(&mut stx)
                 .expect("finalize the elapsed exit before replacement admission");
             let error = RegisterPublicLaneValidator {
+                monetary_plan: fixture_registration_plan(
+                    &stx,
+                    &(replacement.clone()),
+                    &(Quantity::from(1_000_u64)),
+                ),
                 lane_id,
                 peer_id: validator_peer_id(&replacement),
                 validator: replacement.clone(),
@@ -5957,6 +6209,11 @@ mod tests {
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
         let (validator, _, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6030,6 +6287,11 @@ mod tests {
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
         let (validator, _, _, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6106,6 +6368,11 @@ mod tests {
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
         let (validator, _, _, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6184,6 +6451,11 @@ mod tests {
         let (validator, delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         set_test_npos_penalty_windows(&mut stx, 1, 1);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(500_u64)),
+            ),
             lane_id: LaneId::new(7),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6194,6 +6466,13 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(
+                &stx,
+                LaneId::new(7),
+                &(validator.clone()),
+                &(delegator.clone()),
+                &(Quantity::from(250_u64)),
+            ),
             lane_id: LaneId::new(7),
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -6237,6 +6516,13 @@ mod tests {
         early_tx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         early_tx.nexus.staking.slash_sink_account_id = escrow.to_string();
         let error = FinalizePublicLaneUnbond {
+            monetary_plan: fixture_unbond_plan(
+                &early_tx,
+                LaneId::new(7),
+                &(validator.clone()),
+                &(delegator.clone()),
+                Hash::new("req"),
+            ),
             lane_id: LaneId::new(7),
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -6257,6 +6543,13 @@ mod tests {
         finalize_tx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         finalize_tx.nexus.staking.slash_sink_account_id = escrow.to_string();
         FinalizePublicLaneUnbond {
+            monetary_plan: fixture_unbond_plan(
+                &finalize_tx,
+                LaneId::new(7),
+                &(validator.clone()),
+                &(delegator.clone()),
+                Hash::new("req"),
+            ),
             lane_id: LaneId::new(7),
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -6315,6 +6608,11 @@ mod tests {
         set_test_npos_penalty_windows(&mut stx, 1, 1);
         let lane_id = LaneId::new(174);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(500_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6360,6 +6658,11 @@ mod tests {
         set_test_npos_penalty_windows(&mut stx, 1, 1);
         let lane_id = LaneId::new(83);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(500_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6370,6 +6673,13 @@ mod tests {
         .execute(&validator, &mut stx)
         .expect("register validator");
         let err = BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                &(delegator.clone()),
+                &(Quantity::from(250_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -6391,6 +6701,13 @@ mod tests {
             "rejected bond must not create delegator stake"
         );
         BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                &(delegator.clone()),
+                &(Quantity::from(250_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -6433,6 +6750,13 @@ mod tests {
         .execute(&delegator, &mut stx)
         .expect("delegator can schedule own unbond");
         let err = FinalizePublicLaneUnbond {
+            monetary_plan: fixture_unbond_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                &(delegator.clone()),
+                Hash::new("authority-unbond"),
+            ),
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -6465,6 +6789,13 @@ mod tests {
         finalize_tx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         finalize_tx.nexus.staking.slash_sink_account_id = escrow.to_string();
         FinalizePublicLaneUnbond {
+            monetary_plan: fixture_unbond_plan(
+                &finalize_tx,
+                lane_id,
+                &(validator.clone()),
+                &(delegator.clone()),
+                Hash::new("authority-unbond"),
+            ),
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -6505,6 +6836,11 @@ mod tests {
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         stx.world.peers.clear();
         let res = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(42),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6560,6 +6896,11 @@ mod tests {
             .map(|asset| asset.as_ref().clone());
 
         let err = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: sibling_lane,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6616,6 +6957,11 @@ mod tests {
             iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         let _ = stx.world.peers.push(peer_id);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(2),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6652,6 +6998,11 @@ mod tests {
             iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         let _ = stx.world.peers.push(peer_id);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(3),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6670,6 +7021,11 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         let err = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(500_u64)),
+            ),
             lane_id: LaneId::new(3),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6705,6 +7061,11 @@ mod tests {
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(84);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6784,6 +7145,11 @@ mod tests {
             iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         let _ = stx.world.peers.push(peer_id);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6794,6 +7160,13 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         SlashPublicLaneValidator {
+            monetary_plan: fixture_slash_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                stx.block_height(),
+                &(Quantity::from(100_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             offence_height: stx.block_height(),
@@ -6805,6 +7178,11 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect("slash succeeds");
         let err = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(250_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6827,6 +7205,11 @@ mod tests {
         .execute(&validator, &mut stx)
         .expect("exit slashed validator");
         let err = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(250_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6867,6 +7250,11 @@ mod tests {
         let lane_id = LaneId::new(35);
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -6877,6 +7265,13 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         SlashPublicLaneValidator {
+            monetary_plan: fixture_slash_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                stx.block_height(),
+                &(Quantity::from(200_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             offence_height: stx.block_height(),
@@ -6931,6 +7326,11 @@ mod tests {
             prerelease_tx.nexus.staking.stake_escrow_account_id = escrow.to_string();
             prerelease_tx.nexus.staking.slash_sink_account_id = escrow.to_string();
             let err = RegisterPublicLaneValidator {
+                monetary_plan: fixture_registration_plan(
+                    &prerelease_tx,
+                    &(replacement.clone()),
+                    &(Quantity::from(1_000_u64)),
+                ),
                 lane_id,
                 peer_id: validator_peer_id(&replacement),
                 validator: replacement.clone(),
@@ -6966,6 +7366,11 @@ mod tests {
                 .push(replacement_peer.clone());
         }
         let error = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &post_tx,
+                &(replacement.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
@@ -7008,6 +7413,11 @@ mod tests {
         let peer_id =
             iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(31),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -7053,6 +7463,11 @@ mod tests {
         let peer_id =
             iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -7069,6 +7484,13 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                &(delegator.clone()),
+                &(Quantity::from(250_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -7134,6 +7556,11 @@ mod tests {
         )
         .expect("drain delegator funds");
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(500_u64)),
+            ),
             lane_id: LaneId::new(12),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -7144,6 +7571,13 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         let res = BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(
+                &stx,
+                LaneId::new(12),
+                &(validator.clone()),
+                &(delegator.clone()),
+                &(Quantity::from(500_u64)),
+            ),
             lane_id: LaneId::new(12),
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -7171,6 +7605,11 @@ mod tests {
             let (validator, delegator, escrow, asset_definition) = prepare_accounts(&mut stx);
             let lane_id = LaneId::new(210 + u32::try_from(index).expect("small status index"));
             RegisterPublicLaneValidator {
+                monetary_plan: fixture_registration_plan(
+                    &stx,
+                    &(validator.clone()),
+                    &(Quantity::from(500_u64)),
+                ),
                 lane_id,
                 peer_id: validator_peer_id(&validator),
                 validator: validator.clone(),
@@ -7203,6 +7642,13 @@ mod tests {
                 .clone();
 
             let error = BondPublicLaneStake {
+                monetary_plan: fixture_bond_plan(
+                    &stx,
+                    lane_id,
+                    &(validator.clone()),
+                    &(delegator.clone()),
+                    &(Quantity::from(100_u64)),
+                ),
                 lane_id,
                 validator: validator.clone(),
                 staker: delegator.clone(),
@@ -7281,6 +7727,13 @@ mod tests {
             Quantity::from(1_000_u64),
         );
         let err = BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                &(delegator.clone()),
+                &(Quantity::from(100_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -7323,6 +7776,11 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let res = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(3),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -7355,6 +7813,11 @@ mod tests {
             stx.world.peers.remove(index);
         }
         let res = RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(42),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -7377,6 +7840,11 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, delegator, _, _) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(4),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -7408,6 +7876,11 @@ mod tests {
         let (validator, delegator, _escrow, asset_definition) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(171);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -7435,6 +7908,13 @@ mod tests {
             .clone();
 
         let err = BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                &(delegator.clone()),
+                &(Quantity::from(100_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -7483,6 +7963,11 @@ mod tests {
         let (validator, _delegator, _escrow, _asset_definition) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(172);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -7557,6 +8042,11 @@ mod tests {
         let (validator, delegator, escrow, asset_definition) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(167);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -7616,6 +8106,11 @@ mod tests {
         // Route slashes to the delegator account to ensure the transfer is observable.
         stx.nexus.staking.slash_sink_account_id = delegator.to_string();
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(13),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -7626,6 +8121,13 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(
+                &stx,
+                LaneId::new(13),
+                &(validator.clone()),
+                &(delegator.clone()),
+                &(Quantity::from(500_u64)),
+            ),
             lane_id: LaneId::new(13),
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -7635,6 +8137,13 @@ mod tests {
         .execute(&delegator, &mut stx)
         .unwrap();
         SlashPublicLaneValidator {
+            monetary_plan: fixture_slash_plan(
+                &stx,
+                LaneId::new(13),
+                &(validator.clone()),
+                stx.block_height(),
+                &(Quantity::from(400_u64)),
+            ),
             lane_id: LaneId::new(13),
             validator: validator.clone(),
             offence_height: stx.block_height(),
@@ -7692,6 +8201,11 @@ mod tests {
         let lane_id = LaneId::new(173);
         stx.nexus.staking.slash_sink_account_id = delegator.to_string();
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -7702,6 +8216,13 @@ mod tests {
         .execute(&validator, &mut stx)
         .expect("register slash-order fixture validator");
         BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                &(delegator.clone()),
+                &(Quantity::from(500_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -7776,6 +8297,11 @@ mod tests {
         let lane_id = LaneId::new(175);
         set_test_npos_penalty_windows(&mut stx, 1, 1);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -7826,6 +8352,13 @@ mod tests {
             ),
         ] {
             let error = SlashPublicLaneValidator {
+                monetary_plan: fixture_slash_plan(
+                    &slash_tx,
+                    lane_id,
+                    &(validator.clone()),
+                    offence_height,
+                    &(Quantity::from(1_u64)),
+                ),
                 lane_id,
                 validator: validator.clone(),
                 offence_height,
@@ -7848,6 +8381,13 @@ mod tests {
             .expect("manual-slash fixture validator")
             .deactivation_height = Some(4);
         let error = SlashPublicLaneValidator {
+            monetary_plan: fixture_slash_plan(
+                &slash_tx,
+                lane_id,
+                &(validator.clone()),
+                4,
+                &(Quantity::from(1_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             offence_height: 4,
@@ -7869,6 +8409,13 @@ mod tests {
             .deactivation_height = None;
 
         let error = SlashPublicLaneValidator {
+            monetary_plan: fixture_slash_plan(
+                &slash_tx,
+                lane_id,
+                &(validator.clone()),
+                4,
+                &(Quantity::from(101_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             offence_height: 4,
@@ -7894,6 +8441,13 @@ mod tests {
         );
 
         SlashPublicLaneValidator {
+            monetary_plan: fixture_slash_plan(
+                &slash_tx,
+                lane_id,
+                &(validator.clone()),
+                4,
+                &(Quantity::from(100_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             offence_height: 4,
@@ -7929,6 +8483,11 @@ mod tests {
                 prepare_accounts(&mut transaction);
             transaction.nexus.staking.slash_sink_account_id = delegator.to_string();
             RegisterPublicLaneValidator {
+                monetary_plan: fixture_registration_plan(
+                    &transaction,
+                    &(validator.clone()),
+                    &(Quantity::from(1_000_u64)),
+                ),
                 lane_id,
                 peer_id: validator_peer_id(&validator),
                 validator: validator.clone(),
@@ -8086,6 +8645,18 @@ mod tests {
             Quantity::from(1_000_u64),
         );
         let err = SlashPublicLaneValidator {
+            // This deliberately malformed record never installed real custody.
+            // Its explicit nominal plan must not bypass storage-key validation.
+            monetary_plan: fixture_transfer_plan(
+                &stx,
+                escrow_asset.clone(),
+                escrow_asset.clone(),
+                Quantity::from(100_u64),
+                PublicLaneMonetaryPreconditionV1::Slash(PublicLaneMonetarySlashV1 {
+                    activation_height: 1,
+                    slashable_exposure: Quantity::from(1_000_u64),
+                }),
+            ),
             lane_id,
             validator: validator.clone(),
             offence_height: stx.block_height(),
@@ -8124,6 +8695,11 @@ mod tests {
         let lane_id = LaneId::new(171);
         stx.nexus.staking.max_slash_bps = 10_000;
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -8134,6 +8710,13 @@ mod tests {
         .execute(&validator, &mut stx)
         .expect("register validator");
         BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                &(delegator.clone()),
+                &(Quantity::from(100_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             staker: delegator.clone(),
@@ -8162,6 +8745,13 @@ mod tests {
             .public_lane_stake_shares
             .insert(share_key.clone(), malformed_share);
         let err = SlashPublicLaneValidator {
+            monetary_plan: fixture_slash_plan(
+                &stx,
+                lane_id,
+                &(validator.clone()),
+                stx.block_height(),
+                &(Quantity::from(1_100_u64)),
+            ),
             lane_id,
             validator: validator.clone(),
             offence_height: stx.block_height(),
@@ -8230,9 +8820,14 @@ mod tests {
         .execute(&_sink, &mut stx)
         .unwrap();
         ClaimPublicLaneRewards {
+            claim_plan: fixture_reward_claim_plan(
+                &stx,
+                LaneId::new(0),
+                &(validator.clone()),
+                Some(1),
+            ),
             lane_id: LaneId::new(0),
             account: validator.clone(),
-            upto_epoch: Some(1),
         }
         .execute(&validator, &mut stx)
         .unwrap();
@@ -8242,10 +8837,10 @@ mod tests {
         let claimed = view
             .world
             .public_lane_reward_claims()
-            .get(&(LaneId::new(0), validator.clone(), reward_asset.clone()))
+            .get(&(LaneId::new(0), validator.clone()))
             .copied()
             .expect("claim marker");
-        assert_eq!(claimed, 1);
+        assert_eq!(claimed.through_epoch, Some(1));
         let validator_asset = AssetId::new(asset_def_id.clone(), validator.clone());
         let balance = view
             .world
@@ -8280,9 +8875,14 @@ mod tests {
         .execute(&_sink, &mut stx)
         .unwrap();
         ClaimPublicLaneRewards {
+            claim_plan: fixture_reward_claim_plan(
+                &stx,
+                LaneId::new(11),
+                &(validator.clone()),
+                Some(1),
+            ),
             lane_id: LaneId::new(11),
             account: validator.clone(),
-            upto_epoch: Some(1),
         }
         .execute(&validator, &mut stx)
         .unwrap();
@@ -8292,9 +8892,19 @@ mod tests {
         let claimed = view
             .world
             .public_lane_reward_claims()
-            .get(&(LaneId::new(11), validator.clone(), reward_asset.clone()))
-            .copied();
-        assert_eq!(claimed, None, "unpaid dust must remain claimable");
+            .get(&(LaneId::new(11), validator.clone()))
+            .copied()
+            .expect("processed dust record");
+        assert_eq!(claimed.through_epoch, Some(1));
+        assert_eq!(
+            view.world.public_lane_reward_accruals().get(&(
+                LaneId::new(11),
+                validator.clone(),
+                reward_asset
+            )),
+            Some(&Quantity::from(50_u64)),
+            "unpaid dust must remain claimable"
+        );
         let validator_asset = AssetId::new(asset_def_id.clone(), validator.clone());
         assert!(
             view.world.assets().get(&validator_asset).is_none(),
@@ -8338,9 +8948,9 @@ mod tests {
             .get(&reward_asset)
             .cloned();
         let error = ClaimPublicLaneRewards {
+            claim_plan: fixture_reward_claim_plan(&stx, lane_id, &(validator.clone()), Some(1)),
             lane_id,
             account: validator.clone(),
-            upto_epoch: Some(1),
         }
         .execute(&validator, &mut stx)
         .expect_err("corrupt reward records must reject the entire claim");
@@ -8356,7 +8966,7 @@ mod tests {
         assert!(
             stx.world
                 .public_lane_reward_claims()
-                .get(&(lane_id, validator.clone(), reward_asset))
+                .get(&(lane_id, validator.clone()))
                 .is_none(),
             "mismatched reward row must not advance claim cursor"
         );
@@ -8392,9 +9002,14 @@ mod tests {
         .execute(&_sink, &mut stx)
         .unwrap();
         ClaimPublicLaneRewards {
+            claim_plan: fixture_reward_claim_plan(
+                &stx,
+                LaneId::new(12),
+                &(validator.clone()),
+                Some(1),
+            ),
             lane_id: LaneId::new(12),
             account: validator.clone(),
-            upto_epoch: Some(1),
         }
         .execute(&validator, &mut stx)
         .unwrap();
@@ -8404,10 +9019,10 @@ mod tests {
         let claimed = view
             .world
             .public_lane_reward_claims()
-            .get(&(LaneId::new(12), validator.clone(), reward_asset.clone()))
+            .get(&(LaneId::new(12), validator.clone()))
             .copied()
             .expect("claim marker");
-        assert_eq!(claimed, 1);
+        assert_eq!(claimed.through_epoch, Some(1));
     }
     #[test]
     fn slash_rejects_above_max_ratio() {
@@ -8418,6 +9033,11 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id: LaneId::new(5),
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -8428,6 +9048,13 @@ mod tests {
         .execute(&validator, &mut stx)
         .unwrap();
         let res = SlashPublicLaneValidator {
+            monetary_plan: fixture_slash_plan(
+                &stx,
+                LaneId::new(5),
+                &(validator.clone()),
+                stx.block_height(),
+                &(Quantity::from(200_u64)),
+            ),
             lane_id: LaneId::new(5),
             validator: validator.clone(),
             offence_height: stx.block_height(),
@@ -8552,7 +9179,9 @@ mod tests {
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let network_id = *state.network_id_ref();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 1, &roster);
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 1, &roster,
+            );
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,

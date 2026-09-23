@@ -2351,7 +2351,13 @@ impl FairV2IngressOwnershipEvidence {
     pub(crate) fn matches_message(&self, message: &BlockMessage) -> bool {
         let encoded = match message {
             BlockMessage::V2(message) => message.encode(),
-            message if message.is_lane_local() || message.is_live_auxiliary() => message.encode(),
+            message
+                if message.is_lane_local()
+                    || message.is_native_lane()
+                    || message.is_live_auxiliary() =>
+            {
+                message.encode()
+            }
             _ => return false,
         };
         self.first.encoded_bytes.as_ref() == encoded.as_slice()

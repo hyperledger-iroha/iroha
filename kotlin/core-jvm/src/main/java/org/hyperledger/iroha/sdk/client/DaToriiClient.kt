@@ -28,11 +28,6 @@ class DaToriiClient private constructor(builder: Builder) : AutoCloseable {
             DaJson.parsePolicyBundle(DaJson.parse(it, "DA proof-policy response"), "response")
         }
 
-    fun getProofPolicySnapshot(): CompletableFuture<DaModels.ProofPolicyBundle> =
-        executeGet(PROOF_POLICY_SNAPSHOT_PATH) {
-            DaJson.parsePolicyBundle(DaJson.parse(it, "DA proof-policy response"), "response")
-        }
-
     fun listCommitments(
         request: DaModels.CommitmentListRequest = DaModels.CommitmentListRequest(),
     ): CompletableFuture<DaModels.CommitmentListResponse> =
@@ -258,7 +253,6 @@ class DaToriiClient private constructor(builder: Builder) : AutoCloseable {
 
     companion object {
         private const val PROOF_POLICIES_PATH = "/v1/da/proof-policies"
-        private const val PROOF_POLICY_SNAPSHOT_PATH = "/v1/da/proof-policies/snapshot"
         private const val COMMITMENTS_PATH = "/v1/da/commitments"
         private const val COMMITMENTS_PROVE_PATH = "/v1/da/commitments/prove"
         private const val COMMITMENTS_VERIFY_PATH = "/v1/da/commitments/verify"

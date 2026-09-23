@@ -480,7 +480,7 @@ impl Kura {
                     )
                 })?
         };
-        let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;
+        let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;
         let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
         let required = self
             .kura_disk_usage_bytes()?
@@ -545,7 +545,7 @@ impl Kura {
                 used_bytes: self.kura_disk_usage_bytes()?,
                 stable_terminal_reservations,
                 shared_terminal_transient,
-                lane_publication_reservations: self.lane_publication_budget_reserved_bytes()?,
+                lane_publication_reservations: self.all_publication_budget_reserved_bytes()?,
                 certified_bundle_reservations: self.certified_bundle_capacity_reserved_bytes()?,
             });
         }
@@ -664,7 +664,7 @@ impl Kura {
                 let terminal_reservations =
                     self.autonomous_global_terminal_outcome_reserved_bytes_locked()?;
                 let lane_publication_reservations =
-                    self.lane_publication_budget_reserved_bytes()?;
+                    self.all_publication_budget_reserved_bytes()?;
                 let certified_bundle_reservations =
                     self.certified_bundle_capacity_reserved_bytes()?;
                 let required = used

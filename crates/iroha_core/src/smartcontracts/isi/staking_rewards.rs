@@ -21,9 +21,11 @@ pub(super) fn outstanding_rewards(
         for share in &record.shares {
             let claimed = world
                 .public_lane_reward_claims()
-                .get(&(key.0, share.account.clone()))
-                .and_then(|claim| claim.through_epoch);
-            if claimed.is_some_and(|epoch| epoch >= key.1) {
+                .get(&(key.0, share.account.clone()));
+            if claimed
+                .and_then(|state| state.through_epoch)
+                .is_some_and(|epoch| epoch >= key.1)
+            {
                 continue;
             }
             outstanding = quantity_add(outstanding, share.amount.clone())?;

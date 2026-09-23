@@ -49,6 +49,11 @@ fn with_loopback_connect_info(mut request: Request<Body>) -> Request<Body> {
 }
 fn configure_nexus_staking(state: &mut State, escrow: &AccountId) {
     let mut nexus = state.nexus_snapshot();
+    nexus.staking.stake_asset_id = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("nexus", "universal").expect("fixture stake domain"),
+        "xor".parse().expect("fixture stake name"),
+    )
+    .to_string();
     nexus.staking.stake_escrow_account_id = escrow.to_string();
     nexus.staking.slash_sink_account_id = escrow.to_string();
     state
@@ -189,6 +194,14 @@ fn seed_public_lane_state(
     validator: &AccountId,
     delegator: &AccountId,
 ) {
+    let nexus = state.nexus_snapshot();
+    let definition: AssetDefinitionId = nexus
+        .staking
+        .stake_asset_id
+        .parse()
+        .expect("configured fixture asset");
+    let escrow = AccountId::parse_encoded(&nexus.staking.stake_escrow_account_id)
+        .expect("configured fixture custody");
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     let manage_consensus_keys = Permission::from(CanManageConsensusKeys);
@@ -230,6 +243,11 @@ fn seed_public_lane_state(
         stake_account: validator.clone(),
         initial_stake: iroha_primitives::numeric::Quantity::from(1000_u32),
         metadata,
+        monetary_plan: iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+            AssetId::new(definition.clone(), validator.clone()),
+            AssetId::new(definition.clone(), escrow.clone()),
+            Quantity::from(1000_u32),
+        ),
     }
     .execute(validator, &mut tx)
     .expect("validator registration");
@@ -239,6 +257,19 @@ fn seed_public_lane_state(
         staker: delegator.clone(),
         amount: iroha_primitives::numeric::Quantity::from(250_u32),
         metadata: Metadata::default(),
+        monetary_plan: iroha_data_model::nexus::PublicLaneMonetaryPlanV1 {
+            network_scope: iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Genesis,
+            valid_until_height: 1,
+            source_asset: AssetId::new(definition.clone(), delegator.clone()),
+            destination_asset: AssetId::new(definition, escrow),
+            amount: Quantity::from(250_u32),
+            precondition: iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Bond(
+                iroha_data_model::nexus::PublicLaneMonetaryBondV1 {
+                    activation_height: 1,
+                    peer_id: PeerId::from(validator.expect_single_signatory().clone()),
+                },
+            ),
+        },
     }
     .execute(delegator, &mut tx)
     .expect("bond stake");

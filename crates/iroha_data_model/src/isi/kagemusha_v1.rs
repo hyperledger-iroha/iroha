@@ -271,7 +271,10 @@ impl KagemushaMintFinalityAuthorityGenerationV1 {
     }
 }
 
-/// Complete binding to an authenticated installed threshold-beacon transcript.
+/// Exact authority of an installed threshold-beacon transcript.
+///
+/// Norito encodes `session_id` before `transcript_hash`. The installed enum
+/// variant owns one length-delimited instance of this body.
 #[derive(
     Debug,
     Clone,
@@ -296,7 +299,8 @@ pub struct InstalledBeaconEpochBindingV1 {
 
 /// Exact beacon authority bound to one scheduling epoch.
 ///
-/// JSON uses the `kind` and `value` envelope; the installed value is one complete binding.
+/// JSON uses a closed `kind`/`value` envelope with `bootstrap` and `installed`
+/// tags; only `bootstrap` has a null value.
 #[derive(
     Debug,
     Clone,
@@ -335,13 +339,13 @@ pub enum BeaconEpochBindingV1 {
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
 )]
+#[repr(u8)]
 #[norito(
     tag = "kind",
     content = "value",
     rename_all = "snake_case",
     deny_unknown_fields
 )]
-#[repr(u8)]
 pub enum KagemushaMintFinalityEpochDecisionV1 {
     /// Signed genesis establishes the initial authorization.
     Genesis = 0,
@@ -399,6 +403,34 @@ pub struct KagemushaMintFinalityEpochAuthorizationV1 {
 }
 
 impl KagemushaMintFinalityEpochAuthorizationV1 {
+    /// Construct the initial scheduling authorization from the signed genesis authority.
+    ///
+    /// The network and complete key commitment come from the validated generation-zero
+    /// authority. This constructs the body; callers still authenticate the signed genesis.
+    ///
+    /// # Errors
+    /// Rejects invalid authorities, nonzero generations, and an empty height interval.
+    pub fn genesis(
+        authority: &KagemushaMintFinalityAuthorityGenerationV1,
+        last_height: u64,
+    ) -> Result<Self, KagemushaIsiValidationErrorV1> {
+        let authorization = Self {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id: authority.network_id,
+            epoch: 0,
+            first_height: 1,
+            last_height,
+            authority_generation: authority.generation,
+            authority_id: authority.authority_id()?,
+            beacon: BeaconEpochBindingV1::Bootstrap,
+            previous_authorization_id: [0; 32],
+            transition_id: [0; 32],
+            decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+        };
+        authorization.validate_against_authority(authority)?;
+        Ok(authorization)
+    }
+
     /// Validate canonical shape without treating this body as a certificate.
     ///
     /// # Errors
@@ -418,11 +450,8 @@ impl KagemushaMintFinalityEpochAuthorizationV1 {
                     return Err(invalid("mint_finality.epoch_authorization.beacon"));
                 }
             }
-            BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                session_id,
-                transcript_hash,
-            }) => {
-                if session_id == [0; 32] || transcript_hash == [0; 32] {
+            BeaconEpochBindingV1::Installed(binding) => {
+                if binding.session_id == [0; 32] || binding.transcript_hash == [0; 32] {
                     return Err(invalid("mint_finality.epoch_authorization.beacon"));
                 }
             }
@@ -537,13 +566,10 @@ impl KagemushaMintFinalityEpochAuthorizationV1 {
                 hasher.update([0]);
                 hasher.update([0; 64]);
             }
-            BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                session_id,
-                transcript_hash,
-            }) => {
+            BeaconEpochBindingV1::Installed(binding) => {
                 hasher.update([1]);
-                hasher.update(session_id);
-                hasher.update(transcript_hash);
+                hasher.update(binding.session_id);
+                hasher.update(binding.transcript_hash);
             }
         }
         hasher.update(self.previous_authorization_id);
@@ -568,7 +594,7 @@ pub fn kagemusha_mint_finality_peer_id_digest_v1(
     hasher.update([0]);
     hasher.update(
         u64::try_from(bytes.len())
-            .map_err(|_| invalid("mint_finality.epoch_roster.peer_id"))?
+            .map_err(|_| invalid("mint_finality.authority_generation.peer_id"))?
             .to_le_bytes(),
     );
     hasher.update(bytes);
@@ -2798,6 +2824,253 @@ mod tests {
         )))
     }
 
+    #[test]
+    fn beacon_epoch_binding_has_one_tagged_json_and_binary_layout() {
+        let installed = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+            session_id: [7; 32],
+            transcript_hash: [8; 32],
+        });
+        let installed_json = format!(
+            "{{\"kind\":\"installed\",\"value\":{{\"session_id\":[{}],\"transcript_hash\":[{}]}}}}",
+            ["7"; 32].join(","),
+            ["8"; 32].join(","),
+        );
+        // Fixed-v1 COMPACT_LEN: u32 variant, 66-byte body, then two
+        // length-prefixed 32-byte fields in their declared order.
+        let mut installed_bytes = vec![1, 0, 0, 0, 66, 32];
+        installed_bytes.extend([7; 32]);
+        installed_bytes.push(32);
+        installed_bytes.extend([8; 32]);
+        for (value, expected_json, expected_bytes) in [
+            (
+                BeaconEpochBindingV1::Bootstrap,
+                r#"{"kind":"bootstrap","value":null}"#.to_owned(),
+                vec![0, 0, 0, 0],
+            ),
+            (installed, installed_json, installed_bytes),
+        ] {
+            assert_eq!(norito::json::to_json(&value).unwrap(), expected_json);
+            assert_eq!(
+                norito::json::from_str::<BeaconEpochBindingV1>(&expected_json).unwrap(),
+                value
+            );
+            assert_eq!(value.encode(), expected_bytes);
+            assert_eq!(
+                BeaconEpochBindingV1::decode(&mut expected_bytes.as_slice()).unwrap(),
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn beacon_epoch_binding_rejects_noncanonical_json_shapes() {
+        for json in [
+            r#""bootstrap""#,
+            r#"{"kind":"Bootstrap","value":null}"#,
+            r#"{"kind":"unknown","value":null}"#,
+            r#"{"kind":"bootstrap"}"#,
+            r#"{"kind":"bootstrap","value":{}}"#,
+            r#"{"kind":"bootstrap","value":null,"unknown":0}"#,
+            r#"{"kind":"bootstrap","kind":"installed","value":null}"#,
+            r#"{"kind":"bootstrap","value":null,"value":null}"#,
+            r#"{"kind":"installed","value":null}"#,
+        ] {
+            assert!(
+                norito::json::from_str::<BeaconEpochBindingV1>(json).is_err(),
+                "{json}"
+            );
+        }
+        let installed = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+            session_id: [7; 32],
+            transcript_hash: [8; 32],
+        });
+        let canonical = norito::json::to_value(&installed).unwrap();
+        for mutation in 0..4 {
+            let mut malformed = canonical.clone();
+            let body = malformed
+                .as_object_mut()
+                .unwrap()
+                .get_mut("value")
+                .unwrap()
+                .as_object_mut()
+                .unwrap();
+            match mutation {
+                0 => {
+                    body.insert("unknown".into(), norito::json::Value::Null);
+                }
+                1 => {
+                    body.remove("session_id");
+                }
+                2 => {
+                    body.insert("session_id".into(), norito::json::Value::Array(Vec::new()));
+                }
+                _ => {
+                    body.insert(
+                        "transcript_hash".into(),
+                        norito::json::Value::String("08".repeat(32)),
+                    );
+                }
+            }
+            assert!(
+                norito::json::from_value::<BeaconEpochBindingV1>(malformed).is_err(),
+                "mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn mint_finality_epoch_decisions_preserve_tags_and_discriminants() {
+        for (value, tag, discriminant) in [
+            (
+                KagemushaMintFinalityEpochDecisionV1::Genesis,
+                "genesis",
+                0_u32,
+            ),
+            (
+                KagemushaMintFinalityEpochDecisionV1::Activate,
+                "activate",
+                1,
+            ),
+            (KagemushaMintFinalityEpochDecisionV1::Retain, "retain", 2),
+            (
+                KagemushaMintFinalityEpochDecisionV1::RetainAndCancel,
+                "retain_and_cancel",
+                3,
+            ),
+        ] {
+            let json = format!("{{\"kind\":\"{tag}\",\"value\":null}}");
+            assert_eq!(norito::json::to_json(&value).unwrap(), json);
+            assert_eq!(
+                norito::json::from_str::<KagemushaMintFinalityEpochDecisionV1>(&json).unwrap(),
+                value
+            );
+            assert_eq!(u32::from(value as u8), discriminant);
+            assert_eq!(value.encode(), discriminant.to_le_bytes());
+            assert_eq!(
+                KagemushaMintFinalityEpochDecisionV1::decode(
+                    &mut discriminant.to_le_bytes().as_slice()
+                )
+                .unwrap(),
+                value
+            );
+        }
+        for json in [
+            r#"{"kind":"Genesis","value":null}"#,
+            r#"{"kind":"retain_and_cancel","value":0}"#,
+            r#"{"kind":"retain","value":null,"unknown":true}"#,
+            r#"{"kind":"activate"}"#,
+        ] {
+            assert!(norito::json::from_str::<KagemushaMintFinalityEpochDecisionV1>(json).is_err());
+        }
+        assert!(
+            KagemushaMintFinalityEpochDecisionV1::decode(&mut 4_u32.to_le_bytes().as_slice())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn beacon_epoch_binding_schema_preserves_owner_and_field_order() {
+        use iroha_schema::{EnumVariant, Metadata, TypeId as _};
+        let schema = BeaconEpochBindingV1::schema();
+        let Some(Metadata::Enum(binding)) = schema.get::<BeaconEpochBindingV1>() else {
+            panic!("beacon binding schema must be an enum");
+        };
+        assert_eq!(BeaconEpochBindingV1::id(), "BeaconEpochBindingV1");
+        assert_eq!(BeaconEpochBindingV1::type_name(), "BeaconEpochBindingV1");
+        assert_eq!(
+            binding.variants,
+            vec![
+                EnumVariant {
+                    tag: "bootstrap".into(),
+                    discriminant: 0,
+                    ty: None
+                },
+                EnumVariant {
+                    tag: "installed".into(),
+                    discriminant: 1,
+                    ty: Some(core::any::TypeId::of::<InstalledBeaconEpochBindingV1>())
+                },
+            ]
+        );
+        let Some(Metadata::Struct(body)) = schema.get::<InstalledBeaconEpochBindingV1>() else {
+            panic!("installed beacon body must own its named schema fields");
+        };
+        assert_eq!(
+            body.declarations
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            ["session_id", "transcript_hash"]
+        );
+        assert!(
+            body.declarations
+                .iter()
+                .all(|field| field.ty == core::any::TypeId::of::<[u8; 32]>())
+        );
+        let decisions = KagemushaMintFinalityEpochDecisionV1::schema();
+        let Some(Metadata::Enum(decision)) =
+            decisions.get::<KagemushaMintFinalityEpochDecisionV1>()
+        else {
+            panic!("epoch decision schema must be an enum");
+        };
+        assert_eq!(
+            KagemushaMintFinalityEpochDecisionV1::id(),
+            "KagemushaMintFinalityEpochDecisionV1"
+        );
+        assert_eq!(
+            decision
+                .variants
+                .iter()
+                .map(|variant| (variant.tag.as_str(), variant.discriminant, variant.ty))
+                .collect::<Vec<_>>(),
+            [
+                ("genesis", 0, None),
+                ("activate", 1, None),
+                ("retain", 2, None),
+                ("retain_and_cancel", 3, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn mint_finality_epoch_authorization_digest_is_independent_of_body_framing() {
+        let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+            version: 1,
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; 32])),
+            ),
+            epoch: 1,
+            first_height: 11,
+            last_height: 20,
+            authority_generation: 0,
+            authority_id: [0x22; 32],
+            beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                session_id: [7; 32],
+                transcript_hash: [8; 32],
+            }),
+            previous_authorization_id: [0x33; 32],
+            transition_id: [0; 32],
+            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+        };
+        // SHA-256 of the fixed 281-byte domain-separated authorization preimage.
+        assert_eq!(
+            hex::encode(authorization.authorization_id().unwrap()),
+            "c44b44f659b5854ccdcd49bbaac9a0a4d26410627ec92ab593225e79042541d0"
+        );
+        let json = norito::json::to_json(&authorization).unwrap();
+        assert_eq!(
+            norito::json::from_str::<KagemushaMintFinalityEpochAuthorizationV1>(&json).unwrap(),
+            authorization
+        );
+        assert_eq!(
+            KagemushaMintFinalityEpochAuthorizationV1::decode(
+                &mut authorization.encode().as_slice()
+            )
+            .unwrap(),
+            authorization
+        );
+    }
+
     fn mint_finality_template(
         generation: u64,
     ) -> KagemushaMintFinalityAuthorityGenerationTemplateV1 {
@@ -2880,18 +3153,71 @@ mod tests {
         let authority = mint_finality_template(0)
             .bind_network_id(network())
             .unwrap();
-        KagemushaMintFinalityEpochAuthorizationV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id: network(),
-            epoch: 0,
-            first_height: 1,
-            last_height: 10,
-            authority_generation: 0,
-            authority_id: authority.authority_id().unwrap(),
-            beacon: BeaconEpochBindingV1::Bootstrap,
-            previous_authorization_id: [0; 32],
-            transition_id: [0; 32],
-            decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+        KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 10).unwrap()
+    }
+
+    #[test]
+    fn genesis_authorization_binds_authority_network_and_interval() {
+        let authority = mint_finality_template(0)
+            .bind_network_id(network())
+            .unwrap();
+        let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 10)
+            .expect("valid initial authority");
+        authorization
+            .validate_against_authority(&authority)
+            .unwrap();
+        assert_eq!(authorization.network_id, authority.network_id);
+        assert_eq!(
+            authorization.authority_id,
+            authority.authority_id().unwrap()
+        );
+        assert_eq!(
+            (
+                authorization.epoch,
+                authorization.first_height,
+                authorization.last_height
+            ),
+            (0, 1, 10)
+        );
+        assert_eq!(authorization.beacon, BeaconEpochBindingV1::Bootstrap);
+        assert_eq!(authorization.previous_authorization_id, [0; 32]);
+        assert_eq!(authorization.transition_id, [0; 32]);
+        assert_eq!(
+            authorization.decision,
+            KagemushaMintFinalityEpochDecisionV1::Genesis
+        );
+        let longer = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 11).unwrap();
+        assert_ne!(
+            authorization.authorization_id().unwrap(),
+            longer.authorization_id().unwrap()
+        );
+        assert_ne!(
+            authorization.authorization_id().unwrap(),
+            authority.authority_id().unwrap()
+        );
+    }
+
+    #[test]
+    fn genesis_authorization_rejects_invalid_authority_or_interval() {
+        let authority = mint_finality_template(0)
+            .bind_network_id(network())
+            .unwrap();
+        assert!(KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 0).is_err());
+        for mutation in 0..5 {
+            let mut invalid = authority.clone();
+            match mutation {
+                0 => invalid.generation = 1,
+                1 => invalid.validators[1].validator = invalid.validators[0].validator.clone(),
+                2 => invalid.version += 1,
+                3 => {
+                    invalid.validators.pop();
+                }
+                _ => invalid.validators[0].eq_proof_public_key = [0; 32],
+            }
+            assert!(
+                KagemushaMintFinalityEpochAuthorizationV1::genesis(&invalid, 10).is_err(),
+                "mutation {mutation}"
+            );
         }
     }
 
@@ -3051,17 +3377,11 @@ mod tests {
             .unwrap();
         let bytes = authorization.encode();
         let decoded: KagemushaMintFinalityEpochAuthorizationV1 =
-            <KagemushaMintFinalityEpochAuthorizationV1 as norito::codec::DecodeAll>::decode_all(
-                &mut bytes.as_slice(),
-            )
-            .unwrap();
+            Decode::decode(&mut bytes.as_slice()).unwrap();
         assert_eq!(decoded, authorization);
         let bytes = authority.encode();
         let decoded: KagemushaMintFinalityAuthorityGenerationV1 =
-            <KagemushaMintFinalityAuthorityGenerationV1 as norito::codec::DecodeAll>::decode_all(
-                &mut bytes.as_slice(),
-            )
-            .unwrap();
+            Decode::decode(&mut bytes.as_slice()).unwrap();
         assert_eq!(decoded, authority);
         let decoded = norito::json::value::from_value::<KagemushaMintFinalityEpochAuthorizationV1>(
             norito::json::to_value(&authorization).unwrap(),

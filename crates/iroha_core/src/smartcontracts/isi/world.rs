@@ -5245,16 +5245,6 @@ pub mod isi {
                 &self.referendum_id,
                 state_transaction,
             )?;
-            // Reject typed proposal selectors before looking up a standalone
-            // referendum or its frozen public-ballot policy.
-            if typed_proposal_for_standalone_referendum(&self.referendum_id, state_transaction)?
-                .is_some()
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "typed governance proposals accept only timed-private Parliament ballots"
-                        .into(),
-                ));
-            }
             if !state_transaction.gov.plain_voting_enabled {
                 return Err(invalid_smart_contract_parameter(
                     "plain voting mode disabled by policy",
@@ -5263,6 +5253,16 @@ pub mod isi {
             if self.direction > 2 {
                 return Err(invalid_smart_contract_parameter(
                     "plain governance ballot direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)",
+                ));
+            }
+            // Typed proposals have no standalone referendum policy to load.
+            // Reject their selector before touching that separate voting surface.
+            if typed_proposal_for_standalone_referendum(&self.referendum_id, state_transaction)?
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "typed governance proposals accept only timed-private Parliament ballots"
+                        .into(),
                 ));
             }
             let policy = state_transaction
@@ -25692,7 +25692,7 @@ pub mod isi {
                         "liquidity_profile": "tier1",
                         "volatility_class": "stable"
                     }])),
-                    "invalid ivm_gas_units_per_gas asset",
+                    "must not contain surrounding whitespace",
                 ),
                 (
                     "duplicate asset",
@@ -29503,13 +29503,19 @@ pub mod isi {
             let kura = Kura::blank_kura_for_testing();
             let provisional_finality =
                 iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
-                    .expect("exact provisional SCCP finality fixture decodes");
+                    .expect("decode the exact SCCP fixture network before State startup");
+            // Establish authenticated initial lane storage while Kura is still
+            // empty, then install this fixture's completed finality artifact.
             let state = State::new_with_chain_and_network_id_for_testing(
-                World::default(), Arc::clone(&kura), LiveQueryStore::start_test(),
+                World::default(), kura.clone(), LiveQueryStore::start_test(),
                 iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
                 provisional_finality.finality_artifact.height_context.network_id,
             );
             let (fixture, finality) = store_exact_sccp_finality_for_test(&kura, &fixture);
+            assert_eq!(
+                state.network_id_ref(),
+                &finality.finality_artifact.height_context.network_id
+            );
             let mut state_block = state.block(finality.block_header.clone());
             let exact_sender = exact_sccp_fixture_sender(&fixture);
             let exact_key = crate::bridge::test_sccp_outbound_message_key(&fixture.bundle.payload);
@@ -33304,6 +33310,34 @@ seiyaku GovernanceLifecycle {
                     .is_some()
             );
         });
+        world_test!(unregister_domain_preserves_exact_reward_accrual_source {
+            let state = blank_state();
+            let domain_id = DomainId::try_new("rewardcustody", "universal").unwrap();
+            state_transaction!(state, block, state_block, stx);
+            Register::domain(Domain::new(domain_id.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "register reward source domain");
+            let definition = AssetDefinitionId::derive_from_components(domain_id.clone(), "reward".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(
+                definition.clone(), "reward", iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            )).expect_execute(&ALICE_ID, &mut stx, "register exact reward source definition");
+            let source = AssetId::new(definition.clone(), ALICE_ID.clone());
+            let key = (LaneId::SINGLE, ALICE_ID.clone(), source.clone());
+            stx.world.public_lane_reward_accruals.insert(key.clone(), Quantity::one());
+            stx.world.public_lane_reward_reserves.insert(source.clone(), Quantity::one());
+            let error = Unregister::domain(domain_id.clone())
+                .expect_execute_err(&ALICE_ID, &mut stx, "positive source accrual prevents domain deletion");
+            assert_contains!(format!("{error:?}"), "public-lane reward accrual state", "unexpected error: {error}");
+            assert!(stx.world.domains.get(&domain_id).is_some());
+            assert!(stx.world.asset_definitions.get(&definition).is_some());
+            assert_eq!(stx.world.public_lane_reward_accruals.get(&key), Some(&Quantity::one()));
+            assert_eq!(stx.world.public_lane_reward_reserves.get(&source), Some(&Quantity::one()));
+            stx.world.public_lane_reward_accruals.remove(key);
+            stx.world.public_lane_reward_reserves.remove(source);
+            Unregister::domain(domain_id.clone())
+                .expect_execute(&ALICE_ID, &mut stx, "settled source accrual releases domain");
+            assert!(stx.world.domains.get(&domain_id).is_none());
+        });
         world_test!(unregister_domain_preserves_pinned_staking_custody_after_config_change {
             let state = blank_state();
             let domain_id = DomainId::try_new("custody", "universal").unwrap();
@@ -33928,13 +33962,14 @@ seiyaku GovernanceLifecycle {
                     asset: AssetId::new(reward_def.clone(), account_id.clone()),
                     total_reward: iroha_primitives::numeric::Quantity::from(1_u32),
                     shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
-                        account: account_id.clone(),
+                        account: ALICE_ID.clone(),
                         role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
                         amount: iroha_primitives::numeric::Quantity::from(1_u32),
                     }],
                     metadata: Metadata::default(),
                 },
             );
+            let reward_source = AssetId::new(reward_def, account_id.clone());
             stx.world.public_lane_reward_claims.insert(
                 (LaneId::SINGLE, ALICE_ID.clone()),
                 iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
@@ -33942,13 +33977,10 @@ seiyaku GovernanceLifecycle {
                 },
             );
             stx.world.public_lane_reward_accruals.insert(
-                (
-                    LaneId::SINGLE,
-                    ALICE_ID.clone(),
-                    AssetId::new(reward_def, account_id.clone()),
-                ),
-                iroha_primitives::numeric::Quantity::from(1_u32),
+                (LaneId::SINGLE, ALICE_ID.clone(), reward_source.clone()),
+                iroha_primitives::numeric::Quantity::one(),
             );
+            stx.world.public_lane_reward_reserves.insert(reward_source.clone(), iroha_primitives::numeric::Quantity::one());
             Unregister::domain(domain_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "domain unlink should preserve surviving account audit state");
             assert!(
@@ -33959,6 +33991,13 @@ seiyaku GovernanceLifecycle {
                 stx.world.accounts.get(&account_id).is_some(),
                 "account should remain materialized"
             );
+            assert_eq!(stx.world.public_lane_reward_claims.get(&(LaneId::SINGLE, ALICE_ID.clone())),
+                Some(&iroha_data_model::nexus::PublicLaneRewardClaimStateV1 { through_epoch: Some(1) }));
+            assert_eq!(stx.world.public_lane_reward_accruals.get(&(LaneId::SINGLE, ALICE_ID.clone(), reward_source.clone())),
+                Some(&iroha_primitives::numeric::Quantity::one()));
+            assert_eq!(stx.world.public_lane_reward_reserves.get(&reward_source),
+                Some(&iroha_primitives::numeric::Quantity::one()));
+
             assert!(
                 stx.world.repo_agreements.get(&repo_id).is_some(),
                 "repo agreement state should remain"

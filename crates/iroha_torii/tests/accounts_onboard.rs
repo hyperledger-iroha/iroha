@@ -264,6 +264,12 @@ fn build_onboarding_test_context_at(
                 stake_account: validator.clone(),
                 initial_stake: Quantity::from(1_000_u32),
                 metadata: Default::default(),
+                monetary_plan:
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_asset_id.clone(), validator.clone()),
+                        AssetId::new(stake_asset_id.clone(), escrow_id.clone()),
+                        Quantity::from(1_000_u32),
+                    ),
             }
             .into(),
         );

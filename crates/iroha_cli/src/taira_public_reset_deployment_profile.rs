@@ -36,7 +36,7 @@ fn derive_profile(
 }
 
 // The caller admits either the complete inventory or the native-derived public
-// context. Profile derivation does not require its own yet-unbuilt supervisor
+// context. Profile derivation does not require a completed artifact
 // plan, and confers no deployment or owner authorization.
 pub(super) fn derive_admitted_profile(
     next_genesis_hash: &str,
@@ -229,16 +229,6 @@ mod tests {
         inventory.beacon_bootstrap =
             host::beacon::fixture_plan(&inventory.validators, &inventory.validator_clients);
         inventory.beacon_bootstrap.request.dkg_session.network_id = public.network_id;
-        // Rebind the complete structural fixture after selecting another native
-        // genesis and consensus roster; no prior supervisor closure can survive it.
-        inventory.maintenance_admin_identity.network_id = public.network_id.to_string();
-        inventory.maintenance_admin_identity.genesis_hash = public.genesis_hash.clone();
-        inventory.epoch_supervisor = host::epoch_supervisor::fixture_plan(
-            &inventory.validators,
-            &inventory.validator_clients,
-            &inventory.revision,
-            &inventory.maintenance_admin_identity,
-        );
         inventory.artifact_closure_sha256 = artifact_closure_sha256(&inventory);
         validate_inventory_structure(&inventory).expect("complete profile binding fixture");
         (inventory, public, wire)
@@ -320,11 +310,11 @@ mod tests {
     }
 
     #[test]
-    fn deployment_profile_public_context_precedes_supervisor_plan_without_weakening_export() {
+    fn deployment_profile_public_context_precedes_artifact_closure_without_weakening_export() {
         let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
         let (mut inventory, public, wire) = fixture();
         let expected = admitted_inventory_profile(&inventory, &public, &wire).unwrap();
-        inventory.epoch_supervisor.schema = "not-yet-assembled".into();
+        inventory.artifact_closure_sha256 = "not-yet-assembled".into();
         let profile = derive_admitted_profile(
             &inventory.next_genesis_hash,
             &inventory.canary_onboarding_request,

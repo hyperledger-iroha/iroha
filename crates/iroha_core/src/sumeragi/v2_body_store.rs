@@ -1331,7 +1331,9 @@ pub(crate) enum LocalValidationRefusal {
         wake: std::task::Waker,
     },
     /// The original candidate awaits its authenticated first-admission body.
-    #[error("proposal validation awaits Native first-admission source at execution {execution_index}")]
+    #[error(
+        "proposal validation awaits Native first-admission source at execution {execution_index}"
+    )]
     NativeSourceRecovery {
         /// Original applying-carrier execution index.
         execution_index: usize,
@@ -2469,7 +2471,8 @@ impl QuarantinedV2BodyStore {
         }
         self.0
             .retain_recovered_markers_for_authority(validation_authority)?;
-        let mut service = super::v2_apply::NativeApplyService::new(apply_service, &self.0, context)?;
+        let mut service =
+            super::v2_apply::NativeApplyService::new(apply_service, &self.0, context)?;
         service.revalidate_recovered_markers(&mut self.0)?;
         let store = self.0.into_revalidated_startup()?;
         Ok((store, service))

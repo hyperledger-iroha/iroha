@@ -161,14 +161,17 @@ pub(super) fn validate_plan(plan: &Plan) -> Result<()> {
     Ok(())
 }
 
-pub(super) struct Locks(Vec<(PathBuf, File, FileSnapshot)>);
+pub(super) struct Locks {
+    pinned: Vec<(PathBuf, File, FileSnapshot)>,
+    deployment: deployment_lifecycle::Guard,
+}
 impl Locks {
     pub(super) fn revalidate(&self) -> Result<()> {
-        for (path, file, snapshot) in &self.0 {
+        for (path, file, snapshot) in &self.pinned {
             require_root_no_symlink_ancestors(path, "held transition lock")?;
             ensure_pinned_unchanged(path, "held transition lock", file, snapshot)?;
         }
-        Ok(())
+        self.deployment.revalidate_unowned()
     }
 }
 pub(super) fn locks(plan: &Plan) -> Result<Locks> {
@@ -196,13 +199,12 @@ pub(super) fn locks_for_host(host_identity: &str) -> Result<Locks> {
         ensure_pinned_unchanged(&path, "transition lock", &file, &snapshot)?;
         held.push((path, file, snapshot));
     }
-    // This bounded transition admits the observed absent supervisor only. It never creates
-    // a new lock in an absent generation or bypasses an installed updater's ownership.
-    need(
-        !storage::exists(Path::new(epoch_supervisor::STATE_ROOT))?,
-        "epoch supervisor must remain absent",
-    )?;
-    Ok(Locks(held))
+    let deployment =
+        deployment_lifecycle::acquire_unowned_existing(Instant::now() + Duration::from_secs(30))?;
+    Ok(Locks {
+        pinned: held,
+        deployment,
+    })
 }
 
 fn sealed(plan: &Plan) -> Result<()> {
@@ -309,46 +311,6 @@ pub(super) fn validate_sealed_records(
 }
 
 fn protected(plan: &Plan) -> Result<()> {
-    need(
-        !storage::exists(Path::new(epoch_supervisor::STATE_ROOT))?,
-        "supervisor appeared",
-    )?;
-    need(
-        !storage::exists(Path::new(
-            "/etc/systemd/system/iroha-taira-epoch-supervisor.service",
-        ))?,
-        "supervisor unit appeared",
-    )?;
-    let absent = run_host_command(
-        SYSTEMCTL,
-        &[
-            "show",
-            "--property=LoadState,FragmentPath,DropInPaths,ActiveState,SubState,MainPID,ControlPID,Job",
-            "iroha-taira-epoch-supervisor.service",
-        ],
-        Instant::now() + Duration::from_secs(30),
-    )?;
-    let fields = std::str::from_utf8(&absent)?
-        .lines()
-        .map(|line| {
-            line.split_once('=')
-                .ok_or_else(|| eyre!("malformed supervisor unit"))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
-    need(
-        fields
-            == BTreeMap::from([
-                ("LoadState", "not-found"),
-                ("FragmentPath", ""),
-                ("DropInPaths", ""),
-                ("ActiveState", "inactive"),
-                ("SubState", "dead"),
-                ("MainPID", "0"),
-                ("ControlPID", "0"),
-                ("Job", ""),
-            ]),
-        "supervisor is not absent",
-    )?;
     for role in &plan.predecessor.occupied {
         let state = Path::new(&role.state.path);
         require_root_directory(state, role.slug != "taira-edge", "protected stopped state")?;

@@ -838,24 +838,7 @@ fn queue_plan_capacity_harness_for_test(
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).unwrap(),
         roster,
-        kagemusha_mint_finality_authorization: {
-            let authority = &mint_roster;
-            let authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
-                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
-                network_id: authority.network_id,
-                epoch: 0,
-                first_height: 1,
-                last_height: 100,
-                authority_generation: authority.generation,
-                authority_id: authority.authority_id().expect("fixture authority identity"),
-                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
-                previous_authorization_id: [0; 32],
-                transition_id: [0; 32],
-                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
-            };
-            authorization.validate_against_authority(authority).expect("complete genesis fixture authorization");
-            authorization
-        },
+        kagemusha_mint_finality_authorization: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&mint_roster, 100).unwrap(),
         kagemusha_mint_finality_authority: mint_roster,
         nexus_amx_context_hash: Hash::new(b"Torii capacity fixture nexus"),
         execution_policy_hash: Hash::new(b"Torii capacity fixture policy"),

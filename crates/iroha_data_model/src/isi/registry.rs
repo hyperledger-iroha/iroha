@@ -358,11 +358,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 368;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 369;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 368;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 369;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 351;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 352;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -1379,21 +1379,28 @@ mod tests {
         assert_default_registry_decodes(crate::isi::staking::ClaimPublicLaneRewards {
             lane_id: iroha_model_base::topology::LaneId::SINGLE,
             account: account(0xA4),
-            claim_plan: crate::nexus::staking::PublicLaneRewardClaimPlanV1 {
-                network_scope: crate::nexus::staking::PublicLaneMonetaryScopeV1::Network(
+            claim_plan: crate::nexus::PublicLaneRewardClaimPlanV1 {
+                network_scope: crate::nexus::PublicLaneMonetaryScopeV1::Network(
                     crate::NetworkId::from_genesis_hash(
-                        iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
-                            iroha_crypto::Hash::new(b"registry reward claim network"),
-                        ),
+                        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                            b"registry reward fixture network",
+                        )),
                     ),
                 ),
-                valid_until_height: 10,
-                expected_state: None,
-                records: vec![crate::nexus::staking::PublicLaneRewardRecordRefV1 {
+                valid_until_height: 20,
+                expected_state: Some(crate::nexus::PublicLaneRewardClaimStateV1 {
+                    through_epoch: Some(8),
+                }),
+                records: vec![crate::nexus::PublicLaneRewardRecordRefV1 {
                     epoch: 9,
-                    record_hash: iroha_crypto::Hash::new(b"registry reward record"),
+                    record_hash: iroha_crypto::Hash::new(b"registry reward fixture record"),
                 }],
-                sources: Vec::new(),
+                sources: vec![crate::nexus::PublicLaneRewardClaimSourceV1 {
+                    source_asset: AssetId::new(asset_definition_id(), account(0xA5)),
+                    destination_asset: AssetId::new(asset_definition_id(), account(0xA4)),
+                    expected_accrued: None,
+                    payout: Quantity::from(1_u64),
+                }],
             },
         });
     }

@@ -9,11 +9,20 @@ impl V2BodyStore {
     /// Reproduce quarantined marker outcomes using actual retained candidate custody.
     /// Every round of one exact body shares the same original executed owner.
     pub(crate) fn revalidate_retained_markers<P: CarrierValidator>(
-        &mut self, service: &mut RetainedBodyValidationService<P>,
+        &mut self,
+        service: &mut RetainedBodyValidationService<P>,
     ) -> Result<(), V2BodyStoreError> {
-        let receipts: Vec<_> = self.pending_revalidation.values().map(|row| row.durable.clone()).collect();
+        let receipts: Vec<_> = self
+            .pending_revalidation
+            .values()
+            .map(|row| row.durable.clone())
+            .collect();
         for durable in receipts {
-            let result = self.execute_retained_durable_validation(durable.clone(), durable.manifest_hash(), service)?;
+            let result = self.execute_retained_durable_validation(
+                durable.clone(),
+                durable.manifest_hash(),
+                service,
+            )?;
             if result.validated_receipt().is_none() && result.rejection_identity().is_none() {
                 return Err(V2BodyStoreError::RecoveredValidationOutcomeMismatch);
             }
@@ -22,13 +31,16 @@ impl V2BodyStore {
     }
 
     /// Recheck the exact successful live marker and durable frame before selecting its owner.
-    pub(crate) fn verify_validated_receipt(&self, receipt: &ValidatedBodyReceipt)
-        -> Result<(), V2BodyStoreError> {
+    pub(crate) fn verify_validated_receipt(
+        &self,
+        receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), V2BodyStoreError> {
         let durable = receipt.durable();
         if self.validated.get(&(durable.round(), durable.subject())) != Some(receipt) {
             return Err(V2BodyStoreError::ReceiptMismatch);
         }
-        self.load_validation_envelope(durable, durable.manifest_hash()).map(|_| ())
+        self.load_validation_envelope(durable, durable.manifest_hash())
+            .map(|_| ())
     }
 
     /// Plan the exact retained-service descriptor allocations before construction.

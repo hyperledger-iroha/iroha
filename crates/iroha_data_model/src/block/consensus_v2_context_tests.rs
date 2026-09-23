@@ -40,13 +40,13 @@ fn height_context_rejects_noncanonical_rosters_and_quorums() {
         Err(ValidationError::DuplicateValidator)
     );
     assert_eq!(invalid.validate(), Err(ValidationError::DuplicateValidator));
-    let mut invalid_mint_roster = context(&[1, 1, 1, 1]);
-    invalid_mint_roster
+    let mut invalid_mint_authority = context(&[1, 1, 1, 1]);
+    invalid_mint_authority
         .kagemusha_mint_finality_authority
         .validators
         .clear();
     assert_eq!(
-        invalid_mint_roster.validate(),
+        invalid_mint_authority.validate(),
         Err(ValidationError::InvalidKagemushaMintFinalityAuthorization)
     );
     let mut invalid = context(&[1, 1, 1, 1]);

@@ -12176,7 +12176,9 @@ pub(crate) mod valid {
                 .collect::<Vec<_>>();
             let (mint_finality_authorization, mint_finality_authority) =
                 crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-                    state.network_id, u64::MAX, &roster,
+                    state.network_id,
+                    u64::MAX,
+                    &roster,
                 );
             let genesis_parameters = wire::SumeragiV2GenesisContextParameters::recommended();
             let mut parent_context = wire::HeightContext {
@@ -12636,7 +12638,11 @@ pub(crate) mod valid {
                 )
                 .collect::<Vec<_>>();
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                    network_id,
+                    u64::MAX,
+                    &roster,
+                );
             let height_context = iroha_data_model::block::consensus_v2::HeightContext {
                 network_id,
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
@@ -13901,7 +13907,11 @@ pub(crate) mod valid {
                 })
                 .collect::<Vec<_>>();
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(state.network_id, u64::MAX, &roster);
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                    state.network_id,
+                    u64::MAX,
+                    &roster,
+                );
             let context = if block.header().height().get() == 1 {
                 assert!(block.header().prev_block_hash().is_none());
                 let parameters = wire::SumeragiV2GenesisContextParameters::recommended();
@@ -14856,7 +14866,11 @@ pub(crate) mod valid {
                 .collect::<Vec<_>>();
             let network_id = crate::sumeragi::synthetic_network_id("v2-artifact-bound-commit");
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                    network_id,
+                    u64::MAX,
+                    &roster,
+                );
             let context = iroha_data_model::block::consensus_v2::HeightContext {
                 network_id,
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
@@ -19460,7 +19474,11 @@ pub(crate) mod valid {
                 .collect::<Vec<_>>();
             let network_id = *state.network_id_ref();
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                    network_id,
+                    u64::MAX,
+                    &roster,
+                );
             let context = consensus_v2::HeightContext {
                 network_id,
                 protocol_version: consensus_v2::PROTOCOL_VERSION,

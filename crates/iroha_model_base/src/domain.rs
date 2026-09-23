@@ -3,9 +3,9 @@
 use derive_more::Display;
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
-use norito::json::JsonKeyCodec;
 #[cfg(test)]
 use norito::codec::Decode;
+use norito::json::JsonKeyCodec;
 use norito::{
     codec::Encode,
     core as ncore,

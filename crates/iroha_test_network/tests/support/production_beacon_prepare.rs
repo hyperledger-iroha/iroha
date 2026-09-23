@@ -46,7 +46,6 @@ pub(super) struct Prepared {
     pub network_id: NetworkId,
     pub genesis_public_key: PublicKey,
     pub routed_client: PathBuf,
-    pub epoch_schedule: PathBuf,
 }
 
 // One real funded account gives the retained explicit-route contract an
@@ -255,14 +254,15 @@ fn short_epoch_manifest(path: &Path) -> Result<()> {
             npos.max_validators == 4,
             "native fixture roster ceiling is not four"
         );
-        // The first real epoch-maintenance operation admits at 8, anchors at 9 and
+        // The first real paid catalog operation admits at 8, anchors at 9 and
         // executes at 10. Epoch 11 makes that execution merge itself carry the
-        // mandatory pulse; no padding transaction or pulse-only block exists.
-        npos.epoch_length_blocks = NonZeroU64::new(11).expect("positive fixture epoch");
+        // mandatory pulse; no key-renewal transaction or padding block exists.
+        npos.epoch_length_blocks =
+            NonZeroU64::new(super::epoch_retention::EPOCH_LENGTH).expect("positive fixture epoch");
         // Retain evidence within the signed three-epoch window, rather than
         // truncating only the epoch while leaving incompatible production bounds.
-        npos.evidence_horizon_blocks = 11;
-        npos.slashing_delay_blocks = 11;
+        npos.evidence_horizon_blocks = super::epoch_retention::EPOCH_LENGTH;
+        npos.slashing_delay_blocks = super::epoch_retention::EPOCH_LENGTH;
         npos.validate().map_err(|error| eyre!(error))?;
         parameters.custom.insert(id, npos.into_custom_parameter());
         *parameters_value = json::value::to_value(&parameters)?;
@@ -581,15 +581,6 @@ pub(super) async fn prepare(
         Instant::now() < deadline,
         "beacon fixture deadline after genesis preparation"
     );
-    let epoch_schedule = super::epoch_maintenance::prepare_schedule(
-        &directory,
-        kagami,
-        &roster,
-        network_id,
-        &genesis_public_key,
-        deadline,
-    )
-    .await?;
     Ok(Prepared {
         directory,
         genesis_directory,
@@ -598,6 +589,5 @@ pub(super) async fn prepare(
         network_id,
         genesis_public_key,
         routed_client,
-        epoch_schedule,
     })
 }

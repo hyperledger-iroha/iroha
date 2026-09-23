@@ -131,6 +131,24 @@ impl NativeLaneTransport {
         }
     }
 
+    /// Borrow exact retained frames and unfinished destinations for custody assertions.
+    #[cfg(test)]
+    pub(crate) fn retained_outputs_for_test(&self) -> Vec<(Arc<BlockMessageWire>, Vec<PeerId>)> {
+        self.fanouts
+            .iter()
+            .map(|fanout| {
+                (
+                    Arc::clone(&fanout.message),
+                    fanout
+                        .destinations
+                        .iter()
+                        .map(|destination| destination.peer.clone())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
     /// Transfer an actual native outbox packet only after the exact current
     /// instance, signatures, original bytes and frozen destinations rejoin.
     /// No writer, timer, or reducer state is acquired here.

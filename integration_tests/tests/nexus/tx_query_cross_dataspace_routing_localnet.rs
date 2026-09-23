@@ -435,6 +435,11 @@ fn npos_multilane_genesis_post_topology_transactions(
                 validator_id.clone(),
                 Quantity::from(VALIDATOR_STAKE),
                 Metadata::default(),
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                    AssetId::new(stake_asset_id.clone(), routing_probe_gas_account_id()),
+                    Quantity::from(VALIDATOR_STAKE),
+                ),
             )
             .into(),
         );

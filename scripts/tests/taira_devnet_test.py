@@ -6223,9 +6223,27 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(
             names(REPO_ROOT / "scripts"),
             {
+                "check_taira_initial_executor.py",
+                "refresh_taira_nevo_fixtures.py",
                 "render_taira_edge_nginx_conf.py",
+                "taira_cargo_artifact.py",
+                "taira_cargo_cache.py",
                 "taira_constants.py",
                 "taira_devnet.py",
+                "taira_disk_capacity.py",
+                "taira_nginx_logrotate.py",
+                "taira_release.py",
+                "taira_release_check.py",
+                "taira_release_transfer.py",
+                "taira_retained_release.py",
+                "taira_retained_source.py",
+                "taira_retry.py",
+                "taira_seed_observation.py",
+                "taira_source_capture.py",
+                "taira_source_observation.py",
+                "taira_update.py",
+                "taira_update_guest.py",
+                "taira_validator_unit.py",
             },
         )
         self.assertEqual(
@@ -6233,7 +6251,13 @@ class TairaDevnetTests(unittest.TestCase):
             {
                 "render_taira_edge_nginx_conf_test.py",
                 "taira_devnet_test.py",
+                "taira_disk_capacity_test.py",
                 "taira_inrou_canary_identity_source_test.py",
+                "taira_public_identity_defaults_test.py",
+                "taira_retry_test.py",
+                "taira_seed_observation_test.py",
+                "taira_update_test.py",
+                "taira_validator_unit_test.py",
             },
         )
         config_root = REPO_ROOT / "configs" / "soranexus" / "taira"

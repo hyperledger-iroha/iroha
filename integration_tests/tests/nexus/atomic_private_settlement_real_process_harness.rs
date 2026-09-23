@@ -5636,52 +5636,75 @@ fn collect_signed_rs16_finality(
         .ok_or_else(|| eyre!("finalized receipt height is zero"))?;
     let expected_layout = recommended_data_availability_layout();
     let expected_roster = network.validators().iter().map(|peer| peer.id()).collect();
+    let peers = network.all_peers().cloned().collect::<Vec<_>>();
+    let expected_observations = peers.len();
+    ensure!(
+        expected_observations > 0,
+        "finality observations omitted every validator"
+    );
+    let network_id = network.network_id();
+    let responses = collect_bounded_observations(peers, TEST_STACK_BYTES, |peer| {
+        let response = peer
+            .client()
+            .client()
+            .get_bridge_finality_anchor(height, network_id);
+        (peer.id(), response)
+    });
     let mut observations = 0_u64;
     let mut anchor = None;
     let mut files = Vec::new();
-    for (peer_index, peer) in network.all_peers().enumerate() {
-        let (proof, block_hash) = peer
-            .client()
-            .client()
-            .get_bridge_finality_anchor(height, network.network_id())
-            .wrap_err_with(|| format!("fetch signed finality proof from {}", peer.id()))?;
-        let artifact = &proof.finality_artifact;
-        ensure!(
-            proof.block_header.hash() == block_hash
-                && proof.block_header.height() == height
-                && artifact.height_context.roster.len() == VALIDATORS_PER_LANE
-                && artifact.height_context.quorum.min_signers == 3
-                && artifact.commit_qc.signers.len() == 3
-                && artifact.height_context.da_layout == expected_layout,
-            "peer {} did not return a signed 3-of-4 RS16 finality artifact",
-            peer.id()
-        );
-        let observed_anchor = SignedRs16FinalityAnchorV1 {
-            block_hash,
-            context_id: artifact.height_context.id(),
-        };
-        let observed_roster = artifact
-            .height_context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<Vec<_>>();
-        ensure_signed_rs16_finality_identity(
-            &expected_roster,
-            &observed_roster,
-            anchor,
-            observed_anchor,
-        )?;
-        anchor = Some(observed_anchor);
-        observations += 1;
-        if let Some((root, prefix)) = evidence {
-            files.push(write_smoke_evidence(
-                root,
-                &format!("{prefix}-{peer_index:02}.json"),
-                &proof,
-            )?);
+    let mut failures = Vec::new();
+    for (peer_index, (peer_id, response)) in responses.into_iter().enumerate() {
+        let validated = (|| -> Result<()> {
+            let (proof, block_hash) =
+                response.wrap_err_with(|| format!("fetch signed finality proof from {peer_id}"))?;
+            let artifact = &proof.finality_artifact;
+            ensure!(
+                proof.block_header.hash() == block_hash
+                    && proof.block_header.height() == height
+                    && artifact.height_context.roster.len() == VALIDATORS_PER_LANE
+                    && artifact.height_context.quorum.min_signers == 3
+                    && artifact.commit_qc.signers.len() == 3
+                    && artifact.height_context.da_layout == expected_layout,
+                "peer {peer_id} did not return a signed 3-of-4 RS16 finality artifact"
+            );
+            let observed_anchor = SignedRs16FinalityAnchorV1 {
+                block_hash,
+                context_id: artifact.height_context.id(),
+            };
+            let observed_roster = artifact
+                .height_context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<Vec<_>>();
+            ensure_signed_rs16_finality_identity(
+                &expected_roster,
+                &observed_roster,
+                anchor,
+                observed_anchor,
+            )?;
+            anchor = Some(observed_anchor);
+            observations += 1;
+            // Evidence writes remain on the caller in stable all_peers order.
+            if let Some((root, prefix)) = evidence {
+                files.push(write_smoke_evidence(
+                    root,
+                    &format!("{prefix}-{peer_index:02}.json"),
+                    &proof,
+                )?);
+            }
+            Ok(())
+        })();
+        if let Err(error) = validated {
+            failures.push(format!("peer #{peer_index} {peer_id}: {error:?}"));
         }
     }
+    ensure!(failures.is_empty(), "{}", failures.join("; "));
+    ensure!(
+        usize::try_from(observations)? == expected_observations,
+        "signed finality omitted a configured peer"
+    );
     Ok((
         SignedRs16FinalityObservationsV1 {
             observations,

@@ -6,6 +6,7 @@ mod fastpq_artifact_store;
 mod kagemusha_finality_decode;
 mod lane_geometry;
 mod lane_storage;
+mod membership_storage;
 mod snapshot_hash_journal;
 use crate::lane_consensus::{
     CommittedLaneBlockSession, DurableLaneBlockNewViewCertificateV1,
@@ -166,6 +167,10 @@ pub(crate) use lane_geometry::{
 };
 use lane_storage::LaneStorageEntry;
 pub use lane_storage::LaneStorageIdentity;
+pub(crate) use membership_storage::MEMBERSHIP_RECORD_BYTES;
+pub use membership_storage::{
+    MembershipAppendCleanup, MembershipAppendRange, MembershipStorageError,
+};
 #[cfg(test)]
 use norito::core::{Header, MAGIC};
 use norito::{
@@ -637,6 +642,7 @@ pub(crate) use publication_lease::{
 pub struct Kura {
     /// One finite pool shared by every State hash generation using this store.
     block_hash_history_budget: mv::allocation::AllocationBudget,
+    membership_storage: membership_storage::MembershipStorage,
     /// Exact owner-published resident and physical resources; never consensus authority.
     resource_inventory: Arc<resource_inventory::Inventory>,
     /// Process-local identity shared with sealed lifecycle storage authority.
@@ -686,6 +692,8 @@ pub struct Kura {
     block_plain_text_path: Mutex<Option<PathBuf>>,
     /// Serialize sidecar writes to avoid index/data races.
     sidecar_lock: PublicationMutex,
+    /// Opaque permission for audited immutable reads of this exact sidecar fence.
+    sidecar_read_permit: crate::publication_lock::PublicationReadPermit,
     /// Serializes the one durable process-generation claim for this Kura instance.
     autonomous_lifecycle_process_generation_lock: Mutex<()>,
     /// Process-local cache of the exact durable generation claimed after peer binding.
@@ -743,6 +751,8 @@ pub struct Kura {
     /// Restart-empty proof that the exact pair completed its strict barriers;
     /// artifact, pair metadata and every directory generation gate fsync reuse.
     certified_pair_durability: ResidentMutex<BTreeMap<LaneId, CertifiedPairDurabilityAttestation>>,
+    /// Bounded original directory handles; never cached canonical/application authority.
+    lane_receipt_namespace_durability: ResidentMutex<LaneReceiptNamespaceDurability>,
     /// Bounded restart-empty proof that exact stable frontier bytes completed
     /// full certificate validation and subsequent pair repair/readback.
     certified_frontier_artifact_validation:
@@ -2603,6 +2613,15 @@ impl Kura {
                     configured_store_dir.clone(),
                 )
             })?;
+        let membership_storage = membership_storage::MembershipStorage::new(
+            config.membership_storage,
+        )
+        .map_err(|error| {
+            Error::IO(
+                std::io::Error::new(ErrorKind::InvalidInput, error),
+                configured_store_dir.clone(),
+            )
+        })?;
         config.fastpq_artifacts.validate().map_err(|error| {
             Error::IO(
                 std::io::Error::new(ErrorKind::InvalidInput, error.to_string()),
@@ -3022,8 +3041,10 @@ impl Kura {
             merge_log.truncate_to_len(block_count)?;
         }
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
+        let (sidecar_lock, sidecar_read_permit) = PublicationMutex::with_read_permit();
         let kura = Arc::new(Self {
             block_hash_history_budget: mv::allocation::AllocationBudget::new(history_bytes),
+            membership_storage,
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
             #[cfg(test)]
@@ -3050,7 +3071,8 @@ impl Kura {
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
-            sidecar_lock: PublicationMutex::default(),
+            sidecar_lock,
+            sidecar_read_permit,
             autonomous_lifecycle_process_generation_lock: Mutex::new(()),
             autonomous_lifecycle_process_generation_claim: OnceLock::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
@@ -3094,6 +3116,10 @@ impl Kura {
                 config.init_mode == InitMode::Fast && !provisional_open,
             ),
             certified_pair_durability: ResidentMutex::new(BTreeMap::new(), &resource_inventory),
+            lane_receipt_namespace_durability: ResidentMutex::new(
+                LaneReceiptNamespaceDurability::default(),
+                &resource_inventory,
+            ),
             certified_frontier_artifact_validation: ResidentMutex::new(
                 BTreeMap::new(),
                 &resource_inventory,
@@ -3426,7 +3452,12 @@ impl Kura {
             )
             .expect("default Native AMX prune-intent bound is valid");
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
+        let (sidecar_lock, sidecar_read_permit) = PublicationMutex::with_read_permit();
         Arc::new(Self {
+            membership_storage: membership_storage::MembershipStorage::new(
+                iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
+            )
+            .expect("default finite membership control fits its original pool"),
             block_hash_history_budget: mv::allocation::AllocationBudget::new(
                 usize::try_from(
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES.get(),
@@ -3459,7 +3490,8 @@ impl Kura {
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),
-            sidecar_lock: PublicationMutex::default(),
+            sidecar_lock,
+            sidecar_read_permit,
             autonomous_lifecycle_process_generation_lock: Mutex::new(()),
             autonomous_lifecycle_process_generation_claim: OnceLock::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
@@ -3498,6 +3530,10 @@ impl Kura {
             committed_lane_status_revision: AtomicU64::new(0),
             latest_certified_frontier_storage_unknown: AtomicBool::new(false),
             certified_pair_durability: ResidentMutex::new(BTreeMap::new(), &resource_inventory),
+            lane_receipt_namespace_durability: ResidentMutex::new(
+                LaneReceiptNamespaceDurability::default(),
+                &resource_inventory,
+            ),
             certified_frontier_artifact_validation: ResidentMutex::new(
                 BTreeMap::new(),
                 &resource_inventory,
@@ -18410,6 +18446,9 @@ impl Kura {
         let retired_geometry_root = retired_root.join("lane_geometry");
         let mut used = 0u64;
         used = used.saturating_add(Self::merge_root_bytes(&merge_root)?);
+        used = used.saturating_add(Self::file_len_or_zero(
+            &self.store_root.join(membership_storage::SEGMENT_NAME),
+        )?);
         used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(&retired_geometry_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(
@@ -18796,7 +18835,7 @@ impl Kura {
             })?;
         let association_stage_bytes =
             self.canonical_association_stage_additional_bytes(block, merge_entry)?;
-        let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;
+        let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;
         let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
         let autonomous_terminal_reservations =
             self.autonomous_global_terminal_outcome_reserved_bytes()?;
@@ -18899,7 +18938,7 @@ impl Kura {
         }
         pending_raw_after = pending_raw_after.saturating_add(new_bytes);
         let pending_current = pending_raw.saturating_sub(unindexed_bytes);
-        let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;
+        let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;
         let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
         let autonomous_terminal_reservations =
             self.autonomous_global_terminal_outcome_reserved_bytes()?;
@@ -26656,7 +26695,7 @@ impl Kura {
         self.active_lane_incarnation_marker(&entry)?;
         let (data_path, index_path) =
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
-        let _sidecar_guard = self.sidecar_lock.lock();
+        let _sidecar_guard = self.lock_consensus_sidecar_read()?;
         self.ensure_prune_recovery_not_required()?;
         if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
             return Ok(None);
@@ -36055,7 +36094,7 @@ impl Kura {
         let mut recovered = Vec::new();
         for (lane_id, entry) in entries {
             let candidate = {
-                let _guard = self.sidecar_lock.lock();
+                let _guard = self.lock_consensus_sidecar_read()?;
                 if self.prune_recovery_is_required() {
                     return Err(Error::PruneRecoveryRequired);
                 }
@@ -36074,10 +36113,11 @@ impl Kura {
                 }
             })?;
             let record = {
-                let _guard = self.sidecar_lock.lock();
+                let _guard = self.lock_consensus_sidecar_read()?;
                 if self.prune_recovery_is_required() {
                     return Err(Error::PruneRecoveryRequired);
                 }
+                // MainOnly: no temporary promotion or namespace mutation.
                 self.read_autonomous_lane_block_attempt_record_with_current_locked(
                     &entry,
                     lane_id,
@@ -39438,7 +39478,10 @@ impl Kura {
             &entry,
             &self.store_root,
         );
-        let sidecar = lease.is_none().then(|| self.sidecar_lock.lock());
+        let sidecar = lease
+            .is_none()
+            .then(|| self.lock_consensus_sidecar_read())
+            .transpose()?;
         if self.bound_progress_sidecar_directory_is_absent(&manifest_anchor, &receipt_anchor)? {
             return Ok(NativeAmxParticipantApplicationHistory::default());
         }
@@ -39594,7 +39637,10 @@ impl Kura {
         }
         let geometry = lease.is_none().then(|| self.lane_geometry_lock.lock());
         let current = self.lane_storage_entry(lane_id)?;
-        let sidecar = lease.is_none().then(|| self.sidecar_lock.lock());
+        let sidecar = lease
+            .is_none()
+            .then(|| self.lock_consensus_sidecar_read())
+            .transpose()?;
         self.ensure_prune_recovery_not_required()?;
         if Self::native_amx_participant_receipt_latest_index_path_for_entry(
             &current,
@@ -42067,7 +42113,11 @@ impl Kura {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id).ok()?;
         let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
-        let _guard = self.sidecar_lock.lock();
+        let _guard = if recover {
+            self.sidecar_lock.lock()
+        } else {
+            self.lock_consensus_sidecar_read().ok()?
+        };
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -42770,6 +42820,7 @@ impl Kura {
 include!("kura/autonomous_application_evidence.rs");
 include!("kura/sidecar_physical_resource_accounting.rs");
 include!("kura/indexed_sidecar_io.rs");
+include!("kura/receipt_namespace_durability.rs");
 include!("kura/consensus_storage_reads.rs");
 #[path = "kura/lane_admission_source.rs"]
 mod lane_admission_source;
@@ -47369,6 +47420,7 @@ pub(crate) mod tests {
     include!("kura/tests/07m_canonical_autonomous_replica_tests.rs");
     include!("kura/tests/08_lane_receipts_and_artifacts.rs");
     include!("kura/tests/08a_certified_lane_block_read_tests.rs");
+    include!("kura/tests/08b_receipt_namespace_durability_tests.rs");
     include!("kura/tests/08b_lane_history_compaction_capacity_tests.rs");
     include!("kura/tests/09_lane_artifacts_and_fastpq.rs");
     include!("kura/tests/10_native_amx_and_roster.rs");

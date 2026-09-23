@@ -10,13 +10,20 @@ use iroha::data_model::{
         PublicLanePeerBindingAuthorization, RebindPublicLaneValidatorPeer, RecordPublicLaneRewards,
         RegisterPublicLaneCandidate, RegisterPublicLaneValidator, SchedulePublicLaneUnbond,
     },
+    nexus::{
+        PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
+        PublicLaneRewardClaimPlanV1,
+    },
     prelude::AccountId,
 };
 use iroha_crypto::{Hash, SignatureOf};
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::LaneId;
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Register a stake-elected validator on a public lane
@@ -35,7 +42,7 @@ pub enum Command {
     ScheduleUnbond(ScheduleUnbondArgs),
     /// Withdraw a scheduled unbond once its time and liability bounds have passed
     FinalizeUnbond(FinalizeUnbondArgs),
-    /// Claim rewards through an optional inclusive epoch bound
+    /// Process exact reward records and claim explicitly authorized custody payouts
     ClaimRewards(ClaimRewardsArgs),
     /// Record a fee-funded epoch distribution as the configured fee-sink authority
     RecordRewards(RecordRewardsArgs),
@@ -76,6 +83,9 @@ pub struct RegisterArgs {
     /// Optional metadata JSON (Norito JSON object)
     #[arg(long, value_name = "PATH")]
     pub metadata: Option<PathBuf>,
+    /// Canonical Norito JSON monetary plan binding network, assets, quantity, and observed state
+    #[arg(long, value_name = "PATH")]
+    pub monetary_plan: PathBuf,
 }
 impl Run for RegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -96,6 +106,23 @@ impl RegisterArgs {
             None => validator.clone(),
         };
         let metadata = load_metadata(self.metadata.as_ref())?;
+        let monetary_plan = load_monetary_plan(context, &self.monetary_plan)?;
+        eyre::ensure!(
+            validator == stake_account,
+            "initial stake must belong to --validator"
+        );
+        eyre::ensure!(
+            monetary_plan.source_asset.account() == &stake_account
+                && monetary_plan.amount == self.initial_stake,
+            "--monetary-plan must bind --stake-account and --initial-stake",
+        );
+        eyre::ensure!(
+            matches!(
+                monetary_plan.precondition,
+                PublicLaneMonetaryPreconditionV1::Registration(_)
+            ),
+            "--monetary-plan must contain a Registration precondition",
+        );
         Ok(RegisterPublicLaneValidator {
             lane_id,
             validator,
@@ -103,6 +130,7 @@ impl RegisterArgs {
             stake_account,
             initial_stake: self.initial_stake,
             metadata,
+            monetary_plan,
         })
     }
 }
@@ -124,6 +152,18 @@ pub struct RegisterCandidateArgs {
 impl Run for RegisterCandidateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let registration = self.registration.into_instruction(context)?;
+        eyre::ensure!(
+            self.network_id == context.config().network_id,
+            "--network-id must match the configured network"
+        );
+        eyre::ensure!(
+            matches!(
+                registration.monetary_plan.precondition,
+                PublicLaneMonetaryPreconditionV1::Registration(ref value)
+                    if value.activation_height == self.activation_height
+            ),
+            "--monetary-plan activation height must match --activation-height",
+        );
         let key_pair = crate::operator_key::load_operator_key_pair(&self.peer_private_key_file)
             .wrap_err("failed to load --peer-private-key-file")?;
         eyre::ensure!(
@@ -275,6 +315,9 @@ pub struct BondArgs {
     /// Optional stake-share metadata JSON (Norito JSON object)
     #[arg(long, value_name = "PATH")]
     pub metadata: Option<PathBuf>,
+    /// Canonical Norito JSON monetary plan binding network, assets, quantity, and observed state
+    #[arg(long, value_name = "PATH")]
+    pub monetary_plan: PathBuf,
 }
 impl Run for BondArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -282,12 +325,25 @@ impl Run for BondArgs {
         let validator = parse_account_id(context, &self.validator, "--validator")?;
         let staker = parse_account_or_authority(context, self.staker.as_deref(), "--staker")?;
         let metadata = load_metadata(self.metadata.as_ref())?;
+        let monetary_plan = load_monetary_plan(context, &self.monetary_plan)?;
+        eyre::ensure!(
+            monetary_plan.source_asset.account() == &staker && monetary_plan.amount == self.amount,
+            "--monetary-plan must bind --staker and --amount",
+        );
+        eyre::ensure!(
+            matches!(
+                monetary_plan.precondition,
+                PublicLaneMonetaryPreconditionV1::Bond(_)
+            ),
+            "--monetary-plan must contain a Bond precondition",
+        );
         let instruction: InstructionBox = BondPublicLaneStake {
             lane_id: LaneId::new(self.lane_id),
             validator,
             staker,
             amount: self.amount,
             metadata,
+            monetary_plan,
         }
         .into();
         context.finish(vec![instruction])
@@ -345,16 +401,32 @@ pub struct FinalizeUnbondArgs {
     /// Exact withdrawal hash previously supplied to schedule-unbond
     #[arg(long, value_name = "HASH")]
     pub request_id: Hash,
+    /// Canonical Norito JSON monetary plan binding network, assets, quantity, and observed state
+    #[arg(long, value_name = "PATH")]
+    pub monetary_plan: PathBuf,
 }
 impl Run for FinalizeUnbondArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let validator = parse_account_id(context, &self.validator, "--validator")?;
         let staker = parse_account_or_authority(context, self.staker.as_deref(), "--staker")?;
+        let monetary_plan = load_monetary_plan(context, &self.monetary_plan)?;
+        eyre::ensure!(
+            monetary_plan.destination_asset.account() == &staker,
+            "--monetary-plan destination must belong to --staker",
+        );
+        eyre::ensure!(
+            matches!(
+                monetary_plan.precondition,
+                PublicLaneMonetaryPreconditionV1::Unbond(_)
+            ),
+            "--monetary-plan must contain an Unbond precondition",
+        );
         let instruction: InstructionBox = FinalizePublicLaneUnbond {
             lane_id: LaneId::new(self.lane_id),
             validator,
             staker,
             request_id: self.request_id,
+            monetary_plan,
         }
         .into();
         context.finish(vec![instruction])
@@ -368,17 +440,27 @@ pub struct ClaimRewardsArgs {
     /// Reward recipient (defaults to the configured transaction authority)
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub account: Option<String>,
-    /// Claim epochs up to this inclusive bound (defaults to all available epochs)
-    #[arg(long, value_name = "EPOCH")]
-    pub upto_epoch: Option<u64>,
+    /// Canonical Norito JSON claim plan with exact retained cursor, records, and custody payouts
+    #[arg(long, value_name = "PATH")]
+    pub claim_plan: PathBuf,
 }
 impl Run for ClaimRewardsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let account = parse_account_or_authority(context, self.account.as_deref(), "--account")?;
+        let claim_plan: PublicLaneRewardClaimPlanV1 = load_plan(&self.claim_plan, "--claim-plan")?;
+        eyre::ensure!(
+            claim_plan.network_scope
+                == PublicLaneMonetaryScopeV1::Network(context.config().network_id),
+            "--claim-plan must bind the configured network",
+        );
+        eyre::ensure!(
+            claim_plan.has_canonical_shape(&account),
+            "--claim-plan must contain bounded ordered records and exact recipient payouts"
+        );
         let instruction: InstructionBox = ClaimPublicLaneRewards {
             lane_id: LaneId::new(self.lane_id),
             account,
-            upto_epoch: self.upto_epoch,
+            claim_plan,
         }
         .into();
         context.finish(vec![instruction])
@@ -402,6 +484,23 @@ impl Run for RecordRewardsArgs {
             .wrap_err("--file must contain a valid Norito JSON RecordPublicLaneRewards object")?;
         context.finish(vec![InstructionBox::from(instruction)])
     }
+}
+fn load_plan<T: norito::json::JsonDeserialize>(path: &Path, flag: &str) -> Result<T> {
+    let json = crate::read_cli_text_file_bounded(path, flag)?;
+    crate::parse_json(&json)
+        .wrap_err_with(|| format!("{flag} must contain a canonical Norito JSON plan"))
+}
+fn load_monetary_plan<C: RunContext>(context: &C, path: &Path) -> Result<PublicLaneMonetaryPlanV1> {
+    let plan: PublicLaneMonetaryPlanV1 = load_plan(path, "--monetary-plan")?;
+    eyre::ensure!(
+        plan.network_scope == PublicLaneMonetaryScopeV1::Network(context.config().network_id),
+        "--monetary-plan must bind the configured network",
+    );
+    eyre::ensure!(
+        plan.has_canonical_shape(),
+        "--monetary-plan must have positive amount and heights, matching asset scope, and exact preconditions"
+    );
+    Ok(plan)
 }
 fn parse_account_or_authority<C: RunContext>(
     context: &C,
@@ -430,9 +529,17 @@ mod tests {
     use super::*;
     use clap::Parser;
     use eyre::Result;
+    use iroha::data_model::{
+        asset::{AssetDefinitionId, AssetId},
+        nexus::{
+            PublicLaneMonetaryBondV1, PublicLaneMonetaryRegistrationV1, PublicLaneMonetaryUnbondV1,
+            PublicLaneRewardClaimSourceV1, PublicLaneRewardClaimStateV1,
+            PublicLaneRewardRecordRefV1,
+        },
+    };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_i18n::Language;
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
     use norito::json::JsonSerialize;
     use std::fmt::Display;
     #[derive(Parser, Debug)]
@@ -503,6 +610,92 @@ mod tests {
             }
         }
     }
+    fn fixture_plan(
+        owner: &AccountId,
+        amount: &str,
+        precondition: PublicLaneMonetaryPreconditionV1,
+    ) -> PublicLaneMonetaryPlanV1 {
+        let definition = AssetDefinitionId::from_uuid_bytes([
+            1, 2, 3, 4, 5, 6, 0x47, 8, 0x89, 10, 11, 12, 13, 14, 15, 16,
+        ])
+        .expect("canonical fixture definition");
+        let owner_asset = AssetId::new(definition.clone(), owner.clone());
+        let custody_asset = AssetId::new(definition, CARPENTER_ID.clone());
+        let (source_asset, destination_asset) =
+            if matches!(precondition, PublicLaneMonetaryPreconditionV1::Unbond(_)) {
+                (custody_asset, owner_asset)
+            } else {
+                (owner_asset, custody_asset)
+            };
+        PublicLaneMonetaryPlanV1 {
+            network_scope: PublicLaneMonetaryScopeV1::Network(TestContext::new().cfg.network_id),
+            valid_until_height: 4000,
+            source_asset,
+            destination_asset,
+            amount: amount.parse().expect("exact fixture quantity"),
+            precondition,
+        }
+    }
+    fn registration_plan(amount: &str) -> PublicLaneMonetaryPlanV1 {
+        fixture_plan(
+            &ALICE_ID,
+            amount,
+            PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
+                activation_height: 3601,
+            }),
+        )
+    }
+    fn bond_plan(owner: &AccountId, amount: &str) -> PublicLaneMonetaryPlanV1 {
+        fixture_plan(
+            owner,
+            amount,
+            PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
+                activation_height: 1,
+                peer_id: valid_peer_id_literal().parse().expect("peer"),
+            }),
+        )
+    }
+    fn unbond_plan(owner: &AccountId) -> PublicLaneMonetaryPlanV1 {
+        fixture_plan(
+            owner,
+            "0.000000001",
+            PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
+                activation_height: 1,
+                request_hash: Hash::new(b"retained exact fixture withdrawal record"),
+            }),
+        )
+    }
+    fn claim_plan(owner: &AccountId, epoch: u64) -> PublicLaneRewardClaimPlanV1 {
+        let transfer = unbond_plan(owner);
+        PublicLaneRewardClaimPlanV1 {
+            network_scope: transfer.network_scope,
+            valid_until_height: transfer.valid_until_height,
+            expected_state: epoch.checked_sub(1).map(|through_epoch| {
+                PublicLaneRewardClaimStateV1 {
+                    through_epoch: Some(through_epoch),
+                }
+            }),
+            records: vec![PublicLaneRewardRecordRefV1 {
+                epoch,
+                record_hash: Hash::new(b"immutable fixture reward record"),
+            }],
+            sources: vec![PublicLaneRewardClaimSourceV1 {
+                source_asset: transfer.source_asset,
+                destination_asset: transfer.destination_asset,
+                expected_accrued: Some(transfer.amount.clone()),
+                payout: transfer.amount,
+            }],
+        }
+    }
+    fn write_plan<T: JsonSerialize>(plan: &T) -> tempfile::NamedTempFile {
+        let file = tempfile::NamedTempFile::new().expect("plan file");
+        fs::write(
+            file.path(),
+            norito::json::to_json(plan).expect("canonical plan JSON"),
+        )
+        .expect("write plan");
+        file
+    }
     fn parse_command(args: &[&str]) -> clap::error::Result<Command> {
         Wrapper::try_parse_from(args).map(|wrapper| wrapper.command)
     }
@@ -539,8 +732,13 @@ mod tests {
         let network_id = NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"staking-cli-network")),
         );
+        let mut monetary_plan = registration_plan("25000.000000001");
+        monetary_plan.network_scope = PublicLaneMonetaryScopeV1::Network(network_id);
+        let plan_file = write_plan(&monetary_plan);
         let command = parse_command(&[
             "register-candidate",
+            "--monetary-plan",
+            plan_file.path().to_str().expect("plan path"),
             "--lane-id",
             "0",
             "--validator",
@@ -558,6 +756,7 @@ mod tests {
         ])
         .expect("candidate command should parse");
         let mut context = TestContext::new();
+        context.cfg.network_id = network_id;
         command.run(&mut context).expect("candidate should succeed");
         let submitted = context.submitted.expect("submitted candidate");
         assert_eq!(submitted.len(), 1);
@@ -572,6 +771,7 @@ mod tests {
             stake_account: ALICE_ID.clone(),
             initial_stake: "25000.000000001".parse().expect("exact amount"),
             metadata: Metadata::default(),
+            monetary_plan,
         };
         assert_eq!(instruction.registration, expected_registration);
         assert_eq!(instruction.activation_height, 3601);
@@ -618,6 +818,9 @@ mod tests {
             iroha_crypto::ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
         )
         .expect("write runtime key");
+        let context_network = TestContext::new().cfg.network_id;
+        let monetary_plan = registration_plan("1000");
+        let plan_file = write_plan(&monetary_plan);
         for (peer_id, expected_error) in [
             (
                 valid_peer_id_literal(),
@@ -636,10 +839,9 @@ mod tests {
                     stake_account: None,
                     initial_stake: 1_000_u64.into(),
                     metadata: None,
+                    monetary_plan: plan_file.path().to_path_buf(),
                 },
-                network_id: NetworkId::from_genesis_hash(
-                    iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"staking-cli-network")),
-                ),
+                network_id: context_network,
                 activation_height: 3601,
                 peer_private_key_file: key_file.path().to_path_buf(),
             };
@@ -673,8 +875,15 @@ mod tests {
     }
     #[test]
     fn bond_defaults_to_signer_and_preserves_exact_quantity() {
+        let monetary_plan = bond_plan(
+            &TestContext::new().cfg.account,
+            "9007199254740993.000000001",
+        );
+        let plan_file = write_plan(&monetary_plan);
         let command = parse_command(&[
             "bond",
+            "--monetary-plan",
+            plan_file.path().to_str().expect("plan path"),
             "--lane-id",
             "0",
             "--validator",
@@ -690,6 +899,7 @@ mod tests {
             staker: context.cfg.account.clone(),
             amount: "9007199254740993.000000001".parse().expect("exact amount"),
             metadata: Metadata::default(),
+            monetary_plan,
         }
         .into();
         command.run(&mut context).expect("bond should succeed");
@@ -700,8 +910,12 @@ mod tests {
         let delegator = BOB_ID.canonical_i105().expect("canonical delegator I105");
         let metadata_file = tempfile::NamedTempFile::new().expect("metadata file");
         fs::write(metadata_file.path(), r#"{"purpose":"delegation"}"#).expect("write metadata");
+        let monetary_plan = bond_plan(&BOB_ID, "0.125");
+        let plan_file = write_plan(&monetary_plan);
         let command = parse_command(&[
             "bond",
+            "--monetary-plan",
+            plan_file.path().to_str().expect("plan path"),
             "--lane-id",
             "7",
             "--validator",
@@ -722,6 +936,7 @@ mod tests {
             amount: "0.125".parse().expect("exact amount"),
             metadata: norito::json::from_str(r#"{"purpose":"delegation"}"#)
                 .expect("expected metadata"),
+            monetary_plan,
         }
         .into();
         command
@@ -764,8 +979,12 @@ mod tests {
     #[test]
     fn finalize_unbond_defaults_to_signer_and_preserves_request() {
         let request_id = Hash::new(b"staking-cli-unbond");
+        let monetary_plan = unbond_plan(&TestContext::new().cfg.account);
+        let plan_file = write_plan(&monetary_plan);
         let command = parse_command(&[
             "finalize-unbond",
+            "--monetary-plan",
+            plan_file.path().to_str().expect("plan path"),
             "--lane-id",
             "3",
             "--validator",
@@ -780,42 +999,53 @@ mod tests {
             validator: ALICE_ID.clone(),
             staker: context.cfg.account.clone(),
             request_id,
+            monetary_plan,
         }
         .into();
         command.run(&mut context).expect("finalize should succeed");
         assert_eq!(context.submitted, Some(vec![expected]));
     }
     #[test]
-    fn claim_rewards_defaults_to_signer_and_all_epochs() {
-        let command = parse_command(&["claim-rewards", "--lane-id", "0"])
-            .expect("claim-rewards command should parse");
+    fn claim_rewards_defaults_to_signer_and_preserves_exact_records() {
+        let claim_plan = claim_plan(&TestContext::new().cfg.account, 0);
+        let plan_file = write_plan(&claim_plan);
+        let command = parse_command(&[
+            "claim-rewards",
+            "--lane-id",
+            "0",
+            "--claim-plan",
+            plan_file.path().to_str().expect("plan path"),
+        ])
+        .expect("claim-rewards command should parse");
         let mut context = TestContext::new();
         let expected: InstructionBox = ClaimPublicLaneRewards {
             lane_id: LaneId::SINGLE,
             account: context.cfg.account.clone(),
-            upto_epoch: None,
+            claim_plan,
         }
         .into();
         command.run(&mut context).expect("claim should succeed");
         assert_eq!(context.submitted, Some(vec![expected]));
     }
     #[test]
-    fn claim_rewards_preserves_account_and_inclusive_epoch() {
+    fn claim_rewards_preserves_account_cursor_and_exact_epoch_records() {
+        let claim_plan = claim_plan(&ALICE_ID, 12);
+        let plan_file = write_plan(&claim_plan);
         let command = parse_command(&[
             "claim-rewards",
+            "--claim-plan",
+            plan_file.path().to_str().expect("plan path"),
             "--lane-id",
             "4",
             "--account",
             &alice_literal(),
-            "--upto-epoch",
-            "12",
         ])
         .expect("bounded claim should parse");
         let mut context = TestContext::new();
         let expected: InstructionBox = ClaimPublicLaneRewards {
             lane_id: LaneId::new(4),
             account: ALICE_ID.clone(),
-            upto_epoch: Some(12),
+            claim_plan,
         }
         .into();
         command.run(&mut context).expect("claim should succeed");
@@ -902,6 +1132,8 @@ mod tests {
             ];
             if name == "schedule-unbond" {
                 args.extend(["--request-id", &request, "--release-at-ms", "2000000000000"]);
+            } else {
+                args.extend(["--monetary-plan", "/not-opened-for-zero-amount.json"]);
             }
             let command = parse_command(&args).expect("zero quantity parses");
             let mut context = TestContext::new();
@@ -915,6 +1147,8 @@ mod tests {
         for amount in ["NaN", "-1", "1e3"] {
             let error = parse_command(&[
                 "bond",
+                "--monetary-plan",
+                "/not-opened-for-invalid-quantity.json",
                 "--lane-id",
                 "0",
                 "--validator",
@@ -932,6 +1166,8 @@ mod tests {
             let mut args = vec![name, "--lane-id", "0", "--validator", &account];
             if name == "schedule-unbond" {
                 args.extend(["--amount", "1", "--release-at-ms", "2000000000000"]);
+            } else {
+                args.extend(["--monetary-plan", "/not-opened-for-invalid-request.json"]);
             }
             let error = parse_command(&args).expect_err("request id is mandatory");
             assert_eq!(
@@ -1088,8 +1324,12 @@ mod tests {
     }
     #[test]
     fn register_submits_instruction_with_valid_peer_id() {
+        let monetary_plan = registration_plan("10");
+        let plan_file = write_plan(&monetary_plan);
         let command = parse_command(&[
             "register",
+            "--monetary-plan",
+            plan_file.path().to_str().expect("plan path"),
             "--lane-id",
             "1",
             "--validator",
@@ -1137,6 +1377,7 @@ mod tests {
             stake_account: None,
             initial_stake: 10_u64.into(),
             metadata: None,
+            monetary_plan: PathBuf::from("/not-opened-for-invalid-peer.json"),
         };
         let mut context = TestContext::new();
         let err = args
@@ -1168,5 +1409,239 @@ mod tests {
                 .contains("--peer-id must be a valid peer id")
         );
         assert!(context.submitted.is_none());
+    }
+    #[test]
+    fn monetary_commands_require_explicit_plans() {
+        for args in [
+            vec![
+                "register",
+                "--lane-id",
+                "0",
+                "--validator",
+                "placeholder",
+                "--peer-id",
+                "placeholder",
+                "--initial-stake",
+                "1",
+            ],
+            vec![
+                "bond",
+                "--lane-id",
+                "0",
+                "--validator",
+                "placeholder",
+                "--amount",
+                "1",
+            ],
+            vec![
+                "finalize-unbond",
+                "--lane-id",
+                "0",
+                "--validator",
+                "placeholder",
+            ],
+        ] {
+            let error = parse_command(&args).expect_err("monetary plan is required");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument
+            );
+            assert!(error.to_string().contains("--monetary-plan"));
+        }
+        let error = parse_command(&["claim-rewards", "--lane-id", "0"])
+            .expect_err("claim plan is required");
+        assert!(error.to_string().contains("--claim-plan"));
+        let error = parse_command(&[
+            "claim-rewards",
+            "--lane-id",
+            "0",
+            "--claim-plan",
+            "plan.json",
+            "--upto-epoch",
+            "12",
+        ])
+        .expect_err("retired bound cannot replace exact record authorization");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn bond_rejects_substituted_plan_before_submission() {
+        let context = TestContext::new();
+        let baseline = bond_plan(&context.cfg.account, "10");
+        let mut alternatives = vec![baseline.clone(); 8];
+        alternatives[0].network_scope = PublicLaneMonetaryScopeV1::Genesis;
+        alternatives[1].network_scope =
+            PublicLaneMonetaryScopeV1::Network(NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"other monetary network")),
+            ));
+        alternatives[2].source_asset = baseline.destination_asset.clone();
+        alternatives[3].amount = 9_u64.into();
+        alternatives[4].precondition = registration_plan("10").precondition;
+        alternatives[5].valid_until_height = 0;
+        alternatives[6].amount = 0_u64.into();
+        alternatives[7].precondition =
+            PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
+                activation_height: 0,
+                peer_id: valid_peer_id_literal().parse().expect("peer"),
+            });
+        for plan in alternatives {
+            let file = write_plan(&plan);
+            let mut context = TestContext::new();
+            BondArgs {
+                lane_id: 0,
+                validator: alice_literal(),
+                staker: None,
+                amount: 10_u64.into(),
+                metadata: None,
+                monetary_plan: file.path().to_path_buf(),
+            }
+            .run(&mut context)
+            .expect_err("substituted plan must fail before submission");
+            assert!(context.submitted.is_none());
+        }
+    }
+
+    #[test]
+    fn registration_rejects_foreign_stake_and_wrong_plan_operation() {
+        let mut alternatives = vec![registration_plan("10"); 4];
+        alternatives[0].source_asset = alternatives[0].destination_asset.clone();
+        alternatives[1].amount = 9_u64.into();
+        alternatives[2].precondition = bond_plan(&ALICE_ID, "10").precondition;
+        alternatives[3].source_asset = AssetId::new(
+            alternatives[3].source_asset.definition().clone(),
+            BOB_ID.clone(),
+        );
+        for (index, plan) in alternatives.into_iter().enumerate() {
+            let file = write_plan(&plan);
+            let mut context = TestContext::new();
+            RegisterArgs {
+                lane_id: 0,
+                validator: alice_literal(),
+                peer_id: valid_peer_id_literal(),
+                stake_account: (index == 3).then(|| BOB_ID.canonical_i105().expect("staker")),
+                initial_stake: 10_u64.into(),
+                metadata: None,
+                monetary_plan: file.path().to_path_buf(),
+            }
+            .run(&mut context)
+            .expect_err("registration must bind validator-owned stake");
+            assert!(context.submitted.is_none());
+        }
+    }
+
+    #[test]
+    fn candidate_rejects_network_or_activation_mismatch_before_key_access() {
+        let plan = registration_plan("1000");
+        let file = write_plan(&plan);
+        for wrong_network in [false, true] {
+            let mut context = TestContext::new();
+            let network = if wrong_network {
+                NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                    Hash::new(b"other candidate network"),
+                ))
+            } else {
+                context.cfg.network_id
+            };
+            let error = RegisterCandidateArgs {
+                registration: RegisterArgs {
+                    lane_id: 0,
+                    validator: alice_literal(),
+                    peer_id: valid_peer_id_literal(),
+                    stake_account: None,
+                    initial_stake: 1000_u64.into(),
+                    metadata: None,
+                    monetary_plan: file.path().to_path_buf(),
+                },
+                network_id: network,
+                activation_height: if wrong_network { 3601 } else { 3602 },
+                peer_private_key_file: PathBuf::from(
+                    "/not-opened-for-substituted-authorization.key",
+                ),
+            }
+            .run(&mut context)
+            .expect_err("candidate context must agree with monetary consent");
+            assert!(error.to_string().contains(if wrong_network {
+                "--network-id must match"
+            } else {
+                "activation height must match"
+            }));
+            assert!(context.submitted.is_none());
+        }
+    }
+
+    #[test]
+    fn finalize_unbond_rejects_foreign_destination_and_wrong_operation() {
+        let owner = TestContext::new().cfg.account;
+        let mut alternatives = vec![unbond_plan(&owner); 2];
+        alternatives[0].destination_asset = alternatives[0].source_asset.clone();
+        alternatives[1].precondition = registration_plan("1").precondition;
+        for plan in alternatives {
+            let file = write_plan(&plan);
+            let mut context = TestContext::new();
+            FinalizeUnbondArgs {
+                lane_id: 0,
+                validator: alice_literal(),
+                staker: None,
+                request_id: Hash::new(b"fixture withdrawal"),
+                monetary_plan: file.path().to_path_buf(),
+            }
+            .run(&mut context)
+            .expect_err("withdrawal must bind its recipient and operation");
+            assert!(context.submitted.is_none());
+        }
+    }
+
+    #[test]
+    fn claim_rejects_wrong_network_recipient_cursor_and_unbounded_records() {
+        let baseline = claim_plan(&TestContext::new().cfg.account, 12);
+        let mut alternatives = vec![baseline.clone(); 6];
+        alternatives[0].network_scope = PublicLaneMonetaryScopeV1::Genesis;
+        alternatives[1].network_scope =
+            PublicLaneMonetaryScopeV1::Network(NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"other reward network")),
+            ));
+        alternatives[2].sources[0].destination_asset = baseline.sources[0].source_asset.clone();
+        alternatives[3].expected_state = Some(PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(12),
+        });
+        alternatives[4].records = (12..77)
+            .map(|epoch| PublicLaneRewardRecordRefV1 {
+                epoch,
+                record_hash: Hash::new(epoch.to_le_bytes()),
+            })
+            .collect();
+        alternatives[5].records.push(baseline.records[0]);
+        for plan in alternatives {
+            let file = write_plan(&plan);
+            let mut context = TestContext::new();
+            ClaimRewardsArgs {
+                lane_id: 0,
+                account: None,
+                claim_plan: file.path().to_path_buf(),
+            }
+            .run(&mut context)
+            .expect_err("invalid claim must fail before submission");
+            assert!(context.submitted.is_none());
+        }
+    }
+
+    #[test]
+    fn monetary_plan_reader_rejects_unknown_fields_and_oversized_files() {
+        let plan = registration_plan("10");
+        let mut json = norito::json::to_value(&plan).expect("plan JSON");
+        json.as_object_mut()
+            .expect("plan object")
+            .insert("retired_transfer".into(), norito::json::Value::Null);
+        let file = write_plan(&json);
+        let context = TestContext::new();
+        load_monetary_plan(&context, file.path()).expect_err("unknown plan fields are rejected");
+        let oversized = tempfile::NamedTempFile::new().expect("sparse plan file");
+        oversized
+            .as_file()
+            .set_len(crate::MAX_CLI_STDIN_BYTES_V1 as u64 + 1)
+            .expect("extend sparse file");
+        let error = load_monetary_plan(&context, oversized.path())
+            .expect_err("oversized plan is rejected before decoding");
+        assert!(format!("{error:#}").contains("exceeds"));
     }
 }

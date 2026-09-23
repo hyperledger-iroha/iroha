@@ -1286,9 +1286,7 @@ mod tests {
             BridgeFinalityAttestationBodyV1,
         },
         isi::kagemusha_v1::{
-            BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-            KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-            KagemushaMintFinalityEpochDecisionV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
         },
         transaction::signed::TransactionBuilder,
     };
@@ -1416,24 +1414,12 @@ mod tests {
                 })
                 .collect(),
         };
-        let mint_finality_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id,
-            epoch: 0,
-            first_height: 1,
-            last_height: 10,
-            authority_generation: mint_finality_authority.generation,
-            authority_id: mint_finality_authority
-                .authority_id()
-                .expect("canonical fixture mint-finality authority"),
-            beacon: BeaconEpochBindingV1::Bootstrap,
-            previous_authorization_id: [0; 32],
-            transition_id: [0; 32],
-            decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
-        };
-        mint_finality_authorization
-            .validate_against_authority(&mint_finality_authority)
-            .expect("fixture genesis authorization matches its authority");
+        let mint_finality_authorization =
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &mint_finality_authority,
+                10,
+            )
+            .expect("canonical fixture genesis authorization");
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,

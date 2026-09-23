@@ -3005,7 +3005,9 @@ impl ProductionLifecycleOwnerV1 {
         )
     }
     pub(in crate::sumeragi) fn assert_cold_ready_fetch_bad_carrier_rejected_for_test(&mut self) {
-        self.registry.registry_mut().assert_cold_fetch_guard_rejects_bad_carrier_for_test();
+        self.registry
+            .registry_mut()
+            .assert_cold_fetch_guard_rejects_bad_carrier_for_test();
     }
 
     /// Opaque byte-stable view of the exact concrete registry for mutation checks.

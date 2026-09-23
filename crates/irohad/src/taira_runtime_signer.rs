@@ -526,19 +526,19 @@ fn load_inherited_key_pair() -> Result<KeyPair, TairaRuntimeSignerErrorV1> {
 fn bind_taira_mint_finality_authority(
     network_id: NetworkId,
     local_validator: &PeerId,
-    authority: &KagemushaMintFinalityAuthorityGenerationV1,
+    generation: &KagemushaMintFinalityAuthorityGenerationV1,
     seed: Zeroizing<[u8; 32]>,
 ) -> Result<KagemushaMintFinalityLocalAuthorityV1, String> {
-    if authority.network_id != network_id {
+    if generation.network_id != network_id {
         return Err("Taira mint-finality roster does not match the configured network".to_owned());
     }
-    let validator_index = authority
+    let validator_index = generation
         .validators
         .iter()
         .position(|entry| &entry.validator == local_validator)
         .and_then(|index| u32::try_from(index).ok())
         .ok_or_else(|| "Taira mint-finality roster has no exact local validator".to_owned())?;
-    KagemushaMintFinalityLocalAuthorityV1::new(Arc::new(authority.clone()), seed, validator_index)
+    KagemushaMintFinalityLocalAuthorityV1::new(Arc::new(generation.clone()), seed, validator_index)
         .map_err(|_| {
             "Taira mint-finality seed does not match its authenticated validator roster".to_owned()
         })

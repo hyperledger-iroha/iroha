@@ -2804,12 +2804,20 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let (mint_finality_authorization, mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-                request.network_id,
+        let mint_finality_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+            request.network_id,
+            0,
+            &roster,
+        );
+        let mint_finality_authorization =
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &mint_finality_authority,
                 u64::MAX,
-                &roster,
-            );
+            )
+            .expect("genesis scheduling authorization");
+        let mint_finality_authorization_id = mint_finality_authorization
+            .authorization_id()
+            .expect("complete genesis authorization identity");
         let _eq_history = KagemushaEqAccumulatorV1::try_from_bytes(&proof.eq_history)
             .expect("canonical Eq mint-authority history");
         let _ep_history = KagemushaEpAccumulatorV1::try_from_bytes(&proof.ep_history)
@@ -2823,7 +2831,7 @@ mod tests {
             proof,
             finality_certificate_binding,
             finality_authority_head,
-            finality_genesis_authorization_id: mint_finality_authorization.authorization_id().expect("genesis authorization identity"),
+            finality_genesis_authorization_id: mint_finality_authorization_id,
             finality_proof_binding_digest,
             encrypted_credit: request.encrypted_credit.clone(),
             artifact_manifest_digest: request.artifact_manifest_digest,
@@ -2836,7 +2844,7 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,
-            kagemusha_mint_finality_authorization: mint_finality_authorization.clone(),
+            kagemusha_mint_finality_authorization: mint_finality_authorization,
             kagemusha_mint_finality_authority: mint_finality_authority,
             epoch_end_height: u64::MAX,
             next_epoch_snapshot: None,

@@ -692,34 +692,22 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let network_id = test_network_id();
-        let mint_finality_roster = crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
-            version: crate::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id,
-            generation: 0,
-            validators: roster
-                .iter()
-                .enumerate()
-                .map(|(index, validator)| {
-                    crate::isi::kagemusha_v1::KagemushaMintFinalityValidatorKeysV1 {
-                        validator: validator.validator.clone(),
-                        eq_proof_public_key: [u8::try_from(index + 1)
-                            .expect("small fixture roster");
-                            32],
-                        ep_proof_public_key: [u8::try_from(index + 17)
-                            .expect("small fixture roster");
-                            32],
-                    }
-                })
-                .collect(),
-        };
-        let mint_finality_authorization = crate::block::consensus_v2::test_kagemusha_genesis_authorization(&mint_finality_roster, u64::MAX);
+        let authority = crate::block::consensus_v2::test_kagemusha_mint_finality_authority(
+            network_id, 0, &roster,
+        );
+        let authorization =
+            crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &authority,
+                u64::MAX,
+            )
+            .expect("valid fixture genesis scheduling authorization");
         HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: block.header().height().get(),
             epoch: 0,
-            kagemusha_mint_finality_authorization: mint_finality_authorization,
-            kagemusha_mint_finality_authority: mint_finality_roster,
+            kagemusha_mint_finality_authorization: authorization,
+            kagemusha_mint_finality_authority: authority,
             epoch_end_height: u64::MAX,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,

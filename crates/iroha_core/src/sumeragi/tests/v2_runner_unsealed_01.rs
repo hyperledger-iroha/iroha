@@ -1,8 +1,7 @@
 #[test]
 fn open_height_lane_relay_drain_services_exactly_one_occurrence_per_turn() {
-    let (mut adapter, keys) =
-        super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
-    let (services, _) = super::super::v2_worker::tests::fixture();
+    let (_adapter, keys, mut queue_plan, _) =
+        super::super::v2_lane_work::tests::queue_plan_owner_fixture(2);
     let sender = PeerId::new(keys[1].public_key().clone());
     let (lane_relay_tx, lane_relay_rx) = std::sync::mpsc::sync_channel(2);
     for certificate in [vec![0_u8], vec![1_u8]] {
@@ -15,16 +14,16 @@ fn open_height_lane_relay_drain_services_exactly_one_occurrence_per_turn() {
     }
 
     assert!(
-        drain_lane_relay_ingress(&lane_relay_rx, &mut adapter, &services, 0)
+        drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0)
             .expect("service the first open-height relay occurrence")
     );
     assert!(
-        drain_lane_relay_ingress(&lane_relay_rx, &mut adapter, &services, 0)
+        drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0)
             .expect("service the second open-height relay occurrence"),
         "the first open-height turn must leave the second relay queued"
     );
     assert!(
-        !drain_lane_relay_ingress(&lane_relay_rx, &mut adapter, &services, 0)
+        !drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0)
             .expect("observe the exhausted open-height relay queue")
     );
 }

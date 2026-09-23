@@ -110,10 +110,9 @@ pub(super) fn constrain_epoch_authorization<F: KagemushaPoseidonFieldV1>(
     let activate = gate.is_equal(ctx, decision, Constant(F::ONE));
     let retain = gate.is_equal(ctx, decision, Constant(F::from(2)));
     let (installed, session, transcript) = match value.map(|v| v.beacon) {
-        Some(BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-            session_id,
-            transcript_hash,
-        })) => (true, session_id, transcript_hash),
+        Some(BeaconEpochBindingV1::Installed(binding)) => {
+            (true, binding.session_id, binding.transcript_hash)
+        }
         None | Some(BeaconEpochBindingV1::Bootstrap) => (false, [0; 32], [0; 32]),
     };
     let beacon_installed = ctx.load_witness(F::from(u64::from(installed)));

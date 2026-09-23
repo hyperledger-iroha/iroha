@@ -17,6 +17,9 @@ use iroha_crypto::{
 #[path = "membership_record.rs"]
 pub(in crate::state) mod record;
 
+#[path = "membership_append.rs"]
+pub(in crate::state) mod append;
+
 const KEY_DOMAIN: &[u8] = b"iroha:transaction-membership:key:v1\0";
 const VALUE_DOMAIN: &[u8] = b"iroha:transaction-membership:height:v1\0";
 const ROOT_DOMAIN: &[u8] = b"iroha:transaction-membership:root:v1\0";

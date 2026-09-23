@@ -3,8 +3,8 @@
 
 The build identity is immutable; each attempt gets a fresh inventory and nonce.
 Native assemble/authorize/apply remain the authentication and execution authority.
-Native preparation derives public genesis, beacon inputs and the ongoing epoch
-supervisor plan from a closed topology intent and actual retained input paths.
+Native preparation derives public genesis and authenticated beacon inputs from
+a closed topology intent and actual retained input paths.
 Only the pinned renderer creates final FD200 units; native code admits credentials.
 Static retained path arguments and per-attempt derived assembly arguments have
 separate records. No prior four-file public bundle is accepted as the new closure.
@@ -53,7 +53,6 @@ PHASES = (
     "retire",
     "prepare-public-inputs",
     "prepare-beacon-inputs",
-    "prepare-epoch-supervisor-plan",
     "assemble",
     "seed-pre",
     "authorize",
@@ -270,7 +269,6 @@ def native_journal_progress(path):
             "admitted",
             "preflight",
             "stage",
-            "epoch_supervisor_pause",
             "stop",
             "install",
             "reset",
@@ -373,7 +371,7 @@ def run_native(argv, directory, *, phase, pass_fds=(), env=None, journal_path=No
 def qualification_steps(scope):
     """Exact first-release native journal sequence; never reinterpret old indices."""
     require(scope in ("core_testnet", "full_inrou"), "one explicit canonical qualification scope is required")
-    return ("preflight", "stage", "epoch_supervisor_pause", "stop", "install", "reset") + (("preseed",) if scope == "full_inrou" else ()) + ("start", "canary", "convergence", "restart_proof", "edge_stage", "edge_cutover", "edge_verify", "seal", "cleanup")
+    return ("preflight", "stage", "stop", "install", "reset") + (("preseed",) if scope == "full_inrou" else ()) + ("start", "canary", "convergence", "restart_proof", "edge_stage", "edge_cutover", "edge_verify", "seal", "cleanup")
 
 
 def require_candidate_probe_inventory(inventory):
@@ -443,70 +441,8 @@ def fresh_inventory(previous, attempt_id, nonce):
     return value
 
 
-def validate_supervisor_intent(value):
-    """Ongoing authority and original service state are explicit owner inputs."""
-    fields = {"host_slug", "authorization", "payment_asset", "transaction_fee_maximum",
-              "first_epoch", "batch_epochs", "operation_timeout_ms", "provision_timeout_ms",
-              "timeout_ms", "prior_state", "prior_plan"}
-    require(isinstance(value, dict) and set(value) == fields,
-            "exact explicit epoch supervisor intent required")
-    require(value["authorization"] == "until_stopped"
-            and value["host_slug"] in {f"taira-validator-{i}" for i in range(1, 5)}
-            and value["prior_state"] in ("absent", "running", "stopped"),
-            "explicit ongoing authority, selected host and prior state required")
-    for key in ("payment_asset", "transaction_fee_maximum"):
-        require(isinstance(value[key], str) and 0 < len(value[key]) <= 1024
-                and not any(c.isspace() or ord(c) < 32 for c in value[key])
-                and not value[key].startswith("-"), "invalid public supervisor intent: " + key)
-    for key in ("first_epoch", "operation_timeout_ms", "provision_timeout_ms", "timeout_ms"):
-        require(type(value[key]) is int and 1 <= value[key] <= 2**64 - 1,
-                "positive finite native supervisor bound required: " + key)
-    require(type(value["batch_epochs"]) is int and 2 <= value["batch_epochs"] <= 256,
-            "native supervisor batch must be within 2..256")
-    prior = value["prior_plan"]
-    require((value["prior_state"] == "absent") == (prior is None),
-            "occupied predecessor requires an exact pinned prior plan")
-    if prior is not None:
-        require(isinstance(prior, dict) and set(prior) == {"path", "sha256"}
-                and isinstance(prior["path"], str) and prior["path"].startswith("/")
-                and Path(prior["path"]) == Path(os.path.normpath(prior["path"]))
-                and not any(c in prior["path"] for c in "\x00\n\r")
-                and isinstance(prior["sha256"], str)
-                and re.fullmatch("[0-9a-f]{64}", prior["sha256"]),
-                "exact public predecessor path and SHA256 required")
-    return value
 
 
-def validate_supervisor_inputs(plan, inventory, arguments):
-    """Join retained public plans and original seed paths before retirement; no secret IO."""
-    intent = validate_supervisor_intent(plan.get("epoch_supervisor"))
-    retained = inventory.get("epoch_supervisor")
-    require(isinstance(retained, dict)
-            and retained.get("schema") == "iroha.taira.public-reset.epoch-supervisor-plan.v1",
-            "retained native supervisor plan required")
-    path = arguments["--epoch-supervisor-plan"][0]
-    require(decode(public_record(path, owner=0, private=True)) == retained,
-            "retained supervisor path does not identify the inventory's exact native plan")
-    originals = retained.get("original_seed_sources")
-    require(isinstance(originals, list) and len(originals) == 4
-            and all(isinstance(row, dict) and set(row) == {"validator", "path"} for row in originals)
-            and arguments["--epoch-seed-sources"] == [row["path"] for row in originals],
-            "original seed paths differ from the retained sorted native mapping")
-    require(intent["prior_state"] == retained.get("prior_state"),
-            "explicit prior service state differs from completed rollback authority")
-    prior = retained.get("prior")
-    if intent["prior_state"] == "absent":
-        require(prior is None, "absence cannot discard an admitted predecessor")
-    else:
-        pin = intent["prior_plan"]
-        require(isinstance(prior, dict) and set(prior) == {"plan_sha256", "plan_bytes"}
-                and pin["sha256"] == prior["plan_sha256"]
-                and pin["path"] != path,
-                "prior plan must identify the original predecessor, never the failed candidate")
-        raw = public_record(pin["path"], pin["sha256"], owner=0, private=True)
-        require(isinstance(prior["plan_bytes"], list) and list(raw) == prior["plan_bytes"],
-                "original predecessor plan bytes differ")
-    return intent
 
 
 def validate_artifact_receipts(build, binary, source):
@@ -750,12 +686,10 @@ def validate_plan(plan):
         "local_node",
         "expected_mac",
         "retired_public_imports",
-        "epoch_supervisor",
     }
     require(set(plan["guest"]) == guest_keys,
             "unexpected guest runtime plan fields")
     validate_retired_public_imports(plan["guest"]["retired_public_imports"])
-    validate_supervisor_intent(plan["guest"]["epoch_supervisor"])
     for key in guest_keys - {
         "guard_support",
         "unit_renderer",
@@ -763,7 +697,6 @@ def validate_plan(plan):
         "capacity_plan",
         "expected_mac",
         "retired_public_imports",
-        "epoch_supervisor",
     }:
         value = plan["guest"][key]
         require(
@@ -825,7 +758,7 @@ RETIRE_BINS = None
 RETIRE_BINARY_MANIFEST = None
 RETIRE_PUBLIC_IMPORTS = ()
 RETIRE_PROTECTED_INPUTS = ()
-RETIRE_EPOCH_STATE = Path("/var/lib/taira-epoch-supervisor")
+RETIRE_DEPLOYMENT_STATE = Path("/var/lib/taira-deployment")
 
 
 class _retire_RebindError(Exception):
@@ -1455,17 +1388,17 @@ def _retire_check_guards(g, root, expected_cli_sha):
         )
 
 
-def _retire_epoch_lock():
+def _retire_deployment_lock():
     """Join the existing native lifecycle lock; never recreate lost authority."""
-    root = direct(RETIRE_EPOCH_STATE)
+    root = direct(RETIRE_DEPLOYMENT_STATE)
     root_info = root.lstat()
     _retire_need(stat.S_ISDIR(root_info.st_mode) and root_info.st_uid == 0
                  and root_info.st_gid == 0 and stat.S_IMODE(root_info.st_mode) == 0o700,
-                 "epoch supervisor state root custody differs")
+                 "deployment state root custody differs")
     for parent in root.parents:
         info = parent.lstat()
         _retire_need(stat.S_ISDIR(info.st_mode) and info.st_uid == 0
-                     and not info.st_mode & 0o022, "epoch lock ancestor custody differs")
+                     and not info.st_mode & 0o022, "deployment lock ancestor custody differs")
     path = root / ".deployment.lock"
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     try:
@@ -1473,12 +1406,12 @@ def _retire_epoch_lock():
         _retire_need(stat.S_ISREG(before.st_mode) and before.st_uid == 0
                      and before.st_gid == 0 and before.st_nlink == 1
                      and stat.S_IMODE(before.st_mode) == 0o600 and before.st_size == 0,
-                     "epoch deployment lock custody differs")
+                     "deployment lock custody differs")
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         _retire_need(identity(path.lstat()) == identity(before)
                      and identity(os.fstat(fd)) == identity(before)
                      and identity(root.lstat()) == identity(root_info),
-                     "epoch deployment lock changed during acquisition")
+                     "deployment lock changed during acquisition")
         _retire_need(not os.path.lexists(root / ".reset-owner.json"),
                      "active reset owner forbids retirement")
         return fd
@@ -1504,10 +1437,10 @@ def _retire_locks(g, context):
             opened.append(fd)
             g["inspect_file"](os.fstat(fd), private=True, size=0)
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        # Native reset order is coordinator -> host action -> epoch deployment.
+        # Native reset order is coordinator -> host action -> deployment.
         # Rollback already released its durable owner; an updater can otherwise
         # enter while retirement archives control and prunes failed artifacts.
-        opened.append(_retire_epoch_lock())
+        opened.append(_retire_deployment_lock())
         yield
     finally:
         for fd in reversed(opened):
@@ -2939,7 +2872,7 @@ def _continuity_capture(args):
     )
     peers = [
         item["validator"]
-        for item in manifest["kagemusha_mint_finality"]["epoch_roster"]["validators"]
+        for item in manifest["kagemusha_mint_finality"]["authority_generation"]["validators"]
     ]
     _continuity_need(
         len(peers) == 4 and len(set(peers)) == 4,
@@ -3757,9 +3690,6 @@ def local_arguments(raw, qualification_scope):
     shape = (
         ("--public-inputs", 1),
         ("--runtime-client-config", 1),
-        ("--maintenance-admin-config", 1),
-        ("--epoch-seed-sources", 4),
-        ("--epoch-supervisor-plan", 1),
         ("--validator-client-config", 4),
         ("--validator-operator-key", 1),
         ("--onboarding-token", 1),
@@ -3796,12 +3726,11 @@ def local_arguments(raw, qualification_scope):
 def apply_arguments(arguments, qualification_scope):
     """Apply receives runtime paths only, never public assembly or unit inputs."""
     qualification_steps(qualification_scope)
-    flags = ["--runtime-client-config", "--maintenance-admin-config", "--validator-client-config",
+    flags = ["--runtime-client-config", "--validator-client-config",
              "--validator-operator-key", "--onboarding-token"]
     if qualification_scope == "full_inrou":
         flags.append("--inrou-stage-dir")
-    return ([item for flag in flags for item in [flag, *arguments[flag]]]
-            + ["--epoch-seed-source", *arguments["--epoch-seed-sources"]])
+    return [item for flag in flags for item in [flag, *arguments[flag]]]
 
 
 def prepare_beacon_arguments(cli, assembly, plan, static_args, arguments, draft, previous, logs):
@@ -3861,48 +3790,11 @@ def prepare_beacon_arguments(cli, assembly, plan, static_args, arguments, draft,
     derived = list(static_args)
     derived[derived.index("--public-inputs") + 1] = str(bundle)
     derived.extend(["--beacon-inputs", str(inputs), "--beacon-validator-unit", *paths])
-    return derived
-
-
-def prepare_supervisor_arguments(cli, assembly, plan, static_args, arguments, intent,
-                                 previous, derived_args, logs):
-    """Native code derives the complete current plan from held actual inputs."""
-    policy = validate_supervisor_inputs(plan, previous, arguments)
-    context_flags = ["--runtime-client-config", "--maintenance-admin-config",
-                     "--validator-client-config", "--validator-operator-key", "--onboarding-token"]
-    if intent["qualification_scope"] == "full_inrou":
-        context_flags.append("--inrou-stage-dir")
-    context_flags.extend(["--validator-unit", "--edge-unit", "--known-hosts"])
-    output = assembly / "epoch-supervisor"
-    argv = [*cli, "prepare-epoch-supervisor-plan", "--intent", assembly / "topology-intent.json",
-            "--public-inputs", assembly / "public-inputs"]
-    argv.extend(item for flag in context_flags for item in [flag, *arguments[flag]])
-    for key in ("host_slug", "authorization", "payment_asset", "transaction_fee_maximum",
-                "first_epoch", "batch_epochs", "operation_timeout_ms", "provision_timeout_ms",
-                "timeout_ms", "prior_state"):
-        argv.extend(["--" + key.replace("_", "-"),
-                     "until-stopped" if key == "authorization" else str(policy[key])])
-    argv.extend(["--epoch-seed-source", *arguments["--epoch-seed-sources"]])
-    if policy["prior_plan"] is not None:
-        argv.extend(["--prior-plan", policy["prior_plan"]["path"]])
-    argv.extend(["--output-dir", output])
-    run_native(argv, logs / "prepare-epoch-supervisor-plan", phase="prepare-epoch-supervisor-plan")
-    generated = output / "supervisor-plan.json"
-    value = decode(public_record(generated, owner=0, private=True))
-    require(isinstance(value, dict)
-            and value.get("schema") == "iroha.taira.public-reset.epoch-supervisor-plan.v1"
-            and value.get("host_slug") == policy["host_slug"]
-            and value.get("prior_state") == policy["prior_state"]
-            and value.get("original_seed_sources") == previous["epoch_supervisor"]["original_seed_sources"],
-            "native supervisor output differs from explicit host, state or original custody")
-    derived = list(derived_args)
-    derived[derived.index("--epoch-supervisor-plan") + 1] = str(generated)
-    current_static = list(static_args)
-    current_static[current_static.index("--epoch-supervisor-plan") + 1] = str(generated)
-    # Future attempts bind this actual generated plan, not the previous candidate.
-    write_public(assembly / "native-local-args.json", current_static)
+    write_public(assembly / "native-local-args.json", list(static_args))
     write_public(assembly / "native-assembly-args.json", derived)
     return derived
+
+
 
 
 def find_terminal(journal_root, deployment_id):
@@ -4166,10 +4058,7 @@ def configure_protocols(
             *(Path(plan[key]) for key in ("source_manifest", "binary_manifest", "signing_key",
                 "trusted_public_key", "ssh_identity", "known_hosts")),
             *(Path(path) for key in ("--runtime-client-config", "--validator-client-config",
-                "--validator-operator-key", "--onboarding-token", "--maintenance-admin-config",
-                "--epoch-seed-sources", "--epoch-supervisor-plan") for path in arguments[key]),
-            *([Path(plan["epoch_supervisor"]["prior_plan"]["path"])]
-              if plan["epoch_supervisor"]["prior_plan"] is not None else []),
+                "--validator-operator-key", "--onboarding-token") for path in arguments[key]),
         )],
         "CONTINUITY_RUNTIME": runtime,
         "CONTINUITY_PREP": Path(plan["prep_root"]),
@@ -4637,7 +4526,6 @@ def guest_admit(request):
             inventory_path.parent / "native-local-args.json", owner=0, private=True
         ), inventory["qualification_scope"]
     )
-    validate_supervisor_inputs(plan, inventory, arguments)
     plan = derive_runtime_paths(plan, request["binary"], inventory, arguments)
     plan["previous_terminal"] = str(
         find_terminal(
@@ -4881,7 +4769,6 @@ def guest_locked(request, capacity, root):
         arguments["--known-hosts"] == [plan["known_hosts"]],
         "native SSH authority differs",
     )
-    validate_supervisor_inputs(plan, inventory, arguments)
     attempt_id = resume_id or (
         "retry-" + str(time.time_ns()) + "-" + secrets.token_hex(4)
     )
@@ -4997,10 +4884,6 @@ def guest_locked(request, capacity, root):
         phase = "prepare-beacon-inputs"
         derived_args = prepare_beacon_arguments(
             cli, assembly, plan, args, arguments, draft, inventory, logs)
-        completed.append(phase)
-        phase = "prepare-epoch-supervisor-plan"
-        derived_args = prepare_supervisor_arguments(
-            cli, assembly, plan, args, arguments, draft, inventory, derived_args, logs)
         completed.append(phase)
         phase = "assemble"
         check_capacity(capacity, plan["capacity_plan"], phase, attempt)

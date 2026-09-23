@@ -11,6 +11,7 @@ use crate::sumeragi::{
     v2_lane_instance::{LaneOutbound, LanePhysicalShutdown, LaneProcessLimits},
     v2_lane_transport::{
         NativeDecisionTransportAdmission, NativeLaneTransport, NativeTransportAdmission,
+        NativeTransportProgress,
     },
 };
 use iroha_data_model::block::lane_consensus::LaneDecisionV1;
@@ -128,6 +129,16 @@ impl NativeRunnerProcess {
     ) -> Result<(), V2RunnerError> {
         self.settle_pending_publication()?;
         self.poll_candidate()?;
+        // Already-issued output gets one bounded actor attempt before another
+        // physical Native dequeue. Pressure retains custody and still permits
+        // the independent ingress, clock and worker phases below.
+        let observed = self
+            .state
+            .verified_lane_consensus_contexts()
+            .map_err(V2RunnerError::Service)?;
+        if let Some(observed) = observed.as_ref() {
+            self.service_ready_output(observed, global, network)?;
+        }
         self.service_native_ingress(receiver)?;
         if let Some(source) = self.source.as_mut() {
             source.poll(network, &self.guard, now, self.retransmit)?;
@@ -135,11 +146,7 @@ impl NativeRunnerProcess {
         if let Some(prepared) = self.pending_ingress.take() {
             self.consume_native_ingress(prepared, receiver)?;
         }
-        let Some(observed) = self
-            .state
-            .verified_lane_consensus_contexts()
-            .map_err(V2RunnerError::Service)?
-        else {
+        let Some(observed) = observed else {
             return Ok(());
         };
         self.recovered_sources.retain(|binding, _| {
@@ -151,36 +158,6 @@ impl NativeRunnerProcess {
         self.driver
             .poll(&observed, now)
             .map_err(V2RunnerError::Service)?;
-        let _ = self
-            .transport
-            .poll(&observed, Some(global), network)
-            .map_err(V2RunnerError::Service)?;
-        if self.outbound.is_none() {
-            self.outbound = self
-                .driver
-                .take_outbound()
-                .map_err(V2RunnerError::Service)?;
-        }
-        if let Some(packet) = self.outbound.take() {
-            match self.transport.retain(&observed, packet) {
-                NativeTransportAdmission::Retained => {}
-                NativeTransportAdmission::Retry(packet) => self.outbound = Some(packet),
-                NativeTransportAdmission::Rejected { packet, reason } => {
-                    let id =
-                        super::super::v2_lane_driver::message_instance(&packet.envelope.message);
-                    if observed
-                        .contexts()
-                        .iter()
-                        .any(|lane| Hash::from(lane.instance_id().0) == id)
-                    {
-                        self.outbound = Some(packet);
-                        return Err(V2RunnerError::Service(reason));
-                    }
-                    // A complete authenticated current-set observation retires only
-                    // this obsolete transport packet. The instance Apply stays owned.
-                }
-            }
-        }
         if self.relay_context != Some(global.context().id()) {
             self.relayed.clear();
             self.relay_context = Some(global.context().id());
@@ -223,6 +200,53 @@ impl NativeRunnerProcess {
             }
         }
         Ok(())
+    }
+
+    /// Attempt one already-issued exact output before selecting fresh ingress.
+    /// No signing, worker wait or economic Apply is performed in this phase.
+    pub(in crate::sumeragi) fn service_ready_output(
+        &mut self,
+        observed: &crate::state::VerifiedLaneContexts,
+        global: &VerifiedHeightContext,
+        network: &crate::IrohaNetwork,
+    ) -> Result<NativeTransportProgress, V2RunnerError> {
+        if self.outbound.is_none() {
+            self.outbound = self
+                .driver
+                .take_outbound()
+                .map_err(V2RunnerError::Service)?;
+        }
+        if let Some(packet) = self.outbound.take() {
+            match self.transport.retain(observed, packet) {
+                NativeTransportAdmission::Retained => {}
+                NativeTransportAdmission::Retry(packet) => self.outbound = Some(packet),
+                NativeTransportAdmission::Rejected { packet, reason } => {
+                    let id =
+                        super::super::v2_lane_driver::message_instance(&packet.envelope.message);
+                    if observed
+                        .contexts()
+                        .iter()
+                        .any(|lane| Hash::from(lane.instance_id().0) == id)
+                    {
+                        self.outbound = Some(packet);
+                        return Err(V2RunnerError::Service(reason));
+                    }
+                    // A complete authenticated current-set observation retires only
+                    // this obsolete transport packet. The instance Apply stays owned.
+                }
+            }
+        }
+        self.transport
+            .poll(observed, Some(global), network)
+            .map_err(V2RunnerError::Service)
+    }
+
+    /// Inspect retained transport custody without completing or replacing an output.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn retained_transport_outputs_for_test(
+        &self,
+    ) -> Vec<(Arc<super::super::message::BlockMessageWire>, Vec<PeerId>)> {
+        self.transport.retained_outputs_for_test()
     }
 
     /// Native and exact historical responses continue while global Validate waits.

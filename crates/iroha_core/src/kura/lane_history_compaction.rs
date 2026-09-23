@@ -675,7 +675,7 @@ impl Kura {
                 .try_fold(0_u64, |peak, ((data, index), _, _)| {
                     Self::sidecar_tracked_bytes(data, index).map(|bytes| peak.max(bytes))
                 })?;
-            let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;
+            let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;
             let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
             let terminal_reservations =
                 self.autonomous_global_terminal_outcome_reserved_bytes_locked()?;

@@ -304,14 +304,12 @@ fn authorization_cannot_extend_the_bounded_plan() {
     .expect("the maximum install timeout fits within the complete execution budget");
     assert_eq!(
         envelope.claims.execution_expires_at_unix_ms - issued_at,
-        36_270_000,
+        36_060_000,
     );
 
     // One physical host requires exactly 42,000 action seconds, plus the
     // fifteen-minute admission window and five-minute safety margin.
     inventory.timeouts = TimeoutsV1 {
-        epoch_supervisor_pause_secs: 2,
-        epoch_supervisor_start_secs: 1,
         stop_secs: 2,
         install_secs: 600,
         reset_secs: 1,
@@ -322,7 +320,7 @@ fn authorization_cannot_extend_the_bounded_plan() {
         restart_secs: 1,
         edge_secs: 1,
         cleanup_secs: 3,
-        rollback_secs: 1,
+        rollback_secs: 2,
     };
     validate_timeouts(&inventory.timeouts).expect("every individual timeout is legal");
     let bytes = canonical_inventory_bytes(&inventory).unwrap();
@@ -486,12 +484,6 @@ fn assembler_rejects_incomplete_topology_before_reading_runtime_inputs() {
             .map(|slug| absent.join(format!("{slug}.beacon.service")))
             .collect(),
         runtime_client_config: absent.join("runtime-client.toml"),
-        maintenance_admin_config: absent.join("maintenance-admin.toml"),
-        epoch_seed_sources: VALIDATOR_SLUGS
-            .iter()
-            .map(|slug| absent.join(format!("{slug}.seed")))
-            .collect(),
-        epoch_supervisor_plan: absent.join("epoch-supervisor.json"),
         validator_client_config: VALIDATOR_SLUGS
             .iter()
             .map(|slug| absent.join(format!("{slug}.toml")))
@@ -524,8 +516,6 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
     let absent = root.join("absent");
     let mut inventory = sample_inventory_fixture();
     inventory.timeouts = TimeoutsV1 {
-        epoch_supervisor_pause_secs: 600,
-        epoch_supervisor_start_secs: 600,
         stop_secs: 600,
         install_secs: 600,
         reset_secs: 600,
@@ -557,9 +547,6 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
             .map(|slug| absent.join(format!("{slug}.beacon.service")))
             .collect(),
         runtime_client_config: absent.join("runtime-client.toml"),
-        maintenance_admin_config: absent.join("maintenance-admin.toml"),
-        epoch_seed_sources: Vec::new(),
-        epoch_supervisor_plan: absent.join("epoch-supervisor.json"),
         validator_client_config: VALIDATOR_SLUGS
             .iter()
             .map(|slug| absent.join(format!("{slug}.toml")))
@@ -574,7 +561,7 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
         edge_unit: absent.join("edge.service"),
         known_hosts: absent.join("known-hosts"),
     };
-    let expected = "bounded execution plan requires 85800 seconds (actions: 84600 seconds, admission: 900 seconds, safety: 300 seconds), exceeding the 43200-second limit by 42600 seconds";
+    let expected = "bounded execution plan requires 83400 seconds (actions: 82200 seconds, admission: 900 seconds, safety: 300 seconds), exceeding the 43200-second limit by 40200 seconds";
     assert_eq!(
         derive_inventory(&mut inventory, &local())
             .expect_err("budget must fail before opening the absent source manifest")
@@ -628,8 +615,6 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
 fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual_bounds() {
     let mut inventory = sample_inventory_fixture();
     inventory.timeouts = TimeoutsV1 {
-        epoch_supervisor_pause_secs: 60,
-        epoch_supervisor_start_secs: 120,
         stop_secs: 60,
         install_secs: 90,
         reset_secs: 60,
@@ -647,7 +632,7 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
         .expect("deployment defaults pass structural admission");
     assert_eq!(
         execution_lifetime_ms(&inventory).expect("bounded deployment lease"),
-        17_820_000,
+        17_400_000,
     );
     let (key, trusted) = owner();
     let bytes = canonical_inventory_bytes(&inventory).expect("inventory");
@@ -656,7 +641,7 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
         .expect("admitted defaults are signable under the same budget");
     assert_eq!(
         envelope.claims.execution_expires_at_unix_ms - issued_at,
-        17_820_000,
+        17_400_000,
     );
 
     inventory.timeouts.stop_secs = 0;
@@ -815,87 +800,6 @@ fn topology_context_checks_scope_and_budget_before_custody() {
     assert!(reset_context::validate_topology_intent(&intent).is_err());
 }
 
-#[test]
-fn maintenance_grant_requires_registration_and_survives_no_revocation() {
-    use iroha_data_model::{
-        account::Account,
-        isi::{Grant, InstructionBox, Register, Revoke, Unregister},
-        permission::Permission,
-    };
-    let key = KeyPair::from_seed(
-        b"synthetic maintenance owner only".to_vec(),
-        Algorithm::Ed25519,
-    );
-    let account = AccountId::new(key.public_key().clone());
-    let permission = Permission::new(
-        "CanSetParameters".to_owned(),
-        iroha_primitives::json::Json::new(()),
-    );
-    let register: InstructionBox = Register::account(Account::new(account.clone())).into();
-    let grant: InstructionBox =
-        Grant::account_permission(permission.clone(), account.clone()).into();
-    let revoke: InstructionBox = Revoke::account_permission(permission, account.clone()).into();
-    let unregister: InstructionBox = Unregister::account(account.clone()).into();
-    assert!(validate_maintenance_grant_instructions([&grant], &account).is_err());
-    assert!(validate_maintenance_grant_instructions([&register], &account).is_err());
-    validate_maintenance_grant_instructions([&register, &grant], &account)
-        .expect("explicit registered grant");
-    assert!(
-        validate_maintenance_grant_instructions([&register, &grant, &revoke], &account).is_err()
-    );
-    assert!(
-        validate_maintenance_grant_instructions([&register, &grant, &unregister], &account)
-            .is_err()
-    );
-}
-
-#[test]
-fn ongoing_supervisor_authorization_is_explicit_and_separate_from_reset_expiry() {
-    let inventory = sample_inventory_fixture();
-    let (key, trusted) = owner();
-    let bytes = canonical_inventory_bytes(&inventory).unwrap();
-    let envelope = sign_inventory(&inventory, &bytes, &trusted, &key, 1_000_000).unwrap();
-    assert_eq!(
-        envelope.claims.epoch_supervisor_authorization,
-        "until_stopped"
-    );
-    assert_eq!(
-        envelope.claims.epoch_supervisor_policy_sha256,
-        inventory.epoch_supervisor.policy_sha256
-    );
-    let canonical = json::to_value(&envelope.claims).unwrap();
-    for field in [
-        "epoch_supervisor_authorization",
-        "epoch_supervisor_policy_sha256",
-        "maintenance_admin_config_sha256",
-        "maintenance_admin_identity",
-    ] {
-        let mut missing = canonical.clone();
-        missing.as_object_mut().unwrap().remove(field);
-        assert!(json::from_value::<AuthorizationClaimsV1>(missing).is_err());
-    }
-    let mut forged = envelope;
-    forged.claims.epoch_supervisor_authorization = "until_reset_expires".to_owned();
-    forged.signature_hex = hex::encode(
-        Signature::try_new(
-            key.private_key(),
-            &authorization_message(&forged.claims).unwrap(),
-        )
-        .unwrap()
-        .payload(),
-    );
-    assert!(
-        verify_authorization(
-            &inventory,
-            &sha256_hex(&bytes),
-            &forged,
-            &trusted,
-            1_000_000
-        )
-        .is_err()
-    );
-}
-
 #[cfg(unix)]
 #[test]
 fn native_context_rejects_scope_before_opening_actual_inputs() {
@@ -907,7 +811,6 @@ fn native_context_rejects_scope_before_opening_actual_inputs() {
     let inputs = ResetContextInputs {
         public_inputs: path.clone(),
         runtime_client_config: path.clone(),
-        maintenance_admin_config: path.clone(),
         validator_client_config: vec![path.clone(); 4],
         onboarding_token: path.clone(),
         validator_operator_key: path.clone(),
@@ -923,4 +826,38 @@ fn native_context_rejects_scope_before_opening_actual_inputs() {
         error.to_string().contains("inrou") || error.to_string().contains("Inrou"),
         "{error}"
     );
+}
+
+#[test]
+fn authorization_rejects_retired_supervisor_fields() {
+    let inventory = sample_inventory_fixture();
+    let (key, trusted) = owner();
+    let bytes = canonical_inventory_bytes(&inventory).unwrap();
+    let envelope = sign_inventory(&inventory, &bytes, &trusted, &key, 1_000_000).unwrap();
+    verify_authorization(
+        &inventory,
+        &sha256_hex(&bytes),
+        &envelope,
+        &trusted,
+        1_000_000,
+    )
+    .unwrap();
+    let canonical = json::to_value(&envelope.claims).unwrap();
+    for field in [
+        "epoch_supervisor_authorization",
+        "epoch_supervisor_policy_sha256",
+        "maintenance_admin_config_sha256",
+        "maintenance_admin_identity",
+    ] {
+        assert!(canonical.get(field).is_none());
+        let mut retired = canonical.clone();
+        retired
+            .as_object_mut()
+            .unwrap()
+            .insert(field.into(), json::Value::Null);
+        assert!(
+            json::from_value::<AuthorizationClaimsV1>(retired).is_err(),
+            "{field}"
+        );
+    }
 }

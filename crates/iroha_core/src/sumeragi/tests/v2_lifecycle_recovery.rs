@@ -112,6 +112,7 @@ fn lifecycle_kura_config(dir: &TempDir) -> KuraConfig {
         lane_history_retention: LANE_HISTORY_RETENTION,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
@@ -405,7 +406,11 @@ fn lifecycle_context_for_peer(local_peer: &PeerId) -> wire::HeightContext {
         .collect::<Vec<_>>();
     let network_id = crate::sumeragi::synthetic_network_id("lifecycle-recovery-test");
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+            network_id,
+            u64::MAX,
+            &roster,
+        );
     wire::HeightContext {
         network_id,
         protocol_version: wire::PROTOCOL_VERSION,

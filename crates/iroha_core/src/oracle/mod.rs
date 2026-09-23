@@ -9,11 +9,11 @@ use iroha_data_model::oracle::{
     AggregationOutput, ConnectorRequest, FeedConfig, FeedConfigVersion, FeedSlot, Observation,
     OracleAggregationError, OracleId, ReplayKey, aggregate_observations,
 };
-#[cfg(feature = "json")]
-use norito::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json;
+#[cfg(feature = "json")]
+use norito::json::JsonKeyCodec;
 /// Deterministic admission pipeline for oracle observations.
 #[derive(Debug)]
 pub struct ObservationAdmission<'a> {

@@ -8402,7 +8402,7 @@ impl NetworkBuilder {
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
                 CARPENTER_ID.clone(),
-                gas_account_id,
+                gas_account_id.clone(),
             ] {
                 bootstrap_tx.push(
                     Mint::asset_quantity(
@@ -8424,6 +8424,12 @@ impl NetworkBuilder {
                         stake_account: validator_id.clone(),
                         initial_stake: stake_amount.clone(),
                         metadata: Metadata::default(),
+                        monetary_plan:
+                            iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                                AssetId::new(stake_asset_id.clone(), gas_account_id.clone()),
+                                stake_amount.clone(),
+                            ),
                     }
                     .into(),
                 );
@@ -17118,13 +17124,44 @@ mod tests {
     fn custom_genesis_binds_active_validator_projection_instead_of_normal_preview() {
         init_instruction_registry();
         const SEED: &str = "custom-genesis-active-validator-projection";
+        fn fixture_stake_asset_id() -> AssetDefinitionId {
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("nexus", "universal").expect("stake domain"),
+                "xor".parse().expect("stake asset name"),
+            )
+        }
+        fn fixture_escrow_id() -> AccountId {
+            AccountId::new(
+                checked_key_pair_from_seed(
+                    format!("{SEED}-staking-custody").into_bytes(),
+                    Algorithm::Ed25519,
+                )
+                .public_key()
+                .clone(),
+            )
+        }
+
         let baseline = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
                 .with_base_seed(SEED)
                 .with_npos_consensus()
                 .without_npos_genesis_bootstrap()
-                .with_config_layer(|_| {}),
+                .with_config_layer(|layer| {
+                    layer
+                        .write(
+                            ["nexus", "staking", "stake_asset_id"],
+                            fixture_stake_asset_id().to_string(),
+                        )
+                        .write(
+                            ["nexus", "staking", "stake_escrow_account_id"],
+                            fixture_escrow_id().to_string(),
+                        )
+                        .write(
+                            ["nexus", "staking", "slash_sink_account_id"],
+                            fixture_escrow_id().to_string(),
+                        );
+                }),
         );
         let baseline_genesis = baseline.genesis();
         assert_signed_nexus_amx_context_matches_preexecution(&baseline, &baseline_genesis);
@@ -17155,7 +17192,21 @@ mod tests {
                 .with_base_seed(SEED)
                 .with_npos_consensus()
                 .without_npos_genesis_bootstrap()
-                .with_config_layer(|_| {})
+                .with_config_layer(|layer| {
+                    layer
+                        .write(
+                            ["nexus", "staking", "stake_asset_id"],
+                            fixture_stake_asset_id().to_string(),
+                        )
+                        .write(
+                            ["nexus", "staking", "stake_escrow_account_id"],
+                            fixture_escrow_id().to_string(),
+                        )
+                        .write(
+                            ["nexus", "staking", "slash_sink_account_id"],
+                            fixture_escrow_id().to_string(),
+                        );
+                })
                 .with_genesis_block(|topology, topology_entries| {
                     let peer_id = topology
                         .iter()
@@ -17164,12 +17215,11 @@ mod tests {
                         .clone();
                     let nexus_domain =
                         DomainId::try_new("nexus", "universal").expect("nexus domain");
-                    let stake_asset_id = AssetDefinitionId::derive_from_components(
-                        nexus_domain.clone(),
-                        "xor".parse().expect("stake asset name"),
-                    );
+                    let stake_asset_id = fixture_stake_asset_id();
+                    let escrow = fixture_escrow_id();
                     let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
                     let bootstrap = vec![
+                        Register::account(Account::new(escrow.clone())).into(),
                         Register::domain(Domain::new(nexus_domain)).into(),
                         Register::asset_definition(
                             AssetDefinition::new(
@@ -17184,7 +17234,7 @@ mod tests {
                         .into(),
                         Mint::asset_quantity(
                             stake_amount.clone(),
-                            AssetId::new(stake_asset_id, ALICE_ID.clone()),
+                            AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
                         )
                         .into(),
                     ];
@@ -17194,13 +17244,18 @@ mod tests {
                             ALICE_ID.clone(),
                             peer_id,
                             ALICE_ID.clone(),
-                            stake_amount,
+                            stake_amount.clone(),
                             Metadata::default(),
+                            iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
+                                AssetId::new(stake_asset_id, escrow),
+                                stake_amount,
+                            ),
                         )
                         .into(),
                         ActivatePublicLaneValidator::new(LaneId::SINGLE, ALICE_ID.clone()).into(),
                     ];
-                    genesis_factory_with_post_topology(
+                    unexecuted_genesis_factory_with_post_topology(
                         Vec::new(),
                         vec![bootstrap, validator],
                         topology,

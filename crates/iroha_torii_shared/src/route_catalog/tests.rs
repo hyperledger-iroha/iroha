@@ -1219,6 +1219,7 @@ mod tests {
             "/v1/fee-sponsor-policies/by-id",
             "/v1/da/proof_policies",
             "/v1/da/proof_policy_snapshot",
+            "/v1/da/proof-policies/snapshot",
             "/v1/da/pin_intents",
             "/v1/iso20022/status/{msg_id}",
         ] {

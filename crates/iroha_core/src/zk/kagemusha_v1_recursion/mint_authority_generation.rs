@@ -659,17 +659,15 @@ pub(super) fn generate(
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     let authorization_id = template
         .certificate
-        .seal_bundle
-        .message
-        .epoch_authorization
-        .authorization_id()
-        .map_err(|e| KagemushaArtifactGenerationErrorV1::CircuitBuild(e.to_string()))?;
+        .authorization_head_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
+        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     if template.release_id == [0; 32]
         || template.certificate.statement.lifecycle.release_id != template.release_id
         || authorization_id != template.genesis_authorization_id
     {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
-            "MintAuthority bootstrap certificate differs from release or genesis roster".to_owned(),
+            "MintAuthority bootstrap certificate differs from release or genesis authorization"
+                .to_owned(),
         ));
     }
     // Configure the fixed auxiliary geometry before either witness graph exists. This catches the

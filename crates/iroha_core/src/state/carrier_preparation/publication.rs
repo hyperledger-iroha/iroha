@@ -194,7 +194,9 @@ impl<A> PublishedCarrier<A> {
     }
 
     /// Borrow the authenticated finality artifact consumed by actual publication.
-    pub(crate) fn artifact(&self) -> &iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact {
+    pub(crate) fn artifact(
+        &self,
+    ) -> &iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact {
         self.finality.artifact()
     }
 

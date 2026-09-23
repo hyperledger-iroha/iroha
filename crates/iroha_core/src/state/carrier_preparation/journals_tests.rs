@@ -873,7 +873,8 @@ pub(in crate::state::carrier_preparation::journals) fn archive_fixture() -> (
 }
 
 /// Exact governed feed instructions shared by real archive capture fixtures.
-pub(in crate::state) fn archive_fixture_instructions() -> Vec<iroha_data_model::isi::InstructionBox> {
+pub(in crate::state) fn archive_fixture_instructions() -> Vec<iroha_data_model::isi::InstructionBox>
+{
     use iroha_data_model::{
         isi::{
             Grant, Register,

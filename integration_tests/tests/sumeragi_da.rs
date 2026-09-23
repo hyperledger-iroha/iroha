@@ -209,6 +209,11 @@ fn da_route_authority_genesis_transactions(
                 validator_id.clone(),
                 Quantity::from(DA_VALIDATOR_STAKE),
                 Metadata::default(),
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                    AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
+                    Quantity::from(DA_VALIDATOR_STAKE),
+                ),
             )
             .into(),
         );

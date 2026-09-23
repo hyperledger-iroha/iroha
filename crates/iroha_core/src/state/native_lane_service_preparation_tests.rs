@@ -426,9 +426,8 @@ fn native_service_retention_fixture(atomic: bool) -> Box<NativeServicePreparatio
             .build(&authority)
             .into_key_value();
         world.accounts.insert(id, account);
-        let (id, domain) = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone())
-            .build(&authority)
-            .into_key_value();
+        let id = iroha_genesis::GENESIS_DOMAIN_ID.clone();
+        let domain = Domain::new(id.clone()).build(&authority);
         world.domains.insert(id, domain);
     });
     setup.genesis_instructions = super::carrier_preparation::archive_fixture_instructions();
@@ -471,6 +470,12 @@ state_test! { sync native_service_control_only_admission_retains_one_execution_a
             iroha_crypto::SignatureOf::from_hash(keys[leader as usize].private_key(), fixture.proposal.hash())),
     ])).unwrap();
     let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
+    {
+        let view = fixture.state.view();
+        assert_eq!(view.world.assets.get(&fixture.source_asset).unwrap().0, Quantity::from(100u32));
+        assert!(view.world.assets.get(&fixture.destination_asset).is_none(),
+            "the admitted transfers have not created a destination balance");
+    }
     let directory = tempfile::tempdir().unwrap();
     let mut store = V2BodyStore::open_with_policy_and_capacity(
         directory.path(), context.clone(), BlockSignaturePolicy::RotatingLeader,
@@ -507,7 +512,9 @@ state_test! { sync native_service_control_only_admission_retains_one_execution_a
     assert_eq!(fixture.state.committed_height() as u64, context.height);
     let view = fixture.state.view();
     assert_eq!(view.world.assets.get(&fixture.source_asset).unwrap().0, Quantity::from(100u32));
-    assert_eq!(view.world.assets.get(&fixture.destination_asset).unwrap().0, Quantity::from(0u32));
+    let destination = view.world.assets.get(&fixture.destination_asset);
+    assert!(destination.is_none(), "control publication must not create an economic asset");
+    assert_eq!(destination.map(|asset| asset.0.clone()).unwrap_or_else(Quantity::zero), Quantity::from(0u32));
     drop(view);
     drop(published);
     drop(retained);

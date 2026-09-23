@@ -3,135 +3,26 @@
 //! These endpoints operate on the in-memory pin intent index populated during
 //! block application. Durable WSV plumbing can replace the backing store once
 //! available without changing the handler surface.
-use super::commitments::{DaListSnapshot, list_snapshot_for_state};
+use super::commitments::list_snapshot_for_state;
 use crate::{Error, JsonBody, NoritoJson, SharedAppState};
 use axum::extract::State;
 use iroha_config::parameters::actual::Nexus;
 use iroha_core::{
     da::{
-        ActiveLaneProofPolicyContext, MAX_DA_PIN_INTENT_ALIAS_BYTES, build_da_pin_intent_proof,
-        pin_store::DaPinStore, verify_da_pin_intent_proof,
+        ActiveLaneProofPolicyContext, build_da_pin_intent_proof, pin_store::DaPinStore,
+        verify_da_pin_intent_proof,
     },
     state::WorldStateSnapshot,
 };
-use iroha_data_model::{
-    da::{
-        pin_intent::{DaPinIntentProof, DaPinIntentWithLocation},
-        types::StorageTicketId,
-    },
-    sorafs::pin_registry::ManifestDigest,
+use iroha_data_model::da::pin_intent::{DaPinIntentProof, DaPinIntentWithLocation};
+use iroha_torii_shared::da::{
+    DaListSnapshot, DaPinIntentListCursor, DaPinIntentListRequest, DaPinIntentListResponse,
+    DaPinIntentQueryRequest, DaPinIntentVerifyResponse, DaQueryValidationError,
 };
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroUsize;
 const ENDPOINT_DA_PIN_INTENTS: &str = "/v1/da/pin-intents";
 const ENDPOINT_DA_PIN_INTENTS_PROVE: &str = "/v1/da/pin-intents/prove";
 const ENDPOINT_DA_PIN_INTENTS_VERIFY: &str = "/v1/da/pin-intents/verify";
-/// Maximum accepted body size for pin-intent list, prove, and verify requests.
-pub(crate) const DA_PIN_INTENT_REQUEST_MAX_BYTES: usize = 64 * 1024;
-const DEFAULT_PIN_INTENT_PAGE_SIZE: usize = 100;
-const MAX_PIN_INTENT_PAGE_SIZE: usize = 1_000;
-/// Forward-only cursor for canonically ordered DA pin intents.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::pin_intents::DaPinIntentListCursor")]
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
-pub struct DaPinIntentListCursor {
-    /// Immutable ledger view this cursor was issued against.
-    pub snapshot: DaListSnapshot,
-    /// Last raw pin intent examined in canonical block-location order.
-    pub after: iroha_data_model::da::commitment::DaCommitmentLocation,
-}
-/// Request payload for bounded DA pin-intent traversal.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::pin_intents::DaPinIntentListRequest")]
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
-
-pub struct DaPinIntentListRequest {
-    /// Maximum raw index rows to inspect; values above 1,000 are rejected.
-    #[norito(default)]
-    pub limit: Option<NonZeroU64>,
-    /// Server-issued continuation cursor from the preceding page.
-    #[norito(default)]
-    pub cursor: Option<DaPinIntentListCursor>,
-}
-/// Exact selector used to generate one DA pin-intent proof.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::pin_intents::DaPinIntentQueryRequest")]
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
-
-pub struct DaPinIntentQueryRequest {
-    #[norito(default)]
-    pub manifest_hash: Option<ManifestDigest>,
-    #[norito(default)]
-    pub storage_ticket: Option<StorageTicketId>,
-    #[norito(default)]
-    pub alias: Option<String>,
-    #[norito(default)]
-    pub lane_id: Option<u32>,
-    #[norito(default)]
-    pub epoch: Option<u64>,
-    #[norito(default)]
-    pub sequence: Option<u64>,
-}
-/// Response surface for bounded DA pin-intent traversal.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::pin_intents::DaPinIntentListResponse")]
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
-pub struct DaPinIntentListResponse {
-    /// Visible intents among the bounded raw index rows examined for this page.
-    pub intents: Vec<DaPinIntentWithLocation>,
-    /// Cursor for the next bounded scan, or `None` when the ordered index is exhausted.
-    #[norito(default)]
-    pub next_cursor: Option<DaPinIntentListCursor>,
-}
-/// Verification response for indexed DA pin intent location data.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::pin_intents::DaPinIntentVerifyResponse")]
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::NoritoSerialize,
-)]
-pub struct DaPinIntentVerifyResponse {
-    pub valid: bool,
-    /// Deterministic verification failure when `valid` is false.
-    #[norito(default)]
-    pub error: Option<String>,
-}
 /// HTTP handler for `/v1/da/pin-intents`.
 pub async fn handler_list_pin_intents(
     State(app): State<SharedAppState>,
@@ -159,7 +50,7 @@ pub async fn handler_prove_pin_intent(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<DaPinIntentQueryRequest>,
 ) -> Result<JsonBody<Option<DaPinIntentProof>>, Error> {
-    validate_pin_intent_query_request(&request)?;
+    request.validate().map_err(pin_query_error)?;
     let nexus = app.state.nexus_snapshot();
     let proof = build_active_proof_from_state(&request, &nexus, app.state.as_ref());
     Ok(JsonBody(proof))
@@ -183,39 +74,31 @@ fn list_active_from_store(
         pin_intent_lane_is_active(&policy_context, entry)
     })
 }
-fn validate_pin_intent_query_request(request: &DaPinIntentQueryRequest) -> Result<(), Error> {
-    let Some(alias) = request.alias.as_ref() else {
-        return Ok(());
-    };
-    if alias.len() <= MAX_DA_PIN_INTENT_ALIAS_BYTES {
-        return Ok(());
+fn pin_query_error(error: DaQueryValidationError) -> Error {
+    Error::AppQueryValidation {
+        code: if matches!(error, DaQueryValidationError::AliasTooLong { .. }) {
+            "invalid_da_pin_intent_alias"
+        } else {
+            "invalid_da_pin_intent_selector"
+        },
+        message: error.to_string(),
     }
-    Err(Error::AppQueryValidation {
-        code: "invalid_da_pin_intent_alias",
-        message: format!(
-            "DA pin-intent alias is {} UTF-8 bytes; maximum is {MAX_DA_PIN_INTENT_ALIAS_BYTES}",
-            alias.len()
-        ),
-    })
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DaPinIntentListError {
-    LimitOutOfRange { provided: u64 },
-    NonCanonicalSnapshot,
+    InvalidRequest(DaQueryValidationError),
     StaleSnapshot,
     UnknownLocation,
 }
 fn pin_list_error(error: DaPinIntentListError) -> Error {
     let (code, message) = match error {
-        DaPinIntentListError::LimitOutOfRange { provided } => (
-            "invalid_da_pin_intent_limit",
-            format!(
-                "DA pin-intent list limit is {provided}; maximum is {MAX_PIN_INTENT_PAGE_SIZE}"
-            ),
-        ),
-        DaPinIntentListError::NonCanonicalSnapshot => (
-            "invalid_da_pin_intent_cursor",
-            "DA pin-intent cursor snapshot must contain no block hash at height 0 and exactly one block hash at non-zero height".to_owned(),
+        DaPinIntentListError::InvalidRequest(error) => (
+            if matches!(error, DaQueryValidationError::LimitOutOfRange { .. }) {
+                "invalid_da_pin_intent_limit"
+            } else {
+                "invalid_da_pin_intent_cursor"
+            },
+            error.to_string(),
         ),
         DaPinIntentListError::StaleSnapshot => (
             "stale_da_pin_intent_cursor",
@@ -240,18 +123,9 @@ fn list_page_from_store(
     mut is_visible: impl FnMut(&DaPinIntentWithLocation) -> bool,
 ) -> Result<DaPinIntentPage, DaPinIntentListError> {
     let limit = request
-        .limit
-        .map_or(Ok(DEFAULT_PIN_INTENT_PAGE_SIZE), |limit| {
-            let provided = limit.get();
-            usize::try_from(provided)
-                .ok()
-                .filter(|&limit| limit <= MAX_PIN_INTENT_PAGE_SIZE)
-                .ok_or(DaPinIntentListError::LimitOutOfRange { provided })
-        })?;
+        .page_size()
+        .map_err(DaPinIntentListError::InvalidRequest)?;
     let after = request.cursor.map(|cursor| {
-        if !cursor.snapshot.is_canonical() {
-            return Err(DaPinIntentListError::NonCanonicalSnapshot);
-        }
         if cursor.snapshot != snapshot {
             return Err(DaPinIntentListError::StaleSnapshot);
         }
@@ -434,6 +308,7 @@ fn verify_against_kura_block(
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
     use iroha_data_model::{
         NetworkId,
         account::AccountId,
@@ -444,7 +319,7 @@ mod tests {
                 DaIngestAuthorizationV1, DaIngestSignatureV1, DaPinScopeAuthorizationV1,
                 DaPinScopeV1,
             },
-            pin_intent::{DaPinIntent, DaPinIntentBundle},
+            pin_intent::{DaPinIntent, DaPinIntentBundle, MAX_DA_PIN_INTENT_ALIAS_BYTES},
             types::{BlobDigest, StorageTicketId},
         },
         nexus::{
@@ -453,6 +328,7 @@ mod tests {
         },
     };
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+    use iroha_torii_shared::da::{DA_QUERY_REQUEST_MAX_BYTES, MAX_DA_QUERY_PAGE_SIZE};
     use std::{
         num::{NonZeroU32, NonZeroU64},
         sync::Arc,
@@ -520,6 +396,14 @@ mod tests {
         ];
         DaPinStore::from_intents(&intents)
     }
+    fn pin_store_snapshot() -> DaListSnapshot {
+        DaListSnapshot {
+            block_height: 100,
+            block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"DA pin store snapshot at height 100",
+            ))),
+        }
+    }
     fn list_request(limit: Option<u64>) -> DaPinIntentListRequest {
         DaPinIntentListRequest {
             limit: limit.and_then(NonZeroU64::new),
@@ -532,13 +416,16 @@ mod tests {
             alias: Some("é".repeat(MAX_DA_PIN_INTENT_ALIAS_BYTES / 2)),
             ..DaPinIntentQueryRequest::default()
         };
-        validate_pin_intent_query_request(&accepted)
+        accepted
+            .validate()
             .expect("alias at the exact UTF-8 byte bound must be accepted");
         let rejected = DaPinIntentQueryRequest {
             alias: Some("é".repeat(MAX_DA_PIN_INTENT_ALIAS_BYTES / 2 + 1)),
             ..DaPinIntentQueryRequest::default()
         };
-        let error = validate_pin_intent_query_request(&rejected)
+        let error = rejected
+            .validate()
+            .map_err(pin_query_error)
             .expect_err("alias above the UTF-8 byte bound must fail closed");
         assert!(matches!(
             error,
@@ -568,35 +455,40 @@ mod tests {
         let lane_catalog = lane_catalog_with_lane_ids(lane_ids);
         Nexus {
             lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+            configured_lane_catalog: lane_catalog.clone(),
             lane_catalog,
             ..Nexus::default()
         }
     }
-    fn install_nexus_lane_catalog(app: &mut crate::SharedAppState, lane_ids: &[u32]) {
-        let app = std::sync::Arc::get_mut(app).expect("unique app state");
-        let state = std::sync::Arc::get_mut(&mut app.state).expect("unique core state");
-        let nexus_cfg = nexus_with_lane_ids(lane_ids);
-        state
-            .set_nexus(nexus_cfg)
-            .expect("install Nexus lane catalog for tests");
-    }
     fn install_stale_runtime_lane_geometry(app: &crate::SharedAppState, stale_lane: LaneId) {
-        let authoritative_catalog = lane_catalog_with_lane_ids(&[0]);
+        assert!(
+            app.state
+                .nexus_snapshot()
+                .lane_config
+                .entry(stale_lane)
+                .is_none(),
+            "the removed lane must be absent from authoritative runtime state"
+        );
         let stale_geometry_catalog = lane_catalog_with_lane_ids(&[0, stale_lane.as_u32()]);
         let mut nexus = app.state.nexus.write();
-        nexus.lane_catalog = authoritative_catalog;
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&stale_geometry_catalog);
         assert!(
             nexus.lane_config.entry(stale_lane).is_some(),
             "fixture must retain stale runtime geometry for the removed lane"
         );
+        drop(nexus);
+        let canonical = app.state.nexus_snapshot();
+        assert!(canonical.lane_config.entry(stale_lane).is_none());
+        assert!(
+            !canonical
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == stale_lane)
+        );
     }
-    fn install_future_created_autoscale_lane(
-        app: &crate::SharedAppState,
-        lane_id: LaneId,
-        created_height: u64,
-    ) {
+    fn future_created_autoscale_nexus(lane_id: LaneId, created_height: u64) -> Nexus {
         let mut elastic_lane = ModelLaneConfig {
             id: lane_id,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -615,13 +507,40 @@ mod tests {
             vec![ModelLaneConfig::default(), elastic_lane],
         )
         .expect("future-created autoscale lane catalog");
-        let mut nexus = app.state.nexus.write();
+        // A synthetic policy input, never admitted as committed State: real
+        // lifecycle admission rejects a future creation height at the current tip.
+        let mut nexus = Nexus::default();
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
         nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
         nexus.lane_catalog = lane_catalog;
+        nexus
+    }
+    fn install_uncommitted_autoscale_overlay(app: &crate::SharedAppState, lane_id: LaneId) {
+        let overlay = future_created_autoscale_nexus(lane_id, 7);
+        {
+            let mut nexus = app.state.nexus.write();
+            nexus.autoscale = overlay.autoscale;
+            nexus.lane_config = overlay.lane_config;
+            nexus.lane_catalog = overlay.lane_catalog;
+            assert!(
+                nexus.lane_catalog.lanes().iter().any(|lane| {
+                    lane.id == lane_id && lane.autoscale_created_height() == Some(7)
+                })
+            );
+        }
+        let canonical = app.state.nexus_snapshot();
+        assert!(!canonical.autoscale.enabled);
+        assert!(canonical.lane_config.entry(lane_id).is_none());
+        assert!(
+            !canonical
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == lane_id)
+        );
     }
     fn seed_pin_store(app: &mut crate::SharedAppState, store: DaPinStore) {
         let app = std::sync::Arc::get_mut(app).expect("unique app state");
@@ -635,8 +554,18 @@ mod tests {
             .map(|intent| intent.lane_id.as_u32())
             .chain(core::iter::once(0))
             .collect::<Vec<_>>();
-        let mut app = crate::mk_app_state_for_tests();
-        install_nexus_lane_catalog(&mut app, &lane_ids);
+        app_with_historical_pin_intents(intents, nexus_with_lane_ids(&lane_ids))
+    }
+    fn app_with_historical_pin_intents(
+        intents: Vec<DaPinIntent>,
+        current_nexus: Nexus,
+    ) -> crate::SharedAppState {
+        // The signed historical bundle remains available even when its lane is
+        // absent from the current authoritative catalog.
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+            iroha_core::state::World::default(),
+            current_nexus,
+        );
         let bundle = DaPinIntentBundle::new(intents);
         let bundle_for_store = bundle.clone();
         let keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -676,13 +605,25 @@ mod tests {
         seed_pin_store(&mut app, DaPinStore::from_intents(&entries));
         app
     }
+    fn historical_pin_proof(app: &crate::SharedAppState) -> DaPinIntentProof {
+        let block = app
+            .state
+            .block_by_height(NonZeroUsize::new(1).expect("nonzero height"))
+            .expect("historical signed block must remain available");
+        build_da_pin_intent_proof(
+            block
+                .as_ref()
+                .da_pin_intents()
+                .expect("historical pin bundle"),
+            1,
+            0,
+        )
+        .expect("historical pin proof")
+    }
     #[test]
     fn list_uses_forward_only_keyset_cursor() {
         let store = store_with_records();
-        let snapshot = DaListSnapshot {
-            block_height: 0,
-            block_hash: None,
-        };
+        let snapshot = pin_store_snapshot();
         let first = list_page_from_store(&store, &list_request(Some(2)), snapshot, |_| true)
             .expect("first page");
         assert_eq!(first.intents.len(), 2);
@@ -709,18 +650,20 @@ mod tests {
         use std::cell::Cell;
 
         let store = store_with_records();
-        let snapshot = DaListSnapshot {
-            block_height: 0,
-            block_hash: None,
-        };
+        let snapshot = pin_store_snapshot();
         let examined = Cell::new(0_usize);
-        let provided = u64::try_from(MAX_PIN_INTENT_PAGE_SIZE).expect("page limit fits u64") + 1;
+        let provided = u64::try_from(MAX_DA_QUERY_PAGE_SIZE).expect("page limit fits u64") + 1;
         let error = list_page_from_store(&store, &list_request(Some(provided)), snapshot, |_| {
             examined.set(examined.get() + 1);
             true
         })
         .expect_err("limit above the exact maximum must be rejected");
-        assert_eq!(error, DaPinIntentListError::LimitOutOfRange { provided });
+        assert_eq!(
+            error,
+            DaPinIntentListError::InvalidRequest(DaQueryValidationError::LimitOutOfRange {
+                provided
+            })
+        );
         assert_eq!(
             examined.get(),
             0,
@@ -730,16 +673,15 @@ mod tests {
         assert_eq!(
             list_page_from_store(&store, &list_request(Some(u64::MAX)), snapshot, |_| true)
                 .expect_err("unrepresentable or overlarge limits must be rejected"),
-            DaPinIntentListError::LimitOutOfRange { provided: u64::MAX }
+            DaPinIntentListError::InvalidRequest(DaQueryValidationError::LimitOutOfRange {
+                provided: u64::MAX
+            })
         );
     }
     #[test]
     fn list_cursor_rejects_unknown_location_and_stale_snapshot() {
         let store = store_with_records();
-        let snapshot = DaListSnapshot {
-            block_height: 0,
-            block_hash: None,
-        };
+        let snapshot = pin_store_snapshot();
         let unknown = DaPinIntentListRequest {
             limit: NonZeroU64::new(1),
             cursor: Some(DaPinIntentListCursor {
@@ -759,7 +701,7 @@ mod tests {
             limit: NonZeroU64::new(1),
             cursor: Some(DaPinIntentListCursor {
                 snapshot: DaListSnapshot {
-                    block_height: 1,
+                    block_height: 101,
                     block_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed([7; 32]))),
                 },
                 after: store
@@ -776,12 +718,33 @@ mod tests {
         );
     }
     #[test]
+    fn list_cursor_rejects_location_outside_snapshot_before_index_lookup() {
+        let store = store_with_records();
+        let snapshot = pin_store_snapshot();
+        for block_height in [0, snapshot.block_height + 1] {
+            let request = DaPinIntentListRequest {
+                limit: NonZeroU64::new(1),
+                cursor: Some(DaPinIntentListCursor {
+                    snapshot,
+                    after: DaCommitmentLocation {
+                        block_height,
+                        index_in_bundle: 0,
+                    },
+                }),
+            };
+            assert_eq!(
+                list_page_from_store(&store, &request, snapshot, |_| {
+                    panic!("invalid cursor must fail before visibility scanning")
+                })
+                .expect_err("cursor location must belong to its committed snapshot"),
+                DaPinIntentListError::InvalidRequest(DaQueryValidationError::CursorOutsideSnapshot)
+            );
+        }
+    }
+    #[test]
     fn list_cursor_rejects_noncanonical_snapshot() {
         let store = store_with_records();
-        let snapshot = DaListSnapshot {
-            block_height: 0,
-            block_hash: None,
-        };
+        let snapshot = pin_store_snapshot();
         let request = DaPinIntentListRequest {
             limit: NonZeroU64::new(1),
             cursor: Some(DaPinIntentListCursor {
@@ -799,17 +762,14 @@ mod tests {
         assert_eq!(
             list_page_from_store(&store, &request, snapshot, |_| true)
                 .expect_err("malformed snapshot must fail closed"),
-            DaPinIntentListError::NonCanonicalSnapshot
+            DaPinIntentListError::InvalidRequest(DaQueryValidationError::NonCanonicalSnapshot)
         );
     }
     #[test]
     fn inactive_rows_cannot_amplify_the_raw_scan_budget() {
         use std::cell::Cell;
         let store = store_with_records();
-        let snapshot = DaListSnapshot {
-            block_height: 0,
-            block_hash: None,
-        };
+        let snapshot = pin_store_snapshot();
         let examined = Cell::new(0_usize);
         let page = list_page_from_store(&store, &list_request(Some(2)), snapshot, |_| {
             examined.set(examined.get() + 1);
@@ -818,10 +778,12 @@ mod tests {
         .expect("bounded filtered page");
         assert!(page.intents.is_empty());
         assert_eq!(examined.get(), 2, "visibility work is bounded by limit");
-        assert!(
-            page.next_cursor.is_some(),
-            "an empty visible page must still permit deterministic traversal"
-        );
+        let cursor = page
+            .next_cursor
+            .expect("an empty visible page must still permit deterministic traversal");
+        cursor
+            .validate()
+            .expect("filtered continuation must remain within the committed snapshot");
     }
     #[test]
     fn prove_uses_lane_epoch_sequence() {
@@ -867,6 +829,32 @@ mod tests {
             Err(iroha_core::da::DaPinIntentProofVerificationError::PathMismatch)
         ));
     }
+
+    #[tokio::test]
+    async fn proof_handler_rejects_missing_or_partial_selectors() {
+        for request in [
+            DaPinIntentQueryRequest::default(),
+            DaPinIntentQueryRequest {
+                lane_id: Some(4),
+                epoch: Some(9),
+                ..DaPinIntentQueryRequest::default()
+            },
+        ] {
+            let error = super::handler_prove_pin_intent(
+                State(crate::mk_app_state_for_tests()),
+                NoritoJson(request),
+            )
+            .await
+            .expect_err("incomplete selector must fail before index lookup");
+            assert!(matches!(
+                error,
+                Error::AppQueryValidation {
+                    code: "invalid_da_pin_intent_selector",
+                    ..
+                }
+            ));
+        }
+    }
     #[tokio::test]
     async fn handler_succeeds_with_current_lane_catalog() {
         let app = crate::mk_app_state_for_tests();
@@ -882,7 +870,7 @@ mod tests {
     #[tokio::test]
     async fn list_handler_enforces_exact_limit_maximum() {
         let app = crate::mk_app_state_for_tests();
-        let accepted = u64::try_from(MAX_PIN_INTENT_PAGE_SIZE).expect("page limit fits u64");
+        let accepted = u64::try_from(MAX_DA_QUERY_PAGE_SIZE).expect("page limit fits u64");
         let JsonBody(page) = super::handler_list_pin_intents(
             State(app.clone()),
             NoritoJson(list_request(Some(accepted))),
@@ -1014,17 +1002,8 @@ mod tests {
     #[tokio::test]
     async fn handler_verify_uses_historical_header_after_lane_removal() {
         let intent = sample_intent(1, 3, 7);
-        let app = app_with_pin_intent_bundle(vec![intent.clone()]);
-        let JsonBody(proof) = super::handler_prove_pin_intent(
-            State(app.clone()),
-            NoritoJson(DaPinIntentQueryRequest {
-                storage_ticket: Some(intent.storage_ticket),
-                ..DaPinIntentQueryRequest::default()
-            }),
-        )
-        .await
-        .expect("pin intent proof lookup should succeed");
-        let proof = proof.expect("indexed pin intent should be present before lane removal");
+        let app = app_with_historical_pin_intents(vec![intent.clone()], nexus_with_lane_ids(&[0]));
+        let proof = historical_pin_proof(&app);
         install_stale_runtime_lane_geometry(&app, intent.lane_id);
         let JsonBody(response) = super::handler_verify_pin_intent(State(app), NoritoJson(proof))
             .await
@@ -1037,20 +1016,10 @@ mod tests {
     }
     #[tokio::test]
     async fn handler_list_and_prove_ignore_stale_runtime_lane_geometry() {
-        let mut app = crate::mk_app_state_for_tests();
-        install_nexus_lane_catalog(&mut app, &[0, 1]);
-        let stale = DaPinIntentWithLocation {
-            intent: sample_intent(1, 4, 8),
-            location: DaCommitmentLocation {
-                block_height: 9,
-                index_in_bundle: 1,
-            },
-        };
-        seed_pin_store(
-            &mut app,
-            DaPinStore::from_intents(std::slice::from_ref(&stale)),
-        );
-        install_stale_runtime_lane_geometry(&app, stale.intent.lane_id);
+        let stale = sample_intent(1, 4, 8);
+        let app = app_with_historical_pin_intents(vec![stale.clone()], nexus_with_lane_ids(&[0]));
+        assert_eq!(historical_pin_proof(&app).intent, stale);
+        install_stale_runtime_lane_geometry(&app, stale.lane_id);
         let JsonBody(page) = super::handler_list_pin_intents(
             State(app.clone()),
             NoritoJson(DaPinIntentListRequest::default()),
@@ -1064,7 +1033,7 @@ mod tests {
         let JsonBody(proof) = super::handler_prove_pin_intent(
             State(app),
             NoritoJson(DaPinIntentQueryRequest {
-                storage_ticket: Some(stale.intent.storage_ticket),
+                storage_ticket: Some(stale.storage_ticket),
                 ..DaPinIntentQueryRequest::default()
             }),
         )
@@ -1076,21 +1045,11 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn handlers_use_current_visibility_but_historical_verification() {
+    async fn handlers_ignore_uncommitted_autoscale_overlay_but_verify_historical_proof() {
         let intent = sample_intent(1, 5, 9);
-        let app = app_with_pin_intent_bundle(vec![intent.clone()]);
-        let JsonBody(historical_proof) = super::handler_prove_pin_intent(
-            State(app.clone()),
-            NoritoJson(DaPinIntentQueryRequest {
-                storage_ticket: Some(intent.storage_ticket),
-                ..DaPinIntentQueryRequest::default()
-            }),
-        )
-        .await
-        .expect("pin intent proof lookup should succeed");
-        let historical_proof =
-            historical_proof.expect("proof must exist before current lane visibility changes");
-        install_future_created_autoscale_lane(&app, intent.lane_id, 7);
+        let app = app_with_historical_pin_intents(vec![intent.clone()], nexus_with_lane_ids(&[0]));
+        let historical_proof = historical_pin_proof(&app);
+        install_uncommitted_autoscale_overlay(&app, intent.lane_id);
         let JsonBody(page) = super::handler_list_pin_intents(
             State(app.clone()),
             NoritoJson(DaPinIntentListRequest::default()),
@@ -1099,7 +1058,7 @@ mod tests {
         .expect("pin intent list should succeed");
         assert!(
             page.intents.is_empty(),
-            "future-created autoscale lane pin intents must not be listed before creation height"
+            "an uncommitted overlay must not expose a historical lane's pin intents"
         );
         let JsonBody(proof) = super::handler_prove_pin_intent(
             State(app.clone()),
@@ -1112,7 +1071,7 @@ mod tests {
         .expect("pin intent proof lookup should succeed");
         assert!(
             proof.is_none(),
-            "future-created autoscale lane pin intents must not produce public proofs"
+            "an uncommitted overlay must not authorize public proofs for a historical lane"
         );
         let JsonBody(response) =
             super::handler_verify_pin_intent(State(app), NoritoJson(historical_proof))
@@ -1155,17 +1114,17 @@ mod tests {
             .route(
                 ENDPOINT_DA_PIN_INTENTS,
                 post(super::handler_list_pin_intents)
-                    .layer(DefaultBodyLimit::max(DA_PIN_INTENT_REQUEST_MAX_BYTES)),
+                    .layer(DefaultBodyLimit::max(DA_QUERY_REQUEST_MAX_BYTES)),
             )
             .route(
                 ENDPOINT_DA_PIN_INTENTS_PROVE,
                 post(super::handler_prove_pin_intent)
-                    .layer(DefaultBodyLimit::max(DA_PIN_INTENT_REQUEST_MAX_BYTES)),
+                    .layer(DefaultBodyLimit::max(DA_QUERY_REQUEST_MAX_BYTES)),
             )
             .route(
                 ENDPOINT_DA_PIN_INTENTS_VERIFY,
                 post(super::handler_verify_pin_intent)
-                    .layer(DefaultBodyLimit::max(DA_PIN_INTENT_REQUEST_MAX_BYTES)),
+                    .layer(DefaultBodyLimit::max(DA_QUERY_REQUEST_MAX_BYTES)),
             )
             .with_state(app);
         for path in [
@@ -1177,7 +1136,7 @@ mod tests {
                 .method(Method::POST)
                 .uri(path)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(vec![b' '; DA_PIN_INTENT_REQUEST_MAX_BYTES + 1]))
+                .body(Body::from(vec![b' '; DA_QUERY_REQUEST_MAX_BYTES + 1]))
                 .expect("oversized request");
             let response = router.clone().oneshot(request).await.expect("response");
             assert_eq!(

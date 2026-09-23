@@ -159,17 +159,6 @@ impl ProductionV2Services {
         &self.kura
     }
 
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn queue_plan_test_route(
-        &self,
-        view: wire::View,
-    ) -> (NetworkId, PeerId) {
-        let peer = self.context.roster[usize::try_from(self.context.leader(view)).unwrap()]
-            .validator
-            .clone();
-        (self.context.network_id.clone(), peer)
-    }
-
     pub(crate) fn queue_plan_admission_batch_sources(
         &self,
     ) -> Result<QueuePlanBatchSources, String> {

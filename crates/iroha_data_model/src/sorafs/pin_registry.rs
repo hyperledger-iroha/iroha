@@ -6,8 +6,8 @@ use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 
-use norito::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
+use norito::json::JsonKeyCodec;
 /// Exact byte length of a canonical first-release manifest root CID.
 pub const MANIFEST_ROOT_CID_LENGTH: usize = sorafs_manifest::MAX_MANIFEST_ROOT_CID_BYTES;
 /// Hard maximum number of summaries in one finalized pin-manifest page.

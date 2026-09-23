@@ -311,11 +311,18 @@ fn autonomous_lane_carrier_block_for_recovery(
         u64::try_from(leader).expect("leader index fits u64"),
         keys[leader].private_key(),
     );
-    signed.set_execution_outputs(
-        Vec::new(), 1, Default::default(), Vec::new(), Default::default(),
-        Default::default(), Vec::new(),
-        &crate::execution_output_test_support::structural_output_limits(),
-    ).expect("autonomous recovery carrier has complete structural outputs");
+    signed
+        .set_execution_outputs(
+            Vec::new(),
+            1,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+        .expect("autonomous recovery carrier has complete structural outputs");
     ValidBlock::new_unverified_for_tests(signed)
         .commit_unchecked()
         .unpack(|_| {})
@@ -1159,7 +1166,9 @@ fn audited_snapshot_prefix_classifies_retained_legacy_bodies_without_sidecars() 
 fn untyped_zero_length_placeholder_is_never_a_replay_exemption() {
     let kura = Kura::blank_kura_for_testing();
     let _state = State::new_for_testing(
-        World::default(), Arc::clone(&kura), LiveQueryStore::start_test(),
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
     );
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC4; 32]));
     kura.extend_hash_only_suffix_from_verified_snapshot(&[hash])
@@ -1312,6 +1321,8 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
             iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
             [0x73; 32],
         );
+    assert_eq!(transitioned_mint_finality_authorization.first_height, 2);
+    assert_eq!(transitioned_mint_finality_authorization.last_height, 10);
     parent_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch: 1,
         kagemusha_mint_finality_authorization: transitioned_mint_finality_authorization,

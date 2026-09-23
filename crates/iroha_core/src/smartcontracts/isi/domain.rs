@@ -1851,7 +1851,7 @@ pub mod isi {
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it has public-lane reward processing state (lane {lane_id}, account {claimant}); clear the retained cursor first"
+                        "cannot unregister account {account_id}: it has pending public-lane reward claim state (lane {lane_id}, account {claimant}); clear the retained processing cursor first"
                     )
                     .into(),
                 )
@@ -8714,44 +8714,98 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_account_rejects_when_account_is_reward_claim_asset_owner() {
-        assert_account_unregister_guard(
-            |tx, domain_id, authority, account_id| {
-                tx.world.public_lane_reward_accruals.insert(
-                    (
-                        LaneId::SINGLE,
-                        authority.clone(),
-                        AssetId::new(
-                            AssetDefinitionId::derive_from_components(
-                                domain_id.clone(),
-                                "fee".parse().unwrap(),
-                            ),
-                            account_id.clone(),
-                        ),
-                    ),
-                    Quantity::from(1_u32),
-                );
-            },
-            "account referenced by reward-claim asset owner must not be unregistered",
-            "public-lane reward accrual state",
-            "error should explain reward-claim conflict",
-        );
+    fn unregister_account_rejects_when_account_has_only_reward_processing_cursor() {
+        with_registered_account_unregistration_candidate(|authority, _, account_id, tx| {
+            let key = (LaneId::SINGLE, account_id.clone());
+            let cursor = iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+                through_epoch: Some(1),
+            };
+            tx.world
+                .public_lane_reward_claims
+                .insert(key.clone(), cursor);
+            assert!(tx.world.public_lane_reward_accruals.iter().next().is_none());
+            let error = Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect_err("retained processing cursor keeps its recipient registered");
+            assert!(
+                error.to_string().contains("retained processing cursor"),
+                "{error}"
+            );
+            assert_eq!(tx.world.public_lane_reward_claims.get(&key), Some(&cursor));
+            assert!(tx.world.accounts.get(&account_id).is_some());
+            tx.world.public_lane_reward_claims.remove(key);
+            Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect("clearing the only retained cursor releases the account");
+            assert!(tx.world.accounts.get(&account_id).is_none());
+        });
     }
     #[test]
-    fn unregister_account_rejects_retained_reward_processing_cursor() {
+    fn unregister_account_rejects_when_account_is_reward_accrual_source_owner() {
         assert_account_unregister_guard(
-            |tx, _, _, account_id| {
+            |tx, domain_id, authority, account_id| {
+                let source = AssetId::new(
+                    AssetDefinitionId::derive_from_components(
+                        domain_id.clone(),
+                        "fee".parse().unwrap(),
+                    ),
+                    account_id.clone(),
+                );
                 tx.world.public_lane_reward_claims.insert(
-                    (LaneId::SINGLE, account_id.clone()),
+                    (LaneId::SINGLE, authority.clone()),
                     iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
                         through_epoch: Some(1),
                     },
                 );
+                tx.world.public_lane_reward_accruals.insert(
+                    (LaneId::SINGLE, authority.clone(), source.clone()),
+                    Quantity::one(),
+                );
+                tx.world
+                    .public_lane_reward_reserves
+                    .insert(source, Quantity::one());
             },
-            "account with a retained reward cursor must not be unregistered",
-            "public-lane reward processing state",
-            "error should explain the retained cursor",
+            "account referenced by reward-accrual source owner must not be unregistered",
+            "public-lane reward accrual state",
+            "error should explain reward-accrual conflict",
         );
+    }
+    #[test]
+    fn unregister_asset_definition_preserves_exact_reward_accrual_source() {
+        with_registered_asset_definition_unregistration_candidate(|authority, definition, tx| {
+            let source = AssetId::new(definition.clone(), authority.clone());
+            let key = (LaneId::SINGLE, authority.clone(), source.clone());
+            tx.world
+                .public_lane_reward_accruals
+                .insert(key.clone(), Quantity::one());
+            tx.world
+                .public_lane_reward_reserves
+                .insert(source.clone(), Quantity::one());
+            let error = Unregister::asset_definition(definition.clone())
+                .execute(&authority, tx)
+                .expect_err("positive accrual keeps its exact source definition registered");
+            assert!(
+                error
+                    .to_string()
+                    .contains("public-lane reward accrual state"),
+                "{error}"
+            );
+            assert!(tx.world.asset_definitions.get(&definition).is_some());
+            assert_eq!(
+                tx.world.public_lane_reward_accruals.get(&key),
+                Some(&Quantity::one())
+            );
+            assert_eq!(
+                tx.world.public_lane_reward_reserves.get(&source),
+                Some(&Quantity::one())
+            );
+            tx.world.public_lane_reward_accruals.remove(key);
+            tx.world.public_lane_reward_reserves.remove(source);
+            Unregister::asset_definition(definition.clone())
+                .execute(&authority, tx)
+                .expect("settled accrual releases the source definition");
+            assert!(tx.world.asset_definitions.get(&definition).is_none());
+        });
     }
     #[test]
     fn unregister_account_ignores_mismatched_public_lane_economic_rows() {

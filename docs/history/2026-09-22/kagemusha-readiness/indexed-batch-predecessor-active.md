@@ -93,4 +93,3 @@ rebuild and exercise SDK/native artifacts; then close release, physical-device
 and independent-review gates. Exact OEM services/profiles for the requested
 brands remain external dependencies. Release authentication and fail-closed
 activation must stay enforced throughout this work.
-

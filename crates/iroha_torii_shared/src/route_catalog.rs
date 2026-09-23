@@ -2312,11 +2312,6 @@ pub mod data_availability {
         "data_availability.proof_policy.list",
         "/v1/da/proof-policies",
     );
-    /// Read the signed proof-policy snapshot.
-    pub const PROOF_POLICY_SNAPSHOT: RouteDescriptor = public_get(
-        "data_availability.proof_policy.snapshot",
-        "/v1/da/proof-policies/snapshot",
-    );
     /// List commitments selected by a typed filter request.
     pub const COMMITMENTS: RouteDescriptor =
         public_post("data_availability.commitment.list", "/v1/da/commitments");
@@ -2360,7 +2355,6 @@ pub mod data_availability {
         INGEST,
         MANIFEST,
         PROOF_POLICIES,
-        PROOF_POLICY_SNAPSHOT,
         COMMITMENTS,
         COMMITMENTS_PROVE,
         COMMITMENTS_VERIFY,

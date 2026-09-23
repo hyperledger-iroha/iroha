@@ -7,6 +7,11 @@
     clippy::result_large_err,
     clippy::struct_excessive_bools
 )]
+#[cfg(feature = "app_api")]
+mod public_lane_rewards;
+#[cfg(feature = "app_api")]
+use public_lane_rewards::collect_pending_public_lane_rewards;
+
 #[cfg(test)]
 #[allow(unused_macro_rules)]
 macro_rules! routing_test {
@@ -3583,6 +3588,8 @@ impl MaybeTelemetry {
                     iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
                 block_hash_history_bytes:
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+                membership_storage:
+                    iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
                 fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
                 replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
                 debug_output_new_blocks: false,
@@ -7537,6 +7544,7 @@ pub(crate) mod sccp_first_release_api_tests {
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
@@ -68804,7 +68812,8 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         &account_id,
         upto_epoch,
         asset_filter.as_ref(),
-        world.public_lane_reward_claims().iter(),
+        world.public_lane_reward_claims().get(&(lane_id, account_id.clone())),
+        world.public_lane_reward_accruals().iter(),
         world.public_lane_rewards().iter(),
     )?;
     let mut entries = rewards
@@ -68818,84 +68827,7 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         entries.into_iter().map(|(_, value)| value).collect(),
     )
 }
-fn collect_pending_public_lane_rewards<'a>(
-    lane_id: LaneId,
-    account_id: &iroha_data_model::account::AccountId,
-    upto_epoch: u64,
-    asset_filter: Option<&iroha_data_model::asset::AssetId>,
-    reward_claims: impl Iterator<
-        Item = (
-            &'a (
-                LaneId,
-                iroha_data_model::account::AccountId,
-                iroha_data_model::asset::AssetId,
-            ),
-            &'a u64,
-        ),
-    >,
-    rewards: impl Iterator<Item = (&'a (LaneId, u64), &'a PublicLaneRewardRecord)>,
-) -> Result<Vec<iroha_data_model::nexus::PublicLanePendingReward>, Error> {
-    let mut last_claimed: BTreeMap<AssetId, u64> = BTreeMap::new();
-    for ((lane, account, asset), epoch) in reward_claims {
-        if *lane != lane_id || account != account_id {
-            continue;
-        }
-        if let Some(filter) = asset_filter
-            && asset != filter
-        {
-            continue;
-        }
-        last_claimed.insert(asset.clone(), *epoch);
-    }
-    let mut totals: BTreeMap<AssetId, (Quantity, u64)> = BTreeMap::new();
-    for (key, record) in rewards {
-        let (lane, epoch) = key;
-        if *lane != lane_id {
-            continue;
-        }
-        if *epoch > upto_epoch {
-            break;
-        }
-        if !public_lane_reward_record_matches_key(key, record) {
-            continue;
-        }
-        if let Some(filter) = asset_filter
-            && &record.asset != filter
-        {
-            continue;
-        }
-        let last = last_claimed.get(&record.asset).copied();
-        if last.is_some_and(|last| *epoch <= last) {
-            continue;
-        }
-        for share in record.shares.iter().filter(|s| &s.account == account_id) {
-            let entry = totals
-                .entry(record.asset.clone())
-                .or_insert_with(|| (Quantity::zero(), *epoch));
-            entry.0 = entry.0.checked_add(&share.amount).map_err(|_| {
-                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "pending reward amount overflowed".to_owned(),
-                    ),
-                ))
-            })?;
-            entry.1 = entry.1.max(*epoch);
-        }
-    }
-    Ok(totals
-        .into_iter()
-        .map(|(asset_id, (amount, pending_epoch))| {
-            iroha_data_model::nexus::PublicLanePendingReward {
-                lane_id,
-                account: account_id.clone(),
-                asset: asset_id.clone(),
-                last_claimed_epoch: last_claimed.get(&asset_id).copied().unwrap_or(0),
-                pending_through_epoch: pending_epoch,
-                amount,
-            }
-        })
-        .collect())
-}
+
 fn build_lane_items_payload(lane_id: LaneId, items: Vec<Value>) -> Map {
     let mut root = Map::new();
     root.insert("lane_id".into(), Value::from(u64::from(lane_id)));
@@ -69073,12 +69005,13 @@ routing_test! { sync collect_pending_public_lane_rewards_includes_unclaimed_epoc
         shares: vec![PublicLaneRewardShare { account: account.clone(), role: PublicLaneRewardRole::Nominator, amount: Quantity::from(25_u64) }],
         metadata: Metadata::default(),
     })]);
-    let pending = collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.iter(), rewards.iter()).unwrap();
+    let pending = collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.get(&(lane_id, account.clone())), std::iter::empty(), rewards.iter()).unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].amount, Quantity::from(25_u64));
     assert_eq!(pending[0].pending_through_epoch, 0);
-    claims.insert((lane_id, account.clone(), asset), 0);
-    assert!(collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.iter(), rewards.iter()).unwrap().is_empty());
+    assert_eq!(pending[0].processed_through_epoch, None);
+    claims.insert((lane_id, account.clone()), iroha_data_model::nexus::PublicLaneRewardClaimStateV1 { through_epoch: Some(0) });
+    assert!(collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.get(&(lane_id, account.clone())), std::iter::empty(), rewards.iter()).unwrap().is_empty());
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync collect_pending_public_lane_rewards_ignores_mismatched_reward_rows
@@ -69101,7 +69034,7 @@ routing_test! { sync collect_pending_public_lane_rewards_ignores_mismatched_rewa
         account.clone(),
     );
     let mut claims = BTreeMap::new();
-    claims.insert((lane_id, account.clone(), asset.clone()), 1);
+    claims.insert((lane_id, account.clone()), iroha_data_model::nexus::PublicLaneRewardClaimStateV1 { through_epoch: Some(1) });
     let valid_reward = |epoch: u64, amount: u32| PublicLaneRewardRecord {
         lane_id,
         epoch,
@@ -69153,7 +69086,8 @@ routing_test! { sync collect_pending_public_lane_rewards_ignores_mismatched_rewa
         &account,
         5,
         None,
-        claims.iter(),
+        claims.get(&(lane_id, account.clone())),
+        std::iter::empty(),
         rewards.iter(),
     )
     .expect("pending reward collection should succeed");
@@ -69161,7 +69095,7 @@ routing_test! { sync collect_pending_public_lane_rewards_ignores_mismatched_rewa
     assert_eq!(pending[0].lane_id, lane_id);
     assert_eq!(&pending[0].account, &account);
     assert_eq!(&pending[0].asset, &asset);
-    assert_eq!(pending[0].last_claimed_epoch, 1);
+    assert_eq!(pending[0].processed_through_epoch, Some(1));
     assert_eq!(pending[0].pending_through_epoch, 5);
     assert_eq!(
         &pending[0].amount,
@@ -69463,8 +69397,8 @@ fn pending_reward_to_json(
     map.insert("account".into(), Value::from(account_literal));
     map.insert("asset".into(), Value::from(reward.asset.to_string()));
     map.insert(
-        "last_claimed_epoch".into(),
-        Value::from(reward.last_claimed_epoch),
+        "processed_through_epoch".into(),
+        reward.processed_through_epoch.map(Value::from).unwrap_or(Value::Null),
     );
     map.insert(
         "pending_through_epoch".into(),

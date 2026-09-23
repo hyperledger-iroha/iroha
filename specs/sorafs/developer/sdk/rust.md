@@ -215,25 +215,27 @@ reports can trace every artefact to its source.
 
 ```rust
 use eyre::Result;
-use iroha::{
-    Client,
-    da::{DaProofArtifactMetadata, DaProofConfig},
+use iroha::{client::Client, data_model::da::types::StorageTicketId};
+use iroha_storage_client::{
+    client::{StorageClient, build_da_proof_artifact, write_da_proof_artifact},
+    da::{DaProofArtifactMetadata, DaProofConfig, build_car_plan_from_manifest},
 };
 
-async fn emit_proof(client: &Client, storage_ticket: &str) -> Result<()> {
-    let bundle = client.get_da_manifest_bundle(storage_ticket)?;
-    let plan = client.build_da_car_plan(&bundle)?;
-    let payload_bytes = client
+async fn emit_proof(client: &Client, storage_ticket: &StorageTicketId) -> Result<()> {
+    let storage = StorageClient::new(client);
+    let bundle = storage.da_manifest(storage_ticket).await?;
+    let plan = build_car_plan_from_manifest(&bundle.decode_manifest()?)?;
+    let payload_bytes = storage
         .sorafs_fetch_via_gateway(&plan, gateway_config(), providers(), Default::default())
         .await?
-        .assemble_payload();
+        .outcome.assemble_payload();
 
     let metadata = DaProofArtifactMetadata::new(
-        "artifacts/da/manifest.to",
+        "artifacts/da/manifest.norito",
         "artifacts/da/payload.car",
     );
     // Build the JSON structure (matches `iroha app da prove --json-out`):
-    let summary = client.build_da_proof_artifact(
+    let summary = build_da_proof_artifact(
         &bundle,
         &payload_bytes,
         &DaProofConfig::default(),
@@ -241,7 +243,7 @@ async fn emit_proof(client: &Client, storage_ticket: &str) -> Result<()> {
     )?;
 
     // Persist the same artefact with pretty JSON + trailing newline.
-    client.write_da_proof_artifact(
+    write_da_proof_artifact(
         &bundle,
         &payload_bytes,
         &DaProofConfig::default(),

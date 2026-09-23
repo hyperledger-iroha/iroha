@@ -746,8 +746,12 @@ fn autonomous_merge_commit_authorization_fixture(
 fn autonomous_transfer_evidence_fixture(
     mode: QueuePlanTransferFixture,
 ) -> (State, MergeLedgerEntry, SignedBlock) {
-    let UnpersistedAutonomousMergeFixture { state, entry, carrier, .. } =
-        unpersisted_autonomous_merge_commit_fixture(false, false, Some(mode), false, None, false);
+    let UnpersistedAutonomousMergeFixture {
+        state,
+        entry,
+        carrier,
+        ..
+    } = unpersisted_autonomous_merge_commit_fixture(false, false, Some(mode), false, None, false);
     (state, entry, carrier)
 }
 #[derive(Clone, Copy)]
@@ -1332,7 +1336,8 @@ fn unpersisted_autonomous_merge_commit_fixture(
         0,
     );
     let batch = state
-        .build_merge_execution_batch_from_source_prefix(1, application_header, vec![source]).expect("fixture hash admission")
+        .build_merge_execution_batch_from_source_prefix(1, application_header, vec![source])
+        .expect("fixture hash admission")
         .expect("fixture source produces a canonical autonomous execution batch");
     if runtime_effect.is_some() {
         for lane in &batch.lanes {

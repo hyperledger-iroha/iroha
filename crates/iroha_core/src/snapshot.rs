@@ -63,6 +63,12 @@ pub(crate) enum SnapshotCaptureError {
     /// The semantic State changed during the single capture attempt.
     #[error("State snapshot observation changed during capture")]
     Changed,
+    /// The captured committed cut belongs to another finalized block boundary.
+    #[error("State snapshot differs from the finalized commit {component}")]
+    CommitBoundary {
+        /// Exact identity component which failed before hashing or durable I/O.
+        component: &'static str,
+    },
     /// A stable runtime/World projection is malformed.
     #[error("invalid State snapshot runtime projection: {0}")]
     Runtime(#[source] Box<crate::state::LaneLifecycleError>),
@@ -168,6 +174,33 @@ impl CapturedStateSnapshot {
     pub(crate) fn canonical_hash(&self) -> Result<Hash, SnapshotCaptureError> {
         canonical_snapshot_wsv_hash(self.json.as_bytes())
             .map_err(|error| SnapshotCaptureError::Encoding(Box::new(error)))
+    }
+
+    /// Hash only the captured cut belonging to this exact finalized block.
+    ///
+    /// Identity and bytes share one capture; no subsequent live State read can
+    /// substitute another generation. A later publication does not invalidate
+    /// these immutable historical bytes. This authenticates the capture's block
+    /// association, not finality or the installation of retained State journals.
+    pub(crate) fn canonical_hash_for_block(
+        &self,
+        network_id: NetworkId,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Result<Hash, SnapshotCaptureError> {
+        let component = if self.identity.network_id != network_id {
+            Some("network")
+        } else if height == 0 || u64::try_from(self.identity.height).ok() != Some(height) {
+            Some("height")
+        } else if self.identity.tip != Some(block_hash) {
+            Some("block hash")
+        } else {
+            None
+        };
+        if let Some(component) = component {
+            return Err(SnapshotCaptureError::CommitBoundary { component });
+        }
+        self.canonical_hash()
     }
 }
 fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, out: &mut String) {

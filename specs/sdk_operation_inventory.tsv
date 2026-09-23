@@ -368,7 +368,6 @@ data_availability.pin_intent.list	POST	/v1/da/pin-intents	public	torii_default	p
 data_availability.pin_intent.prove	POST	/v1/da/pin-intents/prove	public	canonical_account_signature	authenticated_account	compute	http	always	true	true	true	true
 data_availability.pin_intent.verify	POST	/v1/da/pin-intents/verify	public	canonical_account_signature	authenticated_account	compute	http	always	true	true	true	true
 data_availability.proof_policy.list	GET	/v1/da/proof-policies	public	torii_default	public	read	http	always	true	true	true	false
-data_availability.proof_policy.snapshot	GET	/v1/da/proof-policies/snapshot	public	torii_default	public	read	http	always	true	true	true	false
 diagnostic.cpu_profile	GET	/debug/pprof/profile	diagnostic	operator_signature	operator	compute	http	feature(profiling)	false	true	false	true
 diagnostic.metrics	GET	/metrics	diagnostic	unauthenticated	public	read	http	feature(telemetry)	false	true	false	false
 diagnostic.status	GET	/status	diagnostic	unauthenticated	public	read	http	feature(telemetry)	false	true	false	false

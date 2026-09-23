@@ -1,6 +1,6 @@
 //! Data-availability helpers shared across SDKs.
 use crate::{
-    crypto::{HashOf, KeyPair},
+    crypto::KeyPair,
     data_model::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
@@ -12,29 +12,27 @@ use blake3::Hasher;
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
     NetworkId,
-    block::BlockHeader,
     da::{
-        commitment::{
-            DaCommitmentKey, DaCommitmentLocation, DaCommitmentProof, DaCommitmentWithLocation,
-            DaProofPolicyBundle,
-        },
         ingest::{DaIngestReceipt, DaIngestRequest, DaIngestRequestIntentV1},
-        pin_intent::DaPinIntentWithLocation,
         types::{
             BlobClass, BlobCodec, BlobDigest, Compression, DaRentLedgerProjection, ErasureProfile,
-            ExtraMetadata, GovernanceTag, RetentionPolicy, StorageTicketId,
+            ExtraMetadata, GovernanceTag, RetentionPolicy,
         },
     },
-    sorafs::pin_registry::{ManifestDigest, StorageClass},
+    sorafs::pin_registry::StorageClass,
 };
 use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::XorQuantity;
-use norito::{
-    decode_from_bytes,
-    derive::{JsonDeserialize, JsonSerialize},
+pub use iroha_torii_shared::da::{
+    DA_QUERY_REQUEST_MAX_BYTES, DEFAULT_DA_QUERY_PAGE_SIZE, DaCommitmentListCursor,
+    DaCommitmentListRequest, DaCommitmentListResponse, DaCommitmentProofRequest,
+    DaCommitmentProofResponse, DaCommitmentVerifyResponse, DaListSnapshot, DaManifestResponse,
+    DaPinIntentListCursor, DaPinIntentListRequest, DaPinIntentListResponse,
+    DaPinIntentQueryRequest, DaPinIntentVerifyResponse, DaQueryValidationError,
+    MAX_DA_QUERY_PAGE_SIZE,
 };
+use norito::decode_from_bytes;
 use sorafs_manifest::pdp::PdpCommitmentV1;
-use std::num::NonZeroU64;
 /// Canonical HTTP header carrying the base64-encoded PDP commitment bytes.
 pub const PDP_COMMITMENT_HEADER: &str = "sora-pdp-commitment";
 /// Decode the `sora-pdp-commitment` header into a typed PDP commitment.
@@ -67,117 +65,6 @@ pub fn receipt_pdp_commitment(receipt: &DaIngestReceipt) -> Result<Option<PdpCom
         || Ok(None),
         |bytes| decode_pdp_commitment_bytes(bytes).map(Some),
     )
-}
-/// Canonical ledger tip that binds a DA list cursor to one immutable view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub struct DaListSnapshot {
-    /// Committed chain height observed while constructing the page.
-    pub block_height: u64,
-    /// Hash of the block at `block_height`, absent only for the empty chain.
-    pub block_hash: Option<HashOf<BlockHeader>>,
-}
-/// Forward-only cursor for canonically ordered DA commitments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub struct DaCommitmentListCursor {
-    /// Immutable ledger view this cursor was issued against.
-    pub snapshot: DaListSnapshot,
-    /// Last raw commitment examined in `(lane_id, epoch, sequence)` order.
-    pub after: DaCommitmentKey,
-}
-/// Request payload for `/v1/da/commitments`.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub struct DaCommitmentListRequest {
-    /// Maximum raw index rows to inspect, capped by Torii at 1,000.
-    pub limit: Option<NonZeroU64>,
-    /// Server-issued continuation cursor from the preceding page.
-    pub cursor: Option<DaCommitmentListCursor>,
-}
-/// Request payload for `/v1/da/commitments/prove`.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub struct DaCommitmentProofRequest {
-    /// Optional manifest digest used as the primary lookup key.
-    pub manifest_hash: Option<ManifestDigest>,
-    /// Optional lane id used with `epoch` and `sequence` fallback lookup.
-    pub lane_id: Option<u32>,
-    /// Optional epoch used with `lane_id` and `sequence` fallback lookup.
-    pub epoch: Option<u64>,
-    /// Optional sequence used with `lane_id` and `epoch` fallback lookup.
-    pub sequence: Option<u64>,
-}
-/// Response payload for `/v1/da/commitments`.
-#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub struct DaCommitmentListResponse {
-    /// Active proof-policy bundle for DA commitments.
-    pub policies: DaProofPolicyBundle,
-    /// Matching commitment records with on-chain location metadata.
-    pub commitments: Vec<DaCommitmentWithLocation>,
-    /// Cursor for the next bounded scan, or `None` when the index is exhausted.
-    pub next_cursor: Option<DaCommitmentListCursor>,
-}
-/// Response payload for `/v1/da/commitments/prove`.
-#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub struct DaCommitmentProofResponse {
-    /// Proof-policy sidecar committed by the referenced block.
-    pub policies: DaProofPolicyBundle,
-    /// Commitment proof bound to the requested record.
-    pub proof: DaCommitmentProof,
-}
-/// Response payload for `/v1/da/commitments/verify`.
-#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub struct DaCommitmentVerifyResponse {
-    /// Indicates whether the proof verified against the canonical committed block and policy
-    /// sidecar loaded from Kura.
-    pub valid: bool,
-    /// Optional verification failure detail when `valid` is false.
-    pub error: Option<String>,
-}
-/// Forward-only cursor for canonically ordered DA pin intents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub struct DaPinIntentListCursor {
-    /// Immutable ledger view this cursor was issued against.
-    pub snapshot: DaListSnapshot,
-    /// Last raw pin intent examined in canonical block-location order.
-    pub after: DaCommitmentLocation,
-}
-/// Request payload for `/v1/da/pin-intents`.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub struct DaPinIntentListRequest {
-    /// Maximum raw index rows to inspect, capped by Torii at 1,000.
-    pub limit: Option<NonZeroU64>,
-    /// Server-issued continuation cursor from the preceding page.
-    pub cursor: Option<DaPinIntentListCursor>,
-}
-/// Response payload for `/v1/da/pin-intents`.
-#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub struct DaPinIntentListResponse {
-    /// Visible intents among the bounded raw index rows examined for this page.
-    pub intents: Vec<DaPinIntentWithLocation>,
-    /// Cursor for the next bounded scan, or `None` when the index is exhausted.
-    pub next_cursor: Option<DaPinIntentListCursor>,
-}
-/// Request payload for `/v1/da/pin-intents/prove`.
-#[derive(Debug, Default, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub struct DaPinIntentQueryRequest {
-    /// Optional manifest digest used as a lookup key.
-    pub manifest_hash: Option<ManifestDigest>,
-    /// Optional storage ticket used as a lookup key.
-    pub storage_ticket: Option<StorageTicketId>,
-    /// Optional human-readable alias used as a lookup key (at most 256 UTF-8 bytes).
-    pub alias: Option<String>,
-    /// Optional lane id used with `epoch` and `sequence` fallback lookup.
-    pub lane_id: Option<u32>,
-    /// Optional epoch used with `lane_id` and `sequence` fallback lookup.
-    pub epoch: Option<u64>,
-    /// Optional sequence used with `lane_id` and `epoch` fallback lookup.
-    pub sequence: Option<u64>,
-}
-/// Response payload for `/v1/da/pin-intents/verify`.
-#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub struct DaPinIntentVerifyResponse {
-    /// Indicates whether the supplied pin-intent membership proof verified.
-    pub valid: bool,
-    /// Optional verification failure detail when `valid` is false.
-    pub error: Option<String>,
 }
 /// Canonical ingest parameters shared by CLI and SDK clients.
 #[derive(Debug, Clone)]
@@ -390,6 +277,7 @@ mod tests {
     use iroha_data_model::{
         asset::{AssetDefinitionId, AssetId},
         da::{
+            commitment::{DaCommitmentKey, DaCommitmentLocation},
             ingest::DaStripeLayout,
             types::{
                 BlobClass, BlobCodec, BlobDigest, DaRentQuote, ErasureProfile, ExtraMetadata,
@@ -397,11 +285,12 @@ mod tests {
             },
         },
         prelude::AccountId,
-        sorafs::pin_registry::StorageClass,
+        sorafs::pin_registry::{ManifestDigest, StorageClass},
     };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::topology::LaneId;
     use sorafs_manifest::{ChunkingProfileV1, pdp::PdpMerkleTreeV1};
+    use std::num::NonZeroU64;
     fn checked_seed_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives DA Ed25519 keypair")

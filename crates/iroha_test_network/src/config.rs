@@ -2119,6 +2119,15 @@ mod tests {
                 validator_id.clone(),
                 Quantity::from(10_u32),
                 Metadata::default(),
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                    AssetId::new(
+                        stake_asset_id.clone(),
+                        AccountId::parse_encoded(&nexus.staking.stake_escrow_account_id)
+                            .expect("configured genesis fixture escrow"),
+                    ),
+                    Quantity::from(10_u32),
+                ),
             )
             .into(),
             ActivatePublicLaneValidator::new(lane_one.id, validator_id.clone()).into(),

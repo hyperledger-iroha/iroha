@@ -53,8 +53,8 @@ current runtime bindings and durable deployment history.
 Reset input validation checks the complete action timeout budget before scanning
 artifacts or reading signing custody. The install budget counts every required
 artifact upload, including `kagami`, plus each validator's stage and install
-actions. All four beacon providers activate before the epoch supervisor starts;
-restart qualification follows that required barrier. Prepared Inrou stage files
+actions. All four beacon providers activate before restart qualification.
+Prepared Inrou stage files
 use mode0600; retained runtime snapshots use mode0400. Both remain owner-only, direct,
 singly linked files, with unchanged content verification.
 

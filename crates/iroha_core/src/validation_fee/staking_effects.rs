@@ -12,20 +12,20 @@ use iroha_data_model::{
 
 pub(super) fn monetary_staking_wire_id(instruction: &InstructionBox) -> Option<&'static str> {
     macro_rules! classify {
-        ($($ty:ty => $wire_id:literal),+ $(,)?) => {$(
+        ($($ty:ty),+ $(,)?) => {$(
             if instruction.as_any().downcast_ref::<$ty>().is_some() {
-                return Some($wire_id);
+                return iroha_data_model::isi::instruction_wire_id(instruction);
             }
         )+};
     }
     classify!(
-        RegisterPublicLaneCandidate => "iroha.staking.register_public_lane_candidate",
-        RegisterPublicLaneValidator => "iroha.instruction.v1::staking::RegisterPublicLaneValidator",
-        BondPublicLaneStake => "iroha.instruction.v1::staking::BondPublicLaneStake",
-        FinalizePublicLaneUnbond => "iroha.instruction.v1::staking::FinalizePublicLaneUnbond",
-        SlashPublicLaneValidator => "iroha.instruction.v1::staking::SlashPublicLaneValidator",
-        RecordPublicLaneRewards => "iroha.instruction.v1::staking::RecordPublicLaneRewards",
-        ClaimPublicLaneRewards => "iroha.instruction.v1::staking::ClaimPublicLaneRewards",
+        RegisterPublicLaneCandidate,
+        RegisterPublicLaneValidator,
+        BondPublicLaneStake,
+        FinalizePublicLaneUnbond,
+        SlashPublicLaneValidator,
+        RecordPublicLaneRewards,
+        ClaimPublicLaneRewards,
     );
     None
 }
@@ -39,7 +39,7 @@ fn registration_plan(
         && plan.amount == registration.initial_stake
         && matches!(
             plan.precondition,
-            PublicLaneMonetaryPreconditionV1::Registration(..)
+            PublicLaneMonetaryPreconditionV1::Registration(_)
         ))
     .then_some(plan)
 }
@@ -50,7 +50,7 @@ fn transfer_plan(instruction: &InstructionBox) -> Option<&PublicLaneMonetaryPlan
         .downcast_ref::<RegisterPublicLaneCandidate>()
     {
         let plan = registration_plan(&candidate.registration)?;
-        return matches!(&plan.precondition, PublicLaneMonetaryPreconditionV1::Registration(precondition) if precondition.activation_height == candidate.activation_height).then_some(plan);
+        return matches!(&plan.precondition, PublicLaneMonetaryPreconditionV1::Registration(value) if value.activation_height == candidate.activation_height).then_some(plan);
     }
     if let Some(registration) = instruction
         .as_any()
@@ -63,10 +63,7 @@ fn transfer_plan(instruction: &InstructionBox) -> Option<&PublicLaneMonetaryPlan
         return (plan.has_canonical_shape()
             && plan.source_asset.account() == &bond.staker
             && plan.amount == bond.amount
-            && matches!(
-                plan.precondition,
-                PublicLaneMonetaryPreconditionV1::Bond(..)
-            ))
+            && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Bond(_)))
         .then_some(plan);
     }
     if let Some(unbond) = instruction
@@ -78,7 +75,7 @@ fn transfer_plan(instruction: &InstructionBox) -> Option<&PublicLaneMonetaryPlan
             && plan.destination_asset.account() == &unbond.staker
             && matches!(
                 plan.precondition,
-                PublicLaneMonetaryPreconditionV1::Unbond(..)
+                PublicLaneMonetaryPreconditionV1::Unbond(_)
             ))
         .then_some(plan);
     }
@@ -91,7 +88,7 @@ fn transfer_plan(instruction: &InstructionBox) -> Option<&PublicLaneMonetaryPlan
             && plan.amount == slash.amount
             && matches!(
                 plan.precondition,
-                PublicLaneMonetaryPreconditionV1::Slash(..)
+                PublicLaneMonetaryPreconditionV1::Slash(_)
             ))
         .then_some(plan);
     }

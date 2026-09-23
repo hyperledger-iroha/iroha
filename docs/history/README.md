@@ -14,6 +14,8 @@ labelled active or release-ready; it never attests the current candidate.
 | [2026-09-09 merge checkpoints](2026-09-09/merge-checkpoints.md) | Verbatim branch merge and privacy observations with source and excerpt hashes; qualification remains scoped to their recorded inputs. |
 | [2026-09-10 Musubi SDK and resolver](2026-09-10/index.md) | Canonical account queries, persistence identities and ordinary-stack resolver repair, with passing and failed source-bound checks retained. |
 | [2026-09-11 JSON context and primitives](2026-09-11/index.md) | Canonical primitive APIs and ordinary iterative Value destruction, complete compiler UI execution and benchmark consumer qualification; source and release limits remain explicit. |
+| [2026-09-22 model authority codecs](2026-09-22/model-enum-codecs.md) | Canonical authorization and monetary-plan migration, genesis codec decomposition and retained merged-build failures. Runtime qualification remains explicitly pending. |
+| [2026-09-22 deployment lifecycle](2026-09-22/deployment-lifecycle-retirement.md) | Epoch-worker retirement, retained shared deployment exclusion and focused script evidence; native execution remains unverified. |
 
 The [current roadmap coverage map](current-roadmap-coverage.json) accounts for
 every original roadmap area using stable current outcome IDs. It is maintained

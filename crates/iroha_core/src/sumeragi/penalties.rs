@@ -823,7 +823,7 @@ pub(crate) fn configure_penalty_staking_state_for_tests(state: &mut State) {
 }
 
 /// Seed one validator with an account, an exactly backed escrow balance, and
-/// the matching retained validator/share rows needed by the slash executor.
+/// the matching retained validator/share and exact custody rows needed by the slash executor.
 #[cfg(test)]
 pub(crate) fn seed_penalty_validator_for_tests(
     state: &State,
@@ -831,7 +831,7 @@ pub(crate) fn seed_penalty_validator_for_tests(
     peer: &PeerId,
     stake: Quantity,
 ) -> AccountId {
-    use crate::smartcontracts::Execute as _;
+    use crate::smartcontracts::{Execute as _, isi::staking::prepare_stake_custody_credit};
     use iroha_data_model::{
         account::Account,
         asset::AssetId,
@@ -850,12 +850,35 @@ pub(crate) fn seed_penalty_validator_for_tests(
             .execute(&validator, &mut transaction)
             .expect("register penalty validator account");
     }
-    Mint::asset_quantity(
-        stake.clone(),
-        AssetId::new(asset_definition, escrow.clone()),
+    let escrow_asset = AssetId::new(asset_definition, escrow.clone());
+    Mint::asset_quantity(stake.clone(), escrow_asset.clone())
+        .execute(&escrow, &mut transaction)
+        .expect("mint exact penalty stake into escrow");
+    let balance = transaction
+        .world
+        .assets
+        .get(&escrow_asset)
+        .expect("minted penalty escrow exists")
+        .as_ref()
+        .clone();
+    assert!(
+        transaction
+            .world
+            .public_lane_stake_custody
+            .get(&(lane_id, validator.clone()))
+            .is_none(),
+        "penalty validator fixture must not replace existing custody"
+    );
+    prepare_stake_custody_credit(
+        &transaction.world,
+        lane_id,
+        &validator,
+        &escrow_asset,
+        &stake,
+        &balance,
     )
-    .execute(&escrow, &mut transaction)
-    .expect("mint exact penalty stake into escrow");
+    .expect("reserve the exact minted validator stake")
+    .apply(&mut transaction.world);
     assert!(
         transaction
             .world
@@ -917,8 +940,8 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
-        IntoKeyValue, NetworkId,
-        asset::{Asset, AssetDefinitionId, AssetId},
+        NetworkId,
+        asset::{AssetDefinitionId, AssetId},
         block::{
             BlockHeader, SignedBlock,
             consensus::{Evidence, EvidenceRecord},
@@ -959,8 +982,8 @@ mod tests {
         state
     }
 
-    fn enable_shared_public_staking_lanes(state: &mut State) {
-        let mut nexus = state.nexus_snapshot();
+    fn fresh_state_with_shared_public_staking_lanes() -> State {
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("non-zero lane count"),
             vec![
@@ -974,11 +997,13 @@ mod tests {
             ],
         )
         .expect("shared public penalty lane catalog");
-        *state = State::new_with_nexus_for_testing(
-            std::mem::take(&mut state.world),
+        let mut state = State::new_with_nexus_for_testing(
+            World::default(),
             nexus,
             LiveQueryStore::start_test(),
         );
+        configure_penalty_staking_state_for_tests(&mut state);
+        state
     }
 
     fn roster_keys() -> Vec<KeyPair> {
@@ -1066,7 +1091,9 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 100, &roster);
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 100, &roster,
+            );
         HeightContext {
             network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
@@ -1232,35 +1259,43 @@ mod tests {
         key
     }
 
-    fn fund_penalty_escrow(state: &State, amount: &Quantity) {
+    fn fund_penalty_escrow(
+        state: &State,
+        lane_id: LaneId,
+        validator: &AccountId,
+        amount: &Quantity,
+    ) {
+        use crate::smartcontracts::{Execute as _, isi::staking::prepare_stake_custody_credit};
+        use iroha_data_model::isi::Mint;
+
         let (asset_definition, escrow, _) = penalty_staking_ids();
-        let escrow_asset = AssetId::new(asset_definition.clone(), escrow);
-        {
-            let mut assets = state.world.assets.block();
-            let current = assets
-                .get(&escrow_asset)
-                .map(|value| value.as_ref().clone())
-                .unwrap_or_else(Quantity::zero);
-            let balance = current
-                .checked_add(amount)
-                .expect("penalty escrow balance remains bounded");
-            let (_, value) = Asset::new(escrow_asset.clone(), balance).into_key_value();
-            assets.insert(escrow_asset, value);
-            assets.commit();
-        }
-        {
-            let mut definitions = state.world.asset_definitions.block();
-            let mut definition = definitions
-                .get(&asset_definition)
-                .cloned()
-                .expect("penalty stake definition exists");
-            definition.total_quantity = definition
-                .total_quantity
-                .checked_add(amount)
-                .expect("penalty stake issuance remains bounded");
-            definitions.insert(asset_definition, definition);
-            definitions.commit();
-        }
+        let escrow_asset = AssetId::new(asset_definition, escrow.clone());
+        let mut state_block = state.block(penalty_staking_fixture_header());
+        let mut transaction = state_block.transaction();
+        Mint::asset_quantity(amount.clone(), escrow_asset.clone())
+            .execute(&escrow, &mut transaction)
+            .expect("mint extra delegated penalty stake into escrow");
+        let balance = transaction
+            .world
+            .assets
+            .get(&escrow_asset)
+            .expect("minted penalty escrow exists")
+            .as_ref()
+            .clone();
+        prepare_stake_custody_credit(
+            &transaction.world,
+            lane_id,
+            validator,
+            &escrow_asset,
+            amount,
+            &balance,
+        )
+        .expect("reserve the exact additional delegated stake")
+        .apply(&mut transaction.world);
+        transaction.apply();
+        state_block
+            .commit_world_overlay_for_testing()
+            .expect("commit delegated stake custody fixture");
     }
 
     fn add_validator_record_on_lane(state: &State, lane_id: LaneId, peer: &PeerId) -> AccountId {
@@ -1356,7 +1391,7 @@ mod tests {
             );
             block.commit();
         }
-        fund_penalty_escrow(&state, &Quantity::from(3_000_u64));
+        fund_penalty_escrow(&state, LaneId::SINGLE, &first, &Quantity::from(3_000_u64));
         {
             let key = (LaneId::SINGLE, first.clone());
             let mut block = state.world.public_lane_validators.block();
@@ -1375,6 +1410,33 @@ mod tests {
         .expect("canonical multi-validator stake snapshot");
 
         assert_eq!(snapshot.stake_share_rows_scanned, 3);
+        let (asset_definition, escrow, _) = penalty_staking_ids();
+        let escrow_asset = AssetId::new(asset_definition, escrow);
+        assert_eq!(
+            view.world
+                .public_lane_stake_custody()
+                .get(&(LaneId::SINGLE, first.clone())),
+            Some(&(escrow_asset.clone(), Quantity::from(13_000_u64))),
+            "both bonded and pending delegated liabilities retain exact custody"
+        );
+        assert_eq!(
+            view.world
+                .public_lane_stake_custody()
+                .get(&(LaneId::SINGLE, second.clone())),
+            Some(&(escrow_asset.clone(), Quantity::from(10_000_u64)))
+        );
+        assert_eq!(
+            view.world.public_lane_stake_reserves().get(&escrow_asset),
+            Some(&Quantity::from(23_000_u64)),
+            "shared escrow reserves sum every validator's liability exactly once"
+        );
+        assert_eq!(
+            view.world
+                .assets()
+                .get(&escrow_asset)
+                .map(|balance| balance.as_ref().clone()),
+            Some(Quantity::from(23_000_u64))
+        );
         let first_locator = snapshot
             .validator_map
             .get(peers[0].public_key())
@@ -1999,8 +2061,7 @@ mod tests {
     }
     #[test]
     fn consensus_penalty_ignores_singleton_non_owner_shared_dataspace_projection() {
-        let mut state = fresh_state();
-        enable_shared_public_staking_lanes(&mut state);
+        let state = fresh_state_with_shared_public_staking_lanes();
         install_one_block_delay_npos(&state);
         let frozen_roster = roster();
         let context = install_height_one_artifact(&state, &frozen_roster);

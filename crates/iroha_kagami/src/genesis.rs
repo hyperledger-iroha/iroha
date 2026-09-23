@@ -1,4 +1,4 @@
-//! Genesis authority admission and command routing.
+//! Genesis authority provisioning, validation, and signing commands.
 use crate::{Outcome, RunArgs};
 use clap::Subcommand;
 use color_eyre::eyre::eyre;
@@ -7,7 +7,7 @@ use iroha_genesis::RawGenesisTransaction;
 use iroha_model_base::topology::DataSpaceId;
 use std::io::{BufWriter, Write};
 
-pub(super) fn ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+pub(super) fn ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
     manifest: &RawGenesisTransaction,
     topology: &[iroha_model_base::peer::PeerId],
 ) -> color_eyre::Result<()> {
@@ -121,12 +121,9 @@ impl CompleteTestGenesisBuilder for iroha_genesis::GenesisBuilder {
 mod authority_tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
-        parameter::{
-            Parameter,
-            system::{SumeragiConsensusMode, SumeragiNposParameters},
-        },
+    use iroha_data_model::parameter::{
+        Parameter,
+        system::{SumeragiConsensusMode, SumeragiNposParameters},
     };
     use iroha_genesis::GenesisBuilder;
     use iroha_model_base::chain::ChainId;
@@ -152,80 +149,73 @@ mod authority_tests {
     }
 
     #[test]
-    fn genesis_authority_matches_exact_topology_and_rejects_height_one_boundary() {
+    fn generation_zero_topology_requires_the_exact_initial_authority() {
         let current = test_peers(0x30);
-        let mut npos_parameters = SumeragiNposParameters::default();
-        npos_parameters.epoch_length_blocks = NonZeroU64::new(1).expect("non-zero epoch length");
-        npos_parameters.evidence_horizon_blocks = 1;
-        npos_parameters.slashing_delay_blocks = 1;
         let manifest = complete_test_genesis_builder_for_peers(
             GenesisBuilder::new_without_executor(
-                ChainId::from("height-one-epoch-boundary"),
+                ChainId::from("initial-authority"),
                 PathBuf::from("."),
-            )
-            .append_parameter(Parameter::Custom(npos_parameters.into_custom_parameter())),
+            ),
             current.clone(),
         )
         .build_raw()
-        .expect("build authority test manifest")
-        .with_consensus_mode(SumeragiConsensusMode::Npos);
-        ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(&manifest, &current)
-            .expect("generation-zero keys match their exact genesis topology");
+        .expect("complete generation-zero manifest");
+        ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
+            &manifest, &current,
+        )
+        .expect("the exact initial committee owns the generation-zero keys");
         assert!(
-            ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+            ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
                 &manifest,
                 &test_peers(0x50)
             )
             .is_err()
         );
-        let error = ensure_kagemusha_mint_finality_schedule_matches_consensus(&manifest)
-            .expect_err("height-one boundary cannot authenticate a committed installed beacon");
+        let mut parameters = manifest
+            .kagemusha_mint_finality_genesis_parameters()
+            .clone();
+        parameters.authority_generation.generation = 1;
+        let invalid = manifest.with_kagemusha_mint_finality_genesis_parameters(parameters);
         assert!(
-            error
-                .to_string()
-                .contains("cannot end its epoch at height one")
+            ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
+                &invalid, &current
+            )
+            .is_err()
         );
     }
 
     #[test]
-    fn genesis_rejects_nonzero_generation_and_retired_successor_field() {
-        let current = test_peers(0x70);
-        let manifest = complete_test_genesis_builder_for_peers(
-            GenesisBuilder::new_without_executor(
-                ChainId::from("nonzero-genesis-generation"),
-                PathBuf::from("."),
+    fn genesis_epoch_requires_room_for_committed_beacon_authority() {
+        for length in [1, 2, 3] {
+            let mut npos_parameters = SumeragiNposParameters::default();
+            npos_parameters.epoch_length_blocks = NonZeroU64::new(length).unwrap();
+            npos_parameters.evidence_horizon_blocks = length;
+            npos_parameters.slashing_delay_blocks = length;
+            let manifest = complete_test_genesis_builder_for_peers(
+                GenesisBuilder::new_without_executor(
+                    ChainId::from("initial-beacon-window"),
+                    PathBuf::from("."),
+                )
+                .append_parameter(Parameter::Custom(npos_parameters.into_custom_parameter())),
+                test_peers(0x70),
             )
-            .append_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            )),
-            current,
-        )
-        .build_raw()
-        .expect("build authority schedule test manifest")
-        .with_consensus_mode(SumeragiConsensusMode::Npos);
-        ensure_kagemusha_mint_finality_schedule_matches_consensus(&manifest)
-            .expect("normal NPoS genesis carries only its generation-zero authority");
-        let mut parameters = manifest
-            .kagemusha_mint_finality_genesis_parameters()
-            .clone();
-        let mut obsolete = norito::json::to_value(&parameters).expect("encode genesis parameters");
-        obsolete
-            .as_object_mut()
-            .expect("genesis parameter object")
-            .insert("next_epoch_roster".to_owned(), norito::json::Value::Null);
-        assert!(
-            norito::json::from_value::<KagemushaMintFinalityGenesisParametersV1>(obsolete).is_err()
-        );
-        parameters.authority_generation.generation = 1;
-        let manifest = manifest.with_kagemusha_mint_finality_genesis_parameters(parameters);
-
-        let error = ensure_kagemusha_mint_finality_schedule_matches_consensus(&manifest)
-            .expect_err("genesis cannot activate a nonzero generation");
-        assert!(
-            error
-                .to_string()
-                .contains("mint_finality.genesis.authority_generation")
-        );
+            .build_raw()
+            .expect("complete authority manifest")
+            .with_consensus_mode(SumeragiConsensusMode::Npos);
+            let result = ensure_kagemusha_mint_finality_schedule_matches_consensus(&manifest);
+            if length < 3 {
+                assert!(
+                    result
+                        .expect_err("missing committed beacon anchor")
+                        .to_string()
+                        .contains("epoch_length_blocks >= 3")
+                );
+            } else {
+                result.expect(
+                    "initial authority does not require a precomputed successor generation",
+                );
+            }
+        }
     }
 }
 mod embed_pop;

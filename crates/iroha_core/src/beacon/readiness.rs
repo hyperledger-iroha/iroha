@@ -438,6 +438,7 @@ mod tests {
             keys,
             session.record().network_id,
             parent_hash,
+            42,
         );
         let mut record =
             FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(session.record().clone())

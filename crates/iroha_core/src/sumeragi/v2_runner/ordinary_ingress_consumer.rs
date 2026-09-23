@@ -394,9 +394,8 @@ pub(in crate::sumeragi) fn consume_prepared_native_source_response(
 /// This is the sole post-selection implementation used by the activated
 /// lifecycle handoff. Every failure leaves both the local
 /// non-permit scope and the move-only handoff armed for restart.
-/// An authenticated lane message gets a bounded output dispatch attempt before
-/// this handoff completes. `lane_output_limit` is the runner control queue
-/// capacity; full queues retain an exact source or worker owner.
+/// Native ingress transfers to its physical process. Global ingress enters the
+/// WAL-bound runtime under the exact fair-ingress and output owners.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
     mut prepared: PreparedDequeuedV2IngressV1,

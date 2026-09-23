@@ -30,15 +30,21 @@ pub(crate) struct PreparedNativeServiceCandidate<'state> {
 impl<'state> PreparedNativeServiceCandidate<'state> {
     /// Detach readiness from synchronous execution: publication checks Queue ownership,
     /// while the retained validator checks AMX evidence after releasing all State writers.
-    pub(crate) fn into_parts(self) -> (
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
         PreparedCarrier<'state>,
         Option<ProviderCandidateCapture>,
         Option<ReputationCandidateCapture>,
         super::native_validation::CarrierShellAdmission,
     ) {
-        (self.carrier, self.provider, self.reputation, self.shell_admission)
+        (
+            self.carrier,
+            self.provider,
+            self.reputation,
+            self.shell_admission,
+        )
     }
-
 }
 
 impl V2ApplyService {
@@ -124,18 +130,39 @@ impl V2ApplyService {
             .into_captures(self, context.context(), body)
             .map_err(|(_, error)| error)?;
         let topology = crate::sumeragi::network_topology::Topology::new(
-            context.context().roster.iter().map(|entry| entry.validator.clone()),
+            context
+                .context()
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone()),
         );
         let mut voting_block = None;
         #[cfg(test)]
-        self.test_failures.candidate_executions.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let carrier = crate::block::ValidBlock::validate_and_prepare_sumeragi_v2_candidate_keep_voting_block(
-            body.clone(), &topology, &self.genesis_account,
-            &TimeSource::new_system(), self.block_cadence,
-            crate::block::valid::SumeragiV2ValidationContext::from_height_context(context.context()),
-            self.state.as_ref(), &mut voting_block,
-        ).map_err(|(failed, error)| self.classify_validation_failure(None, failed.as_ref(), error.as_ref()))?;
-        Ok(PreparedNativeServiceCandidate { carrier, provider, reputation, shell_admission })
+        self.test_failures
+            .candidate_executions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let carrier =
+            crate::block::ValidBlock::validate_and_prepare_sumeragi_v2_candidate_keep_voting_block(
+                body.clone(),
+                &topology,
+                &self.genesis_account,
+                &TimeSource::new_system(),
+                self.block_cadence,
+                crate::block::valid::SumeragiV2ValidationContext::from_height_context(
+                    context.context(),
+                ),
+                self.state.as_ref(),
+                &mut voting_block,
+            )
+            .map_err(|(failed, error)| {
+                self.classify_validation_failure(None, failed.as_ref(), error.as_ref())
+            })?;
+        Ok(PreparedNativeServiceCandidate {
+            carrier,
+            provider,
+            reputation,
+            shell_admission,
+        })
     }
 
     /// Count actual execution attempts, excluding source and archive refusals.

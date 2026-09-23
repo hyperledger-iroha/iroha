@@ -1,7 +1,7 @@
 //! Canonical JSON object key codecs for persisted data-model identities.
 use iroha_crypto::Hash;
-use norito::json::JsonKeyCodec;
 use norito::json;
+use norito::json::JsonKeyCodec;
 macro_rules! impl_id_key_codec {
     ($($ty:path),+ $(,)?) => {
         $(

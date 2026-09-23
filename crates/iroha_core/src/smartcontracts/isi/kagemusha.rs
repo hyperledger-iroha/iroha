@@ -14,9 +14,9 @@ use iroha_data_model::{
     block::consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
     isi::kagemusha_v1::{
         KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1, KagemushaMintFinalityAuthorityGenerationV1,
-        KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalitySealBundleV1,
-        KagemushaMintFinalitySealMessageV1, KagemushaTopUpLeafV1,
-        KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
+        KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
+        KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
+        KagemushaTopUpLeafV1, KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
     },
     isi::{
         KAGEMUSHA_CHAIN_VERSION_V1, KagemushaFinalityTrustAnchorV1, KagemushaOperationFinalityV1,
@@ -253,7 +253,7 @@ pub trait KagemushaV1RuntimeVerifier: Send + Sync {
         request: KagemushaRedemptionRequestV1,
     ) -> Result<crate::zk::kagemusha_v1_recursion::VerifiedKagemushaRedemptionProofV1, String>;
 
-    /// Prove the zero-authority bootstrap for an authenticated release and its pinned roster.
+    /// Prove the zero-value bootstrap for an authenticated release and its pinned authorization.
     ///
     /// This runs only when Kura has no durable checkpoint. The proof is generated after release
     /// authentication, then terminally reverified before persistence; it is deliberately absent
@@ -262,8 +262,8 @@ pub trait KagemushaV1RuntimeVerifier: Send + Sync {
     fn prove_mint_authority_bootstrap(
         &self,
         release_id: [u8; 32],
-        authorization: &KagemushaMintFinalityEpochAuthorizationV1,
         authority_generation: &KagemushaMintFinalityAuthorityGenerationV1,
+        authorization: &KagemushaMintFinalityEpochAuthorizationV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String>;
 
     /// Produce the immutable mint result for one canonical finalized reserve top-up.
@@ -313,8 +313,8 @@ impl KagemushaV1RuntimeVerifier for RejectAllKagemushaV1RuntimeVerifier {
     fn prove_mint_authority_bootstrap(
         &self,
         _release_id: [u8; 32],
-        _authorization: &KagemushaMintFinalityEpochAuthorizationV1,
         _authority_generation: &KagemushaMintFinalityAuthorityGenerationV1,
+        _authorization: &KagemushaMintFinalityEpochAuthorizationV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String> {
         Err("authenticated Kagemusha V1 mint authority is unavailable".to_owned())
     }
@@ -771,21 +771,22 @@ mod release_lifecycle_tests {
 fn kagemusha_mint_authority_bootstrap_certificate_v1(
     release_id: [u8; 32],
     genesis_authorization_id: [u8; 32],
-    authorization: &KagemushaMintFinalityEpochAuthorizationV1,
     authority_generation: &KagemushaMintFinalityAuthorityGenerationV1,
+    authorization: &KagemushaMintFinalityEpochAuthorizationV1,
 ) -> Result<KagemushaMintCertificateWitnessV1, String> {
-    authority_generation
-        .validate()
-        .map_err(|error| format!("invalid Kagemusha genesis finality roster: {error}"))?;
     authorization
         .validate_against_authority(authority_generation)
         .map_err(|error| format!("invalid Kagemusha genesis authorization: {error}"))?;
     let actual_authorization_id = authorization
         .authorization_id()
         .map_err(|error| format!("failed to digest Kagemusha genesis authorization: {error}"))?;
-    if release_id == [0; 32] || actual_authorization_id != genesis_authorization_id {
+    if release_id == [0; 32]
+        || authorization.decision != KagemushaMintFinalityEpochDecisionV1::Genesis
+        || actual_authorization_id != genesis_authorization_id
+    {
         return Err(
-            "Kagemusha bootstrap roster differs from the authenticated release profile".to_owned(),
+            "Kagemusha bootstrap authorization differs from the authenticated release profile"
+                .to_owned(),
         );
     }
     let first_validator = authority_generation
@@ -901,91 +902,121 @@ fn kagemusha_mint_authority_bootstrap_certificate_v1(
 }
 
 #[cfg(test)]
-mod bootstrap_certificate_tests {
+mod mint_authority_bootstrap_tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         NetworkId,
-        block::{BlockHeader, consensus_v2::ValidatorPower},
+        isi::kagemusha_v1::{BeaconEpochBindingV1, InstalledBeaconEpochBindingV1},
     };
     use iroha_model_base::peer::PeerId;
 
-    #[test]
-    fn bootstrap_pins_authorization_bounds_and_cannot_authorize_a_mint() {
-        let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::new(b"bootstrap release fixture"),
-        ));
-        let mut roster = (0u8..4)
-            .map(|index| ValidatorPower {
-                validator: PeerId::new(
-                    KeyPair::from_seed(vec![index; 32], Algorithm::Ed25519)
-                        .public_key()
-                        .clone(),
-                ),
-                power: 1,
+    fn genesis() -> (
+        KagemushaMintFinalityAuthorityGenerationV1,
+        KagemushaMintFinalityEpochAuthorizationV1,
+    ) {
+        let mut validators = (1_u8..=4)
+            .map(|seed| {
+                let key = KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal);
+                crate::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    &[seed; 32],
+                    0,
+                    PeerId::new(key.public_key().clone()),
+                )
+                .expect("valid paired-Pasta genesis keys")
             })
             .collect::<Vec<_>>();
-        roster.sort();
-        let (authorization, authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-                network, 10, &roster,
-            );
-        let pinned = authorization.authorization_id().unwrap();
+        validators.sort_by(|left, right| left.validator.cmp(&right.validator));
+        let authority = KagemushaMintFinalityAuthorityGenerationV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                b"bootstrap certificate genesis",
+            ))),
+            generation: 0,
+            validators,
+        };
+        let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 64)
+            .expect("valid genesis authorization");
+        (authority, authorization)
+    }
+
+    #[test]
+    fn bootstrap_certificate_preserves_genesis_authorization_without_mint_authority() {
+        let (authority, authorization) = genesis();
         let certificate = kagemusha_mint_authority_bootstrap_certificate_v1(
             [1; 32],
-            pinned,
-            &authorization,
+            authorization.authorization_id().unwrap(),
             &authority,
+            &authorization,
         )
-        .unwrap();
-        certificate
-            .certificate_binding_digest(
-                crate::zk::kagemusha_v1_recursion::KagemushaMintAuthorityStepV1::Bootstrap,
-            )
-            .unwrap();
-        assert!(certificate.validate_shape().is_err());
-        assert!(certificate.seal_bundle.message.signing_digest().is_err());
-        assert!(certificate.seal_bundle.seals.is_empty());
+        .expect("release-pinned genesis bootstrap");
+        assert_eq!(certificate.authority_generation, authority);
         assert_eq!(
             certificate.seal_bundle.message.epoch_authorization,
             authorization
         );
         assert!(
-            kagemusha_mint_authority_bootstrap_certificate_v1(
-                [1; 32],
-                authority.authority_id().unwrap(),
-                &authorization,
-                &authority
-            )
-            .is_err()
+            certificate
+                .seal_bundle
+                .message
+                .next_epoch_authorization
+                .is_none()
         );
-        let mut changed = authorization;
-        changed.last_height += 1;
+        assert!(certificate.seal_bundle.seals.is_empty());
+        assert_eq!(certificate.seal_bundle.message.kagemusha_top_up_count, 0);
+        certificate
+            .seal_bundle
+            .message
+            .validate_bootstrap()
+            .expect("canonical bootstrap framing");
         assert!(
-            kagemusha_mint_authority_bootstrap_certificate_v1(
-                [1; 32], pinned, &changed, &authority
-            )
-            .is_err()
+            certificate.validate_shape().is_err(),
+            "an unsigned Bootstrap witness cannot validate as FinalizedMint"
         );
-        assert!(
+    }
+
+    #[test]
+    fn bootstrap_certificate_rejects_relabelled_or_non_genesis_authorization() {
+        let (authority, authorization) = genesis();
+        let pinned_id = authorization.authorization_id().unwrap();
+        let build = |release, pinned, authority, authorization| {
             kagemusha_mint_authority_bootstrap_certificate_v1(
-                [0; 32],
+                release,
                 pinned,
-                &authorization,
-                &authority
+                authority,
+                authorization,
             )
-            .is_err()
-        );
-        let mut changed_authority = authority;
-        changed_authority.generation = 1;
+        };
+        assert!(build([0; 32], pinned_id, &authority, &authorization).is_err());
+        assert!(build([1; 32], [2; 32], &authority, &authorization).is_err());
+        let mut changed_schedule = authorization;
+        changed_schedule.last_height += 1;
+        assert!(build([1; 32], pinned_id, &authority, &changed_schedule).is_err());
+        let mut changed_authority = authority.clone();
+        changed_authority.generation += 1;
+        assert!(build([1; 32], pinned_id, &changed_authority, &authorization).is_err());
+        let retained = KagemushaMintFinalityEpochAuthorizationV1 {
+            epoch: 1,
+            first_height: 65,
+            last_height: 128,
+            previous_authorization_id: pinned_id,
+            beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                session_id: [3; 32],
+                transcript_hash: [4; 32],
+            }),
+            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+            ..authorization
+        };
+        retained.validate_successor(&authorization).unwrap();
         assert!(
-            kagemusha_mint_authority_bootstrap_certificate_v1(
+            build(
                 [1; 32],
-                pinned,
-                &authorization,
-                &changed_authority
+                retained.authorization_id().unwrap(),
+                &authority,
+                &retained
             )
-            .is_err()
+            .is_err(),
+            "even its own release pin cannot bootstrap a retained epoch"
         );
     }
 }
@@ -1035,8 +1066,8 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
     fn prove_mint_authority_bootstrap(
         &self,
         release_id: [u8; 32],
-        authorization: &KagemushaMintFinalityEpochAuthorizationV1,
         authority_generation: &KagemushaMintFinalityAuthorityGenerationV1,
+        authorization: &KagemushaMintFinalityEpochAuthorizationV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String> {
         let runtime = self
             .releases
@@ -1045,8 +1076,8 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
         let certificate = kagemusha_mint_authority_bootstrap_certificate_v1(
             release_id,
             runtime.verifier.mint_genesis_authorization_id(),
-            authorization,
             authority_generation,
+            authorization,
         )?;
         let checkpoint = prove_kagemusha_mint_authority_bootstrap_v1(
             &runtime.eq_mint_prover,
@@ -1179,7 +1210,9 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
         let seal_bundle = decode_kagemusha_mint_finality_seal_bundle_v1(seal_payload)
             .map_err(|error| format!("invalid boundary mint seal bundle: {error}"))?;
         if seal_bundle.message.next_epoch_authorization.is_none() {
-            return Err("mint authority rotation seal lacks the next roster identifier".to_owned());
+            return Err(
+                "mint authority rotation seal lacks the next epoch authorization".to_owned(),
+            );
         }
         let membership = match top_up_membership {
             Some(membership) => membership,
@@ -1423,6 +1456,34 @@ mod recursive_profile_file_tests {
         assert_eq!(profile.commit_wrapper_ep.num_fixed, 5);
         assert_eq!(profile.terminal_authorization_eq.num_fixed, 1);
         assert_eq!(profile.mint_genesis_authorization_id, [3; 32]);
+    }
+
+    #[test]
+    fn recursive_profile_requires_authorization_pin_and_rejects_retired_roster_pin() {
+        let fields = profile_json_fields();
+        let mut missing = fields.clone();
+        let pin = missing.remove("mint_genesis_authorization_id").unwrap();
+        assert!(
+            norito::json::from_value::<KagemushaRecursiveVerifierProfileFileV1>(
+                norito::json::to_value(&missing).unwrap()
+            )
+            .is_err()
+        );
+        missing.insert("mint_genesis_roster_id".to_owned(), pin.clone());
+        assert!(
+            norito::json::from_value::<KagemushaRecursiveVerifierProfileFileV1>(
+                norito::json::to_value(&missing).unwrap()
+            )
+            .is_err()
+        );
+        let mut both = fields;
+        both.insert("mint_genesis_roster_id".to_owned(), pin);
+        assert!(
+            norito::json::from_value::<KagemushaRecursiveVerifierProfileFileV1>(
+                norito::json::to_value(&both).unwrap()
+            )
+            .is_err()
+        );
     }
 
     #[test]

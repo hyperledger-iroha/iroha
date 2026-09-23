@@ -55,25 +55,8 @@ pub(crate) fn mint_finality_genesis_for_authority(
     authority: &KagemushaMintFinalityAuthorityGenerationV1,
     last_height: u64,
 ) -> KagemushaMintFinalityEpochAuthorizationV1 {
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id: authority.network_id,
-        epoch: 0,
-        first_height: 1,
-        last_height,
-        authority_generation: authority.generation,
-        authority_id: authority
-            .authority_id()
-            .expect("fixture authority identity"),
-        beacon: BeaconEpochBindingV1::Bootstrap,
-        previous_authorization_id: [0; 32],
-        transition_id: [0; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
-    };
-    authorization
-        .validate_against_authority(authority)
-        .expect("generation-zero genesis authorization");
-    authorization
+    KagemushaMintFinalityEpochAuthorizationV1::genesis(authority, last_height)
+        .expect("generation-zero genesis authorization")
 }
 
 /// Build a complete generation-zero authority and explicit genesis authorization.
@@ -190,15 +173,17 @@ pub(crate) fn mint_finality_retained_authorization(
 ) {
     assert!(epoch < 1_024, "fixture epoch history is bounded");
     let authority = mint_finality_authority(network_id, 0, roster);
-    let mut authorization = mint_finality_genesis_for_authority(
-        &authority,
-        if epoch == 0 { last_height } else { 1 },
-    );
+    let mut authorization =
+        mint_finality_genesis_for_authority(&authority, if epoch == 0 { last_height } else { 1 });
     for next_epoch in 1..=epoch {
         authorization = mint_finality_successor_authorization(
             &authorization,
             &authority,
-            if next_epoch == epoch { last_height } else { next_epoch + 1 },
+            if next_epoch == epoch {
+                last_height
+            } else {
+                next_epoch + 1
+            },
             fixture_installed_beacon(),
             KagemushaMintFinalityEpochDecisionV1::Retain,
             [0; 32],
@@ -223,7 +208,8 @@ pub(crate) fn mint_finality_scheduled_authorization(
     let authority = mint_finality_authority(network_id, 0, roster);
     let mut authorization = mint_finality_genesis_for_authority(&authority, epoch_length);
     for next_epoch in 1..=epoch {
-        let last_height = next_epoch.checked_add(1)
+        let last_height = next_epoch
+            .checked_add(1)
             .and_then(|count| count.checked_mul(epoch_length))
             .expect("fixture schedule remains representable");
         authorization = mint_finality_successor_authorization(
@@ -255,16 +241,24 @@ mod tests {
 
     #[test]
     fn retained_epoch_history_keeps_generation_zero_and_links_each_successor() {
-        let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
-            iroha_crypto::Hash::new(b"fixture retained authorization history"),
-        ));
+        let network_id =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"fixture retained authorization history"),
+            ));
         // Use the same closed deterministic roster as production-oriented fixtures.
-        let mut roster = (1_u8..=4).map(|seed| {
-            let key = iroha_crypto::KeyPair::try_from_seed(
-                vec![seed; 32], iroha_crypto::Algorithm::BlsNormal,
-            ).expect("fixture validator");
-            ValidatorPower { validator: iroha_model_base::peer::PeerId::new(key.public_key().clone()), power: 1 }
-        }).collect::<Vec<_>>();
+        let mut roster = (1_u8..=4)
+            .map(|seed| {
+                let key = iroha_crypto::KeyPair::try_from_seed(
+                    vec![seed; 32],
+                    iroha_crypto::Algorithm::BlsNormal,
+                )
+                .expect("fixture validator");
+                ValidatorPower {
+                    validator: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
+                    power: 1,
+                }
+            })
+            .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let (epoch, authority) = mint_finality_retained_authorization(network_id, 3, 40, &roster);
         assert_eq!(epoch.epoch, 3);
@@ -274,13 +268,22 @@ mod tests {
         assert_eq!(epoch.authority_generation, 0);
         assert_eq!(epoch.beacon, fixture_installed_beacon());
         let (previous, _) = mint_finality_retained_authorization(network_id, 2, 3, &roster);
-        epoch.validate_successor(&previous).expect("exact previous authorization");
-        let (scheduled_previous, _) = mint_finality_scheduled_authorization(network_id, 2, 10, &roster);
-        let (scheduled, scheduled_authority) = mint_finality_scheduled_authorization(network_id, 3, 10, &roster);
+        epoch
+            .validate_successor(&previous)
+            .expect("exact previous authorization");
+        let (scheduled_previous, _) =
+            mint_finality_scheduled_authorization(network_id, 2, 10, &roster);
+        let (scheduled, scheduled_authority) =
+            mint_finality_scheduled_authorization(network_id, 3, 10, &roster);
         assert_eq!(scheduled.first_height, 31);
         assert_eq!(scheduled.last_height, 40);
         assert_eq!(scheduled_authority, authority);
-        scheduled.validate_successor(&scheduled_previous).expect("exact fixed-length predecessor");
-        assert_ne!(scheduled.previous_authorization_id, epoch.previous_authorization_id);
+        scheduled
+            .validate_successor(&scheduled_previous)
+            .expect("exact fixed-length predecessor");
+        assert_ne!(
+            scheduled.previous_authorization_id,
+            epoch.previous_authorization_id
+        );
     }
 }

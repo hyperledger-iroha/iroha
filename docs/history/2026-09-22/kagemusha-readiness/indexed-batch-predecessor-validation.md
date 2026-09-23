@@ -69,4 +69,3 @@ compiled artifacts, commands and results. Focused vendor or host tests cannot
 replace authenticated Core/SDK integration, final monetary proofs, workspace
 checks, canonical release provenance, measured full-process resources, qualified
 hardware, or independent review.
-
