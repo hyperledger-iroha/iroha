@@ -60,24 +60,12 @@ pub(super) fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
         protocol_version: PROTOCOL_VERSION,
         height,
         epoch: 0,
-        kagemusha_mint_finality_authorization: {
-            let authority = &mint_roster;
-            let authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
-                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
-                network_id: authority.network_id,
-                epoch: 0,
-                first_height: 1,
-                last_height: height.checked_add(1).expect("nonterminal fixture height"),
-                authority_generation: authority.generation,
-                authority_id: authority.authority_id().expect("fixture authority identity"),
-                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
-                previous_authorization_id: [0; 32],
-                transition_id: [0; 32],
-                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
-            };
-            authorization.validate_against_authority(authority).expect("complete genesis fixture authorization");
-            authorization
-        },
+        kagemusha_mint_finality_authorization:
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &mint_roster,
+                height.checked_add(1).expect("nonterminal fixture height"),
+            )
+            .expect("valid fixture mint-finality roster"),
         kagemusha_mint_finality_authority: mint_roster,
         epoch_end_height: height.checked_add(1).expect("nonterminal fixture height"),
         next_epoch_snapshot: None,

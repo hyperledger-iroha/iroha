@@ -300,25 +300,6 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 
 
 
-## `kagami kagemusha derive-mint-finality-epoch-schedule-v1`
-
-Derive the public schedule consumed by `iroha taira epoch-maintenance`. Private
-input uses the same owned pipe and is erased before public output. Required output
-`genesis_roster` contains the epoch-zero public keys derived from those same seeds;
-consumers compare it with their independently authenticated signed genesis.
-
-**Usage:** `kagami kagemusha derive-mint-finality-epoch-schedule-v1 --network-id <NETWORK_ID> --epoch <EPOCH> --validator <PEER_ID> --seed-fd <FD> --epoch-count <EPOCH_COUNT> --payment-asset <PAYMENT_ASSET> --transaction-fee-maximum <TRANSACTION_FEE_MAXIMUM>`
-
-* `--network-id <NETWORK_ID>` — Exact canonical genesis-derived network identity
-* `--epoch <EPOCH>` — First positive target epoch
-* `--validator <PEER_ID>` — Repeat exactly four BLS-normal voters in strictly increasing PeerId order
-* `--seed-fd <FD>` — Transferred read pipe descriptor at least 3; exactly 128 seed bytes, followed by EOF
-* `--epoch-count <EPOCH_COUNT>` — 1–256 consecutive epochs; overflow is rejected
-* `--payment-asset <PAYMENT_ASSET>` — Sole asset authorized for maintenance fees
-* `--transaction-fee-maximum <TRANSACTION_FEE_MAXIMUM>` — Positive maximum fee per transaction
-
-Neither derivation command establishes election eligibility or submits a transaction.
-
 ## `kagami genesis`
 
 Commands related to genesis

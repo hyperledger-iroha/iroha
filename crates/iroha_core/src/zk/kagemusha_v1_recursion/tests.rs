@@ -656,7 +656,8 @@ impl KagemushaRecursiveVerifierV1 for MintFixtureVerifier {
             || request.semantic_digest != expected.semantic_digest
             || request.finality_certificate_binding != expected.finality_certificate_binding
             || request.finality_authority_head != expected.finality_authority_head
-            || request.finality_genesis_authorization_id != expected.finality_genesis_authorization_id
+            || request.finality_genesis_authorization_id
+                != expected.finality_genesis_authorization_id
             || request.finality_proof_binding_digest != expected.finality_proof_binding_digest
             || request.artifact_manifest_digest != expected.artifact_manifest_digest
         {

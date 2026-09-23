@@ -7,6 +7,11 @@
     clippy::result_large_err,
     clippy::struct_excessive_bools
 )]
+#[cfg(feature = "app_api")]
+mod public_lane_rewards;
+#[cfg(feature = "app_api")]
+use public_lane_rewards::collect_pending_public_lane_rewards;
+
 #[cfg(test)]
 #[allow(unused_macro_rules)]
 macro_rules! routing_test {
@@ -128,9 +133,9 @@ use iroha_data_model::{
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
         LaneConfig, LaneLifecycleStatusV1, LaneRelayEnvelope, ManifestEffect, ManifestEntry,
-        ManifestVersion, PublicLaneRewardClaimStateV1, PublicLaneRewardRecord,
-        PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare, PublicLaneUnbonding,
-        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
+        ManifestVersion, PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare,
+        PublicLaneStakeShare, PublicLaneUnbonding, PublicLaneValidatorRecord,
+        PublicLaneValidatorStatus, UniversalAccountId,
     },
     prelude::*,
     proof::VerifyingKeyId,
@@ -3583,6 +3588,8 @@ impl MaybeTelemetry {
                     iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
                 block_hash_history_bytes:
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+                membership_storage:
+                    iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
                 fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
                 replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
                 debug_output_new_blocks: false,
@@ -7537,6 +7544,7 @@ pub(crate) mod sccp_first_release_api_tests {
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
@@ -68804,7 +68812,7 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         &account_id,
         upto_epoch,
         asset_filter.as_ref(),
-        world.public_lane_reward_claims().iter(),
+        world.public_lane_reward_claims().get(&(lane_id, account_id.clone())),
         world.public_lane_reward_accruals().iter(),
         world.public_lane_rewards().iter(),
     )?;
@@ -68819,87 +68827,7 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         entries.into_iter().map(|(_, value)| value).collect(),
     )
 }
-fn collect_pending_public_lane_rewards<'a>(
-    lane_id: LaneId,
-    account_id: &AccountId,
-    upto_epoch: u64,
-    asset_filter: Option<&AssetId>,
-    reward_claims: impl Iterator<Item = (&'a (LaneId, AccountId), &'a PublicLaneRewardClaimStateV1)>,
-    accruals: impl Iterator<Item = (&'a (LaneId, AccountId, AssetId), &'a Quantity)>,
-    rewards: impl Iterator<Item = (&'a (LaneId, u64), &'a PublicLaneRewardRecord)>,
-) -> Result<Vec<iroha_data_model::nexus::PublicLanePendingReward>, Error> {
-    let cursor = reward_claims
-        .filter(|((lane, account), _)| *lane == lane_id && account == account_id)
-        .map(|(_, state)| state.through_epoch)
-        .next()
-        .flatten();
-    let mut totals: BTreeMap<AssetId, (Quantity, Option<u64>)> = BTreeMap::new();
-    // The cursor means records were processed, not that every source was paid.
-    // Retained dust remains an unpaid obligation after the cursor advances.
-    for ((lane, account, source), accrued) in accruals {
-        if *lane != lane_id || account != account_id {
-            continue;
-        }
-        if let Some(filter) = asset_filter
-            && source != filter
-        {
-            continue;
-        }
-        if accrued.is_zero() || cursor.is_none() {
-            return Err(conversion_error(
-                "pending reward accrual has no valid processing cursor".to_owned(),
-            ));
-        }
-        let prior = totals.insert(source.clone(), (accrued.clone(), None));
-        if prior.is_some() {
-            return Err(conversion_error("duplicate pending reward accrual source".to_owned()));
-        }
-    }
-    // The query cap limits new, unprocessed records. Retained dust is shown
-    // regardless of the cap because its source row is already committed state.
-    for (key, record) in rewards {
-        let (lane, epoch) = key;
-        if *lane != lane_id {
-            continue;
-        }
-        if *epoch > upto_epoch {
-            break;
-        }
-        if cursor.is_some_and(|through| *epoch <= through)
-            || !public_lane_reward_record_matches_key(key, record)
-        {
-            continue;
-        }
-        if let Some(filter) = asset_filter
-            && &record.asset != filter
-        {
-            continue;
-        }
-        for share in record.shares.iter().filter(|share| &share.account == account_id) {
-            let entry = totals
-                .entry(record.asset.clone())
-                .or_insert_with(|| (Quantity::zero(), None));
-            entry.0 = entry.0.checked_add(&share.amount).map_err(|_| {
-                conversion_error("pending reward amount overflowed".to_owned())
-            })?;
-            entry.1 = Some(entry.1.map_or(*epoch, |prior| prior.max(*epoch)));
-        }
-    }
-    Ok(totals
-        .into_iter()
-        .filter(|(_, (amount, _))| !amount.is_zero())
-        .map(|(asset, (amount, latest_unprocessed_epoch))| {
-            iroha_data_model::nexus::PublicLanePendingReward {
-                lane_id,
-                account: account_id.clone(),
-                asset,
-                processed_through_epoch: cursor,
-                latest_unprocessed_epoch,
-                amount,
-            }
-        })
-        .collect())
-}
+
 fn build_lane_items_payload(lane_id: LaneId, items: Vec<Value>) -> Map {
     let mut root = Map::new();
     root.insert("lane_id".into(), Value::from(u64::from(lane_id)));
@@ -69077,14 +69005,13 @@ routing_test! { sync collect_pending_public_lane_rewards_includes_unclaimed_epoc
         shares: vec![PublicLaneRewardShare { account: account.clone(), role: PublicLaneRewardRole::Nominator, amount: Quantity::from(25_u64) }],
         metadata: Metadata::default(),
     })]);
-    let accruals = BTreeMap::new();
-    let pending = collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.iter(), accruals.iter(), rewards.iter()).unwrap();
+    let pending = collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.get(&(lane_id, account.clone())), std::iter::empty(), rewards.iter()).unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].amount, Quantity::from(25_u64));
     assert_eq!(pending[0].latest_unprocessed_epoch, Some(0));
     assert_eq!(pending[0].processed_through_epoch, None);
-    claims.insert((lane_id, account.clone()), PublicLaneRewardClaimStateV1 { through_epoch: Some(0) });
-    assert!(collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.iter(), accruals.iter(), rewards.iter()).unwrap().is_empty());
+    claims.insert((lane_id, account.clone()), iroha_data_model::nexus::PublicLaneRewardClaimStateV1 { through_epoch: Some(0) });
+    assert!(collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.get(&(lane_id, account.clone())), std::iter::empty(), rewards.iter()).unwrap().is_empty());
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync collect_pending_public_lane_rewards_ignores_mismatched_reward_rows
@@ -69107,8 +69034,7 @@ routing_test! { sync collect_pending_public_lane_rewards_ignores_mismatched_rewa
         account.clone(),
     );
     let mut claims = BTreeMap::new();
-    claims.insert((lane_id, account.clone()), PublicLaneRewardClaimStateV1 { through_epoch: Some(1) });
-    let accruals = BTreeMap::new();
+    claims.insert((lane_id, account.clone()), iroha_data_model::nexus::PublicLaneRewardClaimStateV1 { through_epoch: Some(1) });
     let valid_reward = |epoch: u64, amount: u32| PublicLaneRewardRecord {
         lane_id,
         epoch,
@@ -69160,8 +69086,8 @@ routing_test! { sync collect_pending_public_lane_rewards_ignores_mismatched_rewa
         &account,
         5,
         None,
-        claims.iter(),
-        accruals.iter(),
+        claims.get(&(lane_id, account.clone())),
+        std::iter::empty(),
         rewards.iter(),
     )
     .expect("pending reward collection should succeed");
@@ -69190,7 +69116,9 @@ routing_test! { sync collect_pending_public_lane_rewards_retains_processed_dust_
     let second_source = AssetId::new(definition, other.clone());
     let claims = BTreeMap::from([(
         (lane_id, account.clone()),
-        PublicLaneRewardClaimStateV1 { through_epoch: Some(100) },
+        iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(100),
+        },
     )]);
     let mut accruals = BTreeMap::from([
         ((lane_id, account.clone(), first_source.clone()), Quantity::from(2_u32)),
@@ -69214,7 +69142,7 @@ routing_test! { sync collect_pending_public_lane_rewards_retains_processed_dust_
         ((lane_id, 102), reward(102, second_source.clone(), 3)),
     ]);
     let pending = collect_pending_public_lane_rewards(
-        lane_id, &account, 101, None, claims.iter(), accruals.iter(), rewards.iter(),
+        lane_id, &account, 101, None, claims.get(&(lane_id, account.clone())), accruals.iter(), rewards.iter(),
     ).unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].asset, first_source);
@@ -69222,14 +69150,14 @@ routing_test! { sync collect_pending_public_lane_rewards_retains_processed_dust_
     assert_eq!(pending[0].latest_unprocessed_epoch, Some(101));
     assert_eq!(pending[0].amount, Quantity::from(9_u32));
     let dust_only = collect_pending_public_lane_rewards(
-        lane_id, &account, 0, None, claims.iter(), accruals.iter(), rewards.iter(),
+        lane_id, &account, 100, None, claims.get(&(lane_id, account.clone())), accruals.iter(), rewards.iter(),
     ).unwrap();
     assert_eq!(dust_only.len(), 1);
     assert_eq!(dust_only[0].amount, Quantity::from(2_u32));
     assert_eq!(dust_only[0].processed_through_epoch, Some(100));
     assert_eq!(dust_only[0].latest_unprocessed_epoch, None);
     let filtered = collect_pending_public_lane_rewards(
-        lane_id, &account, 102, Some(&second_source), claims.iter(), accruals.iter(), rewards.iter(),
+        lane_id, &account, 102, Some(&second_source), claims.get(&(lane_id, account.clone())), accruals.iter(), rewards.iter(),
     ).unwrap();
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].asset, second_source);
@@ -69237,7 +69165,7 @@ routing_test! { sync collect_pending_public_lane_rewards_retains_processed_dust_
     assert_eq!(filtered[0].latest_unprocessed_epoch, Some(102));
     accruals.remove(&(lane_id, account.clone(), first_source));
     let paid = collect_pending_public_lane_rewards(
-        lane_id, &account, 0, None, claims.iter(), accruals.iter(), rewards.iter(),
+        lane_id, &account, 100, None, claims.get(&(lane_id, account.clone())), accruals.iter(), rewards.iter(),
     ).unwrap();
     assert!(paid.is_empty(), "a paid source must not remain pending");
 }

@@ -1,4 +1,4 @@
-"""Pin Kagami's KAGEMUSHA V1 authentication and public provisioning commands.
+"""Pin Kagami's KAGEMUSHA V1 authentication command and retired provisioning cut.
 
 These source-only tests require no compiled binary, network access, release
 artifacts, or environment variables. Runtime authentication is covered by the
@@ -71,7 +71,15 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
             "Command::AuthenticateReleaseV1(args) => authenticate_release_v1(&args, writer)",
             command_source,
         )
+        for retired_command in (
+            "derive-mint-finality-next-epoch-v1",
+            "derive-mint-finality-epoch-schedule-v1",
+        ):
+            self.assertNotIn(retired_command, production)
         self.assertNotIn("derive_mint_finality_next_epoch_v1", command_source)
+        self.assertFalse(
+            (COMMAND.parent / "kagemusha/derive_mint_finality_next_epoch_v1.rs").exists()
+        )
         for field in (
             "recursive_profile",
             "artifact_root",

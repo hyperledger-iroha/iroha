@@ -108,7 +108,7 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 56] = [
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
 ];
 
-/// Authenticate the first-release KAGEMUSHA release format.
+/// Authenticate the first-release format and its deployment evidence.
 #[derive(Debug, ClapArgs)]
 pub struct Args {
     #[command(subcommand)]
@@ -1235,6 +1235,21 @@ fn same_input_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parser_rejects_epoch_key_derivation_commands() {
+        use clap::{Parser as _, error::ErrorKind};
+
+        for command in [
+            "derive-mint-finality-next-epoch-v1",
+            "derive-mint-finality-epoch-schedule-v1",
+        ] {
+            let error = crate::Cli::try_parse_from(["kagami", "kagemusha", command])
+                .err()
+                .expect("epoch-specific public key commands must not remain available");
+            assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
+        }
+    }
 
     fn artifact_inventory() -> Vec<KagemushaArtifactBindingV1> {
         KagemushaArtifactRoleV1::ALL

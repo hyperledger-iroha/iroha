@@ -397,7 +397,10 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
         panic!("exact changed field")
     };
     assert_eq!(refusal.field, last.name);
-    assert!(matches!(refusal.cause, PublicationPreparationError::Changed));
+    assert!(matches!(
+        refusal.cause,
+        PublicationPreparationError::Changed
+    ));
     assert!(dropped.load(Ordering::SeqCst));
     assert_eq!(journal.fields().collect::<Vec<_>>(), expected);
     assert_eq!(physical_custody(&journal), custody);

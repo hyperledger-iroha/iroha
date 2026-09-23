@@ -1679,7 +1679,7 @@ mod tests {
             assert_eq!(
                 registration.monetary_plan.precondition,
                 iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
-                    iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 {
+                    iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
                         activation_height: 1
                     }
                 )

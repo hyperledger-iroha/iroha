@@ -1077,6 +1077,16 @@ mod tests {
         let key_pair = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
         let validator = AccountId::new(key_pair.public_key().clone());
+        let definition = crate::asset::AssetDefinitionId::from_uuid_bytes([
+            1, 2, 3, 4, 5, 6, 0x47, 8, 0x89, 10, 11, 12, 13, 14, 15, 16,
+        ])
+        .expect("fixture definition");
+        let escrow = AccountId::new(
+            KeyPair::try_from_seed(vec![0x12; 32], Algorithm::Ed25519)
+                .expect("fixture escrow")
+                .public_key()
+                .clone(),
+        );
         let instruction = RegisterPublicLaneValidator::new(
             LaneId::SINGLE,
             validator.clone(),
@@ -1084,7 +1094,16 @@ mod tests {
             validator.clone(),
             Quantity::from(1_u64),
             Metadata::default(),
-            crate::isi::staking::registration_plan_fixture(&validator, 1),
+            crate::isi::staking::test_monetary_transfer_plan(
+                crate::asset::AssetId::new(definition.clone(), validator),
+                crate::asset::AssetId::new(definition, escrow),
+                Quantity::from(1_u64),
+                crate::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                    crate::nexus::PublicLaneMonetaryRegistrationV1 {
+                        activation_height: 1,
+                    },
+                ),
+            ),
         );
         let isi = InstructionBox::from(instruction);
         let mut visitor = RegisterVisitor { called: false };

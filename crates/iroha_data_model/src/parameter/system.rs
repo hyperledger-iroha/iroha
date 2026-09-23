@@ -453,10 +453,14 @@ mod model {
             let synthetic_stake = crate::asset::AssetDefinitionId::derive_from_components(
                 iroha_model_base::domain::DomainId::parse_fully_qualified("nexus.universal")
                     .expect("fixed rejected synthetic staking domain"),
-                "xor".parse().expect("fixed rejected synthetic staking name"),
+                "xor"
+                    .parse()
+                    .expect("fixed rejected synthetic staking name"),
             );
             if self.xor_asset_definition_id == synthetic_stake {
-                return Err("NPoS must use the network's canonical XOR asset, not synthetic nexus.universal/xor");
+                return Err(
+                    "NPoS must use the network's canonical XOR asset, not synthetic nexus.universal/xor",
+                );
             }
             if self.epoch_seed == [0; 32] {
                 return Err("epoch_seed must not be all zero");
@@ -506,7 +510,10 @@ mod model {
             Self {
                 xor_asset_definition_id: crate::asset::AssetDefinitionId::parse_address_literal(
                     "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                ).expect("canonical Taira XOR identity; public Nexus genesis supplies its own identity"),
+                )
+                .expect(
+                    "canonical Taira XOR identity; public Nexus genesis supplies its own identity",
+                ),
                 epoch_seed: [0xA5; 32],
                 max_validators: max_validators(),
                 min_self_bond: min_self_bond(),
@@ -839,7 +846,12 @@ impl JsonSerialize for SumeragiNposParameters {
         out.begin_container()?;
         out.push('{')?;
         let mut first = true;
-        json_support::write_field_to(out, &mut first, "xor_asset_definition_id", &self.xor_asset_definition_id)?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "xor_asset_definition_id",
+            &self.xor_asset_definition_id,
+        )?;
         json_support::write_field_to(out, &mut first, "epoch_seed", &self.epoch_seed)?;
         json_support::write_field_to(out, &mut first, "max_validators", &self.max_validators)?;
         json_support::write_field_to(out, &mut first, "min_self_bond", &self.min_self_bond)?;
@@ -2637,7 +2649,7 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_from_custom_parameter_accepts_valid_payload() {
-        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":3600}"#;
+        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":3600,"xor_asset_definition_id":"6TEAJqbb8oEPmLncoNiMRbLEK6tw"}"#;
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             payload
@@ -2750,7 +2762,10 @@ mod tests {
         assert!(bad_context.validate().is_err());
 
         let mut bad_kagemusha = handshake_metadata_fixture();
-        bad_kagemusha.kagemusha_mint_finality.authority_generation.generation = 1;
+        bad_kagemusha
+            .kagemusha_mint_finality
+            .authority_generation
+            .generation = 1;
         assert!(bad_kagemusha.validate().is_err());
     }
 

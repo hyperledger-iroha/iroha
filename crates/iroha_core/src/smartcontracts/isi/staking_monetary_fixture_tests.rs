@@ -41,7 +41,7 @@ fn fixture_registration_plan(
         context.staker_asset,
         context.escrow_asset,
         amount,
-        PublicLaneMonetaryPreconditionV1::Registration(PublicLaneRegistrationPreconditionV1 {
+        PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
             activation_height: scheduled_validator_eligibility_height(stx)
                 .expect("fixture election height"),
         }),
@@ -73,7 +73,7 @@ fn fixture_bond_plan(
         context.staker_asset,
         context.escrow_asset,
         amount,
-        PublicLaneMonetaryPreconditionV1::Bond(PublicLaneBondPreconditionV1 {
+        PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
             activation_height: record.activation_height,
             peer_id: record.peer_id.clone(),
         }),
@@ -114,7 +114,7 @@ fn fixture_unbond_plan(
         source,
         destination,
         request.amount.clone(),
-        PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneUnbondPreconditionV1 {
+        PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
             activation_height: record.activation_height,
             request_hash: public_lane_unbonding_commitment(request)
                 .expect("fixture withdrawal commitment"),
@@ -177,7 +177,7 @@ fn fixture_slash_plan(
         source,
         destination,
         amount,
-        PublicLaneMonetaryPreconditionV1::Slash(PublicLaneSlashPreconditionV1 {
+        PublicLaneMonetaryPreconditionV1::Slash(PublicLaneMonetarySlashV1 {
             activation_height: record.activation_height,
             slashable_exposure: exposure,
         }),
@@ -315,7 +315,7 @@ fn registration_rejects_changed_signed_monetary_fields_without_custody_writes() 
             5 => altered.monetary_plan.amount = Quantity::from(999_u64),
             6 => {
                 altered.monetary_plan.precondition = PublicLaneMonetaryPreconditionV1::Registration(
-                    PublicLaneRegistrationPreconditionV1 {
+                    PublicLaneMonetaryRegistrationV1 {
                         activation_height: 2,
                     },
                 )

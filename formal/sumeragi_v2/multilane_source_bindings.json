@@ -2062,7 +2062,7 @@
           "stable_terminal_reservations",
           "shared_terminal_transient",
           "consumes_terminal_cas_transient",
-          "self.lane_publication_budget_reserved_bytes()?",
+          "self.all_publication_budget_reserved_bytes()?",
           ".kura_disk_usage_bytes()?",
           "bytes.checked_add(stable_terminal_reservations)",
           "bytes.checked_add(lane_publication_reservations)",
@@ -3692,7 +3692,7 @@
         "required_tokens": [
           "let _geometry = self.lane_geometry_lock.lock();",
           "let marker = self.active_lane_incarnation_marker(&entry)?;",
-          "let _sidecar = self.sidecar_lock.lock();",
+          "let _sidecar = self.lock_consensus_sidecar_read()?;",
           "self.ensure_prune_recovery_not_required()?;",
           "AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES,",
           "if pointer.lane_id != lane_id",
@@ -5213,7 +5213,7 @@
         "tokens": [
           "let _geometry = self.lane_geometry_lock.lock();",
           "let marker = self.active_lane_incarnation_marker(&entry)?;",
-          "let _sidecar = self.sidecar_lock.lock();",
+          "let _sidecar = self.lock_consensus_sidecar_read()?;",
           "self.ensure_prune_recovery_not_required()?;",
           "AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES,",
           "if pointer.lane_id != lane_id",
@@ -8276,13 +8276,43 @@
           "symbol": "read_certified_lane_block_artifact_read_only_under_prune_and_canonical_guards",
           "required_tokens": [
             "lane_geometry_lock.lock()",
-            "sidecar_lock.lock()",
+            "self.lock_consensus_sidecar_read()?;",
             "ensure_prune_recovery_not_required",
             "ensure_bound_progress_pair_has_no_recovery_artifacts_locked",
             "BoundProgressPair::Absent",
             "BoundProgressPair::Present",
             "read_active_certified_lane_block_artifact_from_bound_locked",
             "bound_progress_sidecar_unchanged"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/consensus_storage_reads.rs",
+          "kind": "method",
+          "symbol": "Kura::recover_exact_canonical_lane_artifact",
+          "required_tokens": [
+            "let _prune = self.prune_lock.lock();",
+            "let _canonical = self.canonical_chain_lock.lock();",
+            ".read_block_body_under_prune_and_canonical_guards(height)?",
+            "if block.hash() != artifact.proposal_block_hash",
+            ".is_some_and(|bundle| bundle.lane_payload_ownerships.contains(ownership))",
+            "if let Some(existing) = self.read_lane_block_artifact_under_prune_and_canonical_guards(",
+            "return if existing == *artifact",
+            "let _sidecar = self.sidecar_lock.lock();",
+            "let recovery_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;",
+            "self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(\n            &recovery_namespace,",
+            "if !self.sync_bound_progress_namespace(&recovery_namespace, \"canonical lane recovery\") {\n            return Err(Self::invalid_lane_artifact_error(\n                data_path,\n                \"canonical lane recovery namespace durability barrier failed\",\n            ));\n        }",
+            "let checkpoint = self.write_lane_block_artifact_locked(",
+            "LaneBlockArtifactConflictPolicy::PreserveCanonical",
+            "if confirmed.as_ref() != Some(artifact)\n            || !self.bound_progress_namespace_unchanged(&recovery_namespace)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/receipt_namespace_durability.rs",
+          "kind": "method",
+          "symbol": "Kura::lock_consensus_sidecar_read",
+          "required_tokens": [
+            "self.sidecar_lock\n            .lock_read_only(&self.sidecar_read_permit)",
+            ".map_err(|_| {\n                Self::invalid_lane_artifact_error(\n                    self.store_root.clone(),\n                    \"sidecar read permit belongs to a foreign storage mutex\",\n                )\n            })"
           ]
         },
         {
@@ -10692,6 +10722,7 @@
           "kind": "fn",
           "symbol": "read_current_autonomous_lane_block_artifact_under_guards",
           "required_tokens": [
+            "let _sidecar = self.lock_consensus_sidecar_read()?;",
             "pointer.lane_id != lane_id",
             "pointer.dataspace_id != entry.dataspace_id",
             "pointer.lane_block_height != lane_block_height",
@@ -10727,7 +10758,7 @@
             "lease.is_none().then(|| self.prune_lock.lock())",
             "lease.is_none().then(|| self.canonical_chain_lock.lock())",
             "lease.is_none().then(|| self.lane_geometry_lock.lock())",
-            "lease.is_none().then(|| self.sidecar_lock.lock())",
+            "lease\n            .is_none()\n            .then(|| self.lock_consensus_sidecar_read())\n            .transpose()?",
             "self.ensure_prune_recovery_not_required()?;",
             "self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;",
             "self.require_native_amx_latest_index_temp_absent_locked(&namespace)?;",
@@ -11283,6 +11314,16 @@
           ]
         },
         {
+          "path": "crates/iroha_core/src/kura/membership_storage.rs",
+          "kind": "method",
+          "symbol": "Kura::all_publication_budget_reserved_bytes",
+          "required_tokens": [
+            "self.lane_publication_budget_reserved_bytes()?",
+            ".checked_add(self.membership_storage.pending_bytes())",
+            ".ok_or_else("
+          ]
+        },
+        {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "method",
           "symbol": "Kura::check_storage_budget",
@@ -11290,7 +11331,7 @@
             ".post_wsv_prepend_admission_extra_under_prune_and_canonical_guards(",
             ".block_required_bytes_for_budget(block, merge_entry, limit)?",
             ".checked_add(prepend_extra)",
-            "self.lane_publication_budget_reserved_bytes()?",
+            "self.all_publication_budget_reserved_bytes()?",
             ".saturating_add(lane_publication_reservations)",
             "if required > limit",
             "Error::StorageBudgetExceeded"
@@ -11363,7 +11404,7 @@
           "symbol": "Kura::check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards",
           "required_tokens": [
             "let used = self.kura_disk_usage_bytes()?;",
-            "let lane = self.lane_publication_budget_reserved_bytes()?;",
+            "let lane = self.all_publication_budget_reserved_bytes()?;",
             "let required = [\n            pending,\n            lane,\n            certified,\n            terminal,",
             ".try_fold(used, |total, bytes| total.checked_add(bytes))",
             "if required > self.max_disk_usage_bytes"
@@ -11431,7 +11472,7 @@
           "kind": "method",
           "symbol": "Kura::check_replace_storage_budget",
           "required_tokens": [
-            "let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;",
+            "let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;",
             ".saturating_add(lane_publication_reservations)"
           ]
         },
@@ -11569,7 +11610,7 @@
             "stable_terminal_reservations",
             "shared_terminal_transient",
             "consumes_terminal_cas_transient",
-            "self.lane_publication_budget_reserved_bytes()?",
+            "self.all_publication_budget_reserved_bytes()?",
             ".kura_disk_usage_bytes()?",
             "bytes.checked_add(stable_terminal_reservations)",
             "bytes.checked_add(lane_publication_reservations)",
@@ -12081,7 +12122,7 @@
             "if &batch != expected",
             "self.with_native_lane_execution_scope(",
             "begin_exec_witness_capture()",
-            "controls\n                        .apply(overlay)",
+            "controls.apply(overlay).map_err(|error| {\n                        MergeLedgerCommitError::NativeControlValidation(Box::new(error))",
             "Ok((recorder, context))",
             "overlay.seal_native_lane_decision_batch(results, batch)",
             "|overlay, executions, (recorder, context)|",
@@ -12269,7 +12310,7 @@
             "Self::validate_static_with_snapshot(",
             "if generation != state.state_view_generation()",
             "source.record_execution(body, context)?",
-            "recorded.into_preparation_parts()",
+            "recorded\n            .into_preparation_parts()\n            .map_err(NativeCandidatePreparationError::Preparation)?",
             "Arc::new(native.context().context().clone())",
             "PreparedCarrier::prepare(ValidatedCarrierPreparationInput",
             "native: Some(native)"
@@ -13084,8 +13125,15 @@
           "kind": "method",
           "symbol": "PublicationMutex::wrap",
           "required_tokens": [
-            "guard: parking_lot::MutexGuard<'state, T>",
-            "self.released.guard(PhysicalPublicationGuard {\n                guard: Some(guard),\n                fair: false,\n            })"
+            "fn wrap<'state>(\n        &'state self,\n        guard: parking_lot::MutexGuard<'state, T>,\n    ) -> PublicationGuard<'state, T> {\n        // Advance while the actual physical mutex is held, before any caller\n        // can create/rename/unlink or unwind. Saturation permanently disables\n        // observation reuse instead of allowing an ABA wraparound.\n        if let Some(epoch) = &self.mutation_epoch {\n            let _ = epoch.fetch_update(\n                std::sync::atomic::Ordering::Relaxed,\n                std::sync::atomic::Ordering::Relaxed,\n                |epoch| epoch.checked_add(1),\n            );\n        }\n        self.wrap_read_only(guard)\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationMutex::wrap_read_only",
+          "required_tokens": [
+            "fn wrap_read_only<'state>(\n        &'state self,\n        guard: parking_lot::MutexGuard<'state, T>,\n    ) -> PublicationGuard<'state, T> {\n        let epoch = self.mutation_epoch.as_ref().and_then(|epoch| {\n            let epoch = epoch.load(std::sync::atomic::Ordering::Relaxed);\n            (epoch != u64::MAX).then_some(epoch)\n        });\n        PublicationGuard {\n            mutation_epoch: epoch,\n            inner: self.released.guard(PhysicalPublicationGuard {\n                guard: Some(guard),\n                fair: false,\n            }),\n        }\n    }"
           ]
         },
         {
@@ -14700,7 +14748,7 @@
           "kind": "method",
           "symbol": "DetachedWorld::try_prepare_publication",
           "required_tokens": [
-            "    pub(in crate::state) fn try_prepare_publication<'target, Installation, E>(\n        self,\n        target: &'target World,\n        admit: impl FnOnce(&Self, &World) -> Result<Installation, E>,\n    ) -> Result<\n        PreparedWorld<'target, Admission, Installation>,\n        (\n            Self,\n            WorldPublicationError<E>,\n            AbortedWorld<'target, Installation>,\n        ),\n    > {\n        let mut slot = self.publication_slot(target);\n        match slot.try_prepare(admit) {\n            Ok(()) => Ok(slot.into_prepared()),\n            Err(error) => {\n                let original = slot.recover_original();\n                Err((original, error, slot.into_cleanup()))\n            }\n        }\n    }"
+            "    pub(in crate::state) fn try_prepare_publication<'target, Installation, E>(\n        self,\n        target: &'target World,\n        scope: Option<&'target AllocationScope<'target>>,\n        admit: impl FnOnce(&Self, &World) -> Result<Installation, E>,\n    ) -> Result<\n        PreparedWorld<'target, Admission, Installation>,\n        (\n            Self,\n            WorldPublicationError<E>,\n            AbortedWorld<'target, Installation>,\n        ),\n    > {\n        let mut slot = self.publication_slot(target, scope);\n        match slot.try_prepare(admit) {\n            Ok(()) => Ok(slot.into_prepared()),\n            Err(error) => {\n                let original = slot.recover_original();\n                Err((original, error, slot.into_cleanup()))\n            }\n        }\n    }"
           ]
         },
         {
@@ -14933,7 +14981,7 @@
           "kind": "method",
           "symbol": "PublicationGuard::try_release_into",
           "required_tokens": [
-            "fn try_release_into(\n        self,\n        batch: &mut concread::release::DeferredReleaseBatch,\n    ) -> Result<(), Self> {\n        self.inner\n            .try_release_into(batch, drop)\n            .map_err(|inner| Self { inner })\n    }"
+            "fn try_release_into(\n        self,\n        batch: &mut concread::release::DeferredReleaseBatch,\n    ) -> Result<(), Self> {\n        let mutation_epoch = self.mutation_epoch;\n        self.inner\n            .try_release_into(batch, drop)\n            .map_err(|inner| Self {\n                inner,\n                mutation_epoch,\n            })\n    }"
           ]
         },
         {
@@ -15608,9 +15656,9 @@
         {
           "path": "crates/mv/src/storage/acquisition.rs",
           "kind": "method",
-          "symbol": "BlockAcquisitionSlot::release",
+          "symbol": "inherent BlockAcquisitionSlot::release",
           "required_tokens": [
-            "    fn release(&mut self) {\n        self.complete = false;\n        self.started = true;\n        match &mut self.phase {\n            AcquisitionPhase::Empty => {}\n            AcquisitionPhase::Block(block) => crate::BlockRetirement::release_writers(block),\n            AcquisitionPhase::Pending { undo, current } => {\n                current.release(&self.target.blocks, &mut self.current_release);\n                undo.release(&self.target.revert, &mut self.undo_release);\n            }\n        }\n    }"
+            "    pub fn release(&mut self) {\n        self.complete = false;\n        self.started = true;\n        match &mut self.phase {\n            AcquisitionPhase::Empty => {}\n            AcquisitionPhase::Block(block) => crate::BlockRetirement::release_writers(block),\n            AcquisitionPhase::Pending { undo, current } => {\n                current.release(&self.target.blocks, &mut self.current_release);\n                undo.release(&self.target.revert, &mut self.undo_release);\n            }\n        }\n    }"
           ]
         },
         {
@@ -15618,7 +15666,7 @@
           "kind": "method",
           "symbol": "WriterPhase::release",
           "required_tokens": [
-            "    fn release(&mut self, target: &BptreeMap<K, V>, releases: &mut DeferredReleaseBatch) {\n        match std::mem::replace(self, Self::Empty) {\n            Self::Empty => {}\n            Self::Raw(raw) => {\n                raw.try_release_into_observed(releases, drop, || target.is_poisoned())\n                    .unwrap_or_else(|_| unreachable!(\"original raw release source\"));\n            }\n            Self::Writer(writer) => {\n                let retirement = writer\n                    .try_release_into_observed(\n                        releases,\n                        |writer| writer.abort_retaining(),\n                        || target.is_poisoned(),\n                    )\n                    .unwrap_or_else(|_| unreachable!(\"original converted release source\"));\n                *self = Self::Retired(retirement);\n            }\n            Self::Retired(retirement) => *self = Self::Retired(retirement),\n        }\n    }"
+            "    fn release(&mut self, target: &BptreeMap<K, V, M>, releases: &mut DeferredReleaseBatch) {\n        match std::mem::replace(self, Self::Empty) {\n            Self::Empty => {}\n            Self::Raw(raw) => {\n                raw.try_release_into_observed(releases, drop, || target.is_poisoned())\n                    .unwrap_or_else(|_| unreachable!(\"original raw release source\"));\n            }\n            Self::Writer(writer) => {\n                let retirement = writer\n                    .try_release_into_observed(\n                        releases,\n                        |writer| writer.abort_retaining(),\n                        || target.is_poisoned(),\n                    )\n                    .unwrap_or_else(|_| unreachable!(\"original converted release source\"));\n                *self = Self::Retired(retirement);\n            }\n            Self::Retired(retirement) => *self = Self::Retired(retirement),\n        }\n    }"
           ]
         },
         {
@@ -15690,7 +15738,7 @@
           "kind": "enum",
           "symbol": "AcquisitionPhase",
           "required_tokens": [
-            "enum AcquisitionPhase<'a, K: Key, V: Value> {\n    Empty,\n    Pending {\n        undo: WriterPhase<'a, K, Option<V>>,\n        current: WriterPhase<'a, K, V>,\n    },\n    Block(Block<'a, K, V>),\n}"
+            "enum AcquisitionPhase<'a, K: Key, V: Value, M: StorageMode<K, V>> {\n    Empty,\n    Pending {\n        undo: WriterPhase<'a, K, Option<V>, M>,\n        current: WriterPhase<'a, K, V, M>,\n    },\n    Block(Block<'a, K, V, M>),\n}"
           ]
         },
         {
@@ -15698,7 +15746,7 @@
           "kind": "enum",
           "symbol": "WriterPhase",
           "required_tokens": [
-            "enum WriterPhase<'a, K: Key, V: Value> {\n    Empty,\n    Raw(ReleaseGuard<'a, BptreeMapWriterAcquisition<'a, K, V>>),\n    Writer(ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V>>),\n    Retired(BptreeMapAbandonment<K, V>),\n}"
+            "enum WriterPhase<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> {\n    Empty,\n    Raw(ReleaseGuard<'a, BptreeMapWriterAcquisition<'a, K, V, M>>),\n    Writer(ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>),\n    Retired(BptreeMapAbandonment<K, V, M>),\n}"
           ]
         },
         {
@@ -15714,7 +15762,7 @@
           "kind": "method",
           "symbol": "WriterPhase::take_raw",
           "required_tokens": [
-            "    fn take_raw(&mut self) -> ReleaseGuard<'a, BptreeMapWriterAcquisition<'a, K, V>> {\n        match std::mem::replace(self, Self::Empty) {\n            Self::Raw(raw) => raw,\n            other => {\n                *self = other;\n                panic!(\"original raw writer\")\n            }\n        }\n    }"
+            "    fn take_raw(&mut self) -> ReleaseGuard<'a, BptreeMapWriterAcquisition<'a, K, V, M>> {\n        match std::mem::replace(self, Self::Empty) {\n            Self::Raw(raw) => raw,\n            other => {\n                *self = other;\n                panic!(\"original raw writer\")\n            }\n        }\n    }"
           ]
         },
         {
@@ -15722,7 +15770,7 @@
           "kind": "method",
           "symbol": "WriterPhase::take_writer",
           "required_tokens": [
-            "    fn take_writer(&mut self) -> ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V>> {\n        match std::mem::replace(self, Self::Empty) {\n            Self::Writer(writer) => writer,\n            other => {\n                *self = other;\n                panic!(\"original converted writer\")\n            }\n        }\n    }"
+            "    fn take_writer(&mut self) -> ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>> {\n        match std::mem::replace(self, Self::Empty) {\n            Self::Writer(writer) => writer,\n            other => {\n                *self = other;\n                panic!(\"original converted writer\")\n            }\n        }\n    }"
           ]
         },
         {
@@ -15842,7 +15890,7 @@
           "kind": "struct",
           "symbol": "BlockAcquisitionSlot",
           "required_tokens": [
-            "pub struct BlockAcquisitionSlot<'a, K: Key, V: Value> {\n    target: &'a Storage<K, V>,\n    phase: AcquisitionPhase<'a, K, V>,\n    started: bool,\n    complete: bool,\n    // Last: recorded native notifications survive payload/charge destruction.\n    undo_release: DeferredReleaseBatch,\n    current_release: DeferredReleaseBatch,\n}"
+            "pub struct BlockAcquisitionSlot<'a, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {\n    target: &'a Storage<K, V, M>,\n    phase: AcquisitionPhase<'a, K, V, M>,\n    started: bool,\n    complete: bool,\n    custody: M::AcquisitionCustody,\n    // Last: recorded native notifications survive payload/charge destruction.\n    undo_release: DeferredReleaseBatch,\n    current_release: DeferredReleaseBatch,\n}"
           ]
         },
         {
@@ -15850,15 +15898,15 @@
           "kind": "method",
           "symbol": "BlockAcquisitionSlot::new",
           "required_tokens": [
-            "    pub(super) fn new(target: &'a Storage<K, V>) -> Self {\n        Self {\n            target,\n            phase: AcquisitionPhase::Pending {\n                undo: WriterPhase::Empty,\n                current: WriterPhase::Empty,\n            },\n            started: false,\n            complete: false,\n            undo_release: target.revert_released.deferred_batch(),\n            current_release: target.blocks_released.deferred_batch(),\n        }\n    }"
+            "    pub(super) fn new(target: &'a Storage<K, V>) -> Self {\n        Self {\n            target,\n            phase: AcquisitionPhase::Pending {\n                undo: WriterPhase::Empty,\n                current: WriterPhase::Empty,\n            },\n            started: false,\n            complete: false,\n            custody: (),\n            undo_release: target.revert_released.deferred_batch(),\n            current_release: target.blocks_released.deferred_batch(),\n        }\n    }"
           ]
         },
         {
           "path": "crates/mv/src/storage/acquisition.rs",
           "kind": "method",
-          "symbol": "BlockAcquisitionSlot::into_block",
+          "symbol": "inherent BlockAcquisitionSlot::into_block",
           "required_tokens": [
-            "    fn into_block(mut self) -> Self::Block {\n        assert!(\n            self.complete,\n            \"original storage initialization did not complete\"\n        );\n        match std::mem::replace(&mut self.phase, AcquisitionPhase::Empty) {\n            AcquisitionPhase::Block(block) => block,\n            other => {\n                self.phase = other;\n                panic!(\"original completed storage block\")\n            }\n        }\n    }"
+            "    pub fn into_block(mut self) -> Block<'a, K, V, M> {\n        assert!(\n            self.complete,\n            \"original storage initialization did not complete\"\n        );\n        match std::mem::replace(&mut self.phase, AcquisitionPhase::Empty) {\n            AcquisitionPhase::Block(block) => block,\n            other => {\n                self.phase = other;\n                panic!(\"original completed storage block\")\n            }\n        }\n    }"
           ]
         },
         {
@@ -15866,7 +15914,7 @@
           "kind": "method",
           "symbol": "BlockAcquisitionSlot::drop",
           "required_tokens": [
-            "    fn drop(&mut self) {\n        crate::BlockAcquisition::release(self);\n    }"
+            "    fn drop(&mut self) {\n        self.release();\n    }"
           ]
         },
         {
@@ -16226,7 +16274,7 @@
           "kind": "method",
           "symbol": "BlockCaptureSlot::finish_capture",
           "required_tokens": [
-            "    fn finish_capture(&mut self) {\n        let CapturePhase::Attached {\n            block,\n            admission: Some(admission),\n        } = std::mem::replace(&mut self.phase, CapturePhase::Empty)\n        else {\n            unreachable!(\"original checked map block\");\n        };\n        let Block {\n            writers,\n            dirty,\n            failed: _,\n            predecessor,\n            next,\n            mode,\n        } = block;\n        let OriginalWriters { revert, blocks } = writers.into_original();\n        let (blocks, revert, cleanup) = detach_pair_retaining(blocks, revert);\n        self.phase = CapturePhase::Captured(Detached {\n            revert,\n            blocks,\n            metadata: DetachedMetadata {\n                predecessor,\n                mode,\n                dirty,\n                next: next.expect(\"attached block retained original successor identity\"),\n                admission,\n            },\n        });\n        self.cleanup = cleanup;\n    }"
+            "    fn finish_capture(&mut self) {\n        let CapturePhase::Attached {\n            block,\n            admission: Some(admission),\n        } = std::mem::replace(&mut self.phase, CapturePhase::Empty)\n        else {\n            unreachable!(\"original checked map block\");\n        };\n        let Block {\n            writers,\n            dirty,\n            failed: _,\n            predecessor,\n            next,\n            mode,\n            _acquisition_custody: _,\n        } = block;\n        let OriginalWriters { revert, blocks } = writers.into_original();\n        let (blocks, revert, cleanup) = detach_pair_retaining(blocks, revert);\n        self.phase = CapturePhase::Captured(Detached {\n            revert,\n            blocks,\n            metadata: DetachedMetadata {\n                predecessor,\n                mode,\n                dirty,\n                next: next.expect(\"attached block retained original successor identity\"),\n                admission,\n            },\n        });\n        self.cleanup = cleanup;\n    }"
           ]
         },
         {
@@ -16962,7 +17010,7 @@
           "kind": "struct",
           "symbol": "StateBlockFields",
           "required_tokens": [
-            "pub struct StateBlockFields<'state> {\n    /// Immutable policy inputs captured with this scope's actual predecessor.\n    runtime_policy: canonical_runtime::CapturedRuntimePolicy,\n    /// Actual MV runtime scope; projected fields never replace its undo authority.\n    pub(crate) canonical_runtime: block_field::CellField<'state, SnapshotNexusRuntime>,\n    state_ref: &'state State,\n    /// Original replacement-rewind notices, dropped only after joint writer retirement.\n    da_rewind_releases: Option<da_hydration::DaRewindReleases<'state>>,\n    /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.\n    pub world: WorldBlock<'state>,\n    /// Merge-ledger cache retaining recent entries for this block scope.\n    pub merge_ledger: &'state MergeLedgerStore,\n    /// Hashes of transactions mapped onto block height where they stored\n    pub transactions: storage_transactions::TransactionsBlockField<'state>,\n    /// Topology used to commit latest block\n    pub commit_topology: block_field::CellField<'state, Vec<PeerId>>,\n    /// Topology used to commit previous block\n    pub prev_commit_topology: block_field::CellField<'state, Vec<PeerId>>,\n    /// Transaction-isolated consensus metadata published with this carrier.\n    pub(crate) lane_consensus_contexts: block_field::CellField<'state, LaneConsensusContextsV1>,\n    /// Exact full-set snapshot retained after witness capture, including the empty set.\n    lane_consensus_contexts_seal: Option<Hash>,\n    /// Runtime handle for the IVM to execute triggers.\n    pub ivm: &'state IVM,\n    /// Shared immutable artifacts and owned runtimes for pipeline workers.\n    pub(crate) pipeline_ivm_prepared_cache: PreparedContractCache,\n    /// Reference to Kura subsystem.\n    kura: &'state Kura,\n    /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).\n    pub query_handle: &'state LiveQueryStoreHandle,\n    /// Authenticated ledger time used by queries in this block scope.\n    query_ledger_time_ms: Option<u64>,\n    /// Optional node-local Soracloud runtime handle; production replay does not consult it.\n    pub soracloud_runtime: Option<crate::soracloud_runtime::SharedSoracloudRuntime>,\n    /// Cached snapshot of account identifiers for this block.\n    accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,\n    /// Pipeline execution preferences for this block.\n    pub pipeline: iroha_config::parameters::actual::Pipeline,\n    /// Oracle configuration snapshot for this block.\n    pub oracle: iroha_config::parameters::actual::Oracle,\n    /// Cryptography configuration snapshot for this block.\n    pub crypto: Arc<iroha_config::parameters::actual::Crypto>,\n    /// Nexus configuration snapshot for this block.\n    pub nexus: iroha_config::parameters::actual::Nexus,\n    /// Active lane incarnation commitments for this block scope.\n    pub lane_incarnations: BTreeMap<LaneId, Hash>,\n    /// Latest active or retired incarnation commitment for every lane id seen by this block.\n    lane_incarnation_lineage: BTreeMap<LaneId, LaneIncarnationLineage>,\n    /// Global activation height for recreated lane incarnations.\n    pub lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,\n    /// Lane governance manifest registry snapshot for this block.\n    pub lane_manifests: LaneManifestRegistryHandle,\n    /// Lane privacy commitment registry snapshot for this block.\n    pub lane_privacy_registry: LanePrivacyRegistryHandle,\n    /// Optional lane compliance engine snapshot for this block.\n    pub lane_compliance: Option<Arc<LaneComplianceEngine>>,\n    /// Fraud monitoring configuration snapshot for this block.\n    pub fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring,\n    /// Zero-knowledge verification configuration snapshot for this block.\n    pub zk: iroha_config::parameters::actual::Zk,\n    /// Immutable governed SCCP registry snapshot for this block.\n    pub sccp_registry: Arc<ValidatedSccpRegistryV1>,\n    /// Governance configuration snapshot for this block.\n    pub gov: iroha_config::parameters::actual::Governance,\n    /// Content lane configuration snapshot for this block.\n    pub content: iroha_config::parameters::actual::Content,\n    /// Settlement configuration snapshot for this block.\n    pub settlement: iroha_config::parameters::actual::Settlement,\n    /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this block.\n    pub kagemusha_v1_runtime_verifier:\n        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,\n    /// Settlement engine snapshot for this block.\n    pub settlement_engine: crate::settlement::SettlementEngine,\n    /// Chain identifier for this block.\n    pub chain_id: iroha_model_base::chain::ChainId,\n    /// Exact transaction security domain for this block.\n    pub network_id: iroha_data_model::NetworkId,\n    /// Accumulated settlement receipts for transactions in this block.\n    settlement_accumulator: crate::settlement::SettlementAccumulator,\n    /// Transfer transcripts recorded for each transaction hash (for FASTPQ witness plumbing).\n    fastpq_transcripts: BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>>,\n    /// Cached transaction set hash for FASTPQ public inputs.\n    fastpq_tx_set_hash: Option<[u8; 32]>,\n    /// Dataspace assignments for FASTPQ entry hashes in this block.\n    fastpq_entry_dataspaces: BTreeMap<Hash, DataSpaceId>,\n    /// Source-height lane incarnations frozen before any block effects.\n    fastpq_source_context: Option<Arc<crate::fastpq::FastpqBlockStartSourceContext>>,\n    /// Execution source contexts merged only with applied transfer transcripts.\n    fastpq_source_captures: crate::fastpq::FastpqSourceCaptureAccumulator,\n    /// Sealed validator-owned inventory or its latched construction error.\n    fastpq_source_inventory: Option<Result<Arc<FastpqSourceInventoryV1>, String>>,\n    /// Local-only context for background FASTPQ batch construction.\n    fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,\n    /// AXT envelope records captured while executing this block.\n    axt_envelopes: Vec<AxtEnvelopeRecord>,\n    /// Immutable policy/issuer/key context captured before start-of-block effects.\n    axt_block_start_snapshot: Option<Arc<AxtBlockStartSnapshot>>,\n    /// Transactional next-counter state advanced under the frozen AXT policy.\n    axt_next_handle_counters: BTreeMap<DataSpaceId, u64>,\n    /// Dataspaces whose authorization changed at least once during this block.\n    axt_authorization_transitioned: BTreeSet<DataSpaceId>,\n    /// Durable native independent-batch leg outcomes keyed by entrypoint hash.\n    batch_transfer_outcomes:\n        BTreeMap<HashOf<TransactionEntrypoint>, Vec<data_pre::AssetBatchTransferOutcome>>,\n    /// Verified lane relay records captured while executing this block.\n    verified_lane_relay_records: Vec<VerifiedLaneRelayRecord>,\n    /// Captured execution witness for the block (SBV\u2011AM).\n    pub(crate) exec_witness: Option<ExecWitness>,\n    /// Local bounded casting-context leaves retained for durable Kura proof service.\n    parliament_timed_ovn_casting_bindings: Option<\n        Vec<iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1>,\n    >,\n    /// Parliament lifecycle projections waiting for the canonical commit boundary.\n    ///\n    /// The external event buffer is drained before [`StateBlock::commit_inner`].\n    /// Retaining only the two closed metric labels lets commit publish counters\n    /// after world and block metadata succeed without retaining sensitive event\n    /// payloads or leaking metrics from an abandoned block overlay.\n    #[cfg(feature = \"telemetry\")]\n    pending_parliament_telemetry_events: Vec<(\n        iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1,\n        Option<iroha_data_model::governance::types::ParliamentNoResultKindV1>,\n    )>,\n    /// Slash status and metrics waiting for the canonical block commit boundary.\n    pending_public_lane_slash_observability: Vec<PendingPublicLaneSlashObservability>,\n    /// Gas used so far by accepted transactions in this block.\n    pub gas_used_in_block: u64,\n    /// Confidential gas charged so far in this block.\n    pub confidential_gas_used_in_block: u64,\n    /// Confidential operations attempted so far in this block, including rejected proofs.\n    pub zk_confidential_ops_in_block: u32,\n    /// Confidential proof verifications attempted so far in this block.\n    pub zk_verify_calls_in_block: u32,\n    /// Total confidential proof bytes seen in this block.\n    pub zk_proof_bytes_in_block: u64,\n    /// Deterministic SCCP verifier work charged so far in this block.\n    ///\n    /// Charges include proofs that reached bounded work registration and were\n    /// subsequently rejected, so invalid cryptography cannot refund a block's\n    /// verification budget.\n    sccp_verifier_work_in_block: SccpVerifierWorkV1,\n    /// Consensus privacy action/byte budget committed by accepted transactions.\n    privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1,\n    /// Implicit accounts created so far in this block.\n    pub implicit_account_creations_in_block: u32,\n    /// Gas limit per block (read from on-chain parameters or defaults).\n    pub gas_limit_per_block: u64,\n    /// Time matching ceiling captured after this carrier constructor finishes its start stage.\n    /// Pristine and no-hook probe scopes cannot execute the scheduled Time phase.\n    frozen_execution_output_capacity:\n        Option<Result<output_capacity::FrozenExecutionOutputCapacity, String>>,\n    execution_output_plan: Option<output_capacity::ExecutionOutputPlanState>,\n    /// State telemetry\n    #[cfg(feature = \"telemetry\")]\n    pub telemetry: &'state StateTelemetry,\n    /// Lock serializing multi-component writer commit phases.\n    state_write_lock: &'state PublicationMutex,\n    /// Ledger-derived DA commitments indexed while applying the block.\n    pub(crate) da_commitments:\n        &'state PublicationRwLock<crate::da::commitment_store::DaCommitmentStore>,\n    /// DA receipt cursors indexed while applying the block.\n    pub(crate) da_receipt_cursors: &'state PublicationRwLock<DaReceiptCursorIndex>,\n    /// DA shard cursors indexed while applying the block.\n    pub(crate) da_shard_cursors: &'state PublicationRwLock<DaShardCursorIndex>,\n    /// DA pin intents indexed while applying the block.\n    pub(crate) da_pin_intents: &'state PublicationRwLock<crate::da::pin_store::DaPinStore>,\n    /// Lanes whose state was touched while executing this block.\n    touched_lanes: BTreeSet<LaneId>,\n    /// DA commitment indexes prepared by this block and applied during commit.\n    pending_da_commitments: Option<PendingDaCommitmentBundle>,\n    /// DA pin intent indexes prepared by this block and applied during commit.\n    pending_da_pin_intents: Option<PendingDaPinIntentBundle>,\n    /// Autoscale lane lifecycle prepared by this block and applied during commit.\n    pending_autoscale_lifecycle: Option<PendingAutoscaleLaneLifecycle>,\n    /// Block-local canonical autoscale sample history, published only on commit.\n    autoscale_sample_history: VecDeque<AutoscaleSampleRecord>,\n    /// Whether this block appended a canonical autoscale sample record.\n    autoscale_sample_history_dirty: bool,\n    /// Canonical raw fragment count used for this block's one autoscale decision.\n    autoscale_evaluated_committed_fragment_count: Option<u64>,\n    /// Whether the original sampled input completed its fallible lifecycle observation.\n    autoscale_lifecycle_evaluated: bool,\n    /// Certified merge entrypoints staged for membership in the canonical carrier block.\n    merge_carrier_entrypoints: HashSet<HashOf<TransactionEntrypoint>>,\n    /// Resolved certified merge entry staged before ordinary carrier-block effects.\n    staged_merge_entry: Option<MergeLedgerEntry>,\n    /// Private native source seal; roots bind the shared start+native prefix.\n    /// Publication remains forbidden until the sole consumer owns the final seal.\n    native_lane_stage: Option<Arc<lane_decision_batch::NativeLaneStageSealV1>>,\n    /// Exact proposal-native QueuePlan certificates staged before ordinary\n    /// carrier-block effects. These controls are ordered by the Sumeragi QC,\n    /// independently from the Nexus merge ledger.\n    staged_queue_plan_admissions: Vec<Vec<u8>>,\n    /// Single-use canonical WSV publication authority for an autonomous execution batch.\n    canonical_wsv_merge_commit_authorization: Option<CanonicalWsvMergeCommitAuthorization>,\n    /// Single-use authority for exact post-finality carrier metadata.\n    canonical_carrier_commit_metadata_authorization:\n        Option<CanonicalCarrierCommitMetadataAuthorization>,\n    /// Block-local fee staging facts used to reject partial fixture publication.\n    /// Replicated World receipt markers are the sole settlement/replay authority.\n    pending_nexus_fee_receipt_source_ids: BTreeSet<[u8; 32]>,\n    /// Whether deterministic start-of-block effects have already been applied.\n    start_of_block_effects_applied: bool,\n    /// Exact finality-owned NPoS bundle applied before ordinary execution.\n    applied_npos_consensus_effects_hash:\n        Option<HashOf<iroha_data_model::consensus::NposConsensusEffects>>,\n    /// Whether the permanent AXT counter ratchets reflect the final policy identity.\n    axt_policy_transition_ratchets_finalized: bool,\n    pub(crate) _curr_block: BlockHeader,\n    #[cfg(feature = \"zk-preverify\")]\n    pub(crate) zk_dedup: crate::zk::DedupCache,\n    /// Successful overlays (transactions, triggers, deterministic updates) committed in this block.\n    committed_fragments: usize,\n    /// True only after an exact committed block has been re-executed and its\n    /// execution commitment has matched authenticated Kura finality.\n    pub(crate) authenticated_replay_commit: bool,\n    /// True for the disposable full-range replay pass that must not publish external effects.\n    replay_prevalidation: bool,\n    /// Original history custody drops only after all physical State writers.\n    pub block_hashes: block_hash_field::BlockHashField<'state>,\n}"
+            "pub struct StateBlockFields<'state> {\n    /// Immutable policy inputs captured with this scope's actual predecessor.\n    runtime_policy: canonical_runtime::CapturedRuntimePolicy,\n    /// Actual MV runtime scope; projected fields never replace its undo authority.\n    pub(crate) canonical_runtime: block_field::CellField<'state, SnapshotNexusRuntime>,\n    state_ref: &'state State,\n    /// Original replacement-rewind notices, dropped only after joint writer retirement.\n    da_rewind_releases: Option<da_hydration::DaRewindReleases<'state>>,\n    /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.\n    pub world: WorldBlock<'state>,\n    /// Merge-ledger cache retaining recent entries for this block scope.\n    pub merge_ledger: &'state MergeLedgerStore,\n    /// Hashes of transactions mapped onto block height where they stored\n    pub transactions: storage_transactions::TransactionsBlockField<'state>,\n    /// Topology used to commit latest block\n    pub commit_topology: block_field::CellField<'state, Vec<PeerId>>,\n    /// Topology used to commit previous block\n    pub prev_commit_topology: block_field::CellField<'state, Vec<PeerId>>,\n    /// Transaction-isolated consensus metadata published with this carrier.\n    pub(crate) lane_consensus_contexts: block_field::CellField<'state, LaneConsensusContextsV1>,\n    /// Exact full-set snapshot retained after witness capture, including the empty set.\n    lane_consensus_contexts_seal: Option<Hash>,\n    /// Runtime handle for the IVM to execute triggers.\n    pub ivm: &'state IVM,\n    /// Shared immutable artifacts and owned runtimes for pipeline workers.\n    pub(crate) pipeline_ivm_prepared_cache: PreparedContractCache,\n    /// Reference to Kura subsystem.\n    kura: &'state Kura,\n    /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).\n    pub query_handle: &'state LiveQueryStoreHandle,\n    /// Authenticated ledger time used by queries in this block scope.\n    query_ledger_time_ms: Option<u64>,\n    /// Optional node-local Soracloud runtime handle; production replay does not consult it.\n    pub soracloud_runtime: Option<crate::soracloud_runtime::SharedSoracloudRuntime>,\n    /// Cached snapshot of account identifiers for this block.\n    accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,\n    /// Pipeline execution preferences for this block.\n    pub pipeline: iroha_config::parameters::actual::Pipeline,\n    /// Oracle configuration snapshot for this block.\n    pub oracle: iroha_config::parameters::actual::Oracle,\n    /// Cryptography configuration snapshot for this block.\n    pub crypto: Arc<iroha_config::parameters::actual::Crypto>,\n    /// Nexus configuration snapshot for this block.\n    pub nexus: iroha_config::parameters::actual::Nexus,\n    /// Active lane incarnation commitments for this block scope.\n    pub lane_incarnations: BTreeMap<LaneId, Hash>,\n    /// Latest active or retired incarnation commitment for every lane id seen by this block.\n    lane_incarnation_lineage: BTreeMap<LaneId, LaneIncarnationLineage>,\n    /// Global activation height for recreated lane incarnations.\n    pub lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,\n    /// Lane governance manifest registry snapshot for this block.\n    pub lane_manifests: LaneManifestRegistryHandle,\n    /// Lane privacy commitment registry snapshot for this block.\n    pub lane_privacy_registry: LanePrivacyRegistryHandle,\n    /// Optional lane compliance engine snapshot for this block.\n    pub lane_compliance: Option<Arc<LaneComplianceEngine>>,\n    /// Fraud monitoring configuration snapshot for this block.\n    pub fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring,\n    /// Zero-knowledge verification configuration snapshot for this block.\n    pub zk: iroha_config::parameters::actual::Zk,\n    /// Immutable governed SCCP registry snapshot for this block.\n    pub sccp_registry: Arc<ValidatedSccpRegistryV1>,\n    /// Governance configuration snapshot for this block.\n    pub gov: iroha_config::parameters::actual::Governance,\n    /// Content lane configuration snapshot for this block.\n    pub content: iroha_config::parameters::actual::Content,\n    /// Settlement configuration snapshot for this block.\n    pub settlement: iroha_config::parameters::actual::Settlement,\n    /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this block.\n    pub kagemusha_v1_runtime_verifier:\n        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,\n    /// Settlement engine snapshot for this block.\n    pub settlement_engine: crate::settlement::SettlementEngine,\n    /// Chain identifier for this block.\n    pub chain_id: iroha_model_base::chain::ChainId,\n    /// Exact transaction security domain for this block.\n    pub network_id: iroha_data_model::NetworkId,\n    /// Accumulated settlement receipts for transactions in this block.\n    settlement_accumulator: crate::settlement::SettlementAccumulator,\n    /// Transfer transcripts recorded for each transaction hash (for FASTPQ witness plumbing).\n    fastpq_transcripts: BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>>,\n    /// Cached transaction set hash for FASTPQ public inputs.\n    fastpq_tx_set_hash: Option<[u8; 32]>,\n    /// Dataspace assignments for FASTPQ entry hashes in this block.\n    fastpq_entry_dataspaces: BTreeMap<Hash, DataSpaceId>,\n    /// Source-height lane incarnations frozen before any block effects.\n    fastpq_source_context: Option<Arc<crate::fastpq::FastpqBlockStartSourceContext>>,\n    /// Execution source contexts merged only with applied transfer transcripts.\n    fastpq_source_captures: crate::fastpq::FastpqSourceCaptureAccumulator,\n    /// Sealed validator-owned inventory or its latched construction error.\n    fastpq_source_inventory: Option<Result<Arc<FastpqSourceInventoryV1>, String>>,\n    /// Local-only context for background FASTPQ batch construction.\n    fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,\n    /// AXT envelope records captured while executing this block.\n    axt_envelopes: Vec<AxtEnvelopeRecord>,\n    /// Immutable policy/issuer/key context captured before start-of-block effects.\n    axt_block_start_snapshot: Option<Arc<AxtBlockStartSnapshot>>,\n    /// Transactional next-counter state advanced under the frozen AXT policy.\n    axt_next_handle_counters: BTreeMap<DataSpaceId, u64>,\n    /// Dataspaces whose authorization changed at least once during this block.\n    axt_authorization_transitioned: BTreeSet<DataSpaceId>,\n    /// Durable native independent-batch leg outcomes keyed by entrypoint hash.\n    batch_transfer_outcomes:\n        BTreeMap<HashOf<TransactionEntrypoint>, Vec<data_pre::AssetBatchTransferOutcome>>,\n    /// Verified lane relay records captured while executing this block.\n    verified_lane_relay_records: Vec<VerifiedLaneRelayRecord>,\n    /// Captured execution witness for the block (SBV‑AM).\n    pub(crate) exec_witness: Option<ExecWitness>,\n    /// Local bounded casting-context leaves retained for durable Kura proof service.\n    parliament_timed_ovn_casting_bindings: Option<\n        Vec<iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1>,\n    >,\n    /// Parliament lifecycle projections waiting for the canonical commit boundary.\n    ///\n    /// The external event buffer is drained before [`StateBlock::commit_inner`].\n    /// Retaining only the two closed metric labels lets commit publish counters\n    /// after world and block metadata succeed without retaining sensitive event\n    /// payloads or leaking metrics from an abandoned block overlay.\n    #[cfg(feature = \"telemetry\")]\n    pending_parliament_telemetry_events: Vec<(\n        iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1,\n        Option<iroha_data_model::governance::types::ParliamentNoResultKindV1>,\n    )>,\n    /// Slash status and metrics waiting for the canonical block commit boundary.\n    pending_public_lane_slash_observability: Vec<PendingPublicLaneSlashObservability>,\n    /// Gas used so far by accepted transactions in this block.\n    pub gas_used_in_block: u64,\n    /// Confidential gas charged so far in this block.\n    pub confidential_gas_used_in_block: u64,\n    /// Confidential operations attempted so far in this block, including rejected proofs.\n    pub zk_confidential_ops_in_block: u32,\n    /// Confidential proof verifications attempted so far in this block.\n    pub zk_verify_calls_in_block: u32,\n    /// Total confidential proof bytes seen in this block.\n    pub zk_proof_bytes_in_block: u64,\n    /// Deterministic SCCP verifier work charged so far in this block.\n    ///\n    /// Charges include proofs that reached bounded work registration and were\n    /// subsequently rejected, so invalid cryptography cannot refund a block's\n    /// verification budget.\n    sccp_verifier_work_in_block: SccpVerifierWorkV1,\n    /// Consensus privacy action/byte budget committed by accepted transactions.\n    privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1,\n    /// Implicit accounts created so far in this block.\n    pub implicit_account_creations_in_block: u32,\n    /// Gas limit per block (read from on-chain parameters or defaults).\n    pub gas_limit_per_block: u64,\n    /// Time matching ceiling captured after this carrier constructor finishes its start stage.\n    /// Pristine and no-hook probe scopes cannot execute the scheduled Time phase.\n    frozen_execution_output_capacity:\n        Option<Result<output_capacity::FrozenExecutionOutputCapacity, String>>,\n    execution_output_plan: Option<output_capacity::ExecutionOutputPlanState>,\n    /// State telemetry\n    #[cfg(feature = \"telemetry\")]\n    pub telemetry: &'state StateTelemetry,\n    /// Lock serializing multi-component writer commit phases.\n    state_write_lock: &'state PublicationMutex,\n    /// Ledger-derived DA commitments indexed while applying the block.\n    pub(crate) da_commitments:\n        &'state PublicationRwLock<crate::da::commitment_store::DaCommitmentStore>,\n    /// DA receipt cursors indexed while applying the block.\n    pub(crate) da_receipt_cursors: &'state PublicationRwLock<DaReceiptCursorIndex>,\n    /// DA shard cursors indexed while applying the block.\n    pub(crate) da_shard_cursors: &'state PublicationRwLock<DaShardCursorIndex>,\n    /// DA pin intents indexed while applying the block.\n    pub(crate) da_pin_intents: &'state PublicationRwLock<crate::da::pin_store::DaPinStore>,\n    /// Lanes whose state was touched while executing this block.\n    touched_lanes: BTreeSet<LaneId>,\n    /// DA commitment indexes prepared by this block and applied during commit.\n    pending_da_commitments: Option<PendingDaCommitmentBundle>,\n    /// DA pin intent indexes prepared by this block and applied during commit.\n    pending_da_pin_intents: Option<PendingDaPinIntentBundle>,\n    /// Autoscale lane lifecycle prepared by this block and applied during commit.\n    pending_autoscale_lifecycle: Option<PendingAutoscaleLaneLifecycle>,\n    /// Block-local canonical autoscale sample history, published only on commit.\n    autoscale_sample_history: VecDeque<AutoscaleSampleRecord>,\n    /// Whether this block appended a canonical autoscale sample record.\n    autoscale_sample_history_dirty: bool,\n    /// Canonical raw fragment count used for this block's one autoscale decision.\n    autoscale_evaluated_committed_fragment_count: Option<u64>,\n    /// Whether the original sampled input completed its fallible lifecycle observation.\n    autoscale_lifecycle_evaluated: bool,\n    /// Certified merge entrypoints staged for membership in the canonical carrier block.\n    merge_carrier_entrypoints: HashSet<HashOf<TransactionEntrypoint>>,\n    /// Resolved certified merge entry staged before ordinary carrier-block effects.\n    staged_merge_entry: Option<MergeLedgerEntry>,\n    /// Private native source seal; roots bind the shared start+native prefix.\n    /// Publication remains forbidden until the sole consumer owns the final seal.\n    native_lane_stage: Option<Arc<lane_decision_batch::NativeLaneStageSealV1>>,\n    /// Exact proposal-native QueuePlan certificates staged before ordinary\n    /// carrier-block effects. These controls are ordered by the Sumeragi QC,\n    /// independently from the Nexus merge ledger.\n    staged_queue_plan_admissions: Vec<Vec<u8>>,\n    /// Single-use canonical WSV publication authority for an autonomous execution batch.\n    canonical_wsv_merge_commit_authorization: Option<CanonicalWsvMergeCommitAuthorization>,\n    /// Single-use authority for exact post-finality carrier metadata.\n    canonical_carrier_commit_metadata_authorization:\n        Option<CanonicalCarrierCommitMetadataAuthorization>,\n    /// Block-local fee staging facts used to reject partial fixture publication.\n    /// Replicated World receipt markers are the sole settlement/replay authority.\n    pending_nexus_fee_receipt_source_ids: BTreeSet<[u8; 32]>,\n    /// Whether deterministic start-of-block effects have already been applied.\n    start_of_block_effects_applied: bool,\n    /// Exact finality-owned NPoS bundle applied before ordinary execution.\n    applied_npos_consensus_effects_hash:\n        Option<HashOf<iroha_data_model::consensus::NposConsensusEffects>>,\n    /// Whether the permanent AXT counter ratchets reflect the final policy identity.\n    axt_policy_transition_ratchets_finalized: bool,\n    pub(crate) _curr_block: BlockHeader,\n    #[cfg(feature = \"zk-preverify\")]\n    pub(crate) zk_dedup: crate::zk::DedupCache,\n    /// Successful overlays (transactions, triggers, deterministic updates) committed in this block.\n    committed_fragments: usize,\n    /// True only after an exact committed block has been re-executed and its\n    /// execution commitment has matched authenticated Kura finality.\n    pub(crate) authenticated_replay_commit: bool,\n    /// True for the disposable full-range replay pass that must not publish external effects.\n    replay_prevalidation: bool,\n    /// Original history custody drops only after all physical State writers.\n    pub block_hashes: block_hash_field::BlockHashField<'state>,\n}"
           ]
         },
         {
@@ -18365,7 +18413,7 @@
           "kind": "method",
           "symbol": "CarrierPreparation::new",
           "required_tokens": [
-            "    pub(super) fn new(\n        original: DetachedCarrierComponents,\n        target: &'target State,\n        fences: CarrierFences<'target>,\n    ) -> Self {\n        let DetachedCarrierComponents {\n            world,\n            runtime,\n            transactions,\n            block_hashes,\n        } = original;\n        Self {\n            world: Some(world.publication_slot(&target.world)),\n            runtime: Some(runtime.publication_slot(target)),\n            transactions: Some(transactions.publication_slot(&target.transactions)),\n            block_hashes: RetainedHashSlot::new(block_hashes, &target.block_hashes),\n            effect_locks: Some(crate::state::effect_publication::StateEffectLocks::new(\n                target,\n            )),\n            fences: Some(fences),\n            attempted: false,\n            retryable: true,\n            complete: false,\n            released: false,\n            retired_fences: None,\n        }\n    }"
+            "    pub(super) fn new(\n        original: DetachedCarrierComponents,\n        target: &'target State,\n        fences: CarrierFences<'target>,\n    ) -> Self {\n        let DetachedCarrierComponents {\n            world,\n            runtime,\n            transactions,\n            block_hashes,\n        } = original;\n        Self {\n            world: Some(world.publication_slot(&target.world, None)),\n            runtime: Some(runtime.publication_slot(target)),\n            transactions: Some(transactions.publication_slot(&target.transactions)),\n            block_hashes: RetainedHashSlot::new(block_hashes, &target.block_hashes),\n            effect_locks: Some(crate::state::effect_publication::StateEffectLocks::new(\n                target,\n            )),\n            fences: Some(fences),\n            attempted: false,\n            retryable: true,\n            complete: false,\n            released: false,\n            retired_fences: None,\n        }\n    }"
           ]
         },
         {
@@ -19157,7 +19205,7 @@
           "kind": "struct",
           "symbol": "WorldPublicationSlot",
           "required_tokens": [
-            "pub(in crate::state) struct WorldPublicationSlot<'target, Admission, Installation> {\n    target: &'target World,\n    phase: Option<Phase<'target, Admission>>,\n    attempted: bool,\n    retryable: bool,\n    complete: bool,\n    released: bool,\n    installation: Option<Installation>,\n}"
+            "pub(in crate::state) struct WorldPublicationSlot<'target, Admission, Installation> {\n    target: &'target World,\n    scope: Option<&'target AllocationScope<'target>>,\n    phase: Option<Phase<'target, Admission>>,\n    attempted: bool,\n    retryable: bool,\n    complete: bool,\n    released: bool,\n    installation: Option<Installation>,\n}"
           ]
         },
         {
@@ -19173,7 +19221,7 @@
           "kind": "method",
           "symbol": "DetachedWorld::publication_slot",
           "required_tokens": [
-            "    pub(in crate::state) fn publication_slot<Installation>(\n        self,\n        target: &World,\n    ) -> WorldPublicationSlot<'_, Admission, Installation> {\n        WorldPublicationSlot {\n            target,\n            phase: Some(Phase::Original(self)),\n            attempted: false,\n            retryable: true,\n            complete: false,\n            released: false,\n            installation: None,\n        }\n    }"
+            "    pub(in crate::state) fn publication_slot<'target, Installation>(\n        self,\n        target: &'target World,\n        scope: Option<&'target AllocationScope<'target>>,\n    ) -> WorldPublicationSlot<'target, Admission, Installation> {\n        WorldPublicationSlot {\n            target,\n            scope,\n            phase: Some(Phase::Original(self)),\n            attempted: false,\n            retryable: true,\n            complete: false,\n            released: false,\n            installation: None,\n        }\n    }"
           ]
         },
         {
@@ -19189,7 +19237,7 @@
           "kind": "method",
           "symbol": "WorldPublicationSlot::try_prepare",
           "required_tokens": [
-            "    pub(in crate::state) fn try_prepare<E>(\n        &mut self,\n        admit: impl FnOnce(&DetachedWorld<Admission>, &World) -> Result<Installation, E>,\n    ) -> Result<(), WorldPublicationError<E>> {\n        assert!(\n            !self.attempted && !self.released,\n            \"World preparation is one-shot\"\n        );\n        self.attempted = true;\n        self.retryable = false;\n        let installation = match admit(self.original(), self.target) {\n            Ok(installation) => installation,\n            Err(error) => {\n                self.retryable = true;\n                return Err(WorldPublicationError::Admission(error));\n            }\n        };\n        self.installation = Some(installation);\n        // This is the existing admitted prepared Vec. The original stays in the\n        // caller while allocating; its allocation becomes the exact retry Vec.\n        let fields = PreparedWorldFields(Vec::with_capacity(self.original().fields.len()));\n        let Some(Phase::Original(original)) = self.phase.take() else {\n            unreachable!(\"checked original World\");\n        };\n        let DetachedWorld {\n            mode,\n            fields: retry,\n            dataspace_catalog,\n            external_event_buf,\n            admission,\n        } = original;\n        self.phase = Some(Phase::Fields(Fields {\n            mode,\n            fields,\n            retry,\n            dataspace_catalog: Some(dataspace_catalog),\n            external_event_buf: Some(external_event_buf),\n            admission: Some(admission),\n        }));\n        let Some(Phase::Fields(fields)) = self.phase.as_mut() else {\n            unreachable!(\"installed original World fields\");\n        };\n        fields.retry.reverse();\n        while let Some(original) = fields.retry.pop() {\n            fields.fields.push(original.publication_slot(self.target));\n        }\n        // Every shell and its original journal is already in this caller before\n        // the first physical acquisition or a native field preparation can panic.\n        for field in fields.fields.iter_mut() {\n            if let Err(error) = field.try_prepare() {\n                self.retryable = true;\n                return Err(WorldPublicationError::Field(error));\n            }\n        }\n        self.complete = true;\n        self.retryable = true;\n        Ok(())\n    }"
+            "    pub(in crate::state) fn try_prepare<E>(\n        &mut self,\n        admit: impl FnOnce(&DetachedWorld<Admission>, &World) -> Result<Installation, E>,\n    ) -> Result<(), WorldPublicationError<E>> {\n        assert!(\n            !self.attempted && !self.released,\n            \"World preparation is one-shot\"\n        );\n        self.attempted = true;\n        self.retryable = false;\n        let installation = match admit(self.original(), self.target) {\n            Ok(installation) => installation,\n            Err(error) => {\n                self.retryable = true;\n                return Err(WorldPublicationError::Admission(error));\n            }\n        };\n        self.installation = Some(installation);\n        // This is the existing admitted prepared Vec. The original stays in the\n        // caller while allocating; its allocation becomes the exact retry Vec.\n        let fields = PreparedWorldFields(Vec::with_capacity(self.original().fields.len()));\n        let Some(Phase::Original(original)) = self.phase.take() else {\n            unreachable!(\"checked original World\");\n        };\n        let DetachedWorld {\n            mode,\n            fields: retry,\n            dataspace_catalog,\n            external_event_buf,\n            admission,\n        } = original;\n        self.phase = Some(Phase::Fields(Fields {\n            mode,\n            fields,\n            retry,\n            dataspace_catalog: Some(dataspace_catalog),\n            external_event_buf: Some(external_event_buf),\n            admission: Some(admission),\n        }));\n        let Some(Phase::Fields(fields)) = self.phase.as_mut() else {\n            unreachable!(\"installed original World fields\");\n        };\n        fields.retry.reverse();\n        while let Some(original) = fields.retry.pop() {\n            fields\n                .fields\n                .push(original.publication_slot(self.target, self.scope));\n        }\n        // Every shell and its original journal is already in this caller before\n        // the first physical acquisition or a native field preparation can panic.\n        for field in fields.fields.iter_mut() {\n            if let Err(error) = field.try_prepare() {\n                self.retryable = true;\n                return Err(WorldPublicationError::Field(error));\n            }\n        }\n        self.complete = true;\n        self.retryable = true;\n        Ok(())\n    }"
           ]
         },
         {
@@ -19245,7 +19293,7 @@
           "kind": "struct",
           "symbol": "PreparedStorage",
           "required_tokens": [
-            "struct PreparedStorage<'target, K: Key, V: Value> {\n    original: Option<Box<RetainedStorage<K, V>>>,\n    phase: FieldPhase<\n        mv::storage::DetachedPublicationSlot<'target, K, V, (), ()>,\n        mv::storage::PreparedPublication<'target, K, V, (), ()>,\n    >,\n    published: Option<mv::storage::PublishedPublication<K, V, (), ()>>,\n    aborted: Option<mv::PublicationCleanup<()>>,\n    released: bool,\n    normal_recovery: bool,\n}"
+            "struct PreparedStorage<'target, K: Key, V: Value, M: WorldStorageMode<K, V>> {\n    original: Option<Box<RetainedStorage<K, V, M>>>,\n    phase: FieldPhase<M::Slot<'target>, M::Prepared<'target>>,\n    published: Option<M::Published<'target>>,\n    aborted: Option<M::Aborted<'target>>,\n    released: bool,\n    normal_recovery: bool,\n}"
           ]
         },
         {
@@ -19253,7 +19301,7 @@
           "kind": "method",
           "symbol": "PreparedStorage::try_prepare",
           "required_tokens": [
-            "    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {\n        assert!(!self.released, \"original field was terminally released\");\n        let name = self.original.as_ref().expect(\"original field box\").name;\n        let FieldPhase::Preparing(slot) = &mut self.phase else {\n            panic!(\"original field preparation is one-shot\");\n        };\n        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| FieldRefusal {\n                field: name,\n                trigger_component: None,\n                cause,\n            })?;\n        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!(\"checked original field slot\");\n        };\n        self.phase = FieldPhase::Prepared(slot.into_prepared());\n        Ok(())\n    }"
+            "    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {\n        assert!(!self.released, \"original field was terminally released\");\n        let name = self.original.as_ref().expect(\"original field box\").name;\n        let FieldPhase::Preparing(slot) = &mut self.phase else {\n            panic!(\"original field preparation is one-shot\");\n        };\n        M::try_prepare(slot).map_err(|cause| FieldRefusal {\n            field: name,\n            trigger_component: None,\n            cause,\n        })?;\n        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!(\"checked original field slot\");\n        };\n        self.phase = FieldPhase::Prepared(M::into_prepared(slot));\n        Ok(())\n    }"
           ]
         },
         {
@@ -19261,7 +19309,7 @@
           "kind": "method",
           "symbol": "PreparedStorage::release",
           "required_tokens": [
-            "    fn release(&mut self) {\n        self.released = true;\n        if let FieldPhase::Preparing(slot) = &mut self.phase {\n            slot.release_writers();\n        } else if matches!(&self.phase, FieldPhase::Prepared(_)) {\n            let FieldPhase::Prepared(journal) =\n                std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n            else {\n                unreachable!(\"original prepared field\");\n            };\n            let (journal, retirement) = journal.abort();\n            self.original.as_mut().expect(\"original field box\").journal = Some(journal);\n            self.aborted = Some(retirement);\n        }\n    }"
+            "    fn release(&mut self) {\n        self.released = true;\n        if let FieldPhase::Preparing(slot) = &mut self.phase {\n            M::release_writers(slot);\n        } else if matches!(&self.phase, FieldPhase::Prepared(_)) {\n            let FieldPhase::Prepared(journal) =\n                std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n            else {\n                unreachable!(\"original prepared field\");\n            };\n            let (journal, retirement) = M::abort(journal);\n            self.original.as_mut().expect(\"original field box\").journal = Some(journal);\n            self.aborted = Some(retirement);\n        }\n    }"
           ]
         },
         {
@@ -19277,7 +19325,7 @@
           "kind": "method",
           "symbol": "PreparedStorage::publish",
           "required_tokens": [
-            "    fn publish(&mut self) {\n        assert!(\n            !self.released && matches!(&self.phase, FieldPhase::Prepared(_)),\n            \"complete original field\"\n        );\n        let FieldPhase::Prepared(journal) =\n            std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!(\"checked original prepared field\");\n        };\n        self.published = Some(journal.publish());\n        self.released = true;\n    }"
+            "    fn publish(&mut self) {\n        assert!(\n            !self.released && matches!(&self.phase, FieldPhase::Prepared(_)),\n            \"complete original field\"\n        );\n        let FieldPhase::Prepared(journal) =\n            std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!(\"checked original prepared field\");\n        };\n        self.published = Some(M::publish(journal));\n        self.released = true;\n    }"
           ]
         },
         {
@@ -19293,7 +19341,7 @@
           "kind": "method",
           "symbol": "PreparedCell::try_prepare",
           "required_tokens": [
-            "    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {\n        assert!(!self.released, \"original field was terminally released\");\n        let name = self.original.as_ref().expect(\"original field box\").name;\n        let FieldPhase::Preparing(slot) = &mut self.phase else {\n            panic!(\"original field preparation is one-shot\");\n        };\n        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| FieldRefusal {\n                field: name,\n                trigger_component: None,\n                cause,\n            })?;\n        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!(\"checked original field slot\");\n        };\n        self.phase = FieldPhase::Prepared(slot.into_prepared());\n        Ok(())\n    }"
+            "    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {\n        assert!(!self.released, \"original field was terminally released\");\n        let name = self.original.as_ref().expect(\"original field box\").name;\n        let FieldPhase::Preparing(slot) = &mut self.phase else {\n            panic!(\"original field preparation is one-shot\");\n        };\n        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| FieldRefusal {\n                field: name,\n                trigger_component: None,\n                cause: storage_mode::widen_untracked(cause),\n            })?;\n        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!(\"checked original field slot\");\n        };\n        self.phase = FieldPhase::Prepared(slot.into_prepared());\n        Ok(())\n    }"
           ]
         },
         {
@@ -19333,7 +19381,7 @@
           "kind": "method",
           "symbol": "PreparedTriggers::try_prepare",
           "required_tokens": [
-            "    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {\n        assert!(!self.released, \"original field was terminally released\");\n        let name = self.original.as_ref().expect(\"original field box\").name;\n        let FieldPhase::Preparing(slot) = &mut self.phase else {\n            panic!(\"original field preparation is one-shot\");\n        };\n        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|error| match error {\n                SetPublicationError::Admission(impossible) => match impossible {},\n                SetPublicationError::Component { field, cause } => FieldRefusal {\n                    field: name,\n                    trigger_component: Some(field),\n                    cause,\n                },\n            })?;\n        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!(\"checked original field slot\");\n        };\n        self.phase = FieldPhase::Prepared(slot.into_prepared());\n        Ok(())\n    }"
+            "    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {\n        assert!(!self.released, \"original field was terminally released\");\n        let name = self.original.as_ref().expect(\"original field box\").name;\n        let FieldPhase::Preparing(slot) = &mut self.phase else {\n            panic!(\"original field preparation is one-shot\");\n        };\n        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|error| match error {\n                SetPublicationError::Admission(impossible) => match impossible {},\n                SetPublicationError::Component { field, cause } => FieldRefusal {\n                    field: name,\n                    trigger_component: Some(field),\n                    cause: storage_mode::widen_untracked(cause),\n                },\n            })?;\n        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!(\"checked original field slot\");\n        };\n        self.phase = FieldPhase::Prepared(slot.into_prepared());\n        Ok(())\n    }"
           ]
         },
         {
@@ -19365,7 +19413,7 @@
           "kind": "fn",
           "symbol": "storage_slot",
           "required_tokens": [
-            "pub(super) fn storage_slot<'target, K: Key, V: Value>(\n    mut original: Box<RetainedStorage<K, V>>,\n    world: &'target World,\n) -> Box<dyn PreparedWorldField + 'target> {\n    let target = (original.target)(world);\n    let journal = original.journal.take().expect(\"retained original journal\");\n    // Inert shell construction precedes every field's physical preparation.\n    Box::new(PreparedStorage {\n        original: Some(original),\n        phase: FieldPhase::Preparing(journal.publication_slot(target)),\n        published: None,\n        aborted: None,\n        released: false,\n        normal_recovery: false,\n    })\n}"
+            "pub(super) fn storage_slot<'target, K: Key, V: Value, M: WorldStorageMode<K, V>>(\n    mut original: Box<RetainedStorage<K, V, M>>,\n    world: &'target World,\n    scope: Option<&'target AllocationScope<'target>>,\n) -> Box<dyn PreparedWorldField + 'target>\nwhere\n    M::Charge: Send + Sync + 'static,\n{\n    let target = (original.target)(world);\n    let journal = original.journal.take().expect(\"retained original journal\");\n    // Inert shell construction precedes every field's physical preparation.\n    Box::new(PreparedStorage {\n        original: Some(original),\n        phase: FieldPhase::Preparing(M::publication_slot(journal, target, scope)),\n        published: None,\n        aborted: None,\n        released: false,\n        normal_recovery: false,\n    })\n}"
           ]
         },
         {
@@ -19389,7 +19437,7 @@
           "kind": "fn",
           "symbol": "storage_shell_layout",
           "required_tokens": [
-            "pub(super) fn storage_shell_layout<K: Key, V: Value>() -> Layout {\n    Layout::new::<PreparedStorage<'static, K, V>>()\n}"
+            "pub(super) fn storage_shell_layout<K: Key, V: Value, M: WorldStorageMode<K, V>>() -> Layout {\n    Layout::new::<PreparedStorage<'static, K, V, M>>()\n}"
           ]
         },
         {
@@ -19461,7 +19509,7 @@
           "kind": "method",
           "symbol": "RetainedStorage::publication_slot",
           "required_tokens": [
-            "    fn publication_slot<'target>(\n        self: Box<Self>,\n        target: &'target World,\n    ) -> Box<dyn publication::PreparedWorldField + 'target> {\n        publication::storage_slot(self, target)\n    }"
+            "    fn publication_slot<'target>(\n        self: Box<Self>,\n        target: &'target World,\n        scope: Option<&'target AllocationScope<'target>>,\n    ) -> Box<dyn publication::PreparedWorldField + 'target> {\n        publication::storage_slot(self, target, scope)\n    }"
           ]
         },
         {
@@ -19469,7 +19517,7 @@
           "kind": "method",
           "symbol": "RetainedCell::publication_slot",
           "required_tokens": [
-            "    fn publication_slot<'target>(\n        self: Box<Self>,\n        target: &'target World,\n    ) -> Box<dyn publication::PreparedWorldField + 'target> {\n        publication::cell_slot(self, target)\n    }"
+            "    fn publication_slot<'target>(\n        self: Box<Self>,\n        target: &'target World,\n        scope: Option<&'target AllocationScope<'target>>,\n    ) -> Box<dyn publication::PreparedWorldField + 'target> {\n        let _ = scope;\n        publication::cell_slot(self, target)\n    }"
           ]
         },
         {
@@ -19477,7 +19525,7 @@
           "kind": "method",
           "symbol": "RetainedTriggers::publication_slot",
           "required_tokens": [
-            "    fn publication_slot<'target>(\n        self: Box<Self>,\n        target: &'target World,\n    ) -> Box<dyn publication::PreparedWorldField + 'target> {\n        publication::triggers_slot(self, target)\n    }"
+            "    fn publication_slot<'target>(\n        self: Box<Self>,\n        target: &'target World,\n        scope: Option<&'target AllocationScope<'target>>,\n    ) -> Box<dyn publication::PreparedWorldField + 'target> {\n        let _ = scope;\n        publication::triggers_slot(self, target)\n    }"
           ]
         },
         {
@@ -19485,7 +19533,7 @@
           "kind": "method",
           "symbol": "PreparedStorage::release_for_recovery",
           "required_tokens": [
-            "    fn release_for_recovery(&mut self) {\n        assert!(\n            !self.released,\n            \"terminal field release is not retry authority\"\n        );\n        if self.normal_recovery {\n            return;\n        }\n        match &mut self.phase {\n            FieldPhase::Preparing(slot) => {\n                let journal = slot.recover_original();\n                self.original.as_mut().expect(\"original field box\").journal = Some(journal);\n            }\n            FieldPhase::Prepared(_) => {\n                let FieldPhase::Prepared(journal) =\n                    std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n                else {\n                    unreachable!(\"original prepared field\");\n                };\n                let (journal, retirement) = journal.abort();\n                self.original.as_mut().expect(\"original field box\").journal = Some(journal);\n                self.aborted = Some(retirement);\n            }\n            FieldPhase::Recovered => panic!(\"original field was already consumed\"),\n        }\n        self.normal_recovery = true;\n    }"
+            "    fn release_for_recovery(&mut self) {\n        assert!(\n            !self.released,\n            \"terminal field release is not retry authority\"\n        );\n        if self.normal_recovery {\n            return;\n        }\n        match &mut self.phase {\n            FieldPhase::Preparing(slot) => {\n                let journal = M::recover_original(slot);\n                self.original.as_mut().expect(\"original field box\").journal = Some(journal);\n            }\n            FieldPhase::Prepared(_) => {\n                let FieldPhase::Prepared(journal) =\n                    std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n                else {\n                    unreachable!(\"original prepared field\");\n                };\n                let (journal, retirement) = M::abort(journal);\n                self.original.as_mut().expect(\"original field box\").journal = Some(journal);\n                self.aborted = Some(retirement);\n            }\n            FieldPhase::Recovered => panic!(\"original field was already consumed\"),\n        }\n        self.normal_recovery = true;\n    }"
           ]
         },
         {
@@ -20537,6 +20585,150 @@
           "required_tokens": [
             "    fn collect_native_amx_completed_pair_latest_prefixes_locked(\n        &self,\n        index: &NativeAmxPublicationIndexInventory,\n        indexed_routes: &BTreeSet<(LaneId, Hash)>,\n        prefixes: &mut Vec<NativeAmxIndexedPublicationPrefix>,\n    ) -> Result<()> {\n        for location in self.native_amx_evidence_physical_locations_from_journal()? {\n            if indexed_routes.contains(&(location.lane_id(), location.incarnation())) {\n                continue;\n            }\n            let directory = Self::lane_artifact_dir(location.blocks_path());\n            let latest_path = directory.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE);\n            let latest_temp =\n                directory.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE);\n            if Self::regular_sidecar_metadata_for(&self.store_root, &latest_temp, &directory)?\n                .is_none()\n            {\n                continue;\n            }\n            self.require_native_amx_evidence_physical_location(&location)?;\n            let manifest_path = directory.join(Self::native_amx_evidence_file_name(\n                NativeAmxEvidenceKind::Manifest,\n                1,\n            ));\n            let receipt_path = directory.join(Self::native_amx_evidence_file_name(\n                NativeAmxEvidenceKind::Receipt,\n                1,\n            ));\n            let namespace = self.open_bound_progress_namespace(&manifest_path, &receipt_path)?;\n            let inventory = self.inventory_native_amx_evidence_files_locked(&namespace, true)?;\n            if !inventory.temporaries.is_empty() {\n                return Err(Error::PruneIntentConflict(\n                    \"Native maintenance latest prefix overlaps unindexed pair publication\"\n                        .to_owned(),\n                ));\n            }\n            let height = inventory\n                .manifests\n                .keys()\n                .chain(inventory.receipts.keys())\n                .copied()\n                .max()\n                .ok_or_else(|| {\n                    Error::PruneIntentConflict(\n                        \"Native maintenance latest prefix lacks its stable pair\".to_owned(),\n                    )\n                })?;\n            let manifest_file = inventory.manifests.get(&height).ok_or_else(|| {\n                Error::PruneIntentConflict(\n                    \"Native maintenance latest prefix lacks its highest stable manifest\".to_owned(),\n                )\n            })?;\n            let receipt_file = inventory.receipts.get(&height).ok_or_else(|| {\n                Error::PruneIntentConflict(\n                    \"Native maintenance latest prefix lacks its highest stable receipt\".to_owned(),\n                )\n            })?;\n            let receipt_bytes =\n                self.read_native_amx_evidence_file_bytes_locked(&namespace, receipt_file)?;\n            let observed =\n                norito::decode_canonical::<NativeAmxParticipantApplicationReceiptArtifact>(\n                    &receipt_bytes,\n                )\n                .map_err(|error| {\n                    Self::invalid_lane_artifact_error(\n                        receipt_file.path.clone(),\n                        format!(\n                            \"Native maintenance receipt discovery failed exact decode: {error}\"\n                        ),\n                    )\n                })?;\n            let target = self.native_amx_reservation_physical_target_from_location(\n                &location,\n                observed.participant_proposal.descriptor.dataspace_id,\n            )?;\n            let manifest =\n                self.decode_native_amx_manifest_file_locked(&target, &namespace, manifest_file)?;\n            let receipt =\n                self.decode_native_amx_receipt_file_locked(&target, &namespace, receipt_file)?;\n            let carrier = NativeAmxPublicationCarrier {\n                height: receipt.application_block_height,\n                block_hash: receipt.application_block_hash,\n                executed_wire_hash: receipt.executed_block_wire_hash,\n            };\n            if index.records.contains_key(&carrier) {\n                return Err(Error::PruneIntentConflict(\n                    \"Native maintenance latest prefix cannot borrow indexed publication authority\"\n                        .to_owned(),\n                ));\n            }\n            self.ensure_durable_block_at_height(carrier.height, carrier.block_hash)?;\n            if !self.native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(&receipt, &manifest)\n                || !self.native_amx_publication_wsv_join_is_complete_locked(&manifest, &receipt)?\n            {\n                return Err(Error::PruneIntentConflict(\n                    \"Native maintenance latest prefix lacks completed-pair authority\".to_owned(),\n                ));\n            }\n            let expected = norito::encode_canonical(\n                &NativeAmxParticipantReceiptLatestIndexV2::from_receipt(&receipt),\n            )?;\n            let prefix = self.open_native_amx_indexed_publication_prefix_locked(\n                &namespace,\n                NativeAmxPublicationComponent::Latest,\n                &latest_path,\n                &latest_temp,\n                &expected,\n            )?;\n            self.preflight_native_amx_incoming_artifacts_locked(\n                &target, &namespace, &inventory, &manifest, &receipt,\n            )?;\n            let Some((_, capacity)) = self\n                .native_amx_route_publication_capacity_with_inventory_locked(\n                    &target,\n                    &manifest,\n                    &receipt,\n                    Some((&namespace, &inventory)),\n                    prefix.as_ref(),\n                )?\n            else {\n                return Err(Error::PruneIntentConflict(\n                    \"Native maintenance latest prefix cannot rewrite a later frontier\".to_owned(),\n                ));\n            };\n            if capacity\n                .outstanding_components\n                .iter()\n                .any(|component| *component != NativeAmxPublicationComponent::Latest)\n            {\n                return Err(Error::PruneIntentConflict(\n                    \"Native maintenance latest prefix cannot authorize missing pair publication\"\n                        .to_owned(),\n                ));\n            }\n            self.require_native_amx_reservation_physical_target(&target)?;\n            if let Some(file) = prefix {\n                prefixes.push(NativeAmxIndexedPublicationPrefix {\n                    target,\n                    namespace,\n                    file,\n                });\n            }\n        }\n        Ok(())\n    }"
           ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "fn",
+          "symbol": "widen_untracked",
+          "required_tokens": [
+            "pub(super) fn widen_untracked(error: PublicationPreparationError<Infallible>) -> Refusal {\n    match error {\n        PublicationPreparationError::Busy(wait) => PublicationPreparationError::Busy(wait),\n        PublicationPreparationError::Poisoned => PublicationPreparationError::Poisoned,\n        PublicationPreparationError::Changed => PublicationPreparationError::Changed,\n        PublicationPreparationError::Admission(impossible) => match impossible {},\n    }\n}"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "enum",
+          "symbol": "PrepaidSlot",
+          "required_tokens": [
+            "pub(super) enum PrepaidSlot<'a, K: Key, V: Value, P>\nwhere\n    P: mv::storage::AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,\n{\n    Original(mv::storage::AdmittedDetachedPublicationSlot<'a, 'a, K, V, (), P>),\n    Refused {\n        journal: Option<mv::storage::Detached<K, V, (), Prepaid<P>>>,\n        cause: Option<Refusal>,\n    },\n}"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Untracked::publication_slot",
+          "required_tokens": [
+            "    fn publication_slot<'a>(\n        original: mv::storage::Detached<K, V, ()>,\n        target: &'a Storage<K, V>,\n        _scope: Option<&'a AllocationScope<'a>>,\n    ) -> Self::Slot<'a> {\n        original.publication_slot(target)\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Untracked::try_prepare",
+          "required_tokens": [
+            "    fn try_prepare(slot: &mut Self::Slot<'_>) -> Result<(), Refusal> {\n        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(widen_untracked)\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Untracked::release_writers",
+          "required_tokens": [
+            "    fn release_writers(slot: &mut Self::Slot<'_>) {\n        slot.release_writers();\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Untracked::recover_original",
+          "required_tokens": [
+            "    fn recover_original(slot: &mut Self::Slot<'_>) -> mv::storage::Detached<K, V, ()> {\n        slot.recover_original()\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Untracked::into_prepared",
+          "required_tokens": [
+            "    fn into_prepared<'a>(slot: Self::Slot<'a>) -> Self::Prepared<'a> {\n        slot.into_prepared()\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Untracked::abort",
+          "required_tokens": [
+            "    fn abort<'a>(\n        prepared: Self::Prepared<'a>,\n    ) -> (mv::storage::Detached<K, V, ()>, Self::Aborted<'a>) {\n        prepared.abort()\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Untracked::publish",
+          "required_tokens": [
+            "    fn publish<'a>(prepared: Self::Prepared<'a>) -> Self::Published<'a> {\n        prepared.publish()\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Prepaid::publication_slot",
+          "required_tokens": [
+            "    fn publication_slot<'a>(\n        original: mv::storage::Detached<K, V, (), Self>,\n        target: &'a Storage<K, V, Self>,\n        scope: Option<&'a AllocationScope<'a>>,\n    ) -> Self::Slot<'a> {\n        let result = match scope {\n            Some(scope) => original.try_publication_slot(scope, target),\n            None => Err((\n                original,\n                PublicationPreparationError::Admission(AdmittedStorageError::ScopeIdentity),\n            )),\n        };\n        match result {\n            Ok(slot) => PrepaidSlot::Original(slot),\n            Err((journal, cause)) => PrepaidSlot::Refused {\n                journal: Some(journal),\n                cause: Some(cause),\n            },\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Prepaid::try_prepare",
+          "required_tokens": [
+            "    fn try_prepare(slot: &mut Self::Slot<'_>) -> Result<(), Refusal> {\n        match slot {\n            PrepaidSlot::Original(slot) => slot.try_prepare(),\n            PrepaidSlot::Refused { cause, .. } => Err(cause\n                .take()\n                .expect(\"original field preparation is one-shot\")),\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Prepaid::release_writers",
+          "required_tokens": [
+            "    fn release_writers(slot: &mut Self::Slot<'_>) {\n        if let PrepaidSlot::Original(slot) = slot {\n            slot.release_writers();\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Prepaid::recover_original",
+          "required_tokens": [
+            "    fn recover_original(slot: &mut Self::Slot<'_>) -> mv::storage::Detached<K, V, (), Self> {\n        match slot {\n            PrepaidSlot::Original(slot) => slot.recover_original(),\n            PrepaidSlot::Refused { journal, .. } => journal.take().expect(\"original refused field\"),\n        }\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Prepaid::into_prepared",
+          "required_tokens": [
+            "    fn into_prepared<'a>(slot: Self::Slot<'a>) -> Self::Prepared<'a> {\n        let PrepaidSlot::Original(slot) = slot else {\n            unreachable!(\"refused field cannot complete preparation\")\n        };\n        slot.into_prepared()\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Prepaid::abort",
+          "required_tokens": [
+            "    fn abort<'a>(\n        prepared: Self::Prepared<'a>,\n    ) -> (mv::storage::Detached<K, V, (), Self>, Self::Aborted<'a>) {\n        prepared.abort()\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/world_storage_mode.rs",
+          "kind": "method",
+          "symbol": "WorldStorageMode<K, V> for Prepaid::publish",
+          "required_tokens": [
+            "    fn publish<'a>(prepared: Self::Prepared<'a>) -> Self::Published<'a> {\n        prepared.publish()\n    }"
+          ]
+        },
+        {
+          "path": "crates/mv/src/storage/acquisition.rs",
+          "kind": "method",
+          "symbol": "crate::BlockAcquisition for BlockAcquisitionSlot::release",
+          "required_tokens": [
+            "    fn release(&mut self) {\n        BlockAcquisitionSlot::release(self);\n    }"
+          ]
+        },
+        {
+          "path": "crates/mv/src/storage/acquisition.rs",
+          "kind": "method",
+          "symbol": "crate::BlockAcquisition for BlockAcquisitionSlot::into_block",
+          "required_tokens": [
+            "    fn into_block(self) -> Self::Block {\n        BlockAcquisitionSlot::into_block(self)\n    }"
+          ]
         }
       ]
     },
@@ -20753,7 +20945,7 @@
             "stable_terminal_reservations",
             "shared_terminal_transient",
             "consumes_terminal_cas_transient",
-            "self.lane_publication_budget_reserved_bytes()?",
+            "self.all_publication_budget_reserved_bytes()?",
             ".kura_disk_usage_bytes()?",
             "bytes.checked_add(stable_terminal_reservations)",
             "bytes.checked_add(lane_publication_reservations)",
@@ -25395,10 +25587,15 @@
           "kind": "method",
           "symbol": "PublicationMutex::wrap",
           "required_tokens": [
-            "guard: parking_lot::MutexGuard<'state, T>",
-            "inner: self.released.guard(PhysicalPublicationGuard {",
-            "guard: Some(guard),",
-            "fair: false,"
+            "fn wrap<'state>(\n        &'state self,\n        guard: parking_lot::MutexGuard<'state, T>,\n    ) -> PublicationGuard<'state, T> {\n        // Advance while the actual physical mutex is held, before any caller\n        // can create/rename/unlink or unwind. Saturation permanently disables\n        // observation reuse instead of allowing an ABA wraparound.\n        if let Some(epoch) = &self.mutation_epoch {\n            let _ = epoch.fetch_update(\n                std::sync::atomic::Ordering::Relaxed,\n                std::sync::atomic::Ordering::Relaxed,\n                |epoch| epoch.checked_add(1),\n            );\n        }\n        self.wrap_read_only(guard)\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/publication_lock.rs",
+          "kind": "method",
+          "symbol": "PublicationMutex::wrap_read_only",
+          "required_tokens": [
+            "fn wrap_read_only<'state>(\n        &'state self,\n        guard: parking_lot::MutexGuard<'state, T>,\n    ) -> PublicationGuard<'state, T> {\n        let epoch = self.mutation_epoch.as_ref().and_then(|epoch| {\n            let epoch = epoch.load(std::sync::atomic::Ordering::Relaxed);\n            (epoch != u64::MAX).then_some(epoch)\n        });\n        PublicationGuard {\n            mutation_epoch: epoch,\n            inner: self.released.guard(PhysicalPublicationGuard {\n                guard: Some(guard),\n                fair: false,\n            }),\n        }\n    }"
           ]
         },
         {

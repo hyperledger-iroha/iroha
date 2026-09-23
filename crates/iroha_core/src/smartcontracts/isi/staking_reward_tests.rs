@@ -30,11 +30,17 @@ fn reward_distribution_requires_the_exact_treasury_authority() {
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     let distribution = reward_distribution(lane, 0, &asset, &validator, 25);
-    let error = distribution.clone().execute(&validator, &mut stx).unwrap_err();
+    let error = distribution
+        .clone()
+        .execute(&validator, &mut stx)
+        .unwrap_err();
     assert!(error.to_string().contains("authorized"));
     assert!(stx.world.public_lane_rewards.get(&(lane, 0)).is_none());
     distribution.execute(&sink, &mut stx).unwrap();
-    assert_eq!(rewards::outstanding_rewards(&stx.world, &asset).unwrap(), Quantity::from(25_u64));
+    assert_eq!(
+        rewards::outstanding_rewards(&stx.world, &asset).unwrap(),
+        Quantity::from(25_u64)
+    );
 }
 
 #[test]
@@ -165,11 +171,18 @@ fn reward_distributions_cannot_reuse_promised_funds() {
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 200);
     // The fee sink owns 200 independently of the validator's bonded custody.
-    reward_distribution(lane, 1, &asset, &validator, 150).execute(&sink, &mut stx).unwrap();
-    let error = reward_distribution(lane, 2, &asset, &validator, 100).execute(&sink, &mut stx).unwrap_err();
+    reward_distribution(lane, 1, &asset, &validator, 150)
+        .execute(&sink, &mut stx)
+        .unwrap();
+    let error = reward_distribution(lane, 2, &asset, &validator, 100)
+        .execute(&sink, &mut stx)
+        .unwrap_err();
     assert!(error.to_string().contains("unreserved"));
     assert!(stx.world.public_lane_rewards.get(&(lane, 2)).is_none());
-    assert_eq!(rewards::outstanding_rewards(&stx.world, &asset).unwrap(), Quantity::from(150_u64));
+    assert_eq!(
+        rewards::outstanding_rewards(&stx.world, &asset).unwrap(),
+        Quantity::from(150_u64)
+    );
 }
 
 #[test]
@@ -232,7 +245,9 @@ fn reward_failed_payment_restores_claim_and_reserve() {
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
     stx.nexus.staking.reward_dust_threshold = Quantity::zero();
-    reward_distribution(lane, 1, &asset, &validator, 25).execute(&sink, &mut stx).unwrap();
+    reward_distribution(lane, 1, &asset, &validator, 25)
+        .execute(&sink, &mut stx)
+        .unwrap();
     // Simulate an unavailable funding balance; payment must not consume entitlement.
     stx.world.assets.remove(asset.clone());
     let claim = ClaimPublicLaneRewards {
@@ -261,8 +276,14 @@ fn reward_obligation_audit_rejects_corrupt_record_keys() {
     let mut stx = state_block.transaction();
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, _) = configure_reward_fixture(&mut stx, lane, 100);
-    reward_distribution(lane, 1, &asset, &validator, 25).execute(&sink, &mut stx).unwrap();
-    stx.world.public_lane_rewards.get_mut(&(lane, 1)).unwrap().epoch = 2;
+    reward_distribution(lane, 1, &asset, &validator, 25)
+        .execute(&sink, &mut stx)
+        .unwrap();
+    stx.world
+        .public_lane_rewards
+        .get_mut(&(lane, 1))
+        .unwrap()
+        .epoch = 2;
     assert!(rewards::outstanding_rewards(&stx.world, &asset).is_err());
     let error = ClaimPublicLaneRewards {
         claim_plan: fixture_reward_claim_plan(&stx, lane, &validator, None),
@@ -294,7 +315,9 @@ fn reward_claim_uses_recorded_custody_after_fee_policy_changes() {
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, definition) = configure_reward_fixture(&mut stx, lane, 100);
     stx.nexus.staking.reward_dust_threshold = Quantity::zero();
-    reward_distribution(lane, 1, &asset, &validator, 25).execute(&sink, &mut stx).unwrap();
+    reward_distribution(lane, 1, &asset, &validator, 25)
+        .execute(&sink, &mut stx)
+        .unwrap();
     stx.nexus.fees.fee_sink_account_id = ALICE_ID.to_string();
     stx.nexus.fees.fee_asset_id = "retired-fee-selector".to_owned();
     stx.nexus.staking.public_validator_mode =
@@ -330,13 +353,30 @@ fn reward_recording_excludes_bonded_custody_from_a_shared_fee_sink() {
     let old_escrow = AccountId::parse_encoded(&stx.nexus.staking.stake_escrow_account_id).unwrap();
     let old_escrow_asset = AssetId::new(asset.definition().clone(), old_escrow);
     let bonded = stx.world.assets.remove(old_escrow_asset.clone()).unwrap();
-    let total = stx.world.assets.get(&asset).unwrap().as_ref().checked_add(bonded.as_ref()).unwrap();
+    let total = stx
+        .world
+        .assets
+        .get(&asset)
+        .unwrap()
+        .as_ref()
+        .checked_add(bonded.as_ref())
+        .unwrap();
     **stx.world.assets.get_mut(&asset).unwrap() = total;
-    let held = stx.world.public_lane_stake_reserves.remove(old_escrow_asset).unwrap();
-    stx.world.public_lane_stake_reserves.insert(asset.clone(), held.clone());
-    stx.world.public_lane_stake_custody.insert((lane, validator.clone()), (asset.clone(), held));
+    let held = stx
+        .world
+        .public_lane_stake_reserves
+        .remove(old_escrow_asset)
+        .unwrap();
+    stx.world
+        .public_lane_stake_reserves
+        .insert(asset.clone(), held.clone());
+    stx.world
+        .public_lane_stake_custody
+        .insert((lane, validator.clone()), (asset.clone(), held));
     stx.nexus.staking.stake_escrow_account_id = sink.to_string();
-    let error = reward_distribution(lane, 1, &asset, &validator, 101).execute(&sink, &mut stx).unwrap_err();
+    let error = reward_distribution(lane, 1, &asset, &validator, 101)
+        .execute(&sink, &mut stx)
+        .unwrap_err();
     assert!(error.to_string().contains("unreserved"));
     assert!(stx.world.public_lane_rewards.get(&(lane, 1)).is_none());
     reward_distribution(lane, 1, &asset, &validator, 100)
@@ -366,7 +406,9 @@ fn reward_reserve_checks_aggregate_batch_debits() {
     seed_test_call_hash(&mut stx, 0xB6);
     let lane = LaneId::SINGLE;
     let (sink, validator, asset, definition) = configure_reward_fixture(&mut stx, lane, 200);
-    reward_distribution(lane, 1, &asset, &validator, 150).execute(&sink, &mut stx).unwrap();
+    reward_distribution(lane, 1, &asset, &validator, 150)
+        .execute(&sink, &mut stx)
+        .unwrap();
     let batch = TransferAssetBatch::new(vec![
         TransferAssetBatchEntry::with_leg_id(
             "one",
@@ -378,9 +420,18 @@ fn reward_reserve_checks_aggregate_batch_debits() {
         TransferAssetBatchEntry::with_leg_id("two", sink.clone(), validator, definition, 30_u32),
     ]);
     let error = batch.execute(&sink, &mut stx).unwrap_err();
-    assert!(error.to_string().contains("reserved public-lane rewards"), "{error}");
-    assert_eq!(stx.world.assets.get(&asset).unwrap().as_ref(), &Quantity::from(200_u64));
-    assert_eq!(stx.world.public_lane_reward_reserves.get(&asset), Some(&Quantity::from(150_u64)));
+    assert!(
+        error.to_string().contains("reserved public-lane rewards"),
+        "{error}"
+    );
+    assert_eq!(
+        stx.world.assets.get(&asset).unwrap().as_ref(),
+        &Quantity::from(200_u64)
+    );
+    assert_eq!(
+        stx.world.public_lane_reward_reserves.get(&asset),
+        Some(&Quantity::from(150_u64))
+    );
 }
 
 #[test]

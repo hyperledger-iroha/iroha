@@ -1,9 +1,21 @@
 //! Explicit genesis/retention authorization and authenticated installed-beacon boundaries.
 
 use super::*;
-use crate::{beacon, state::World};
+use crate::{
+    beacon,
+    kura::Kura,
+    query::store::LiveQueryStore,
+    state::{BlockHashes, State, World},
+};
 use iroha_crypto::{HashOf, KeyPair};
-use iroha_data_model::block::BlockHeader;
+use iroha_data_model::{
+    block::BlockHeader,
+    consensus::{
+        ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
+        GlobalThresholdBeaconChainAnchorV1,
+    },
+};
+use iroha_model_base::chain::ChainId;
 
 fn fixture() -> (
     NetworkId,
@@ -31,8 +43,8 @@ fn fixture() -> (
 
 #[test]
 fn genesis_and_repeated_retention_advance_epoch_without_relabeling_keys() {
-    let (_, _, authority) = fixture();
-    let genesis = genesis_mint_finality_authorization(&authority, 9).unwrap();
+    let (_, roster, authority) = fixture();
+    let genesis = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 9).unwrap();
     assert_eq!(
         genesis.decision,
         KagemushaMintFinalityEpochDecisionV1::Genesis
@@ -51,9 +63,20 @@ fn genesis_and_repeated_retention_advance_epoch_without_relabeling_keys() {
         session_id: [0xA1; 32],
         transcript_hash: [0xA2; 32],
     };
-    let retained =
-        retained_mint_finality_authorization(&genesis, &authority, installed, 19).unwrap();
-    let again = retained_mint_finality_authorization(&retained, &authority, installed, 29).unwrap();
+    let mut election = FrozenElectionInputs {
+        epoch: genesis.epoch,
+        kagemusha_mint_finality_authorization: genesis,
+        kagemusha_mint_finality_authority: authority.clone(),
+        epoch_end_height: genesis.last_height,
+        mode: wire::ConsensusMode::Permissioned,
+        roster,
+        leader_seed: [0xA3; 32],
+    };
+    let retained = retained_epoch_authorization(&election, 19, installed).unwrap();
+    election.epoch = retained.epoch;
+    election.kagemusha_mint_finality_authorization = retained;
+    election.epoch_end_height = retained.last_height;
+    let again = retained_epoch_authorization(&election, 29, installed).unwrap();
     for (previous, next, epoch, first, last) in [
         (&genesis, &retained, 1, 10, 19),
         (&retained, &again, 2, 20, 29),
@@ -72,45 +95,80 @@ fn genesis_and_repeated_retention_advance_epoch_without_relabeling_keys() {
         assert_eq!(next.decision, KagemushaMintFinalityEpochDecisionV1::Retain);
         next.validate_successor(previous).unwrap();
     }
-    assert!(genesis_mint_finality_authorization(&authority, 0).is_err());
+    assert!(KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 0).is_err());
     let mut relabeled = authority.clone();
     relabeled.generation = 1;
-    assert!(genesis_mint_finality_authorization(&relabeled, 9).is_err());
-    assert!(retained_mint_finality_authorization(&retained, &relabeled, installed, 29).is_err());
-    assert!(retained_mint_finality_authorization(&retained, &authority, installed, 19).is_err());
+    assert!(KagemushaMintFinalityEpochAuthorizationV1::genesis(&relabeled, 9).is_err());
+    let mut relabeled_election = election.clone();
+    relabeled_election.kagemusha_mint_finality_authority = relabeled;
+    assert!(retained_epoch_authorization(&relabeled_election, 29, installed).is_err());
+    assert!(retained_epoch_authorization(&election, 19, installed).is_err());
     let different = InstalledBeaconEpochBindingV1 {
         session_id: [0xB1; 32],
         ..installed
     };
-    assert!(retained_mint_finality_authorization(&retained, &authority, different, 29).is_err());
+    assert!(retained_epoch_authorization(&election, 29, different).is_err());
 }
 
 #[test]
 fn retention_beacon_requires_canonical_active_exact_incumbent_transcript() {
-    let (network, roster, _) = fixture();
+    const BOUNDARY: u64 = 7;
+    const SUCCESSOR: u64 = BOUNDARY + 1;
+    let (network, roster, authority) = fixture();
     let peers = roster
         .iter()
         .map(|entry| entry.validator.clone())
         .collect::<Vec<_>>();
-    let mut valid = beacon::tests::finalized_key_session_fixture_for_context_v1(
-        network,
-        [0xC1; 32],
-        beacon::global_threshold_beacon_roster_hash_v1(&peers),
-    );
-    let committed = valid.session.adaptive_dkg.finalized_at_height;
-    valid.activate(committed).unwrap();
-    let boundary = committed + 1;
-    let successor = boundary + 1;
-    for case in 0..10 {
-        let world = World::new();
+    let anchor = GlobalThresholdBeaconChainAnchorV1 {
+        height: BOUNDARY - 2,
+        block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; 32])),
+    };
+    let (valid, mut pulses) =
+        beacon::signed_pulses_fixture_for_roster_and_anchors(network, &peers, &[anchor]);
+    let pulse = pulses.pop().expect("one real signed pre-boundary pulse");
+    let link = validate_persisted_global_threshold_beacon_pulse_v1(&pulse).unwrap();
+    assert!(valid.is_active_at(pulse.height));
+    assert!(valid.is_active_at(SUCCESSOR));
+    assert_eq!(pulse.height, BOUNDARY - 1);
+    let election =
+        FrozenElectionInputs {
+            epoch: 0,
+            kagemusha_mint_finality_authorization:
+                KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, BOUNDARY).unwrap(),
+            kagemusha_mint_finality_authority: authority,
+            epoch_end_height: BOUNDARY,
+            mode: wire::ConsensusMode::Permissioned,
+            roster,
+            leader_seed: [0xC2; 32],
+        };
+    for case in 0..12 {
+        let mut world = World::new();
+        for seed in 1_u8..=4 {
+            let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap();
+            let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, format!("retained{seed}"));
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: key.public_key().clone(),
+                pop: Some(iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap()),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world
+                .consensus_keys_by_pk
+                .insert(record.public_key.to_string(), vec![id.clone()]);
+            world.consensus_keys.insert(id, record);
+        }
         let mut record = valid.clone();
         let mut pointer_key = GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY;
         let mut selected = valid.session.session_id;
+        let mut candidate_pulse = pulse.clone();
         match case {
             1 => pointer_key = GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY + 1,
             2 => selected = [0xD1; 32],
-            3 => record.activated_at_height = Some(successor),
-            4 => record.retire(boundary).unwrap(),
+            3 => record.activated_at_height = Some(SUCCESSOR),
+            4 => record.retire(BOUNDARY).unwrap(),
             5 => record.session.transcript_hash[0] ^= 1,
             6 => {
                 record.session.network_id = NetworkId::from_genesis_hash(
@@ -119,39 +177,67 @@ fn retention_beacon_requires_canonical_active_exact_incumbent_transcript() {
             }
             8 => record.activated_at_height = None,
             9 => record.session.committee_size += 1,
+            11 => candidate_pulse.signature[0] ^= 1,
             _ => (),
         }
-        if case != 7 {
+        {
             let mut block = world.block();
+            if case != 7 {
+                block
+                    .global_beacon_key_sessions
+                    .insert(valid.session.session_id, record);
+                block
+                    .global_beacon_active_session
+                    .insert(pointer_key, selected);
+            }
+            if case != 10 {
+                block
+                    .global_beacon_pulses
+                    .insert(candidate_pulse.pulse_id, candidate_pulse);
+            }
             block
-                .global_beacon_key_sessions
-                .insert(valid.session.session_id, record);
-            block
-                .global_beacon_active_session
-                .insert(pointer_key, selected);
+                .global_beacon_latest_pulse
+                .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
             block.commit();
         }
-        let result =
-            retained_mint_finality_beacon(&world.view(), &network, boundary, successor, &roster);
+        let mut state = State::new_with_chain_and_network_id_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("retained-authority-exact-beacon"),
+            network,
+        );
+        let mut hashes = vec![
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"retained authority fixture chain"
+            ),);
+            usize::try_from(pulse.height).unwrap()
+        ];
+        hashes[usize::try_from(anchor.height - 1).unwrap()] = anchor.block_hash;
+        state.block_hashes = BlockHashes::new(hashes);
+        let view = state.view();
+        let result = finalized_next_epoch_snapshot(&view, &network, BOUNDARY, &election);
         if case == 0 {
+            let snapshot = result
+                .expect("authenticated incumbent")
+                .expect("exact boundary");
             assert_eq!(
-                result,
-                Ok(InstalledBeaconEpochBindingV1 {
+                snapshot.kagemusha_mint_finality_authorization.beacon,
+                BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
                     session_id: valid.session.session_id,
                     transcript_hash: valid.session.transcript_hash
                 })
             );
-            let mut wrong_roster = roster.clone();
-            wrong_roster.swap(0, 1);
+            assert_eq!(
+                snapshot.kagemusha_mint_finality_authorization.first_height,
+                SUCCESSOR
+            );
+            assert_eq!(snapshot.epoch_end_height, u64::MAX);
+            assert_eq!(snapshot.roster, election.roster);
+            let mut wrong_roster = election.clone();
+            wrong_roster.roster.swap(0, 1);
             assert!(
-                retained_mint_finality_beacon(
-                    &world.view(),
-                    &network,
-                    boundary,
-                    successor,
-                    &wrong_roster
-                )
-                .is_err()
+                finalized_next_epoch_snapshot(&view, &network, BOUNDARY, &wrong_roster).is_err()
             );
         } else {
             assert!(

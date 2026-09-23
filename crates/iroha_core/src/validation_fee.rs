@@ -902,8 +902,13 @@ impl fmt::Display for ValidationFeeAdmissionError {
                 f,
                 "transaction metadata and signed multisig validation-fee marker disagree in context {context_index}"
             ),
-            Self::NativePrincipalCannotPayFee { instruction_index, entry_index } => write!(
-                f, "native staking principal at {instruction_index}{} cannot pay a validation fee", format_entry_index(*entry_index)
+            Self::NativePrincipalCannotPayFee {
+                instruction_index,
+                entry_index,
+            } => write!(
+                f,
+                "native staking principal at {instruction_index}{} cannot pay a validation fee",
+                format_entry_index(*entry_index)
             ),
             Self::WrongFeeSource {
                 instruction_index,
@@ -1731,12 +1736,17 @@ fn reject_opaque_fee_asset_effects(
         );
     }
     for (instruction_index, instruction) in instructions.iter().enumerate() {
-        if let Some(instruction_wire_id) = staking_effects::opaque_staking_policy_asset_effect(instruction, fee_asset_definition_id) {
-            return Err(ValidationFeeAdmissionError::UnsupportedNativeFeeAssetMovement {
-                context_index: 0,
-                instruction_index,
-                instruction_wire_id,
-            });
+        if let Some(instruction_wire_id) = staking_effects::opaque_staking_policy_asset_effect(
+            instruction,
+            fee_asset_definition_id,
+        ) {
+            return Err(
+                ValidationFeeAdmissionError::UnsupportedNativeFeeAssetMovement {
+                    context_index: 0,
+                    instruction_index,
+                    instruction_wire_id,
+                },
+            );
         }
         if let Ok(MultisigInstructionBox::Propose(propose)) =
             MultisigInstructionBox::try_from(instruction)
@@ -4215,7 +4225,10 @@ fn collect_instruction_asset_transfers(
             }
             NativeInstructionDsEffectDisposition::AuthenticatedStakingEffects => {
                 staking_effects::collect_signed_staking_effects(
-                    instruction, context_index, instruction_index, collection,
+                    instruction,
+                    context_index,
+                    instruction_index,
+                    collection,
                 )?;
             }
             NativeInstructionDsEffectDisposition::RecursiveMultisigProposal => {
@@ -4434,7 +4447,9 @@ pub(crate) mod tests {
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let network_id = validation_fee_test_network_id();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 2, &roster);
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 2, &roster,
+            );
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -4613,17 +4628,17 @@ pub(crate) mod tests {
         use iroha_data_model::{
             isi::staking::{
                 BondPublicLaneStake, ClaimPublicLaneRewards, FinalizePublicLaneUnbond,
-                PublicLaneCandidateAuthorization, RecordPublicLaneRewards, RegisterPublicLaneCandidate,
-                RegisterPublicLaneValidator, SlashPublicLaneValidator,
+                PublicLaneCandidateAuthorization, RecordPublicLaneRewards,
+                RegisterPublicLaneCandidate, RegisterPublicLaneValidator, SlashPublicLaneValidator,
             },
             nexus::{
-                PublicLaneBondPreconditionV1, PublicLaneMonetaryPlanV1,
-                PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
-                PublicLaneRegistrationPreconditionV1, PublicLaneRewardClaimPlanV1,
-                PublicLaneRewardClaimSourceV1, PublicLaneRewardRecord, PublicLaneRewardRecordRefV1,
-                PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneSlashPreconditionV1,
-                PublicLaneUnbondPreconditionV1, PublicLaneUnbonding,
-                public_lane_reward_record_commitment, public_lane_unbonding_commitment,
+                PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1,
+                PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryRegistrationV1,
+                PublicLaneMonetaryScopeV1, PublicLaneMonetarySlashV1, PublicLaneMonetaryUnbondV1,
+                PublicLaneRewardClaimPlanV1, PublicLaneRewardClaimSourceV1, PublicLaneRewardRecord,
+                PublicLaneRewardRecordRefV1, PublicLaneRewardRole, PublicLaneRewardShare,
+                PublicLaneUnbonding, public_lane_reward_record_commitment,
+                public_lane_unbonding_commitment,
             },
         };
         use iroha_model_base::{peer::PeerId, topology::LaneId};
@@ -4650,14 +4665,14 @@ pub(crate) mod tests {
             plan(
                 source_asset.clone(),
                 escrow_asset.clone(),
-                PublicLaneMonetaryPreconditionV1::Registration(PublicLaneRegistrationPreconditionV1 {
+                PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
                     activation_height: 1,
                 }),
             ),
         );
         let ordinary_registration = registration.clone();
         registration.monetary_plan.precondition =
-            PublicLaneMonetaryPreconditionV1::Registration(PublicLaneRegistrationPreconditionV1 {
+            PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
                 activation_height: 10,
             });
         let candidate_authorization =
@@ -4704,7 +4719,7 @@ pub(crate) mod tests {
                 monetary_plan: plan(
                     source_asset.clone(),
                     escrow_asset.clone(),
-                    PublicLaneMonetaryPreconditionV1::Bond(PublicLaneBondPreconditionV1 {
+                    PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
                         activation_height: 1,
                         peer_id: PeerId::new(peer_key.public_key().clone()),
                     }),
@@ -4719,7 +4734,7 @@ pub(crate) mod tests {
                 monetary_plan: plan(
                     escrow_asset.clone(),
                     source_asset.clone(),
-                    PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneUnbondPreconditionV1 {
+                    PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
                         activation_height: 1,
                         request_hash: public_lane_unbonding_commitment(&request).unwrap(),
                     }),
@@ -4737,7 +4752,7 @@ pub(crate) mod tests {
                 monetary_plan: plan(
                     escrow_asset.clone(),
                     AssetId::of(policy.ds_asset_id.clone(), account(4)),
-                    PublicLaneMonetaryPreconditionV1::Slash(PublicLaneSlashPreconditionV1 {
+                    PublicLaneMonetaryPreconditionV1::Slash(PublicLaneMonetarySlashV1 {
                         activation_height: 1,
                         slashable_exposure: Quantity::one(),
                     }),
@@ -4983,11 +4998,38 @@ pub(crate) mod tests {
         instructions.push(dust.into());
         for instruction in instructions {
             assert!(matches!(
-                reject_opaque_fee_asset_effects(&account(1), &[instruction], &policy.ds_asset_id, None),
+                reject_opaque_fee_asset_effects(
+                    &account(1),
+                    &[instruction],
+                    &policy.ds_asset_id,
+                    None
+                ),
                 Err(ValidationFeeAdmissionError::OpaqueDeferredFeeAssetTransfer { .. })
                     | Err(ValidationFeeAdmissionError::UnsupportedNativeFeeAssetMovement { .. })
             ));
         }
+    }
+
+    #[test]
+    fn monetary_staking_classifier_uses_registered_wire_identity() {
+        let policy = policy(&account(3));
+        let instructions = monetary_staking_fee_instructions(&policy);
+        assert_eq!(instructions.len(), 7);
+        for instruction in instructions {
+            let expected = iroha_data_model::isi::instruction_wire_id(&instruction)
+                .expect("each signed staking operation is registered");
+            assert_eq!(
+                staking_effects::monetary_staking_wire_id(&instruction),
+                Some(expected)
+            );
+        }
+        let ordinary = transfer(
+            &account(1),
+            &policy.ds_asset_id,
+            Quantity::one(),
+            &account(2),
+        );
+        assert_eq!(staking_effects::monetary_staking_wire_id(&ordinary), None);
     }
 }
 

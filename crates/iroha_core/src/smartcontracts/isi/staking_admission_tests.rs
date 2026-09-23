@@ -41,7 +41,7 @@ fn signed_candidate(
     )
     .expect("election height");
     registration.monetary_plan.precondition =
-        PublicLaneMonetaryPreconditionV1::Registration(PublicLaneRegistrationPreconditionV1 {
+        PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
             activation_height,
         });
     let authorization = PublicLaneCandidateAuthorization::new(

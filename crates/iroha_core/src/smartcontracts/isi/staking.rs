@@ -12,7 +12,7 @@ use crate::{
     telemetry::StateTelemetry,
 };
 use iroha_data_model::{
-    asset::{Asset, AssetDefinitionId, AssetId},
+    asset::{AssetDefinitionId, AssetId},
     block::consensus::EvidencePenaltyStatus,
     consensus::ConsensusKeyRole,
     isi::{
@@ -26,11 +26,11 @@ use iroha_data_model::{
         },
     },
     nexus::{
-        PublicLaneBondPreconditionV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
-        PublicLaneRegistrationPreconditionV1, PublicLaneRewardRecord, PublicLaneRewardRole,
-        PublicLaneRewardShare, PublicLaneSlashPreconditionV1, PublicLaneStakeShare,
-        PublicLaneUnbondPreconditionV1, PublicLaneUnbonding, PublicLaneValidatorRecord,
-        PublicLaneValidatorStatus, public_lane_unbonding_commitment,
+        PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+        PublicLaneMonetaryRegistrationV1, PublicLaneMonetarySlashV1, PublicLaneMonetaryUnbondV1,
+        PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
+        PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+        public_lane_unbonding_commitment,
     },
     prelude::AccountId,
 };
@@ -1115,7 +1115,7 @@ fn register_public_lane_validator(
         &stake_ctx.staker_asset,
         &stake_ctx.escrow_asset,
         &initial_stake,
-        &PublicLaneMonetaryPreconditionV1::Registration(PublicLaneRegistrationPreconditionV1 {
+        &PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
             activation_height,
         }),
     )?;
@@ -1605,7 +1605,7 @@ impl Execute for BondPublicLaneStake {
             &stake_ctx.staker_asset,
             &stake_ctx.escrow_asset,
             &amount,
-            &PublicLaneMonetaryPreconditionV1::Bond(PublicLaneBondPreconditionV1 {
+            &PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
                 activation_height: validator_record.activation_height,
                 peer_id: validator_record.peer_id.clone(),
             }),
@@ -1866,7 +1866,7 @@ impl Execute for FinalizePublicLaneUnbond {
             &stake_ctx.escrow_asset,
             &stake_ctx.staker_asset,
             &pending.amount,
-            &PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneUnbondPreconditionV1 {
+            &PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
                 activation_height: validator_record.activation_height,
                 request_hash,
             }),
@@ -3079,7 +3079,7 @@ fn apply_slash_to_validator_inner(
             &stake_ctx.escrow_asset,
             &slash_sink_asset,
             amount,
-            &PublicLaneMonetaryPreconditionV1::Slash(PublicLaneSlashPreconditionV1 {
+            &PublicLaneMonetaryPreconditionV1::Slash(PublicLaneMonetarySlashV1 {
                 activation_height: validator_snapshot.activation_height,
                 slashable_exposure: slashable_exposure.clone(),
             }),
@@ -5764,7 +5764,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         stx.nexus.staking.max_validators = nonzero!(1u32);
-        let (validator, _delegator, escrow, _asset_def_id) = prepare_accounts(&mut stx);
+        let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(12);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(&stx, &validator, Quantity::from(1_000_u64)),
@@ -5783,6 +5783,7 @@ mod tests {
         let mut state_block = state.block(block2.as_ref().header());
         let mut stx = state_block.transaction();
         stx.nexus.staking.max_validators = nonzero!(1u32);
+        stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
         SlashPublicLaneValidator {
@@ -5828,6 +5829,7 @@ mod tests {
         let mut state_block = state.block(block3.as_ref().header());
         let mut stx = state_block.transaction();
         stx.nexus.staking.max_validators = nonzero!(1u32);
+        stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
         let err = RegisterPublicLaneValidator {
@@ -8350,12 +8352,14 @@ mod tests {
             Quantity::from(1_000_u64),
         );
         let err = SlashPublicLaneValidator {
+            // This deliberately malformed record never installed real custody.
+            // Its explicit nominal plan must not bypass storage-key validation.
             monetary_plan: fixture_transfer_plan(
                 &stx,
                 escrow_asset.clone(),
                 escrow_asset.clone(),
                 Quantity::from(100_u64),
-                PublicLaneMonetaryPreconditionV1::Slash(PublicLaneSlashPreconditionV1 {
+                PublicLaneMonetaryPreconditionV1::Slash(PublicLaneMonetarySlashV1 {
                     activation_height: 1,
                     slashable_exposure: Quantity::from(1_000_u64),
                 }),

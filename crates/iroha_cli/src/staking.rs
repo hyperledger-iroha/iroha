@@ -673,9 +673,7 @@ mod tests {
             destination_asset: plan_asset(BOB_ID.clone()),
             amount: amount.parse().unwrap(),
             precondition: PublicLaneMonetaryPreconditionV1::Registration(
-                iroha::data_model::nexus::PublicLaneRegistrationPreconditionV1 {
-                    activation_height,
-                },
+                iroha::data_model::nexus::PublicLaneMonetaryRegistrationV1 { activation_height },
             ),
         }
     }
@@ -683,7 +681,7 @@ mod tests {
         let mut plan = registration_plan(amount, 1);
         plan.source_asset = plan_asset(staker);
         plan.precondition = PublicLaneMonetaryPreconditionV1::Bond(
-            iroha::data_model::nexus::PublicLaneBondPreconditionV1 {
+            iroha::data_model::nexus::PublicLaneMonetaryBondV1 {
                 activation_height: 1,
                 peer_id: valid_peer_id_literal().parse().unwrap(),
             },
@@ -702,7 +700,7 @@ mod tests {
         plan.source_asset = plan_asset(BOB_ID.clone());
         plan.destination_asset = plan_asset(staker);
         plan.precondition = PublicLaneMonetaryPreconditionV1::Unbond(
-            iroha::data_model::nexus::PublicLaneUnbondPreconditionV1 {
+            iroha::data_model::nexus::PublicLaneMonetaryUnbondV1 {
                 activation_height: 1,
                 request_hash: iroha::data_model::nexus::public_lane_unbonding_commitment(&request)
                     .unwrap(),
@@ -1595,7 +1593,7 @@ mod tests {
             },
             PublicLaneMonetaryPlanV1 {
                 precondition: PublicLaneMonetaryPreconditionV1::Registration(
-                    iroha::data_model::nexus::PublicLaneRegistrationPreconditionV1 {
+                    iroha::data_model::nexus::PublicLaneMonetaryRegistrationV1 {
                         activation_height: 0,
                     },
                 ),

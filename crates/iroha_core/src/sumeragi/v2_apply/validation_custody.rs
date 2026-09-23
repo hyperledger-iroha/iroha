@@ -27,9 +27,7 @@ pub(crate) trait RetainedValidationOwner: sealed::Owner + Send + 'static {
 }
 
 impl<A> sealed::Owner for crate::state::RetainedCarrier<A> {}
-impl<A: Send + 'static> RetainedValidationOwner
-    for crate::state::RetainedCarrier<A>
-{
+impl<A: Send + 'static> RetainedValidationOwner for crate::state::RetainedCarrier<A> {
     fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool {
         self.matches_validation_candidate(context, body)
     }
@@ -523,12 +521,18 @@ impl RetainedBodyValidationService<super::native_validation::OwnedNativeCarrierV
         subject: wire::BlockSubject,
         request: &crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyRequest,
         response: &crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyResponse,
-    ) -> Result<super::native_validation::NativeSourceRecoveryCompletion, LocalValidationRefusal> {
-        let owner = self.candidates.iter_mut()
+    ) -> Result<super::native_validation::NativeSourceRecoveryCompletion, LocalValidationRefusal>
+    {
+        let owner = self
+            .candidates
+            .iter_mut()
             .find(|row| row.subject == subject)
             .and_then(|row| row.owner.as_mut())
-            .ok_or_else(|| LocalValidationRefusal::RecoveryRequired(
-                "Native source response has no original retained candidate".into()))?;
+            .ok_or_else(|| {
+                LocalValidationRefusal::RecoveryRequired(
+                    "Native source response has no original retained candidate".into(),
+                )
+            })?;
         owner.complete_native_source(subject, request, response)
     }
 }

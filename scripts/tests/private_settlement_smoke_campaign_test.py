@@ -154,7 +154,7 @@ def finality(network: object, identities: list[str], *, height: int = 306) -> di
     block_hash = hash_literal(777)
     context = {name: None for name in ("next_epoch_snapshot", "parent_commit_qc", "snapshot_bootstrap")}
     context.update(network_id=network, protocol_version=4, height=height, epoch=1,
-        kagemusha_mint_finality_epoch_id=[1] * 32, kagemusha_mint_finality_epoch_roster={"synthetic": True},
+        kagemusha_mint_finality_authorization={"synthetic": True}, kagemusha_mint_finality_authority={"synthetic": True},
         epoch_end_height=1000, mode={"mode": "permissioned", "details": None},
         roster=[{"validator": peer, "power": 1} for peer in identities[:4]],
         quorum={"min_signers": 3, "total_power": 4}, nexus_amx_context_hash=hash_literal(778),
@@ -457,6 +457,19 @@ class SmokeEvidenceTests(unittest.TestCase):
             mutate(self.evidence["finality-after-15.json"])
             with self.assertRaises(M.CampaignError):
                 self.validate()
+
+    def test_finality_rejects_retired_authority_context_fields(self) -> None:
+        for canonical, retired in (
+            ("kagemusha_mint_finality_authorization", "kagemusha_mint_finality_epoch_id"),
+            ("kagemusha_mint_finality_authority", "kagemusha_mint_finality_epoch_roster"),
+        ):
+            with self.subTest(field=retired):
+                self.evidence, self.result = evidence_fixture(0, self.sha)
+                context = self.evidence["finality-after-15.json"]["finality_artifact"]["height_context"]
+                context[retired] = context.pop(canonical)
+                with self.assertRaisesRegex(M.release_runner.RunnerError, "height context fields mismatch"):
+
+                    self.validate()
 
     def test_semantic_finality_allows_equivalent_parent_qc_signer_subsets(self) -> None:
         parent = copy.deepcopy(self.evidence["finality-before-00.json"]["finality_artifact"]["commit_qc"])

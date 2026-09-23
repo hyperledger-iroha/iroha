@@ -1288,11 +1288,15 @@ fn native_execution_commit_rejects_post_finality_block_history_drift_on_consensu
         native_publication_fixture_for_test(&[NativeEconomicCase::Transfer(25)]);
     let state = &fixture.native.state;
     let (mut overlay, _) = prepared_native_publication_for_test(state, &carrier, context);
+    let tip = overlay.block_hashes.len() - 1;
     overlay
         .block_hashes
-        .push(HashOf::from_untyped_unchecked(Hash::new(
-            b"unbound successor history",
-        )));
+        .work
+        .try_update_private(
+            &tip,
+            HashOf::from_untyped_unchecked(Hash::new(b"unbound successor history")),
+        )
+        .expect("alter the existing prepaid tip without adding a second history slot");
     assert!(
         matches!(
             overlay.commit(),

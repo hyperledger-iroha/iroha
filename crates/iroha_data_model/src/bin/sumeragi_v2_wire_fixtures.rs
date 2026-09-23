@@ -28,9 +28,8 @@ use iroha_data_model::{
         Vote, encode_payload_chunks, native_amx_application_manifest_empty_root,
     },
     isi::kagemusha_v1::{
-        BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityValidatorKeysV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
+        KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityValidatorKeysV1,
     },
     merge::MergeLedgerEntry,
 };
@@ -150,12 +149,13 @@ fn network_id(seed: u8) -> NetworkId {
 }
 fn mint_finality_authority(
     network_id: NetworkId,
+    generation: u64,
     roster: &[ValidatorPower],
 ) -> KagemushaMintFinalityAuthorityGenerationV1 {
     KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        generation: 0,
+        generation,
         validators: roster
             .iter()
             .enumerate()
@@ -178,32 +178,16 @@ fn context() -> HeightContext {
         })
         .collect::<Vec<_>>();
     let network_id = network_id(0x71);
-    let mint_finality_authority = mint_finality_authority(network_id, &roster);
-    let mint_finality_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id,
-        epoch: 0,
-        first_height: 1,
-        last_height: 100,
-        authority_generation: 0,
-        authority_id: mint_finality_authority
-            .authority_id()
-            .expect("valid fixture mint-finality authority"),
-        beacon: BeaconEpochBindingV1::Bootstrap,
-        previous_authorization_id: [0; 32],
-        transition_id: [0; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
-    };
-    mint_finality_authorization
-        .validate_against_authority(&mint_finality_authority)
-        .expect("fixture authorization binds generation zero");
+    let authority = mint_finality_authority(network_id, 0, &roster);
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 100)
+        .expect("valid fixture genesis scheduling authorization");
     HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
-        kagemusha_mint_finality_authorization: mint_finality_authorization,
-        kagemusha_mint_finality_authority: mint_finality_authority,
+        kagemusha_mint_finality_authorization: authorization,
+        kagemusha_mint_finality_authority: authority,
         epoch_end_height: 100,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,

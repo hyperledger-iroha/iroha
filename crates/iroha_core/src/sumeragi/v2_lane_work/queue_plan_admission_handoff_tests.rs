@@ -77,6 +77,7 @@ fn assert_queue_plan_rejected(
 
 #[test]
 fn queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes() {
+    // Freeze both lane geometries before finalizing the durable parent chain.
     let (mut adapter, keys) = native_multilane_signing_fixture();
     let mut owner =
         queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
@@ -117,6 +118,7 @@ fn queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes() {
 
 #[test]
 fn queue_plan_leader_stages_exact_handoff_idempotently() {
+    // Freeze both lane geometries before finalizing the durable parent chain.
     let (mut adapter, keys) = native_multilane_signing_fixture();
     let mut owner =
         queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
@@ -163,7 +165,8 @@ fn queue_plan_leader_stages_exact_handoff_idempotently() {
 
 #[test]
 fn queue_plan_exact_marker_retains_certificate_until_transaction_application() {
-    let (mut adapter, keys) = native_multilane_signing_fixture();
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (adapter, keys) = native_multilane_signing_fixture();
     let mut owner =
         queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let (binding, bytes) = queue_plan_test_certificate(&adapter, &keys, 0x46);
@@ -212,6 +215,7 @@ fn queue_plan_exact_marker_retains_certificate_until_transaction_application() {
 
 #[test]
 fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_corrupt() {
+    // Freeze both lane geometries before finalizing the durable parent chain.
     let (mut adapter, keys) = native_multilane_signing_fixture();
     let mut owner =
         queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
@@ -382,6 +386,7 @@ fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_co
 
 #[test]
 fn queue_plan_handoff_retires_future_after_current_source_incarnation_drifts() {
+    // Freeze both lane geometries before finalizing the durable parent chain.
     let (mut adapter, keys) = native_multilane_signing_fixture();
     let queue = Arc::new(Queue::test(
         iroha_config::parameters::actual::Queue::default(),
@@ -435,6 +440,7 @@ fn queue_plan_handoff_retires_future_after_current_source_incarnation_drifts() {
 
 #[test]
 fn queue_plan_handoff_cursor_rotates_under_effect_pressure() {
+    // Freeze both lane geometries before finalizing the durable parent chain.
     let (mut adapter, keys) = native_multilane_signing_fixture();
     let mut owner = queue_plan_owner_from_adapter(&adapter, &keys, 1);
     let view = queue_plan_remote_leader_view(&adapter);
@@ -475,6 +481,7 @@ fn queue_plan_handoff_cursor_rotates_under_effect_pressure() {
 
 #[test]
 fn queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover() {
+    // Freeze both lane geometries before finalizing the durable parent chain.
     let (mut adapter, keys) = native_multilane_signing_fixture();
     let queue = Arc::new(Queue::test(
         iroha_config::parameters::actual::Queue::default(),
@@ -607,6 +614,7 @@ fn queue_plan_materialized_certificate_for_binding(
     reason = "one exact admission is traced through durable Queue ownership and both height adapters"
 )]
 fn queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover() {
+    // Freeze both lane geometries before finalizing the durable parent chain.
     let (mut adapter, keys) = native_multilane_signing_fixture();
     let journal_dir = tempfile::tempdir().unwrap();
     let journal_path = journal_dir.path().join("post-wsv-reservations.norito");
@@ -749,7 +757,8 @@ fn queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover
 
 #[test]
 fn queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete() {
-    let (mut adapter, keys) = native_multilane_signing_fixture();
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (adapter, keys) = native_multilane_signing_fixture();
     let mut owner =
         queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let old_worker_height = adapter.context.height;
@@ -803,6 +812,7 @@ fn queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete() {
 
 #[test]
 fn queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification() {
+    // Freeze both lane geometries before finalizing the durable parent chain.
     let (mut adapter, keys) = native_multilane_signing_fixture();
     let mut owner =
         queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
@@ -854,7 +864,8 @@ fn queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification() {
 
 #[test]
 fn queue_plan_handoff_new_inventory_preserves_prior_exact_transfers() {
-    let (mut adapter, keys) = native_multilane_signing_fixture();
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (adapter, keys) = native_multilane_signing_fixture();
     let mut owner =
         queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let view = queue_plan_remote_leader_view(&adapter);
@@ -885,6 +896,7 @@ fn queue_plan_handoff_new_inventory_preserves_prior_exact_transfers() {
 
 #[test]
 fn queue_plan_handoff_is_not_retired_by_unrelated_merge_broadcast_cleanup() {
+    // Freeze both lane geometries before finalizing the durable parent chain.
     let (mut adapter, keys) = native_multilane_signing_fixture();
     let mut owner =
         queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());

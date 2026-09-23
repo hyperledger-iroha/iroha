@@ -2065,17 +2065,8 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "fair: bool,",
         ),
     ),
-    (
-        "crates/iroha_core/src/publication_lock.rs",
-        "method",
-        "PublicationMutex::wrap",
-        (
-            "guard: parking_lot::MutexGuard<'state, T>",
-            "inner: self.released.guard(PhysicalPublicationGuard {",
-            "guard: Some(guard),",
-            "fair: false,",
-        ),
-    ),
+    ("crates/iroha_core/src/publication_lock.rs", "method", 'PublicationMutex::wrap', ("fn wrap<'state>(\n        &'state self,\n        guard: parking_lot::MutexGuard<'state, T>,\n    ) -> PublicationGuard<'state, T> {\n        // Advance while the actual physical mutex is held, before any caller\n        // can create/rename/unlink or unwind. Saturation permanently disables\n        // observation reuse instead of allowing an ABA wraparound.\n        if let Some(epoch) = &self.mutation_epoch {\n            let _ = epoch.fetch_update(\n                std::sync::atomic::Ordering::Relaxed,\n                std::sync::atomic::Ordering::Relaxed,\n                |epoch| epoch.checked_add(1),\n            );\n        }\n        self.wrap_read_only(guard)\n    }",)),
+    ("crates/iroha_core/src/publication_lock.rs", "method", "PublicationMutex::wrap_read_only", ("fn wrap_read_only<'state>(\n        &'state self,\n        guard: parking_lot::MutexGuard<'state, T>,\n    ) -> PublicationGuard<'state, T> {\n        let epoch = self.mutation_epoch.as_ref().and_then(|epoch| {\n            let epoch = epoch.load(std::sync::atomic::Ordering::Relaxed);\n            (epoch != u64::MAX).then_some(epoch)\n        });\n        PublicationGuard {\n            mutation_epoch: epoch,\n            inner: self.released.guard(PhysicalPublicationGuard {\n                guard: Some(guard),\n                fair: false,\n            }),\n        }\n    }",)),
     (
         "crates/iroha_core/src/publication_lock.rs",
         "method",
@@ -3454,10 +3445,22 @@ def _indexed_rust_binding_items(
 
 @lru_cache(maxsize=64)
 def _rust_impl_items(source: str, owner: str) -> tuple[str, ...]:
-    """Extract every inherent or trait implementation for one exact owner."""
+    """Extract implementations for an exact owner and optional impl qualifier.
 
+    Unqualified owners include both inherent and trait implementations, so an
+    ambiguous method remains an error. ``inherent Owner`` selects only inherent
+    implementations; ``Trait for Owner`` selects the exact named trait.
+    """
+
+    inherent_only = owner.startswith("inherent ")
+    if inherent_only:
+        owner = owner.removeprefix("inherent ")
     qualification = owner.split(" for ")
-    if len(qualification) > 2 or any(not part for part in qualification):
+    if (
+        len(qualification) > 2
+        or any(not part for part in qualification)
+        or (inherent_only and len(qualification) != 1)
+    ):
         return ()
     required_trait = qualification[0] if len(qualification) == 2 else None
     owner = qualification[-1]
@@ -3496,6 +3499,8 @@ def _rust_impl_items(source: str, owner: str) -> tuple[str, ...]:
         separators = [position for position, word in words if word == "for" and position < where]
         if len(separators) > 1:
             continue
+        if inherent_only and separators:
+            continue
         if required_trait is not None and (
             not separators or header[generic_end:separators[0]].strip() != required_trait
         ):
@@ -3529,10 +3534,10 @@ def _extract_rust_binding_items(
             if name == symbol
         )
 
-    if symbol.count("::") != 1:
+    if "::" not in symbol:
         return ()
-    owner, method = symbol.split("::", 1)
-    if not owner or not method:
+    owner, method = symbol.rsplit("::", 1)
+    if not owner or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", method) is None:
         return ()
     return tuple(
         item

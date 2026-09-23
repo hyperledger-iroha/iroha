@@ -1,7 +1,7 @@
 #[test]
 fn open_height_lane_relay_drain_services_exactly_one_occurrence_per_turn() {
     let (_adapter, keys, mut queue_plan, _) =
-        super::super::v2_lane_work::tests::queue_plan_owner_fixture(1);
+        super::super::v2_lane_work::tests::queue_plan_owner_fixture(2);
     let sender = PeerId::new(keys[1].public_key().clone());
     let (lane_relay_tx, lane_relay_rx) = std::sync::mpsc::sync_channel(2);
     for certificate in [vec![0_u8], vec![1_u8]] {

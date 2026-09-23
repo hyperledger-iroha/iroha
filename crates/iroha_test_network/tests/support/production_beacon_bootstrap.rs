@@ -36,8 +36,8 @@ use tokio::{
 
 #[path = "production_beacon_canary_receipt.rs"]
 mod canary_receipt;
-#[path = "production_epoch_maintenance.rs"]
-mod epoch_maintenance;
+#[path = "production_epoch_retention.rs"]
+mod epoch_retention;
 #[path = "production_beacon_prepare.rs"]
 mod prepare;
 #[path = "public_transaction_sequence.rs"]
@@ -853,7 +853,7 @@ fn read_block(store: &mut BlockStore, height: u64) -> Result<SignedBlock> {
 fn verify_pulse(
     peer_configs: &[PathBuf],
     bundle: &Value,
-    maintenance_entrypoint_hash: HashOf<TransactionEntrypoint>,
+    catalog_entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<()> {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     iroha_genesis::init_instruction_registry();
@@ -880,11 +880,11 @@ fn verify_pulse(
         .ok_or_else(|| eyre!("validated signed genesis omitted NPoS parameters"))?;
     let epoch_length = npos.epoch_length_blocks().get();
     ensure!(
-        epoch_length == 11,
-        "fixture must exercise real canary merge at mandatory height 10"
+        epoch_length == epoch_retention::EPOCH_LENGTH,
+        "fixture must exercise the real catalog merge at mandatory height 10"
     );
-    let maintenance_tree: MerkleTree<TransactionEntrypoint> =
-        [maintenance_entrypoint_hash].into_iter().collect();
+    let catalog_tree: MerkleTree<TransactionEntrypoint> =
+        [catalog_entrypoint_hash].into_iter().collect();
     let pulse_height = epoch_length
         .checked_sub(1)
         .filter(|height| *height > 1)
@@ -911,24 +911,24 @@ fn verify_pulse(
         );
         let anchor = read_block(&mut store, anchor_height)?;
         let block = read_block(&mut store, pulse_height)?;
-        // The fixture has authenticated this exact signed canary
-        // as Applied in local and global state on all four peers. Bind it to the sole leaf of
+        // Native completion has already authenticated this exact native catalog
+        // transaction as Applied on all four peers. Bind it to the sole leaf of
         // the execution-bearing merge at the mandatory pulse height, excluding
         // unrelated transactions, QueuePlan admissions and anchor padding.
         let context = block
             .execution_context()
             .ok_or_else(|| eyre!("mandatory pulse has no certified execution context"))?;
         let reference = context.merge_entry.as_ref().ok_or_else(|| {
-            eyre!("signed retention canary did not execute on the mandatory pulse carrier")
+            eyre!("catalog transaction did not execute on the mandatory pulse carrier")
         })?;
         ensure!(
             reference.execution_batch_hash.is_some()
                 && reference.entrypoint_count == Some(1)
-                && reference.entrypoint_merkle_root == maintenance_tree.root()
+                && reference.entrypoint_merkle_root == catalog_tree.root()
                 && block.external_entrypoint_count() == 0
                 && context.queue_plan_admissions.is_empty()
                 && context.autonomous_lane_payloads.is_empty(),
-            "mandatory pulse carrier is not the exact one-transaction retention canary merge"
+            "mandatory pulse carrier is not the exact one-transaction native catalog merge"
         );
         // Canonical QueuePlan admissions and autonomous anchors are genuine
         // protocol content even when they contain no external transaction row.
@@ -1368,16 +1368,14 @@ async fn both_public_sequences(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse() -> Result<()> {
-    run_fresh_custody_bootstrap(epoch_maintenance::Driver::Finite).await
+    run_fresh_custody_bootstrap().await
 }
 
-async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Result<()> {
+async fn run_fresh_custody_bootstrap() -> Result<()> {
     // Validate the same immutable identity used by the paid trust helper before
     // artifact reads, custody creation, genesis generation, or child startup.
-    // Development identity is sufficient only for the finite driver. Supervised
-    // renewal must satisfy release-source admission before this expensive setup;
-    // signed source/artifact qualification still belongs to the outer gate.
-    let build_identity = driver.admit_build_identity(
+    // The complete fixture binds every proof to this exact release source.
+    let build_identity = epoch_retention::admit_build_identity(
         iroha_core::compiled_build_identity!()
             .wrap_err("production beacon fixture has invalid compiled build metadata")?,
     )?;
@@ -1462,7 +1460,6 @@ async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Resul
         PHASE_BUDGET.as_secs_f64()
     );
     let mut peers = spawn_peers(directory, &daemon, &prepared.roster, None, 1)?;
-    let mut maintenance = None;
     let outcome: Result<()> = async {
         listeners_started(&mut peers, api, startup).await?;
         wait_for_exact_height(&clients, 1, startup).await?;
@@ -1539,51 +1536,30 @@ async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Resul
         // Deployment uses the generated genesis-authorized client. The fresh
         // public account remains the onboarding/faucet/canary actor and receives
         // no deployment administration permissions.
-        let epoch_trust = directory.join("epoch-trust.json");
-        super::dataspace_deploy_cli::write_fixture_trust(&super::dataspace_deploy_cli::PaidDeploymentFixture {
-            binary: &cli, build_identity, config: &directory.join("client.toml"), operator: &directory.join("runtime/operator-signer.key"),
-            root: &directory.join("paid-deployment"), genesis_wire: &genesis_wire,
-            genesis_public_key: &prepared.genesis_public_key, peer_configs: &peer_configs, clients: &clients,
-        }, &epoch_trust)?;
-        maintenance = Some(match driver {
-            epoch_maintenance::Driver::Finite => epoch_maintenance::Maintenance::start(&cli, &prepared, epoch_trust)?,
-            #[cfg(target_os = "linux")]
-            epoch_maintenance::Driver::Supervised => epoch_maintenance::Maintenance::start_supervisor(&cli, &prepared, epoch_trust, build_identity)?,
-        });
-        let maintenance_deadline = Instant::now() + PHASE_BUDGET;
-        let maintenance_entrypoint_hash = maintenance.as_mut().unwrap().first_progress(&clients, maintenance_deadline).await?;
-        wait_for_exact_height(&clients, 10, maintenance_deadline).await?;
-        // Paid deployment still verifies its exact three signed operations and
-        // all-four finality; it does not carry or drive operator maintenance.
-        super::dataspace_deploy_cli::run_paid_deployment(super::dataspace_deploy_cli::PaidDeploymentFixture {
+        // The first genuine paid catalog transaction admits at 8, anchors at 9,
+        // and executes at the mandatory pulse height 10. Its native completion
+        // verifies the exact signed operation independently on all four peers.
+        let catalog_entrypoint_hash = super::dataspace_deploy_cli::run_paid_deployment(super::dataspace_deploy_cli::PaidDeploymentFixture {
             binary: &cli, build_identity, config: &directory.join("client.toml"), operator: &directory.join("runtime/operator-signer.key"),
             root: &directory.join("paid-deployment"), genesis_wire: &genesis_wire,
             genesis_public_key: &prepared.genesis_public_key, peer_configs: &peer_configs, clients: &clients,
         }).await?;
-        maintenance.as_mut().unwrap().first_retention(Instant::now() + PHASE_BUDGET).await?;
         {
             let mut runtime = Runtime { directory, daemon: &daemon, roster: &prepared.roster,
                 ceremony: &ceremony, api, clients: &clients, peers: &mut peers, run: 2 };
             retained_catalog_recovery(&mut runtime, &prepared, &peer_configs).await?;
             both_public_sequences(&mut runtime, &peer_configs, &prepared.routed_client).await?;
         }
-        let operator = maintenance.as_mut().unwrap();
-        operator.await_current_retention(&clients, Instant::now() + PHASE_BUDGET).await?;
-        operator.stop(Instant::now() + Duration::from_secs(30)).await?;
-        operator.verify(&prepared, &clients, Instant::now() + PHASE_BUDGET).await?;
+        let installed: beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1 =
+            json::from_value(field(&bundle, "record")?.clone())?;
+        epoch_retention::verify_boundary_chain(
+            &prepared, &clients, &installed, Instant::now() + PHASE_BUDGET,
+        ).await?;
         peers.stop(Instant::now() + PHASE_BUDGET).await?;
-        verify_pulse(&peer_configs, &bundle, maintenance_entrypoint_hash)?;
+        verify_pulse(&peer_configs, &bundle, catalog_entrypoint_hash)?;
         eprintln!("four fresh production-custody validators completed native onboarding/faucet/canary/install and paid deployment across a verified mandatory pulse");
         Ok(())
     }.await;
-    if let Some(operator) = &mut maintenance {
-        let stopped = operator
-            .stop(Instant::now() + Duration::from_secs(30))
-            .await;
-        if outcome.is_ok() {
-            stopped?;
-        }
-    }
     if !peers.children.is_empty() {
         let stopped = peers.stop(Instant::now() + Duration::from_secs(30)).await;
         if outcome.is_ok() {

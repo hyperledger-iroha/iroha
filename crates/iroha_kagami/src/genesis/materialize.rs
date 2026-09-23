@@ -36,7 +36,7 @@ impl<T: Write> RunArgs<T> for Args {
             .map(|entry| entry.peer.clone())
             .collect::<Vec<_>>();
         if !topology.is_empty() {
-            super::ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+            super::ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
                 &manifest, &topology,
             )?;
         }

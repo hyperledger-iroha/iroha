@@ -25,8 +25,8 @@ use iroha_data_model::{
         staking::{BondPublicLaneStake, RegisterPublicLaneValidator},
     },
     nexus::{
-        PublicLaneBondPreconditionV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
-        PublicLaneMonetaryScopeV1, PublicLaneRegistrationPreconditionV1,
+        PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+        PublicLaneMonetaryRegistrationV1, PublicLaneMonetaryScopeV1,
     },
     parameter::{Parameter, system::SumeragiNposParameters},
     permission::Permission,
@@ -209,6 +209,14 @@ fn seed_public_lane_state(
     delegator: &AccountId,
     escrow: &AccountId,
 ) {
+    let nexus = state.nexus_snapshot();
+    let definition: AssetDefinitionId = nexus
+        .staking
+        .stake_asset_id
+        .parse()
+        .expect("configured fixture asset");
+    let escrow = AccountId::parse_encoded(&nexus.staking.stake_escrow_account_id)
+        .expect("configured fixture custody");
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     let manage_consensus_keys = Permission::from(CanManageConsensusKeys);
@@ -254,13 +262,13 @@ fn seed_public_lane_state(
         initial_stake: Quantity::from(1000_u32),
         metadata,
         monetary_plan: PublicLaneMonetaryPlanV1 {
-            network_scope,
+            network_scope: network_scope.clone(),
             valid_until_height: 1,
             source_asset: AssetId::new(stake_definition.clone(), validator.clone()),
             destination_asset: escrow_asset.clone(),
             amount: Quantity::from(1000_u32),
             precondition: PublicLaneMonetaryPreconditionV1::Registration(
-                PublicLaneRegistrationPreconditionV1 {
+                PublicLaneMonetaryRegistrationV1 {
                     activation_height: 1,
                 },
             ),
@@ -280,7 +288,7 @@ fn seed_public_lane_state(
             source_asset: AssetId::new(stake_definition, delegator.clone()),
             destination_asset: escrow_asset,
             amount: Quantity::from(250_u32),
-            precondition: PublicLaneMonetaryPreconditionV1::Bond(PublicLaneBondPreconditionV1 {
+            precondition: PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
                 activation_height: 1,
                 peer_id,
             }),

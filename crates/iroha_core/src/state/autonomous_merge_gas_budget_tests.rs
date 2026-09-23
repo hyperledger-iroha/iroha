@@ -1,12 +1,6 @@
 // Focused autonomous source budgeting regressions. Sources carry real producer signatures,
 // QueuePlan bindings, availability certificates and lane CommitQCs from the existing fixture.
 fn autonomous_gas_budget_fixture() -> (State, Vec<KeyPair>, SignedBlock) {
-    let kura = Kura::blank_kura_for_testing();
-    let mut state = State::new_for_testing(
-        World::default(),
-        Arc::clone(&kura),
-        LiveQueryStore::start_test(),
-    );
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.lane_catalog = LaneCatalog::new(
         core::num::NonZeroU32::new(2).expect("two lanes"),
@@ -25,9 +19,12 @@ fn autonomous_gas_budget_fixture() -> (State, Vec<KeyPair>, SignedBlock) {
     nexus.fees.per_byte_fee = Quantity::zero();
     nexus.fees.per_instruction_fee = Quantity::zero();
     nexus.fees.per_gas_unit_fee = Quantity::zero();
-    state
-        .set_nexus(nexus)
-        .expect("install two-lane gas fixture");
+    let state = State::new_with_nexus_for_testing(
+        World::default(),
+        nexus,
+        LiveQueryStore::start_test(),
+    );
+    let kura = Arc::clone(&state.kura);
     let (validator_ids, keys) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &keys);
     install_lane_manifest_registry(

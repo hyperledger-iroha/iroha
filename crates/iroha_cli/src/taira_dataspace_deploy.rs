@@ -41,8 +41,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-#[path = "taira_epoch_maintenance.rs"]
-pub(crate) mod epoch_maintenance;
 #[path = "taira_dataspace_deploy_finality.rs"]
 mod finality;
 #[path = "taira_dataspace_deploy_manifest.rs"]

@@ -22693,11 +22693,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getDaProofPolicySnapshot(completion: @escaping (Result<ToriiDaProofPolicyBundle, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getDaProofPolicySnapshot() }
-    }
-
-    @discardableResult
     public func listDaCommitments(_ requestBody: ToriiDaCommitmentListRequest = ToriiDaCommitmentListRequest(),
                                   completion: @escaping (Result<ToriiDaCommitmentListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.listDaCommitments(requestBody) }
@@ -25054,13 +25049,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func getDaProofPolicies() async throws -> ToriiDaProofPolicyBundle {
         let request = try makeRequest(path: "/v1/da/proof-policies",
-                                      headers: ["Accept": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiDaProofPolicyBundle.self, from: data)
-    }
-
-    public func getDaProofPolicySnapshot() async throws -> ToriiDaProofPolicyBundle {
-        let request = try makeRequest(path: "/v1/da/proof-policies/snapshot",
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiDaProofPolicyBundle.self, from: data)

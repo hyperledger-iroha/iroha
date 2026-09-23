@@ -114,10 +114,11 @@ into the output directory.
   signer at descriptor 198; the daemon binds it to the authenticated genesis and
   matching epoch rosters. Private signing material never belongs in source or
   public artifacts.
-- Mint-finality authority is a genesis-bound key generation and certified epoch
-  authorization chain. `iroha taira epoch-maintenance` observes authenticated
-  retention across actual consensus boundaries; it does not create a roster
-  parameter or submit a maintenance transaction.
+- Scheduling epochs retain the exact authenticated mint-finality authority
+  generation and installed beacon binding through incumbent-certified epoch
+  authorizations. Per-epoch key schedules are not a provisioning interface.
+  TODO: expose prepared generation activation only after consensus owns the
+  frozen target, all-seat custody readiness, and authenticated beacon transition.
 - Writes genesis, signed genesis, its exact hash, per-peer configs,
   `client.toml`, `start.sh`, `stop.sh`, and a generated guide
 - Generic generated stop scripts validate pidfiles against the expected peer

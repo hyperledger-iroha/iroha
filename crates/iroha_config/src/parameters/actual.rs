@@ -2889,7 +2889,10 @@ impl fmt::Debug for NexusStorage {
                 &self.budget_enforce_interval_blocks,
             )
             .field("max_wsv_memory_bytes", &self.max_wsv_memory_bytes)
-            .field("retained_carrier_shell_bytes", &self.retained_carrier_shell_bytes)
+            .field(
+                "retained_carrier_shell_bytes",
+                &self.retained_carrier_shell_bytes,
+            )
             .field("disk_budget_weights", &self.disk_budget_weights)
             .finish()
     }
@@ -5951,6 +5954,8 @@ pub struct Kura {
     /// Finite requested-allocation limit for State's shared block-hash generations.
     /// Includes unpublished successors and generations retained by readers.
     pub block_hash_history_bytes: Bytes,
+    /// Finite physical and requested-allocation limits for the retained membership segment.
+    pub membership_storage: KuraMembershipStoragePolicy,
     /// Number of recent lane-history entries retained alongside the block store.
     pub lane_history_retention: NonZeroUsize,
     /// Authenticated replica-advert retention, expiry, and refresh policy.
@@ -5965,6 +5970,14 @@ pub struct Kura {
     pub fsync_mode: FsyncMode,
     /// Interval used when batching fsync calls.
     pub fsync_interval: Duration,
+}
+/// Finite limits for one retained membership generation; exhaustion requires real reclamation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KuraMembershipStoragePolicy {
+    /// Maximum segment extent, including incomplete or abandoned reservations.
+    pub max_bytes: NonZeroU64,
+    /// Requested allocation bytes for original segment controls and append workspaces.
+    pub memory_bytes: NonZeroUsize,
 }
 /// Immutable storage limits for opaque FASTPQ artifacts; these limits confer no proof authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

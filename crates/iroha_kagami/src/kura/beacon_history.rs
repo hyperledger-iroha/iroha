@@ -1257,12 +1257,14 @@ mod tests {
             projection.records[0]["public_record"]["decoded"].as_bool(),
             Some(false)
         );
-        let unrelated = SetParameter::new(Parameter::Custom(
-            iroha_data_model::parameter::CustomParameter::new(
-                "unrelated_parameter".parse().expect("parameter ID"),
-                iroha_primitives::json::Json::new("unrelated-private-sentinel"),
+        let unrelated = iroha_data_model::isi::SetParameter::new(
+            iroha_data_model::parameter::Parameter::Custom(
+                iroha_data_model::parameter::CustomParameter::new(
+                    "unrelated_parameter".parse().expect("parameter ID"),
+                    iroha_primitives::json::Json::new("unrelated-private-sentinel"),
+                ),
             ),
-        ));
+        );
         projection
             .instruction(&unrelated.into(), &Value::Null, "instructions/1".to_owned())
             .expect("ignore unrelated parameter");

@@ -2734,13 +2734,7 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
         height: context.height,
         view: 0,
     };
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
-        None,
-        3_000,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(1).expect("height"), None, None, 3_000, 0);
     let block_signature = SignatureOf::try_from_hash(keys[0].private_key(), header.hash())
         .expect("canonical body signature");
     let block = SignedBlock::presigned(BlockSignature::new(0, block_signature), header, Vec::new());

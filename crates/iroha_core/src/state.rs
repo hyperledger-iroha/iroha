@@ -431,11 +431,11 @@ pub(crate) use lane_decision_batch::NativeExecutionCustody;
 )]
 mod native_lane_batch_replay;
 mod native_lane_fastpq;
+#[cfg(test)]
+pub(crate) use native_lane_batch_replay::NativeLaneBatchReplayV1;
 pub(crate) use native_lane_batch_replay::{
     NativeLaneBatchSourcePreparationV1, PreparedNativeLaneBatchSourceV1,
 };
-#[cfg(test)]
-pub(crate) use native_lane_batch_replay::NativeLaneBatchReplayV1;
 #[cfg_attr(
     not(test),
     expect(
@@ -14847,11 +14847,24 @@ impl<'state> StateBlock<'state> {
         );
         Some(out)
     }
-    fn prepare_replay_checkpoint_preview(&mut self) {
+    fn prepare_replay_checkpoint_preview(&mut self) -> Result<(), LaneLifecycleError> {
         let fields = self.fields.as_mut().expect("original executing State");
         let Some(pending) = fields.pending_autoscale_lifecycle.as_ref() else {
-            return;
+            return Ok(());
         };
+        // A later instruction may introduce custody after lifecycle staging.
+        // Validate the unpruned original overlay: pruning first would erase
+        // the reward records needed to reconcile its still-retained reserves.
+        let predecessor = fields
+            .canonical_runtime
+            .get_before_block()
+            .nexus_projection(&fields.runtime_policy.nexus)?;
+        ensure_pending_autoscale_lifecycle_staking_is_safe(
+            &fields.world,
+            &predecessor,
+            pending,
+            fields._curr_block.height().get(),
+        )?;
         State::prune_lane_lifecycle_world_block_state_for_lanes(
             &mut fields.world,
             &pending.catalog_update.lanes_to_reset,
@@ -14864,6 +14877,7 @@ impl<'state> StateBlock<'state> {
             &mut fields.verified_lane_relay_records,
             &pending.catalog_update.lanes_to_reset,
         );
+        Ok(())
     }
     #[inline]
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -30493,6 +30507,7 @@ impl State {
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
@@ -58788,6 +58803,7 @@ mod tiered_snapshot_diff_tests {
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
@@ -63397,7 +63413,12 @@ fn replay_blocks_from_kura_range_inner(
             })?;
         replay_timing.apply_without_execution += apply_without_execution_start.elapsed();
         let staged_merge_entry = state_block.staged_merge_entry().cloned();
-        state_block.prepare_replay_checkpoint_preview();
+        state_block
+            .prepare_replay_checkpoint_preview()
+            .map_err(|error| eyre!(error))
+            .wrap_err_with(|| {
+                format!("unsafe lifecycle checkpoint preview for replayed block #{height}")
+            })?;
         let checkpoint_hash_start = Instant::now();
         let actual = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
         replay_timing.checkpoint_hash += checkpoint_hash_start.elapsed();
@@ -67286,8 +67307,8 @@ mod npos_effect_application_tests {
 mod tests;
 #[cfg(test)]
 pub(crate) use tests::{
-    finalized_lane_relay_registration_fixture, prove_finalized_lane_relay_for_registration,
-    ton_breaker_hydration_fixture_for_testing,
+    finalized_lane_relay_registration_fixture, native_dispatch_state_fixture,
+    prove_finalized_lane_relay_for_registration, ton_breaker_hydration_fixture_for_testing,
 };
 
 mod telemetry_status;

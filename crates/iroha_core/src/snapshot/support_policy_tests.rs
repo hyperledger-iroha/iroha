@@ -1056,7 +1056,9 @@ fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsiz
         merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
-        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        block_hash_history_bytes:
+            iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: REPLICA_ADVERT_POLICY,
     }

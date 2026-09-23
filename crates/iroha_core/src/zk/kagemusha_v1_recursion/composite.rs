@@ -3242,7 +3242,7 @@ where
         ),
         (
             mint_public(mint_public_instance::GENESIS_LO)?,
-            "genesis roster",
+            "genesis authorization",
             2,
         ),
         (

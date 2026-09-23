@@ -288,14 +288,12 @@ fn complete_carrier_late_world_panic_releases_every_participant_before_any_callb
         };
         let mut owner = CarrierPreparation::new(decision.journals.components, &state, fences);
         if unwind_owner {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                owner.try_prepare()
-            }));
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || owner.try_prepare()));
             assert!(result.is_err());
         } else {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                owner.try_prepare()
-            }));
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.try_prepare()));
             assert!(result.is_err());
             assert_eq!(callback.fences.wakes.load(Ordering::SeqCst), 0);
             assert!(state.state_commit_lock.try_lock().is_none());

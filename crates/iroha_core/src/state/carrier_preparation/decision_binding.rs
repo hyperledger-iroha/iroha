@@ -345,7 +345,8 @@ mod service_publication;
 
 #[path = "physical_publication.rs"]
 mod physical_publication;
-pub(crate) use physical_publication::{PublishedCarrier, PublishedNativeApply};
+pub(crate) use physical_publication::PublishedCarrier;
+pub(crate) use physical_publication::PublishedNativeApply;
 
 #[path = "archive_publication.rs"]
 pub(crate) mod archive_publication;

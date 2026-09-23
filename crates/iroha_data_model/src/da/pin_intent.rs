@@ -1,3 +1,4 @@
+//! Canonical DA pin intents, their authorization and membership proofs.
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     da::{
@@ -15,6 +16,9 @@ use norito::{
     codec::{Decode, Encode},
     to_bytes,
 };
+/// Maximum UTF-8 byte length admitted for a DA pin-intent alias.
+pub const MAX_DA_PIN_INTENT_ALIAS_BYTES: usize = 256;
+
 /// Pin intent emitted by the DA ingest pipeline to seed the `SoraFS` registry.
 #[derive(
     Clone,

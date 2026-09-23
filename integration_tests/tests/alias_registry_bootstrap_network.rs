@@ -78,10 +78,10 @@ use iroha_genesis::GenesisBlock;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_test_network::{
-    NetworkBuilder, NetworkPeer, ReleasePrebuiltBinary, genesis_factory_with_post_topology,
-    init_instruction_registry, resolve_release_prebuilt_binary,
+    NetworkBuilder, NetworkPeer, ReleasePrebuiltBinary, init_instruction_registry,
+    resolve_release_prebuilt_binary, unexecuted_genesis_factory_with_post_topology,
 };
-use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
+use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
 use sha2::{Digest as _, Sha256};
 use tokio::time::{Instant, sleep, timeout};
 use toml::{Table, Value as TomlValue};
@@ -119,6 +119,18 @@ fn validator_keypair(index: usize) -> KeyPair {
     .expect("derive deterministic retained-BPNG-lane validator signer")
 }
 
+fn staking_custody_account() -> AccountId {
+    AccountId::new(
+        KeyPair::try_from_seed(
+            format!("{NETWORK_SEED}-staking-custody").into_bytes(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive fixture custody identity")
+        .public_key()
+        .clone(),
+    )
+}
+
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
@@ -138,6 +150,7 @@ fn custom_genesis_post_topology(topology: &[PeerId]) -> Vec<Vec<InstructionBox>>
         .checked_add(&stake)
         .expect("two validator self-stakes must be representable");
     let mut bootstrap = vec![
+        Register::account(Account::new(staking_custody_account())).into(),
         Register::domain(Domain::new(
             DomainId::try_new("nexus", "universal").expect("nexus domain"),
         ))
@@ -172,7 +185,7 @@ fn custom_genesis_post_topology(topology: &[PeerId]) -> Vec<Vec<InstructionBox>>
                 Metadata::default(),
                 iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
                     AssetId::new(stake_asset_id.clone(), validator.clone()),
-                    AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
+                    AssetId::new(stake_asset_id.clone(), staking_custody_account()),
                     stake.clone(),
                 ),
             )
@@ -180,6 +193,25 @@ fn custom_genesis_post_topology(topology: &[PeerId]) -> Vec<Vec<InstructionBox>>
         );
         default_lane_validators
             .push(ActivatePublicLaneValidator::new(LaneId::SINGLE, validator).into());
+    }
+    for instruction in &default_lane_validators {
+        if let Some(registration) = instruction
+            .as_any()
+            .downcast_ref::<RegisterPublicLaneValidator>()
+        {
+            assert_eq!(
+                registration.monetary_plan,
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(
+                        stake_asset_definition_id(),
+                        registration.stake_account.clone()
+                    ),
+                    AssetId::new(stake_asset_definition_id(), staking_custody_account()),
+                    registration.initial_stake.clone(),
+                ),
+                "fixture registration must agree with its explicitly authored staking config"
+            );
+        }
     }
     vec![bootstrap, default_lane_validators]
 }
@@ -2085,7 +2117,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .with_npos_consensus()
         .without_npos_genesis_bootstrap()
         .with_genesis_block(|topology, topology_entries| {
-            genesis_factory_with_post_topology(
+            unexecuted_genesis_factory_with_post_topology(
                 Vec::new(),
                 custom_genesis_post_topology(topology.as_ref()),
                 topology,
@@ -2106,7 +2138,11 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
                 )
                 .write(
                     ["nexus", "staking", "stake_escrow_account_id"],
-                    ALICE_ID.to_string(),
+                    staking_custody_account().to_string(),
+                )
+                .write(
+                    ["nexus", "staking", "slash_sink_account_id"],
+                    staking_custody_account().to_string(),
                 )
                 .write(["snapshot", "mode"], "disabled")
                 .write(["kura", "init_mode"], "strict")
@@ -2462,11 +2498,14 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
                     ),
                     valid_until_height,
                     source_asset: AssetId::new(stake_asset_definition_id(), validator.clone()),
-                    destination_asset: AssetId::new(stake_asset_definition_id(), ALICE_ID.clone()),
+                    destination_asset: AssetId::new(
+                        stake_asset_definition_id(),
+                        staking_custody_account(),
+                    ),
                     amount: stake.clone(),
                     precondition:
                         iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
-                            iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 {
+                            iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
                                 activation_height: planned_activation_height,
                             },
                         ),
@@ -2836,7 +2875,10 @@ fn genesis_staking_plans_bind_funded_validators_to_configured_custody() {
         );
         assert_eq!(
             registration.monetary_plan.destination_asset,
-            iroha_data_model::asset::AssetId::new(stake_asset_definition_id(), ALICE_ID.clone())
+            iroha_data_model::asset::AssetId::new(
+                stake_asset_definition_id(),
+                staking_custody_account()
+            )
         );
         assert_eq!(
             registration.monetary_plan.amount,
@@ -2845,7 +2887,7 @@ fn genesis_staking_plans_bind_funded_validators_to_configured_custody() {
         assert_eq!(
             registration.monetary_plan.precondition,
             iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
-                iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 {
+                iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
                     activation_height: 1
                 }
             )

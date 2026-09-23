@@ -188,7 +188,7 @@ async fn fresh_global_candidate_requires_prepared_epoch_transition() -> Result<(
                     destination_asset: AssetId::new(stake_definition.clone(), stake_escrow.clone()),
                     amount: 2_000_u64.into(),
                     precondition: iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
-                        iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 { activation_height },
+                        iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 { activation_height },
                     ),
                 },
             };

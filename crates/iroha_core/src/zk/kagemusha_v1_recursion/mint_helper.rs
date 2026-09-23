@@ -84,9 +84,9 @@ const EP_PARITY_TAG: u8 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(u64)]
 pub enum KagemushaMintAuthorityStepV1 {
-    /// Pin the release-authenticated genesis roster without accepting a quorum assertion.
+    /// Pin the release-authenticated genesis authorization without accepting a quorum assertion.
     Bootstrap = 0,
-    /// Let the current roster's exact quorum authorize the next roster identifier.
+    /// Let the current quorum certify the next epoch authorization, including retention.
     Rotate = 1,
     /// Prove one reserve receipt under the recursively authenticated current roster.
     FinalizedMint = 2,
@@ -105,12 +105,33 @@ pub struct KagemushaMintCertificateWitnessV1 {
     pub membership: KagemushaTopUpMembershipWitnessV1,
     /// Exact current-epoch `2f + 1` paired Pasta seal bundle.
     pub seal_bundle: KagemushaMintFinalitySealBundleV1,
-    /// Complete dynamic epoch roster.  The recursive relation must authenticate its derived state
+    /// Complete immutable key generation. The recursive relation must authenticate its derived state
     /// digest; it is not trusted merely because it is present here.
     pub authority_generation: KagemushaMintFinalityAuthorityGenerationV1,
 }
 
 impl KagemushaMintCertificateWitnessV1 {
+    /// Return the scheduling authorization authenticated by this recursive step.
+    pub(super) fn authorization_head_for_step(
+        &self,
+        step: KagemushaMintAuthorityStepV1,
+    ) -> Result<DigestV1, String> {
+        self.validate_for_step(step)?;
+        let message = &self.seal_bundle.message;
+        let authorization = match step {
+            KagemushaMintAuthorityStepV1::Rotate => {
+                message.next_epoch_authorization.as_ref().ok_or_else(|| {
+                    "mint-authority transition lacks its next authorization".to_owned()
+                })?
+            }
+            KagemushaMintAuthorityStepV1::Bootstrap
+            | KagemushaMintAuthorityStepV1::FinalizedMint => &message.epoch_authorization,
+        };
+        authorization
+            .authorization_id()
+            .map_err(|error| error.to_string())
+    }
+
     /// Validate all non-authoritative shape and semantic bindings before circuit construction.
     ///
     /// Signature equations and roster authority are intentionally not reduced to this native
@@ -184,8 +205,12 @@ impl KagemushaMintCertificateWitnessV1 {
             self.seal_bundle
                 .validate()
                 .map_err(|error| format!("invalid mint-finality seal bundle: {error}"))?;
-        } else if !self.seal_bundle.seals.is_empty() {
-            return Err("mint-authority bootstrap must not carry validator seals".into());
+        } else if !self.seal_bundle.seals.is_empty()
+            || self.seal_bundle.message.epoch_authorization.decision
+                != iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis
+            || self.seal_bundle.message.next_epoch_authorization.is_some()
+        {
+            return Err("mint-authority bootstrap requires genesis without seals or a successor".into());
         }
         if step == KagemushaMintAuthorityStepV1::FinalizedMint {
             self.membership
@@ -199,7 +224,9 @@ impl KagemushaMintCertificateWitnessV1 {
         } else if step == KagemushaMintAuthorityStepV1::Rotate
             && self.seal_bundle.message.next_epoch_authorization.is_none()
         {
-            return Err("mint-authority rotation lacks the quorum-signed next roster".into());
+            return Err(
+                "mint-authority transition lacks the quorum-signed next authorization".into(),
+            );
         }
         let statement_digest = self
             .statement
@@ -230,7 +257,7 @@ impl KagemushaMintCertificateWitnessV1 {
 
 /// Cells produced by the reusable mint-certificate relation.
 ///
-/// `roster_state_digest` and `epoch` must be consumed by the stable recursive authority carrier.
+/// `authorization_state_digest` and `epoch` must be consumed by the stable recursive authority carrier.
 /// Exposing only `mint_instances` without that recursive check is not monetary authority.
 pub(super) struct KagemushaAssignedMintCertificateV1<F: KagemushaPoseidonFieldV1> {
     pub(super) step: AssignedValue<F>,
@@ -620,6 +647,7 @@ where
     gate.assert_is_const(ctx, &enabled_zero_count, &C::Base::ZERO);
     let index_lt_count = range.is_less_than(ctx, leaf_index, top_up_count, 32);
     let one = ctx.load_constant(C::Base::ONE);
+    let zero = ctx.load_constant(C::Base::ZERO);
     constrain_equal_if(ctx, gate, index_lt_count, one, finalized_mint);
 
     let validator_count_value = witness.authority_generation.validators.len();

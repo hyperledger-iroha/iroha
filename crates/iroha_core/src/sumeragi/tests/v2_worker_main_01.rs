@@ -4686,7 +4686,7 @@ fn replayed_proposal_signature_restores_exact_durable_payload() {
 }
 
 #[test]
-fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
+fn zero_top_up_epoch_boundary_commit_signs_next_epoch_authorization() {
     let (service, keys) = fixture();
     let mut context = service.context.clone();
     context.epoch_end_height = context.height;
@@ -4780,7 +4780,7 @@ fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
         &vote,
         &share,
     )
-    .expect("old epoch authorizes the next Pasta roster");
+    .expect("incumbent authority signs the full successor authorization");
 }
 include!("v2_worker_nonzero_view_restart.rs");
 #[test]

@@ -1392,13 +1392,6 @@ mod tests {
             Hash::new(seed.as_bytes()),
         ))
     }
-    fn mint_finality_authority(
-        network_id: NetworkId,
-        generation: u64,
-        roster: &[wire::ValidatorPower],
-    ) -> crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
-        wire::test_kagemusha_mint_finality_authority(network_id, generation, roster)
-    }
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{algorithm:?} bridge fixture key generation should succeed: {err}")
@@ -1530,10 +1523,17 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let network_id = test_network_id(network_seed);
-        let current_mint_finality_roster = mint_finality_authority(network_id, 0, &roster);
-        let mint_finality_authorization = wire::test_kagemusha_genesis_authorization(
-            &current_mint_finality_roster, if boundary { 1 } else { 10 },
-        );
+        use crate::isi::kagemusha_v1::{
+            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
+            KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
+        };
+        let current_authority =
+            wire::test_kagemusha_mint_finality_authority(network_id, 0, &roster);
+        let current_authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(
+            &current_authority,
+            if boundary { 1 } else { 10 },
+        )
+        .expect("valid bridge fixture genesis authorization");
         let mut header = crate::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,
@@ -1573,16 +1573,37 @@ mod tests {
                         .expect("derive next-epoch validator proof of possession")
                 })
                 .collect();
-            let next_mint_finality_roster = mint_finality_authority(network_id, 1, &next_roster);
-            let next_mint_finality_authorization = wire::test_kagemusha_successor_authorization(
-                &mint_finality_authorization, &next_mint_finality_roster, 11,
-            );
+            // This boundary changes the validator/key roster, so it activates
+            // generation one instead of relabeling an incumbent generation.
+            let next_authority =
+                wire::test_kagemusha_mint_finality_authority(network_id, 1, &next_roster);
+            let next_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+                epoch: 1,
+                first_height: 2,
+                last_height: 11,
+                authority_generation: next_authority.generation,
+                authority_id: next_authority.authority_id().unwrap(),
+                beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                    session_id: [7; 32],
+                    transcript_hash: [8; 32],
+                }),
+                previous_authorization_id: current_authorization.authorization_id().unwrap(),
+                transition_id: [9; 32],
+                decision: KagemushaMintFinalityEpochDecisionV1::Activate,
+                ..current_authorization
+            };
+            next_authorization
+                .validate_against_authority(&next_authority)
+                .unwrap();
+            next_authorization
+                .validate_successor(&current_authorization)
+                .unwrap();
             (
                 Some(
                     crate::block::consensus_v2::finality::FinalizedNextEpochSnapshot {
                         epoch: 1,
-                        kagemusha_mint_finality_authorization: next_mint_finality_authorization,
-                        kagemusha_mint_finality_authority: next_mint_finality_roster,
+                        kagemusha_mint_finality_authorization: next_authorization,
+                        kagemusha_mint_finality_authority: next_authority,
                         epoch_end_height: 11,
                         mode: ConsensusMode::Npos,
                         quorum: DualQuorum::from_roster(&next_roster)
@@ -1602,8 +1623,8 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
-            kagemusha_mint_finality_authorization: mint_finality_authorization,
-            kagemusha_mint_finality_authority: current_mint_finality_roster,
+            kagemusha_mint_finality_authorization: current_authorization,
+            kagemusha_mint_finality_authority: current_authority,
             epoch_end_height: if boundary { 1 } else { 10 },
             next_epoch_snapshot,
             mode: ConsensusMode::Npos,
@@ -1702,7 +1723,7 @@ mod tests {
         let (
             epoch,
             mint_finality_authorization,
-            mint_finality_roster,
+            mint_finality_authority,
             epoch_end_height,
             mode,
             roster,
@@ -1764,7 +1785,7 @@ mod tests {
             height,
             epoch,
             kagemusha_mint_finality_authorization: mint_finality_authorization,
-            kagemusha_mint_finality_authority: mint_finality_roster,
+            kagemusha_mint_finality_authority: mint_finality_authority,
             epoch_end_height,
             next_epoch_snapshot: None,
             mode,

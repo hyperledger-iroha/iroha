@@ -2473,7 +2473,7 @@ fn da_route_authority_genesis_binds_every_peer_once() {
         assert_eq!(
             registration.monetary_plan.precondition,
             iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
-                iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 {
+                iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
                     activation_height: 1
                 }
             )

@@ -184,7 +184,15 @@ pub(super) fn test_trust() -> finality::TrustV1 {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{NetworkId, account::address::ChainDiscriminantGuard};
+    use iroha_data_model::{
+        NetworkId,
+        account::address::ChainDiscriminantGuard,
+        asset::{AssetDefinitionId, AssetId},
+        nexus::{
+            PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
+            PublicLaneMonetarySlashV1,
+        },
+    };
     use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::Quantity;
 
@@ -197,19 +205,27 @@ mod tests {
         )
     }
 
-    fn instructions(peers: &[finality::PeerV1]) -> Vec<InstructionBox> {
-        let stake_asset = iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
-            &iroha_config::parameters::defaults::nexus::staking::stake_asset_id(),
-        )
-        .expect("configured stake asset");
-        let escrow =
-            iroha_data_model::account::address::AccountAddress::from_i105_for_discriminant(
-                &iroha_config::parameters::defaults::nexus::staking::stake_escrow_account_id(),
-                Some(iroha_config::parameters::defaults::common::chain_discriminant()),
+    fn staking_asset(owner: AccountId) -> AssetId {
+        AssetId::of(
+            AssetDefinitionId::parse_address_literal(
+                &iroha_config::parameters::defaults::nexus::staking::stake_asset_id(),
             )
-            .expect("configured genesis staking escrow")
-            .to_account_id()
-            .unwrap();
+            .expect("configured stake asset"),
+            owner,
+        )
+    }
+
+    fn escrow_account() -> AccountId {
+        iroha_data_model::account::address::AccountAddress::from_i105_for_discriminant(
+            &iroha_config::parameters::defaults::nexus::staking::stake_escrow_account_id(),
+            Some(iroha_config::parameters::defaults::common::chain_discriminant()),
+        )
+        .expect("configured staking escrow")
+        .to_account_id()
+        .expect("escrow account")
+    }
+
+    fn instructions(peers: &[finality::PeerV1]) -> Vec<InstructionBox> {
         peers
             .iter()
             .zip(130..134)
@@ -223,16 +239,10 @@ mod tests {
                         account.clone(),
                         Quantity::from(1_u64),
                         Metadata::default(),
-                        iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
-                            iroha_data_model::asset::AssetId::of(
-                                stake_asset.clone(),
-                                account.clone(),
-                            ),
-                            iroha_data_model::asset::AssetId::of(
-                                stake_asset.clone(),
-                                escrow.clone(),
-                            ),
-                            Quantity::one(),
+                        PublicLaneMonetaryPlanV1::genesis_registration(
+                            staking_asset(account.clone()),
+                            staking_asset(escrow_account()),
+                            Quantity::from(1_u64),
                         ),
                     )
                     .into(),
@@ -240,6 +250,36 @@ mod tests {
                 ]
             })
             .collect()
+    }
+
+    #[test]
+    fn structural_binding_fixture_carries_exact_genesis_transfers() {
+        let _profile = ChainDiscriminantGuard::enter(369);
+        let trust = finality::test_trust();
+        let instructions = instructions(&trust.peers);
+        let registrations = instructions
+            .iter()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(registrations.len(), VALIDATORS);
+        assert!(validator_bindings(&instructions, &trust.peers).is_ok());
+        for registration in registrations {
+            assert_eq!(registration.stake_account, registration.validator);
+            assert_ne!(registration.stake_account, escrow_account());
+            assert_eq!(
+                registration.monetary_plan,
+                PublicLaneMonetaryPlanV1::genesis_registration(
+                    staking_asset(registration.stake_account.clone()),
+                    staking_asset(escrow_account()),
+                    registration.initial_stake.clone(),
+                )
+            );
+            assert!(registration.monetary_plan.has_canonical_shape());
+        }
     }
 
     #[test]
@@ -410,11 +450,30 @@ mod tests {
                 amount: Quantity::from(1_u64),
                 reason_code: "double_sign".into(),
                 metadata: Metadata::default(),
-                monetary_plan: register.monetary_plan.clone(),
+                monetary_plan: PublicLaneMonetaryPlanV1 {
+                    network_scope: PublicLaneMonetaryScopeV1::Genesis,
+                    valid_until_height: 1,
+                    source_asset: staking_asset(account(140)),
+                    destination_asset: staking_asset(account(141)),
+                    amount: Quantity::from(1_u64),
+                    precondition: PublicLaneMonetaryPreconditionV1::Slash(
+                        PublicLaneMonetarySlashV1 {
+                            activation_height: 1,
+                            slashable_exposure: Quantity::from(1_u64),
+                        },
+                    ),
+                },
             }
             .into(),
         ];
         for change in changes {
+            if let Some(slash) = change.as_any().downcast_ref::<SlashPublicLaneValidator>() {
+                assert!(slash.monetary_plan.has_canonical_shape());
+                assert_ne!(
+                    slash.monetary_plan.source_asset,
+                    slash.monetary_plan.destination_asset
+                );
+            }
             let mut changed = valid.clone();
             changed.push(change);
             assert!(validator_bindings(&changed, &trust.peers).is_err());

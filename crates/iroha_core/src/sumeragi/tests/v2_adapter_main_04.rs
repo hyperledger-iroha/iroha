@@ -1676,6 +1676,12 @@ mod kagemusha_finality_boundary {
             .map(|(label, change)| {
                 let mut changed = message.clone();
                 change(&mut changed);
+                if let Some(next) = &mut changed.next_epoch_authorization {
+                    next.previous_authorization_id = changed
+                        .epoch_authorization
+                        .authorization_id()
+                        .expect("substituted predecessor remains canonical");
+                }
                 changed
                     .validate()
                     .expect("negative keeps a structurally valid statement");

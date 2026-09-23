@@ -5,6 +5,7 @@
 
 pub mod account_bootstrap;
 pub mod configuration;
+pub mod data_availability;
 pub mod funding;
 pub mod musubi;
 pub mod status;

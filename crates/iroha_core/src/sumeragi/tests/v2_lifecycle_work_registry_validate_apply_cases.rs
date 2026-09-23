@@ -3285,7 +3285,8 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
             .into_lineage_for_test(LifecycleDecisionApplyLineageV1::Recovered, live_tag);
     let live_deferred = crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1::Deferred {
         refusal: crate::sumeragi::v2_body_store::LocalValidationRefusal::RecoveryRequired(
-            "lineage fixture retains the original Apply for local recovery".to_owned(),
+            "lineage substitution must be rejected before a local recovery refusal is consumed"
+                .to_owned(),
         ),
         task: live_deferred_task,
     };
@@ -3334,7 +3335,8 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     let recovered_deferred =
         crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1::Deferred {
             refusal: crate::sumeragi::v2_body_store::LocalValidationRefusal::RecoveryRequired(
-                "lineage fixture retains the original Apply for local recovery".to_owned(),
+                "lineage substitution must be rejected before a local recovery refusal is consumed"
+                    .to_owned(),
             ),
             task: recovered_deferred_task,
         };

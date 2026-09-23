@@ -591,24 +591,8 @@ mod tests {
                 ).expect("derive canonical paired-Pasta fixture keys")
             }).collect(),
         };
-        let mint_finality_authorization = {
-            let authority = &mint_finality_roster;
-            let authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
-                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
-                network_id: authority.network_id,
-                epoch: 0,
-                first_height: 1,
-                last_height: 10,
-                authority_generation: authority.generation,
-                authority_id: authority.authority_id().expect("fixture authority identity"),
-                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
-                previous_authorization_id: [0; 32],
-                transition_id: [0; 32],
-                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
-            };
-            authorization.validate_against_authority(authority).expect("complete genesis fixture authorization");
-            authorization
-        };
+        let mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&mint_finality_roster, 10)
+            .expect("derive exact fixture mint-finality epoch identifier");
         let context = HeightContext {
             network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,

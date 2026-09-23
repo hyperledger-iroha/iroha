@@ -11,7 +11,10 @@ use super::{
     message::CanonicalExecutedBlockNeedV1,
     network_topology::Topology,
     v2::VerifiedHeightContext,
-    v2_body_store::{BodyValidationBusy, BodyValidationError, LocalValidationRefusal, V2BodyStore, ValidatedBodyReceipt},
+    v2_body_store::{
+        BodyValidationBusy, BodyValidationError, LocalValidationRefusal, V2BodyStore,
+        ValidatedBodyReceipt,
+    },
     v2_core::{
         CanonicalIdentityProjection, CheckedProductionTransition, EventTag,
         IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD,
@@ -3536,7 +3539,9 @@ mod native_preparation;
 
 /// Production retained Native validation and its finite shell policy.
 pub(crate) mod native_validation;
-pub(crate) use native_validation::{NativeApplyService, PublishedNativeCarrier};
+pub(crate) use native_validation::{
+    CarrierShellAdmission, NativeApplyService, OwnedNativeCarrierValidator, PublishedNativeCarrier,
+};
 
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
@@ -4409,16 +4414,15 @@ impl V2ApplyService {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let runtime = Arc::clone(&self.state.kagemusha_v1_runtime_verifier);
-        let current_head = artifact
+        let current_authorization = &artifact
             .height_context
-            .kagemusha_mint_finality_authorization
-            .authorization_id()
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required(
-                    "Kagemusha V1 current epoch authorization",
-                    &error,
-                )
-            })?;
+            .kagemusha_mint_finality_authorization;
+        let current_head = current_authorization.authorization_id().map_err(|error| {
+            V2ApplyError::committed_recovery_required(
+                "Kagemusha V1 current epoch authorization",
+                &error,
+            )
+        })?;
         let load_checkpoint = |release_id| {
             if let Some(checkpoint) = self
                 .kura
@@ -4435,10 +4439,8 @@ impl V2ApplyService {
             let checkpoint = runtime
                 .prove_mint_authority_bootstrap(
                     release_id,
-                    &artifact
-                        .height_context
-                        .kagemusha_mint_finality_authorization,
                     &artifact.height_context.kagemusha_mint_finality_authority,
+                    current_authorization,
                 )
                 .map_err(|error| {
                     V2ApplyError::committed_recovery_required(
@@ -4449,7 +4451,7 @@ impl V2ApplyService {
             if checkpoint.authority_head != current_head {
                 return Err(V2ApplyError::committed_recovery_required(
                     "Kagemusha V1 mint-authority continuity",
-                    &"no recursively authenticated checkpoint exists for the current roster",
+                    &"no recursively authenticated checkpoint exists for the current epoch authorization",
                 ));
             }
             self.kura
@@ -4496,7 +4498,7 @@ impl V2ApplyService {
                 })?;
         }
 
-        let next_head = artifact
+        let next_authorization = artifact
             .commit_qc
             .kagemusha_finality_seal_payload()
             .map_err(|error| {
@@ -4513,22 +4515,25 @@ impl V2ApplyService {
                     &error,
                 )
             })?
-            .and_then(|bundle| bundle.message.next_epoch_authorization)
-            .map(|authorization| authorization.authorization_id())
-            .transpose()
-            .map_err(|error| {
+            .and_then(|bundle| bundle.message.next_epoch_authorization);
+        let expected_next_authorization = artifact
+            .height_context
+            .next_epoch_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.kagemusha_mint_finality_authorization);
+        if next_authorization != expected_next_authorization {
+            return Err(V2ApplyError::committed_recovery_required(
+                "Kagemusha V1 mint-authority transition",
+                &"boundary seal does not carry the exact authenticated next epoch authorization",
+            ));
+        }
+        if let Some(next_authorization) = next_authorization {
+            let next_head = next_authorization.authorization_id().map_err(|error| {
                 V2ApplyError::committed_recovery_required(
-                    "Kagemusha V1 next epoch authorization",
+                    "Kagemusha V1 successor epoch authorization",
                     &error,
                 )
             })?;
-        if artifact.height_context.next_epoch_snapshot.is_some() && next_head.is_none() {
-            return Err(V2ApplyError::committed_recovery_required(
-                "Kagemusha V1 mint-authority rotation",
-                &"epoch boundary finality does not carry a next-roster certificate",
-            ));
-        }
-        if let Some(next_head) = next_head {
             let membership = finalities
                 .first()
                 .and_then(|finality| finality.top_up_membership_witness.clone());
@@ -4563,7 +4568,7 @@ impl V2ApplyService {
                 if successor.authority_head != next_head {
                     return Err(V2ApplyError::committed_recovery_required(
                         "Kagemusha V1 recursive mint-authority rotation",
-                        &"rotation proof exposed a different successor roster",
+                        &"transition proof exposed a different successor epoch authorization",
                     ));
                 }
                 self.kura
@@ -5886,7 +5891,11 @@ impl V2ApplyService {
         artifact: &wire::finality::V2FinalityArtifact,
     ) -> Result<(), V2ApplyError> {
         let block_hash = subject.block_hash;
-        let checkpoint = crate::snapshot::canonical_state_snapshot_hash(self.state.as_ref())?;
+        // Publication released its commit guard before this repair. Join the
+        // actual immutable capture to the decided boundary before writing any
+        // metadata; a later live State must not supply an earlier height's hash.
+        let checkpoint = crate::snapshot::CapturedStateSnapshot::capture(self.state.as_ref())?
+            .canonical_hash_for_block(context.network_id, context.height, block_hash)?;
         self.kura
             .store_wsv_checkpoint(context.height, block_hash, checkpoint)?;
         let manifest =

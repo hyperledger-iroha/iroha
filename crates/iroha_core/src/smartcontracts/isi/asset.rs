@@ -3392,7 +3392,9 @@ pub mod isi {
         capability: crate::smartcontracts::isi::staking::VerifiedStakingRewardPayouts,
     ) -> Result<(), Error> {
         let (recipient, binding, payouts) = capability.into_parts();
-        if payouts.is_empty() { return Ok(()); }
+        if payouts.is_empty() {
+            return Ok(());
+        }
         let authorization = NumericAssetMovementAuthorization::retained(
             &recipient,
             RetainedNumericAssetMovementPurpose::StakingRewardClaim(binding),
@@ -3405,7 +3407,8 @@ pub mod isi {
                 || amount.is_zero()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "retained reward payout does not match the recipient and exact custody scope".into(),
+                    "retained reward payout does not match the recipient and exact custody scope"
+                        .into(),
                 ));
             }
             let plan = PreparedNumericTransferPlan::prepare(
@@ -3427,7 +3430,8 @@ pub mod isi {
             }
             plans.push(plan);
         }
-        let batch = PreparedNumericAssetMovementBatch::aggregate(state_transaction, plans, authorization)?;
+        let batch =
+            PreparedNumericAssetMovementBatch::aggregate(state_transaction, plans, authorization)?;
         // Composite control stores must be encodable before the first balance write.
         let mut stores = BTreeMap::<AccountId, AssetTransferControlStoreV1>::new();
         for (account, _, _, after) in &batch.control_updates {
@@ -3438,12 +3442,16 @@ pub mod isi {
                         load_asset_transfer_control_store(state_transaction, account)?,
                     ),
                 };
-                if record.is_empty() { store.remove(&record.asset_definition_id); }
-                else { store.upsert(record.clone()); }
+                if record.is_empty() {
+                    store.remove(&record.asset_definition_id);
+                } else {
+                    store.upsert(record.clone());
+                }
                 if !store.controls.is_empty() {
                     store.validate_canonical().map_err(|error| {
                         InstructionExecutionError::InvariantViolation(
-                            format!("reward payout control update is not canonical: {error}").into(),
+                            format!("reward payout control update is not canonical: {error}")
+                                .into(),
                         )
                     })?;
                     Json::try_new(store.clone()).map_err(|error| {
@@ -3457,7 +3465,10 @@ pub mod isi {
         let applied = batch.apply(state_transaction)?;
         for movement in applied {
             emit_numeric_asset_transfer_events(
-                state_transaction, movement.source_id, movement.destination_id, movement.amount,
+                state_transaction,
+                movement.source_id,
+                movement.destination_id,
+                movement.amount,
             );
         }
         Ok(())

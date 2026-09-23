@@ -41,8 +41,6 @@ def beacon_input_fixture(draft):
     }
 
 
-def supervisor_intent_fixture():
-    return {"host_slug":"taira-validator-1","authorization":"until_stopped", "first_epoch":2, "timeout_ms":5000,"prior_state":"absent","prior_plan":None}
 
 
 def complete_previous_fixture(value=None):
@@ -88,9 +86,7 @@ def complete_previous_fixture(value=None):
     for a in edge["artifacts"]:a.setdefault("remote_path","/srv/taira/edge/releases/"+revision["commit"]+"/bin/iroha")
     for key in ("faucet_policy","fee_intent","canary_onboarding_request","cleanup","timeouts"):value.setdefault(key,{"synthetic_selected_intent":True})
     value.setdefault("beacon_bootstrap",{"old_signed_session":"must not enter topology"})
-    value.setdefault("epoch_supervisor",{"schema":"iroha.taira.public-reset.epoch-supervisor-plan.v1","host_slug":"taira-validator-1","prior_state":"absent","prior":None,"policy_sha256":"7"*64})
-    value.setdefault("maintenance_admin_identity",{"old_identity":"must not enter topology"})
-    for key in ("maintenance_admin_config_sha256","runtime_client_config_sha256","onboarding_token_sha256","validator_client_configs_sha256","artifact_closure_sha256"):value.setdefault(key,"9"*64)
+    for key in ("runtime_client_config_sha256","onboarding_token_sha256","validator_client_configs_sha256","artifact_closure_sha256"):value.setdefault(key,"9"*64)
     return value
 
 
@@ -1087,8 +1083,6 @@ class RetryTests(unittest.TestCase):
         flags = (
             ("--public-inputs", 1),
             ("--runtime-client-config", 1),
-            ("--maintenance-admin-config", 1),
-            ("--epoch-supervisor-plan", 1),
             ("--validator-client-config", 4),
             ("--validator-operator-key", 1),
             ("--onboarding-token", 1),
@@ -1111,8 +1105,8 @@ class RetryTests(unittest.TestCase):
         del missing_key[offset:offset + 2]
         with self.assertRaises(retry.RetryError):
             retry.local_arguments(json.dumps(missing_key).encode(), "full_inrou")
-        for flag,count in (("--maintenance-admin-config",1),("--epoch-supervisor-plan",1)):
-            incomplete=list(args);at=incomplete.index(flag);del incomplete[at:at+count+1]
+        for flag,count in (("--maintenance-admin-config",1),("--epoch-seed-sources",4),("--epoch-supervisor-plan",1)):
+            incomplete=[*args, flag, *["/retired/input" for _ in range(count)]]
             with self.subTest(flag=flag),self.assertRaises(retry.RetryError):retry.local_arguments(json.dumps(incomplete).encode(),"full_inrou")
         bad=list(args);bad.insert(0,"--http-operator-key-sha256");bad.insert(1,"a"*64)
         with self.assertRaises(retry.RetryError):retry.local_arguments(json.dumps(bad).encode(),"full_inrou")
@@ -1140,7 +1134,7 @@ class EpochRetirementLockTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(dir=SCRIPT.parent)
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name).resolve()
-        self.state = self.base / "epoch-state"
+        self.state = self.base / "deployment-state"
         self.state.mkdir(mode=0o700)
         self.lock = self.state / ".deployment.lock"
         self.lock.write_bytes(b"")
@@ -1152,7 +1146,7 @@ class EpochRetirementLockTests(unittest.TestCase):
         self.opened, self.closed = [], []
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
-        self.stack.enter_context(mock.patch.object(retry, "RETIRE_EPOCH_STATE", self.state))
+        self.stack.enter_context(mock.patch.object(retry, "RETIRE_DEPLOYMENT_STATE", self.state))
 
         def metadata(info):
             values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
@@ -1188,7 +1182,7 @@ class EpochRetirementLockTests(unittest.TestCase):
 
     def test_existing_lock_is_held_exclusively_without_creation_or_private_reads(self):
         with mock.patch.object(retry.os, "read", side_effect=AssertionError("unexpected body read")):
-            fd = retry._retire_epoch_lock()
+            fd = retry._retire_deployment_lock()
         try:
             flags = self.opened[-1][2]
             self.assertEqual(flags & os.O_ACCMODE, os.O_RDONLY)
@@ -1211,7 +1205,7 @@ class EpochRetirementLockTests(unittest.TestCase):
         self.real_flock(held, retry.fcntl.LOCK_EX | retry.fcntl.LOCK_NB)
         try:
             with self.assertRaises(BlockingIOError):
-                retry._retire_epoch_lock()
+                retry._retire_deployment_lock()
             self.assert_all_closed()
         finally:
             self.real_close(held)
@@ -1219,14 +1213,14 @@ class EpochRetirementLockTests(unittest.TestCase):
     def test_missing_or_symlinked_lock_is_never_recreated_or_followed(self):
         self.lock.unlink()
         with self.assertRaises(FileNotFoundError):
-            retry._retire_epoch_lock()
+            retry._retire_deployment_lock()
         self.assertFalse(self.lock.exists())
         target = self.state / "unadmitted-lock"
         target.write_bytes(b"")
         target.chmod(0o600)
         self.lock.symlink_to(target)
         with self.assertRaises(OSError):
-            retry._retire_epoch_lock()
+            retry._retire_deployment_lock()
         self.assertTrue(self.lock.is_symlink())
         self.assert_all_closed()
 
@@ -1241,13 +1235,13 @@ class EpochRetirementLockTests(unittest.TestCase):
             with self.subTest(path=path.name, field=field):
                 self.override(path, **{field: wrong})
                 with self.assertRaises(retry._retire_RebindError):
-                    retry._retire_epoch_lock()
+                    retry._retire_deployment_lock()
                 self.assert_all_closed()
                 self.overrides.clear()
         owner = self.state / ".reset-owner.json"
         owner.write_bytes(b"PUBLIC-OWNER-MARKER-FIXTURE")
         with self.assertRaisesRegex(retry._retire_RebindError, "active reset owner"):
-            retry._retire_epoch_lock()
+            retry._retire_deployment_lock()
         self.assert_all_closed()
 
     def test_named_lock_replacement_during_acquisition_rejects(self):
@@ -1258,7 +1252,7 @@ class EpochRetirementLockTests(unittest.TestCase):
             self.lock.chmod(0o600)
         with mock.patch.object(retry.fcntl, "flock", side_effect=changed):
             with self.assertRaisesRegex(retry._retire_RebindError, "changed during acquisition"):
-                retry._retire_epoch_lock()
+                retry._retire_deployment_lock()
         self.assert_all_closed()
 
     def prepare_retirement_locks(self):
@@ -1287,7 +1281,7 @@ class EpochRetirementLockTests(unittest.TestCase):
         self.assertEqual(self.closed, [fd for _, fd, _ in reversed(self.opened)])
         self.assert_all_closed()
 
-    def test_epoch_failure_releases_preceding_retirement_locks(self):
+    def test_deployment_failure_releases_preceding_retirement_locks(self):
         paths = self.prepare_retirement_locks()
         (self.state / ".reset-owner.json").write_bytes(b"PUBLIC-OWNER-MARKER-FIXTURE")
         with self.assertRaisesRegex(retry._retire_RebindError, "active reset owner"):
@@ -1299,27 +1293,6 @@ class EpochRetirementLockTests(unittest.TestCase):
         self.assert_all_closed()
 
 
-class SupervisorIntentTests(unittest.TestCase):
-    def test_explicit_ongoing_intent_is_closed_and_bounded(self):
-        value=supervisor_intent_fixture()
-        retry.validate_supervisor_intent(value)
-        invalid=[]
-        for key in value:
-            changed=copy.deepcopy(value);del changed[key];invalid.append(changed)
-        for field,bad in (("authorization","finite_lease"),("batch_epochs",1),("batch_epochs",257),("first_epoch",0),("first_epoch",True),("operation_timeout_ms",0),("provision_timeout_ms",False),("timeout_ms",0),("host_slug","foreign"),("prior_state","unknown"),("prior_plan",{"path":"/old/plan.json","sha256":"a"*64})):
-            changed=copy.deepcopy(value);changed[field]=bad;invalid.append(changed)
-        invalid.append(dict(value,private_key="forbidden"))
-        for changed in invalid:
-            with self.subTest(changed=changed),self.assertRaises(retry.RetryError):retry.validate_supervisor_intent(changed)
-
-    def test_running_or_stopped_requires_exact_public_prior_plan(self):
-        for state in ("running","stopped"):
-            value=dict(supervisor_intent_fixture(),prior_state=state)
-            with self.assertRaises(retry.RetryError):retry.validate_supervisor_intent(value)
-            value["prior_plan"]={"path":"/retained/previous-plan.json","sha256":"a"*64}
-            retry.validate_supervisor_intent(value)
-            for prior in ({"path":"relative","sha256":"a"*64},{"path":"/retained/prior","sha256":"bad"},{"path":"/retained/prior","sha256":"a"*64,"extra":True}):
-                with self.subTest(prior=prior),self.assertRaises(retry.RetryError):retry.validate_supervisor_intent(dict(value,prior_plan=prior))
 
 
 class BeaconArgumentTests(unittest.TestCase):
@@ -1375,7 +1348,8 @@ class BeaconArgumentTests(unittest.TestCase):
         assembly, derived, value = self.prepare()
         self.assertEqual(self.static, original)
         self.assertEqual(derived[1], str(assembly / "public-inputs"))
-        self.assertFalse((assembly / "native-assembly-args.json").exists(),"cannot publish final assembly args before native supervisor preparation")
+        self.assertEqual(json.loads((assembly / "native-assembly-args.json").read_bytes()), derived)
+        self.assertEqual(json.loads((assembly / "native-local-args.json").read_bytes()), original)
         paths = derived[derived.index("--beacon-validator-unit") + 1:]
         self.assertEqual(len(paths), 4)
         for index, (path, row) in enumerate(zip(paths, value["final_units"]), 1):
@@ -1417,15 +1391,15 @@ class BeaconArgumentTests(unittest.TestCase):
 
     def test_apply_arguments_exclude_all_assembly_only_inputs_in_both_scopes(self):
         inputs = {flag: ["/path/" + flag[2:]] for flag in (
-            "--runtime-client-config", "--maintenance-admin-config", "--epoch-supervisor-plan", "--validator-client-config", "--validator-operator-key",
+            "--runtime-client-config", "--validator-client-config", "--validator-operator-key",
             "--onboarding-token", "--inrou-stage-dir", "--public-inputs", "--validator-unit",
             "--edge-unit", "--beacon-inputs", "--beacon-validator-unit")}
         for scope in ("core_testnet", "full_inrou"):
             result = retry.apply_arguments(inputs, scope)
-            self.assertIn("--maintenance-admin-config",result)
+            self.assertNotIn("--maintenance-admin-config",result)
             self.assertNotIn("--epoch-seed-sources",result)
             self.assertNotIn("--epoch-supervisor-plan",result)
-            self.assertNotIn("--epoch-seed-source", result)
+            self.assertNotIn("--epoch-seed-source",result)
             self.assertEqual("--inrou-stage-dir" in result, scope == "full_inrou")
             for flag in ("--public-inputs", "--validator-unit", "--edge-unit", "--beacon-inputs", "--beacon-validator-unit"):
                 self.assertNotIn(flag, result)
@@ -1509,13 +1483,13 @@ class CoreScopeTests(unittest.TestCase):
     def test_scope_steps_match_native_preseed_and_seal_boundaries(self):
         core = retry.qualification_steps("core_testnet")
         full = retry.qualification_steps("full_inrou")
-        self.assertEqual((len(core), len(full)), (15, 16))
+        self.assertEqual((len(core), len(full)), (14, 15))
         self.assertEqual(core, tuple(step for step in full if step != "preseed"))
-        self.assertEqual((core[2], full[2]), ("epoch_supervisor_pause", "epoch_supervisor_pause"))
-        self.assertEqual((core[6], full[6], full[7]), ("start", "preseed", "start"))
-        self.assertEqual((core[13], full[14]), ("seal", "seal"))
-        self.assertEqual(core[7:10], ("canary", "convergence", "restart_proof"))
-        self.assertEqual(full[8:11], core[7:10])
+        self.assertEqual((core[2], full[2]), ("stop", "stop"))
+        self.assertEqual((core[5], full[5], full[6]), ("start", "preseed", "start"))
+        self.assertEqual((core[12], full[13]), ("seal", "seal"))
+        self.assertEqual(core[6:9], ("canary", "convergence", "restart_proof"))
+        self.assertEqual(full[7:10], core[6:9])
         for scope in (None, "inrou", "basic", "full", ""):
             with self.subTest(scope=scope), self.assertRaises(retry.RetryError):
                 retry.qualification_steps(scope)
@@ -1538,7 +1512,6 @@ class CoreScopeTests(unittest.TestCase):
     def test_local_arguments_require_public_bundle_and_forbid_core_stage(self):
         args = []
         for flag, count in (("--public-inputs", 1), ("--runtime-client-config", 1),
-                            ("--maintenance-admin-config", 1), ("--epoch-supervisor-plan", 1),
                             ("--validator-client-config", 4), ("--validator-operator-key", 1),
                             ("--onboarding-token", 1), ("--validator-unit", 4),
                             ("--edge-unit", 1), ("--known-hosts", 1)):
@@ -1599,10 +1572,10 @@ class CoreScopeTests(unittest.TestCase):
     def test_core_rollback_cursor_cannot_cross_seal_or_change_scope(self):
         inventory = {"qualification_scope": "core_testnet", "revision": {"commit": "a" * 40}, "deployment_id": "core"}
         value = {"qualification_scope": "core_testnet", "deployment_id": "core", "status": "rolled_back", "phase": "rolled_back",
-                 "next_step": 12, "touched_validators": list(retry.RETIRE_SLUGS[:-1]), "edge_touched": True,
+                 "next_step": 11, "touched_validators": list(retry.RETIRE_SLUGS[:-1]), "edge_touched": True,
                  "edge_rollback_complete": True, "rollback_next_validator": 4, "rollback_failures": [], "recovery_intent": None}
         retry._retire_validate_terminal(inventory, value, expected_commit="a" * 40, expected_deployment="core")
-        for field, wrong in (("next_step", 13), ("qualification_scope", "full_inrou"), ("qualification_scope", "inrou")):
+        for field, wrong in (("next_step", 12), ("qualification_scope", "full_inrou"), ("qualification_scope", "inrou")):
             with self.subTest(field=field, wrong=wrong), self.assertRaises(retry._retire_RebindError):
                 retry._retire_validate_terminal(inventory, dict(value, **{field: wrong}), expected_commit="a" * 40, expected_deployment="core")
 
@@ -1660,8 +1633,6 @@ class WorkflowTests(unittest.TestCase):
         for flag, count in (
             ("--public-inputs", 1),
             ("--runtime-client-config", 1),
-            ("--maintenance-admin-config", 1),
-            ("--epoch-supervisor-plan", 1),
             ("--validator-client-config", 4),
             ("--validator-operator-key", 1),
             ("--onboarding-token", 1),
@@ -1672,8 +1643,6 @@ class WorkflowTests(unittest.TestCase):
             paths = [
                 f"/public-fixture/{flag.removeprefix('--')}-{i}" for i in range(count)
             ]
-            if flag == "--epoch-supervisor-plan":
-                paths=[record("retained-supervisor.json",self.inventory["epoch_supervisor"])]
             if flag == "--validator-unit":
                 unit_root = self.root / "initial-units"
                 unit_root.mkdir(mode=0o700)
@@ -1690,7 +1659,6 @@ class WorkflowTests(unittest.TestCase):
         reference = {"path": "/public-fixture/helper.py", "sha256": "f" * 64}
         self.plan = {
             "qualification_scope": "core_testnet",
-            "epoch_supervisor":supervisor_intent_fixture(),
             "runtime_root": str(self.root),
             "retired_public_imports": [],
             "attempts_root": str(self.attempts),
@@ -1723,7 +1691,6 @@ class WorkflowTests(unittest.TestCase):
         }
         self.calls = []
         self.fail_phase = None
-        self.mutate_supervisor = None
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(
@@ -1797,10 +1764,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("--http-operator-key-sha256",argv)
         self.assertNotIn("--observation-trust",argv)
         if phase in ("assemble", "apply"):
-            self.assertIn("--maintenance-admin-config",argv)
-            self.assertEqual("--epoch-supervisor-plan" in argv,phase=="assemble")
-            self.assertNotIn("--epoch-seed-sources", argv)
-            self.assertNotIn("--epoch-seed-source", argv)
+            for retired in ("--maintenance-admin-config", "--epoch-supervisor-plan", "--epoch-seed-sources", "--epoch-seed-source"):
+                self.assertNotIn(retired, argv)
             self.assertEqual("--public-inputs" in argv, phase == "assemble")
             self.assertEqual("--inrou-stage-dir" in argv, self.inventory["qualification_scope"] == "full_inrou")
             self.assertIn("--validator-operator-key", argv)
@@ -1826,32 +1791,6 @@ class WorkflowTests(unittest.TestCase):
             draft = json.loads(Path(argv[argv.index("--intent") + 1]).read_bytes())
             self.assertNotIn("beacon_bootstrap", draft)
             retry.write_public(Path(argv[argv.index("--output") + 1]), beacon_input_fixture(draft))
-        if phase == "prepare-epoch-supervisor-plan":
-            self.assertIn("--intent",argv)
-            topology=json.loads(Path(argv[argv.index("--intent")+1]).read_bytes())
-            self.assertEqual(topology,expected_topology(self.inventory,directory.parent.parent.name,topology["authorization_nonce"]))
-            for flag in ("--maintenance-admin-config","--runtime-client-config","--validator-client-config","--validator-operator-key","--onboarding-token","--validator-unit","--edge-unit","--known-hosts"):
-                self.assertIn(flag,argv)
-            for flag in ("--beacon-inputs","--beacon-validator-unit","--epoch-supervisor-plan","--epoch-seed-sources"):
-                self.assertNotIn(flag,argv)
-            self.assertEqual(argv[argv.index("--authorization")+1],"until-stopped")
-            policy = self.plan["epoch_supervisor"]
-            for key in ("host_slug", "first_epoch", "timeout_ms", "prior_state"):
-                self.assertEqual(argv[argv.index("--" + key.replace("_", "-")) + 1], str(policy[key]))
-            self.assertEqual("--prior-plan" in argv, policy["prior_plan"] is not None)
-            if policy["prior_plan"] is not None:
-                self.assertEqual(argv[argv.index("--prior-plan") + 1], policy["prior_plan"]["path"])
-            self.assertEqual(argv[argv.index("--maintenance-admin-config") + 1],
-                             "/public-fixture/maintenance-admin-config-0")
-            self.assertNotIn("--epoch-seed-source", argv)
-            out=Path(argv[argv.index("--output-dir")+1]);out.mkdir(mode=0o700)
-            self.assertFalse((out.parent/"native-local-args.json").exists())
-            self.assertFalse((out.parent/"native-assembly-args.json").exists())
-            generated=copy.deepcopy(self.inventory["epoch_supervisor"]);generated["policy_sha256"]="6"*64
-            if self.mutate_supervisor:self.mutate_supervisor(generated)
-            retry.write_public(out/"supervisor-plan.json",generated)
-            retry.write_public(out/"supervisor-binding.json",{"synthetic_public_native_binding":True})
-            retry.write_public(out/"observation-trust.json",{"synthetic_public_native_trust":True})
         if phase == "assemble":
             self.assertIn("--beacon-inputs", argv)
             self.assertIn("--beacon-validator-unit", argv)
@@ -1859,13 +1798,9 @@ class WorkflowTests(unittest.TestCase):
                 Path(argv[argv.index("--intent") + 1]).read_bytes()
             )
             self.assertEqual(draft,expected_topology(self.inventory,directory.parent.parent.name,draft["authorization_nonce"]))
-            selected=Path(argv[argv.index("--epoch-supervisor-plan")+1])
-            self.assertEqual(selected,directory.parent.parent/"assembly/epoch-supervisor/supervisor-plan.json")
-            self.assertTrue(selected.is_file())
             assembled=copy.deepcopy(self.inventory)
             assembled["deployment_id"]=draft["deployment_id"]
             assembled["authorization_nonce"]=draft["authorization_nonce"]
-            assembled["epoch_supervisor"]=json.loads(selected.read_bytes())
             retry.write_public(Path(argv[argv.index("--output") + 1]),assembled)
         if phase == "preflight":
             inventory_path = Path(argv[argv.index("--inventory") + 1])
@@ -1971,12 +1906,12 @@ class WorkflowTests(unittest.TestCase):
         attempt = Path(result["private_attempt"])
         self.assertTrue(result["passed"])
         self.assertTrue((attempt / "apply-started.json").exists())
-        self.assertEqual(self.calls, ["prepare-public-inputs", "prepare-beacon-inputs", "prepare-epoch-supervisor-plan", "assemble", "authorize", "preflight", "apply"])
+        self.assertEqual(self.calls, ["prepare-public-inputs", "prepare-beacon-inputs", "assemble", "authorize", "preflight", "apply"])
         static=json.loads((attempt/"assembly/native-local-args.json").read_bytes())
         retained=json.loads((attempt/"assembly/native-retained-args.json").read_bytes())
-        self.assertNotEqual(static[static.index("--epoch-supervisor-plan")+1],retained[retained.index("--epoch-supervisor-plan")+1])
-        self.assertNotIn("--epoch-seed-sources", static)
-        self.assertNotIn("--epoch-seed-sources", retained)
+        self.assertEqual(static, retained)
+        derived = json.loads((attempt / "assembly/native-assembly-args.json").read_bytes())
+        self.assertEqual(derived[derived.index("--public-inputs") + 1], str(attempt / "assembly/public-inputs"))
         self.assertEqual(result["completed"], list(retry.PHASES))
         self.assertEqual(result["qualification_scope"], "core_testnet")
 
@@ -1996,105 +1931,26 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.calls.count("apply"), 1)
         self.assertEqual(len(list(attempt.glob("preapply-evidence-*"))), 1)
 
-    def test_supervisor_preparation_failure_stops_before_assembly_signing_or_apply(self):
-        self.fail_phase="prepare-epoch-supervisor-plan"
-        with self.assertRaises(retry.RetryError):retry.guest_locked(self.request,self.capacity,self.attempts)
-        self.assertEqual(self.calls,["prepare-public-inputs","prepare-beacon-inputs","prepare-epoch-supervisor-plan"])
-        pointer=json.loads((self.attempts/"latest.json").read_bytes());attempt=self.attempts/pointer["attempt_id"]
-        identity=(attempt/"operation.json").read_bytes()
-        self.assertFalse((attempt/"assembly/authorization.json").exists())
-        self.assertFalse((attempt/"apply-started.json").exists())
-        self.assertEqual(json.loads((attempt/"failure.json").read_bytes())["phase"],"prepare-epoch-supervisor-plan")
-        result=retry.guest_locked(self.request,self.capacity,self.attempts)
-        self.assertEqual(result["attempt_id"],pointer["attempt_id"])
-        self.assertEqual((attempt/"operation.json").read_bytes(),identity)
-        self.assertEqual(self.calls.count("apply"),1)
 
-    def test_substituted_native_supervisor_output_stops_before_assembly(self):
-        self.mutate_supervisor=lambda value:value.update(host_slug="taira-validator-4")
-        with self.assertRaises(retry.RetryError):retry.guest_locked(self.request,self.capacity,self.attempts)
-        self.assertEqual(self.calls,["prepare-public-inputs","prepare-beacon-inputs","prepare-epoch-supervisor-plan"])
-        pointer=json.loads((self.attempts/"latest.json").read_bytes());attempt=self.attempts/pointer["attempt_id"]
-        self.assertFalse((attempt/"assembly/native-local-args.json").exists())
-        self.assertFalse((attempt/"assembly/native-assembly-args.json").exists())
-        self.assertFalse((attempt/"apply-started.json").exists())
 
-    def test_retired_seed_arguments_reject_before_retirement(self):
-        args=json.loads(Path(self.plan["local_args_path"]).read_bytes())
-        args.extend(["--epoch-seed-sources", "/unselected/seed"])
-        Path(self.plan["local_args_path"]).write_text(json.dumps(args))
-        with self.assertRaisesRegex(retry.RetryError,"argument closure"):
-            retry.guest_locked(self.request,self.capacity,self.attempts)
-        retry._retire_retained_state.assert_not_called();retry._retire_apply.assert_not_called();self.assertEqual(self.calls,[])
 
-    def occupied_supervisor(self, state):
-        raw = b'{"schema":"public-original-predecessor","operation":"retained"}'
-        prior = self.root / "prior-plan.json"
-        prior.write_bytes(raw)
-        digest = retry.hashlib.sha256(raw).hexdigest()
-        self.plan["epoch_supervisor"].update(
-            prior_state=state, prior_plan={"path": str(prior), "sha256": digest})
-        self.inventory["epoch_supervisor"].update(
-            prior_state=state, prior={"plan_sha256": digest, "plan_bytes": list(raw)})
-        Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
-        args = json.loads(Path(self.plan["local_args_path"]).read_bytes())
-        retained = Path(args[args.index("--epoch-supervisor-plan") + 1])
-        retained.write_text(json.dumps(self.inventory["epoch_supervisor"]))
-        return prior, raw
 
-    def test_running_original_supervisor_uses_exact_prior_plan(self):
-        prior, raw = self.occupied_supervisor("running")
-        result = retry.guest_locked(self.request, self.capacity, self.attempts)
-        self.assertTrue(result["passed"])
-        self.assertEqual(prior.read_bytes(), raw)
-        self.assertEqual(self.calls.count("apply"), 1)
 
-    def test_stopped_original_supervisor_keeps_original_state_and_custody(self):
-        prior, raw = self.occupied_supervisor("stopped")
-        result = retry.guest_locked(self.request, self.capacity, self.attempts)
-        assembled = json.loads((Path(result["private_attempt"]) / "assembly/inventory.json").read_bytes())
-        self.assertEqual(assembled["epoch_supervisor"]["prior_state"], "stopped")
-        self.assertEqual(assembled["epoch_supervisor"]["prior"]["plan_bytes"], list(raw))
-        self.assertEqual(prior.read_bytes(), raw)
 
-    def test_original_supervisor_prior_bytes_drift_stops_before_retirement(self):
-        prior, _ = self.occupied_supervisor("running")
-        prior.write_bytes(b'{"changed":"must fail before retirement"}')
-        with self.assertRaisesRegex(retry.RetryError, "predecessor plan bytes differ"):
-            retry.guest_locked(self.request, self.capacity, self.attempts)
-        retry._retire_retained_state.assert_not_called()
-        retry._retire_apply.assert_not_called()
-        self.assertEqual(self.calls, [])
 
     def test_python_preparation_never_opens_private_runtime_inputs(self):
         retry.guest_locked(self.request, self.capacity, self.attempts)
         args = json.loads(Path(self.plan["local_args_path"]).read_bytes())
         _, grouped = retry.local_arguments(json.dumps(args).encode(), "core_testnet")
         private_paths = {path for flag in (
-            "--runtime-client-config", "--maintenance-admin-config",
+            "--runtime-client-config",
             "--validator-client-config", "--validator-operator-key", "--onboarding-token")
             for path in grouped[flag]}
         reads = {str(call.args[0]) for call in retry.public_record.call_args_list}
         self.assertTrue(reads)
         self.assertFalse(reads & private_paths)
 
-    def test_prior_plan_pin_mismatch_rejects_before_retirement(self):
-        original=b'{"public":"predecessor"}'
-        prior=self.root/"prior-plan.json";prior.write_bytes(original)
-        self.plan["epoch_supervisor"].update(prior_state="stopped",prior_plan={"path":str(prior),"sha256":"a"*64})
-        self.inventory["epoch_supervisor"].update(prior_state="stopped",prior={"plan_sha256":"b"*64,"plan_bytes":list(original)})
-        Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
-        args=json.loads(Path(self.plan["local_args_path"]).read_bytes());Path(args[args.index("--epoch-supervisor-plan")+1]).write_text(json.dumps(self.inventory["epoch_supervisor"]))
-        with self.assertRaisesRegex(retry.RetryError,"predecessor"):
-            retry.guest_locked(self.request,self.capacity,self.attempts)
-        retry._retire_retained_state.assert_not_called();retry._retire_apply.assert_not_called();self.assertEqual(self.calls,[])
 
-    def test_missing_supervisor_intent_stops_before_retirement_and_native_calls(self):
-        del self.plan["epoch_supervisor"]
-        with self.assertRaises(retry.RetryError):retry.guest_locked(self.request,self.capacity,self.attempts)
-        retry._retire_retained_state.assert_not_called()
-        retry._retire_apply.assert_not_called()
-        self.assertEqual(self.calls,[])
 
     def test_fresh_native_public_bundle_failure_cannot_reuse_retained_bundle(self):
         self.fail_phase = "prepare-public-inputs"

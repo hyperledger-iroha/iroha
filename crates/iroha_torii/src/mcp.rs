@@ -1082,7 +1082,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_node_query_projection_checkpoint_tool());
     tools.push(iroha_da_ingest_tool());
     tools.push(iroha_da_proof_policies_tool());
-    tools.push(iroha_da_proof_policy_snapshot_tool());
     tools.push(iroha_da_manifests_get_tool());
     tools.push(iroha_da_commitments_list_tool());
     tools.push(iroha_da_commitments_prove_tool());
@@ -1584,7 +1583,6 @@ fn is_audited_manual_read_tool_name(name: &str) -> bool {
             | "iroha.node.capabilities"
             | "iroha.node.query_projection_checkpoint"
             | "iroha.da.proof_policies"
-            | "iroha.da.proof_policy_snapshot"
             | "iroha.runtime.abi.active"
             | "iroha.runtime.abi.hash"
             | "iroha.runtime.metrics"
@@ -2710,12 +2708,6 @@ async fn handle_named_tool_call(
         }
         "iroha.da.proof_policies" => {
             match dispatch_iroha_da_proof_policies(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.da.proof_policy_snapshot" => {
-            match dispatch_iroha_da_proof_policy_snapshot(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -5442,7 +5434,6 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_node_capabilities => "/v1/node/capabilities";
         dispatch_iroha_node_query_projection_checkpoint => "/v1/node/query/projection/checkpoint";
         dispatch_iroha_da_proof_policies => "/v1/da/proof-policies";
-        dispatch_iroha_da_proof_policy_snapshot => "/v1/da/proof-policies/snapshot";
         dispatch_iroha_runtime_abi_active => "/v1/runtime/abi/active";
         dispatch_iroha_runtime_abi_hash => "/v1/runtime/abi/hash";
         dispatch_iroha_runtime_metrics => "/v1/runtime/metrics";
@@ -9572,11 +9563,6 @@ const INLINE_PURPOSE_BUILT_DISPATCH_ROUTES: &[(&str, &str, &str)] = &[
     ),
     ("iroha.da.ingest", "POST", "/v1/da/ingest"),
     ("iroha.da.proof_policies", "GET", "/v1/da/proof-policies"),
-    (
-        "iroha.da.proof_policy_snapshot",
-        "GET",
-        "/v1/da/proof-policies/snapshot",
-    ),
     ("iroha.da.commitments.list", "POST", "/v1/da/commitments"),
     (
         "iroha.da.commitments.prove",
@@ -10420,13 +10406,6 @@ fn iroha_da_proof_policies_tool() -> ToolSpec {
         "iroha.da.proof_policies",
         "Fetch DA proof policies (`/v1/da/proof-policies`).",
         "/v1/da/proof-policies",
-    )
-}
-fn iroha_da_proof_policy_snapshot_tool() -> ToolSpec {
-    simple_manual_get_tool(
-        "iroha.da.proof_policy_snapshot",
-        "Fetch DA proof policy snapshot (`/v1/da/proof-policies/snapshot`).",
-        "/v1/da/proof-policies/snapshot",
     )
 }
 fn iroha_da_commitments_list_tool() -> ToolSpec {
@@ -11552,7 +11531,6 @@ mod tests {
             iroha_node_capabilities_tool(),
             iroha_node_query_projection_checkpoint_tool(),
             iroha_da_proof_policies_tool(),
-            iroha_da_proof_policy_snapshot_tool(),
             iroha_runtime_abi_active_tool(),
             iroha_runtime_abi_hash_tool(),
             iroha_runtime_metrics_tool(),
@@ -11565,9 +11543,7 @@ mod tests {
         ];
         let audited_names = [
             "iroha.da.proof_policies",
-            "iroha.da.proof_policy_snapshot",
             "iroha.gov.citizens.count",
-            "iroha.gov.council.current",
             "iroha.gov.protected_namespaces.list",
             "iroha.gov.unlocks.stats",
             "iroha.health",

@@ -610,7 +610,7 @@ fn lifecycle_apply_dispatch_waits_for_exact_runner_decision_cleanup() {
 
 #[cfg(feature = "bls")]
 #[test]
-fn apply_barrier_handoff_retires_exact_live_proposal_without_legacy_lane_authority() {
+fn apply_barrier_handoff_retires_exact_live_proposal_without_lane_adapter_authority() {
     let mut fixture = ProductionTransportFixture::new();
     let started = Instant::now();
     fixture
@@ -5235,7 +5235,9 @@ fn store_completion_rejects_lost_or_conflicting_pipeline_owner() {
         let completion = services.execute_store(store_id);
         if published_marker {
             let durable = completion.receipt().clone();
-            executor.recovered_bodies.insert(key, (fixture.manifest.clone(), durable.clone()));
+            executor
+                .recovered_bodies
+                .insert(key, (fixture.manifest.clone(), durable.clone()));
             executor.durable_bodies.insert(key, durable.clone());
             let prepare = fixture.qc(wire::GlobalPhase::Prepare);
             let fetch = AdapterEffect::FetchBody {
@@ -5254,23 +5256,31 @@ fn store_completion_rejects_lost_or_conflicting_pipeline_owner() {
             let ownership = bound_test_effect_ownership(&fetch, tag(0), 9_051)
                 .rebind_as_inherited_adapter_effect(&store)
                 .expect("project published Store owner");
-            let pending = ownership.exact_pending_adapter_effect_binding(&store)
+            let pending = ownership
+                .exact_pending_adapter_effect_binding(&store)
                 .expect("bind published Store");
-            let marker = executor.prepare_published_lifecycle_store_retry_marker(&durable)
+            let marker = executor
+                .prepare_published_lifecycle_store_retry_marker(&durable)
                 .expect("prepare exact Store marker")
                 .bind_store_successor(&store, &pending)
                 .expect("bind exact Store successor");
             executor.commit_published_lifecycle_store_retry_marker(marker);
-            executor.body_pipeline_owners.insert(key, BodyPipelineOwner {
-                tag: tag(1),
-                manifest_hash: Some(HashOf::new(&fixture.manifest)),
-            });
+            executor.body_pipeline_owners.insert(
+                key,
+                BodyPipelineOwner {
+                    tag: tag(1),
+                    manifest_hash: Some(HashOf::new(&fixture.manifest)),
+                },
+            );
         } else {
             executor.body_pipeline_owners.remove(&key);
         }
         let completions = executor.runtime.completions.clone();
-        let error = executor.complete_body_store(completion, &mut services)
-            .expect_err("a marker cannot excuse conflicting ownership or replace a missing authority");
+        let error = executor
+            .complete_body_store(completion, &mut services)
+            .expect_err(
+                "a marker cannot excuse conflicting ownership or replace a missing authority",
+            );
         assert!(matches!(error, EffectExecutorError::Contract(reason)
             if reason.contains("immutable pipeline owner")));
         assert_eq!(executor.runtime.completions, completions);
@@ -5547,7 +5557,9 @@ fn store_completion_requires_exact_pipeline_or_published_successor_authority() {
         let completion = services.execute_store(store_id);
         let durable = completion.receipt().clone();
         if publish_marker {
-            executor.recovered_bodies.insert(key, (fixture.manifest.clone(), durable.clone()));
+            executor
+                .recovered_bodies
+                .insert(key, (fixture.manifest.clone(), durable.clone()));
             executor.durable_bodies.insert(key, durable.clone());
             let prepare = fixture.qc(wire::GlobalPhase::Prepare);
             let fetch = AdapterEffect::FetchBody {
@@ -5566,9 +5578,11 @@ fn store_completion_requires_exact_pipeline_or_published_successor_authority() {
             let ownership = bound_test_effect_ownership(&fetch, tag(0), 9_044)
                 .rebind_as_inherited_adapter_effect(&store)
                 .expect("bind the exact published Store successor");
-            let pending = ownership.exact_pending_adapter_effect_binding(&store)
+            let pending = ownership
+                .exact_pending_adapter_effect_binding(&store)
                 .expect("seal the exact Store successor");
-            let prepared = executor.prepare_published_lifecycle_store_retry_marker(&durable)
+            let prepared = executor
+                .prepare_published_lifecycle_store_retry_marker(&durable)
                 .expect("preflight the exact Store successor")
                 .bind_store_successor(&store, &pending)
                 .expect("bind the exact Store marker");
@@ -5578,19 +5592,27 @@ fn store_completion_requires_exact_pipeline_or_published_successor_authority() {
             assert!(executor.body_pipeline_owners.remove(&key).is_some());
         }
         if foreign_tag || foreign_manifest {
-            executor.body_pipeline_owners.insert(key, BodyPipelineOwner {
-                tag: if foreign_tag { tag(1) } else { tag(0) },
-                manifest_hash: Some(if foreign_manifest {
-                    HashOf::from_untyped_unchecked(Hash::new(b"foreign Store pipeline manifest"))
-                } else {
-                    HashOf::new(&fixture.manifest)
-                }),
-            });
+            executor.body_pipeline_owners.insert(
+                key,
+                BodyPipelineOwner {
+                    tag: if foreign_tag { tag(1) } else { tag(0) },
+                    manifest_hash: Some(if foreign_manifest {
+                        HashOf::from_untyped_unchecked(Hash::new(
+                            b"foreign Store pipeline manifest",
+                        ))
+                    } else {
+                        HashOf::new(&fixture.manifest)
+                    }),
+                },
+            );
         }
         let pending_task = executor.pending_stores[&store_id].task.clone();
         let pending_bytes = executor.pending_store_bytes;
         let pipeline_before = executor.body_pipeline_owners.get(&key).copied();
-        let marker_before = executor.published_lifecycle_store_retry_markers.get(&key).cloned();
+        let marker_before = executor
+            .published_lifecycle_store_retry_markers
+            .get(&key)
+            .cloned();
         assert!(matches!(
             executor.complete_body_store(completion, &mut services),
             Err(EffectExecutorError::Contract(reason))
@@ -5598,8 +5620,17 @@ fn store_completion_requires_exact_pipeline_or_published_successor_authority() {
         ));
         assert_eq!(executor.pending_stores[&store_id].task, pending_task);
         assert_eq!(executor.pending_store_bytes, pending_bytes);
-        assert_eq!(executor.body_pipeline_owners.get(&key).copied(), pipeline_before);
-        assert_eq!(executor.published_lifecycle_store_retry_markers.get(&key).cloned(), marker_before);
+        assert_eq!(
+            executor.body_pipeline_owners.get(&key).copied(),
+            pipeline_before
+        );
+        assert_eq!(
+            executor
+                .published_lifecycle_store_retry_markers
+                .get(&key)
+                .cloned(),
+            marker_before
+        );
         assert!(matches!(executor.remote_proposal_replay.get(&key),
             Some(RemoteProposalReplayStageV1::Store { work_id, .. }) if *work_id == store_id));
         assert!(executor.runtime.completions.is_empty());
@@ -6642,7 +6673,12 @@ fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
     (
         foreign_context.kagemusha_mint_finality_authorization,
         foreign_context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(foreign_context.network_id, foreign_context.epoch, foreign_context.epoch_end_height, &foreign_context.roster);
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
+        foreign_context.network_id,
+        foreign_context.epoch,
+        foreign_context.epoch_end_height,
+        &foreign_context.roster,
+    );
     let mut foreign_commit = fixture.qc(wire::GlobalPhase::Commit);
     foreign_commit.round.context_id = foreign_context.id();
     foreign_commit.proposal_round.context_id = foreign_context.id();

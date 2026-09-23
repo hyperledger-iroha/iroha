@@ -14,11 +14,7 @@ use iroha_data_model::{
             QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
         },
     },
-    isi::kagemusha_v1::{
-        BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1,
-    },
+    isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1},
 };
 use iroha_model_base::peer::PeerId;
 use std::{num::NonZeroU64, sync::Arc};
@@ -86,23 +82,11 @@ fn fixture() -> Fixture {
             })
             .collect(),
     };
-    let kagemusha_mint_finality_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id,
-        epoch: 0,
-        first_height: 1,
-        last_height: 10,
-        authority_generation: 0,
-        authority_id: kagemusha_mint_finality_authority
-            .authority_id()
-            .expect("derive bridge fixture Pasta authority ID"),
-        beacon: BeaconEpochBindingV1::Bootstrap,
-        previous_authorization_id: [0; 32],
-        transition_id: [0; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
-    };
-    kagemusha_mint_finality_authorization
-        .validate_against_authority(&kagemusha_mint_finality_authority)
+    let kagemusha_mint_finality_authorization =
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+            &kagemusha_mint_finality_authority,
+            10,
+        )
         .expect("bridge fixture genesis authorization");
     let block_key = KeyPair::try_random().expect("block fixture key");
     let header = BlockHeader::new(

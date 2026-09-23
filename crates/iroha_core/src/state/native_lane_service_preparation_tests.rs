@@ -470,6 +470,12 @@ state_test! { sync native_service_control_only_admission_retains_one_execution_a
             iroha_crypto::SignatureOf::from_hash(keys[leader as usize].private_key(), fixture.proposal.hash())),
     ])).unwrap();
     let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
+    {
+        let view = fixture.state.view();
+        assert_eq!(view.world.assets.get(&fixture.source_asset).unwrap().0, Quantity::from(100u32));
+        assert!(view.world.assets.get(&fixture.destination_asset).is_none(),
+            "the admitted transfers have not created a destination balance");
+    }
     let directory = tempfile::tempdir().unwrap();
     let mut store = V2BodyStore::open_with_policy_and_capacity(
         directory.path(), context.clone(), BlockSignaturePolicy::RotatingLeader,

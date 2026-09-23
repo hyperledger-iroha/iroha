@@ -1794,7 +1794,9 @@ fn blank_kura_for_testing_uses_isolated_canonical_primary_storage() {
     );
     assert_eq!(
         kura.configured_lane_catalog_baseline().unwrap(),
-        Some(LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default())),
+        Some(LaneLifecycleParameterV1::catalog_hash(
+            &LaneCatalog::default()
+        )),
     );
     assert!(
         kura.lane_storage_entry(LaneId::SINGLE).is_err(),

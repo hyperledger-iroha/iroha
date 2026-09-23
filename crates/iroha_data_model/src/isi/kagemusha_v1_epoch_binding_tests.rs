@@ -1,8 +1,8 @@
 //! Canonical codec and schema coverage for scheduling epoch bindings.
 
 use super::*;
-use norito::codec::DecodeAll as _;
 use iroha_crypto::HashOf;
+use norito::codec::DecodeAll as _;
 use std::any::TypeId;
 
 #[test]
@@ -16,7 +16,8 @@ fn beacon_epoch_binding_roundtrips_both_variants_and_registers_payload_schema() 
         (BeaconEpochBindingV1::Installed(installed), "installed"),
     ] {
         let bytes = binding.encode();
-        let decoded: BeaconEpochBindingV1 = BeaconEpochBindingV1::decode_all(&mut bytes.as_slice()).unwrap();
+        let decoded: BeaconEpochBindingV1 =
+            BeaconEpochBindingV1::decode_all(&mut bytes.as_slice()).unwrap();
         assert_eq!(decoded, binding);
         let json = norito::json::to_json(&binding).unwrap();
         let decoded: BeaconEpochBindingV1 = norito::json::from_json(&json).unwrap();

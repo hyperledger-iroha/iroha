@@ -16,7 +16,12 @@ use crate::{
         confidential, content, runtime_upgrade, smart_contract_code, soradns, sorafs, staking,
         transfer, transparent,
     },
-    nexus::{PublicLaneRewardRole, PublicLaneRewardShare},
+    nexus::{
+        PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+        PublicLaneMonetaryScopeV1, PublicLaneMonetarySlashV1, PublicLaneMonetaryUnbondV1,
+        PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding,
+        public_lane_unbonding_commitment,
+    },
     runtime::{RuntimeUpgradeId, RuntimeUpgradeManifest},
     smart_contract::{ContractAddress, ContractLifecycleOwnerV1},
 };
@@ -126,39 +131,28 @@ fn staking_values() -> Vec<Value> {
     let validator = account(0x51);
     let staker = account(0x52);
     let request_id = Hash::new(b"fixture-unbond-request");
-    let bond_plan = staking::monetary_plan_fixture(
-        &staker,
-        &validator,
-        13,
-        crate::nexus::PublicLaneMonetaryPreconditionV1::Bond(
-            crate::nexus::PublicLaneBondPreconditionV1 {
-                activation_height: 1,
-                peer_id: iroha_model_base::peer::PeerId::new(keypair(0x54).public_key().clone()),
-            },
-        ),
-    );
-    let unbond_plan = staking::monetary_plan_fixture(
-        &validator,
-        &staker,
-        7,
-        crate::nexus::PublicLaneMonetaryPreconditionV1::Unbond(
-            crate::nexus::PublicLaneUnbondPreconditionV1 {
-                activation_height: 1,
-                request_hash: Hash::new(b"fixture-pending-withdrawal-record"),
-            },
-        ),
-    );
-    let slash_plan = staking::monetary_plan_fixture(
-        &validator,
-        &account(0x53),
-        3,
-        crate::nexus::PublicLaneMonetaryPreconditionV1::Slash(
-            crate::nexus::PublicLaneSlashPreconditionV1 {
-                activation_height: 1,
-                slashable_exposure: Quantity::from(13_u64),
-            },
-        ),
-    );
+    let custody = AssetId::new(asset_definition(), account(0x53));
+    let staker_asset = AssetId::new(asset_definition(), staker.clone());
+    let network =
+        crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            Hash::new(b"generated staking fixture network"),
+        ));
+    let transfer =
+        |source_asset, destination_asset, amount, precondition| PublicLaneMonetaryPlanV1 {
+            network_scope: PublicLaneMonetaryScopeV1::Network(network),
+            valid_until_height: 30,
+            source_asset,
+            destination_asset,
+            amount,
+            precondition,
+        };
+    let pending = PublicLaneUnbonding {
+        request_id,
+        amount: 7_u64.into(),
+        release_at_ms: 1_234_567,
+        slashable_through_height: 18,
+        liability_release_height: 20,
+    };
     vec![
         capture(staking::BondPublicLaneStake {
             lane_id: LaneId::SINGLE,
@@ -166,7 +160,17 @@ fn staking_values() -> Vec<Value> {
             staker: staker.clone(),
             amount: Quantity::from(13_u64),
             metadata: Metadata::default(),
-            monetary_plan: bond_plan,
+            monetary_plan: transfer(
+                staker_asset.clone(),
+                custody.clone(),
+                13_u64.into(),
+                PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
+                    activation_height: 1,
+                    peer_id: iroha_model_base::peer::PeerId::new(
+                        validator.expect_single_signatory().clone(),
+                    ),
+                }),
+            ),
         }),
         capture(staking::SchedulePublicLaneUnbond {
             lane_id: LaneId::SINGLE,
@@ -181,7 +185,16 @@ fn staking_values() -> Vec<Value> {
             validator: validator.clone(),
             staker,
             request_id,
-            monetary_plan: unbond_plan,
+            monetary_plan: transfer(
+                custody.clone(),
+                staker_asset,
+                pending.amount.clone(),
+                PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
+                    activation_height: 1,
+                    request_hash: public_lane_unbonding_commitment(&pending)
+                        .expect("exact pending record"),
+                }),
+            ),
         }),
         capture(staking::SlashPublicLaneValidator {
             lane_id: LaneId::SINGLE,
@@ -191,7 +204,15 @@ fn staking_values() -> Vec<Value> {
             amount: Quantity::from(3_u64),
             reason_code: "double_sign".into(),
             metadata: Metadata::default(),
-            monetary_plan: slash_plan,
+            monetary_plan: transfer(
+                custody,
+                AssetId::new(asset_definition(), account(0x54)),
+                3_u64.into(),
+                PublicLaneMonetaryPreconditionV1::Slash(PublicLaneMonetarySlashV1 {
+                    activation_height: 1,
+                    slashable_exposure: 13_u64.into(),
+                }),
+            ),
         }),
         capture(staking::RecordPublicLaneRewards {
             lane_id: LaneId::SINGLE,
@@ -330,4 +351,13 @@ pub(super) fn values() -> Vec<Value> {
     records.extend(sorafs_values());
     assert_eq!(records.len(), 30);
     records
+}
+
+#[test]
+#[ignore = "explicit maintenance command prints canonical monetary staking record frames"]
+fn print_staking_monetary_record_fixture_rows() {
+    println!(
+        "STAKING_MONETARY_FIXTURE_ROWS={}",
+        norito::json::to_json(&staking_values()).expect("canonical staking record rows")
+    );
 }

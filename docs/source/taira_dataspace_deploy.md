@@ -10,19 +10,14 @@ The command is a first-release additive workflow. It does not overwrite an
 existing lane, move a dataspace, repair an existing namespace, submit empty
 transactions, or create blocks to advance time.
 
-## Validator epoch maintenance
+## Validator epoch authorization
 
-The network operator runs `iroha taira epoch-maintenance supervise` to observe
-real committed epoch retention under the authenticated four-validator profile.
-The workflow verifies the certified epoch authorization chain and records
-retention evidence in an owner-private journal. It is read-only: it does not
-submit roster parameters, rotate private keys, or create empty blocks. DPN
-receives no validator seed material and does not manage validator epochs.
-
-The mint-finality authority is committed by signed genesis and governed by
-certified epoch authorizations. A public API listener or successful dataspace
-phase does not establish that the next boundary has finalized; use the
-maintainer's authenticated status and the four-validator consensus evidence.
+Scheduling epochs advance through certified authorizations that retain the
+incumbent authority generation and its original signing keys. The consensus
+boundary binds the contiguous height interval and authenticated beacon session.
+Application deployment requires no key-renewal transaction or validator seed
+material. Prepared authority activation is not yet implemented; the current
+production boundary retains the incumbent authority.
 
 ## Commands
 

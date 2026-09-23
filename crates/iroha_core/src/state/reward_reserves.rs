@@ -193,7 +193,7 @@ mod tests {
         assert!(validate_public_lane_reward_reserves(&world.view()).is_err());
         world.public_lane_reward_claims.insert(
             (LaneId::SINGLE, BOB_ID.clone()),
-            iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+            PublicLaneRewardClaimStateV1 {
                 through_epoch: Some(0),
             },
         );
@@ -210,6 +210,39 @@ mod tests {
         assert!(
             validate_public_lane_reward_reserves(&world.view()).is_err(),
             "zero reserve rows are noncanonical"
+        );
+    }
+
+    #[test]
+    fn processed_reward_cursor_preserves_unpaid_source_accrual_backing() {
+        let (mut world, asset) = fixture();
+        world.public_lane_reward_claims.insert(
+            (LaneId::SINGLE, BOB_ID.clone()),
+            PublicLaneRewardClaimStateV1 {
+                through_epoch: Some(0),
+            },
+        );
+        world.public_lane_reward_accruals.insert(
+            (LaneId::SINGLE, BOB_ID.clone(), asset.clone()),
+            Quantity::from(25_u64),
+        );
+        validate_public_lane_reward_reserves(&world.view())
+            .expect("processing the record does not release unpaid custody");
+        world
+            .public_lane_reward_reserves
+            .insert(asset.clone(), Quantity::from(24_u64));
+        assert!(validate_public_lane_reward_reserves(&world.view()).is_err());
+        world
+            .public_lane_reward_reserves
+            .insert(asset.clone(), Quantity::from(26_u64));
+        world.public_lane_reward_accruals.insert(
+            (LaneId::SINGLE, BOB_ID.clone(), asset),
+            Quantity::from(26_u64),
+        );
+        let error = validate_public_lane_reward_reserves(&world.view()).unwrap_err();
+        assert!(
+            error.contains("exceeds its processed entitlement"),
+            "{error}"
         );
     }
 
@@ -273,7 +306,7 @@ mod tests {
         let (mut world, asset) = fixture();
         world.public_lane_reward_claims.insert(
             (LaneId::SINGLE, BOB_ID.clone()),
-            iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+            PublicLaneRewardClaimStateV1 {
                 through_epoch: Some(0),
             },
         );
@@ -314,11 +347,17 @@ mod tests {
             let mut block = state.world.block();
             block.public_lane_reward_claims.insert(
                 (LaneId::SINGLE, BOB_ID.clone()),
-                iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+                PublicLaneRewardClaimStateV1 {
                     through_epoch: Some(0),
                 },
             );
-            block.public_lane_reward_reserves.remove(asset.clone());
+            block.public_lane_reward_accruals.insert(
+                (LaneId::SINGLE, BOB_ID.clone(), asset.clone()),
+                Quantity::from(10_u64),
+            );
+            block
+                .public_lane_reward_reserves
+                .insert(asset.clone(), Quantity::from(10_u64));
             block.commit();
         }
         let value = json::to_value(&state).expect("serialize paired reward state");
@@ -327,6 +366,7 @@ mod tests {
         for field in [
             "public_lane_rewards",
             "public_lane_reward_claims",
+            "public_lane_reward_accruals",
             "public_lane_reward_reserves",
         ] {
             assert_eq!(
@@ -399,7 +439,7 @@ mod tests {
         );
         world.public_lane_reward_claims.insert(
             (LaneId::SINGLE, BOB_ID.clone()),
-            iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+            PublicLaneRewardClaimStateV1 {
                 through_epoch: Some(0),
             },
         );

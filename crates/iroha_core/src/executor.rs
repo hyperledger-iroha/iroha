@@ -10096,11 +10096,12 @@ mod tests {
                     source_asset: AssetId::of(stake_asset.clone(), authority.clone()),
                     destination_asset: AssetId::of(stake_asset, escrow),
                     amount: Quantity::one(),
-                    precondition: iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
-                        iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 {
-                            activation_height: 2,
-                        },
-                    ),
+                    precondition:
+                        iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                            iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
+                                activation_height: 2,
+                            },
+                        ),
                 },
             )
             .into(),
@@ -10133,10 +10134,9 @@ mod tests {
         let peer = iroha_model_base::peer::PeerId::new(checked_keypair().public_key().clone());
         let request_id = Hash::prehashed([0xA5; Hash::LENGTH]);
         use iroha_data_model::nexus::{
-            PublicLaneBondPreconditionV1, PublicLaneMonetaryPlanV1,
-            PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
-            PublicLaneRewardClaimPlanV1, PublicLaneUnbondPreconditionV1, PublicLaneUnbonding,
-            public_lane_unbonding_commitment,
+            PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+            PublicLaneMonetaryScopeV1, PublicLaneMonetaryUnbondV1, PublicLaneRewardClaimPlanV1,
+            PublicLaneUnbonding, public_lane_unbonding_commitment,
         };
         // This test checks dispatch and self-authority, while Core separately
         // authenticates these exact tenure, custody and withdrawal bindings.
@@ -10147,9 +10147,9 @@ mod tests {
         let escrow = checked_account_id();
         let staker_asset = AssetId::of(stake_asset.clone(), staker.clone());
         let escrow_asset = AssetId::of(stake_asset, escrow);
-        let network_scope = PublicLaneMonetaryScopeV1::Network(
-            executor_test_network_id(b"public lane user dispatch"),
-        );
+        let network_scope = PublicLaneMonetaryScopeV1::Network(executor_test_network_id(
+            b"public lane user dispatch",
+        ));
         let request = PublicLaneUnbonding {
             request_id,
             amount: Quantity::one(),
@@ -10163,7 +10163,7 @@ mod tests {
             source_asset: staker_asset.clone(),
             destination_asset: escrow_asset.clone(),
             amount: Quantity::one(),
-            precondition: PublicLaneMonetaryPreconditionV1::Bond(PublicLaneBondPreconditionV1 {
+            precondition: PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
                 activation_height: 1,
                 peer_id: peer.clone(),
             }),
@@ -10174,7 +10174,7 @@ mod tests {
             source_asset: escrow_asset,
             destination_asset: staker_asset,
             amount: request.amount.clone(),
-            precondition: PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneUnbondPreconditionV1 {
+            precondition: PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
                 activation_height: 1,
                 request_hash: public_lane_unbonding_commitment(&request).unwrap(),
             }),
@@ -10183,7 +10183,7 @@ mod tests {
             RebindPublicLaneValidatorPeer::new(
                 iroha_model_base::topology::LaneId::SINGLE,
                 validator.clone(),
-                peer,
+                peer.clone(),
             )
             .into(),
             BondPublicLaneStake {
@@ -10267,7 +10267,9 @@ mod tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
         );
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 1, &roster);
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 1, &roster,
+            );
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,

@@ -50,6 +50,7 @@ pub(in crate::sumeragi) fn queue_plan_owner_fixture(
     QueuePlanAdmissionOwner,
     VerifiedHeightContext,
 ) {
+    // Freeze both lane geometries before finalizing the durable parent chain.
     let (mut adapter, keys) = native_multilane_signing_fixture();
     let (parent, receipt) = adapter
         .kura
@@ -389,19 +390,13 @@ fn queue_plan_runner_relay_uses_global_owner_without_old_lane_admission() {
     let effects_before = adapter.effect_count();
     assert!(
         crate::sumeragi::v2_runner::drain_finalized_lane_relay_prefix_for_test(
-            &receive,
-            &mut owner,
-            0,
-            1,
+            &receive, &mut owner, 0, 1,
         )
         .unwrap()
     );
     assert!(
         !crate::sumeragi::v2_runner::drain_finalized_lane_relay_prefix_for_test(
-            &receive,
-            &mut owner,
-            0,
-            1,
+            &receive, &mut owner, 0, 1,
         )
         .unwrap()
     );
@@ -435,4 +430,27 @@ fn queue_plan_runner_dispatch_rejects_foreign_service_before_source_transfer() {
     assert_eq!(owner.effect_count(), 1);
     assert!(owner.acknowledge_effect(&original));
     assert_queue_plan_kura_source(&adapter, &bytes);
+}
+
+#[test]
+fn queue_plan_owner_fixture_preserves_finalized_execution_policy() {
+    let (adapter, _, owner, verified) = queue_plan_owner_fixture(1);
+    let (parent, _) = adapter
+        .kura
+        .v2_finality_artifact_with_receipt(verified.context().height - 1)
+        .unwrap()
+        .unwrap();
+    let policy =
+        super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref()).unwrap();
+    assert_eq!(verified.context().execution_policy_hash, policy);
+    assert_eq!(parent.height_context.execution_policy_hash, policy);
+    assert_eq!(adapter.state.nexus_snapshot().lane_catalog.lanes().len(), 2);
+    assert!(owner.matches_lifecycle_dependencies(
+        verified.context(),
+        &adapter.state,
+        &adapter.kura,
+        &adapter.output_guard,
+        &adapter.local_peer,
+    ));
+    assert!(!adapter.output_guard.restart_required());
 }

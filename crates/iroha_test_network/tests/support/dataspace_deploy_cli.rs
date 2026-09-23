@@ -88,15 +88,6 @@ struct Trust {
     peers: Vec<TrustPeer>,
 }
 
-/// Serialize the same independently selected public authority for native operator workflows.
-pub(super) fn write_fixture_trust(fixture: &PaidDeploymentFixture<'_>, path: &Path) -> Result<()> {
-    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    let owner = iroha::config::Config::load_file(fixture.config)
-        .map_err(|error| eyre!("fresh owner configuration is invalid: {error:?}"))?;
-    let (trust, _, _) = fixture_trust(fixture, &owner, fixture.build_identity)?;
-    write_private(path, &json::to_vec(&trust)?)
-}
-
 /// Exact fresh fixture inputs supplied after native beacon installation.
 pub(super) struct PaidDeploymentFixture<'a> {
     pub binary: &'a Path,
@@ -832,13 +823,17 @@ fn signed_genesis_validator_mapping_preserves_runtime_accounts() {
         account::Account,
         asset::{AssetDefinitionId, AssetId},
         isi::Register,
+        nexus::PublicLaneMonetaryPlanV1,
     };
-    let stake_asset_id = AssetDefinitionId::derive_from_components(
-        iroha_model_base::domain::DomainId::try_new("nexus", "universal").unwrap(),
-        "xor".parse().unwrap(),
+    // This fixture tests instruction-to-authority projection without executing genesis.
+    // Its transfer endpoints are authored independently of validator and peer identities.
+    let definition = AssetDefinitionId::derive_from_components(
+        iroha_model_base::domain::DomainId::try_new("mapping", "universal").unwrap(),
+        "stake".parse().unwrap(),
     );
-    let escrow_account_id = AccountId::new(
-        KeyPair::from_seed(vec![25; 32], Algorithm::Ed25519)
+    let custody = AccountId::new(
+        KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
+            .unwrap()
             .public_key()
             .clone(),
     );
@@ -867,9 +862,9 @@ fn signed_genesis_validator_mapping_preserves_runtime_accounts() {
                     account.clone(),
                     100_u32.into(),
                     Metadata::default(),
-                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
-                        AssetId::new(stake_asset_id.clone(), account.clone()),
-                        AssetId::new(stake_asset_id.clone(), escrow_account_id.clone()),
+                    PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(definition.clone(), account.clone()),
+                        AssetId::new(definition.clone(), custody.clone()),
                         100_u32.into(),
                     ),
                 )
@@ -891,6 +886,27 @@ fn signed_genesis_validator_mapping_preserves_runtime_accounts() {
         expected
     );
     assert_generated_binding_controls(&expected);
+    let registrations = instructions
+        .iter()
+        .filter_map(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(registrations.len(), 8);
+    for registration in registrations {
+        assert_ne!(registration.stake_account, custody);
+        assert_eq!(
+            registration.monetary_plan,
+            PublicLaneMonetaryPlanV1::genesis_registration(
+                AssetId::new(definition.clone(), registration.stake_account.clone()),
+                AssetId::new(definition.clone(), custody.clone()),
+                registration.initial_stake.clone(),
+            )
+        );
+        assert!(registration.monetary_plan.has_canonical_shape());
+    }
     // Consistent bindings on another public lane are valid; every failure below
     // changes one prerequisite while keeping the remaining native bindings.
     for omitted in [0, 1, 3] {

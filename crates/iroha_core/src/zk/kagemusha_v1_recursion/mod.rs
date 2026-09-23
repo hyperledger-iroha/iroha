@@ -1749,9 +1749,9 @@ pub struct KagemushaMintFinalityHelperVerificationRequestV1<'a> {
     pub proof: &'a KagemushaPairedProofV1,
     /// Exact paired certificate digest constrained by both helper parities.
     pub finality_certificate_binding: DigestV1,
-    /// Current recursively authenticated roster identifier.
+    /// Current recursively authenticated authorization identifier.
     pub finality_authority_head: DigestV1,
-    /// Release-pinned genesis roster identifier.
+    /// Release-pinned complete genesis scheduling authorization identifier.
     pub finality_genesis_authorization_id: DigestV1,
     /// Eq deferred audit, which binds the shared pair transcript and the exact Ep audit.
     pub finality_proof_binding_digest: DigestV1,

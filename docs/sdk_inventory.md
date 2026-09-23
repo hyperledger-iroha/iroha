@@ -93,6 +93,45 @@ integration status polling await this capability directly; synchronous callers
 use the reusable blocking runtime. Diagnostic reads do not trigger a compatibility
 probe or automatically retry a response under another representation.
 
+## DA capability coverage
+
+| Canonical route | Async capability | Blocking capability |
+| --- | --- | --- |
+| `data_availability.manifest.read` — `GET /v1/da/manifests/{ticket}` | `client.da().manifest(&ticket).await` | `client.da().manifest(&ticket)` |
+| `data_availability.proof_policy.list` | `client.da().proof_policies().await` | `client.da().proof_policies()` |
+| `data_availability.commitment.list` | `client.da().commitments(&request).await` | `client.da().commitments(&request)` |
+| `data_availability.pin_intent.list` | `client.da().pin_intents(&request).await` | `client.da().pin_intents(&request)` |
+| `data_availability.commitment.prove` | `account.da().prove_commitment(&request).await` | `account.da().prove_commitment(&request)` |
+| `data_availability.commitment.verify` | `account.da().verify_commitment(&proof).await` | `account.da().verify_commitment(&proof)` |
+| `data_availability.pin_intent.prove` | `account.da().prove_pin_intent(&request).await` | `account.da().prove_pin_intent(&request)` |
+| `data_availability.pin_intent.verify` | `account.da().verify_pin_intent(&proof).await` | `account.da().verify_pin_intent(&proof)` |
+
+The four proof operations require `AccountClient`. They sign the exact bounded
+JSON body, network, method and target with fresh canonical authentication headers.
+Public reads remove stale account authentication headers. All operations share
+the injected asynchronous transport and explicit blocking runtime. Shared request
+DTOs own cursor, selector, alias and page-size validation; encoding enforces the
+64-KiB request ceiling before allocation. Returned proofs bind every supplied
+selector and pin authorization network. Pages enforce forward-only ordering,
+the immutable cursor snapshot and requested scan bound, while allowing filtered
+empty pages with an advancing cursor. Pin cursor locations must remain within
+their snapshot height on both requests and responses. A remote verification result does not
+establish locally verified finality. Current-policy discovery has one operation;
+historical verification uses the referenced block's authenticated policy sidecar.
+
+The request uses the typed `StorageTicketId`; the response has one shared
+`iroha_torii_shared::da::DaManifestResponse` owner. The public capability uses
+client-owned transport, one configured deadline and a 64-MiB response ceiling.
+It binds the exact returned storage ticket and requires a single JSON content
+type. The old raw synchronous method is removed. Storage proof workflows await
+this capability, and CLI manifest reads use its reusable blocking facade.
+
+`iroha_storage_client::StorageClient::da_manifest` checks the complete Norito
+artifact against its declared length, BLAKE3 digest, ticket, blob and chunk
+identities, lane, epoch, JSON projection and chunk fetch plan. Missing canonical
+fields, alternate spellings and fallback layouts are rejected. CLI overrides
+select a Torii base URL with `--torii-url`, creating a new immutable context.
+
 ## Operator configuration coverage
 
 | Canonical route | Async capability | Blocking capability |

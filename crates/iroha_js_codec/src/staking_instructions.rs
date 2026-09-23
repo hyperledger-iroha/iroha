@@ -90,14 +90,43 @@ staking_codec!(
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
-    use iroha_data_model::{NetworkId, account::AccountId};
-    use iroha_model_base::{metadata::Metadata, peer::PeerId, topology::LaneId};
+    use iroha_data_model::{
+        NetworkId,
+        account::AccountId,
+        asset::{AssetDefinitionId, AssetId},
+        nexus::{
+            PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+            PublicLaneMonetaryRegistrationV1, PublicLaneMonetaryScopeV1,
+        },
+    };
+    use iroha_model_base::{domain::DomainId, metadata::Metadata, peer::PeerId, topology::LaneId};
     use iroha_primitives::numeric::Quantity;
 
     fn candidate() -> RegisterPublicLaneCandidate {
         let account_key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).unwrap();
         let peer_key = KeyPair::try_from_seed(vec![0x72; 32], Algorithm::BlsNormal).unwrap();
         let owner = AccountId::new(account_key.public_key().clone());
+        let escrow_key = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519).unwrap();
+        let escrow = AccountId::new(escrow_key.public_key().clone());
+        let definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("staking", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
+        let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"codec-candidate-network",
+        )));
+        let monetary_plan = PublicLaneMonetaryPlanV1 {
+            network_scope: PublicLaneMonetaryScopeV1::Network(network_id),
+            valid_until_height: 100,
+            source_asset: AssetId::new(definition.clone(), owner.clone()),
+            destination_asset: AssetId::new(definition, escrow),
+            amount: Quantity::from(1000_u64),
+            precondition: PublicLaneMonetaryPreconditionV1::Registration(
+                PublicLaneMonetaryRegistrationV1 {
+                    activation_height: 101,
+                },
+            ),
+        };
         let registration = RegisterPublicLaneValidator::new(
             LaneId::new(42),
             owner.clone(),
@@ -105,14 +134,9 @@ mod tests {
             owner,
             Quantity::from(1000_u64),
             Metadata::default(),
+            monetary_plan,
         );
-        let payload = PublicLaneCandidateAuthorization::new(
-            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
-                b"codec-candidate-network",
-            ))),
-            registration.clone(),
-            101,
-        );
+        let payload = PublicLaneCandidateAuthorization::new(network_id, registration.clone(), 101);
         RegisterPublicLaneCandidate {
             registration,
             activation_height: 101,
@@ -156,6 +180,70 @@ mod tests {
                 -((crate::json_u64::MAX_SAFE_INTEGER + 1) as i64)
             ))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn staking_candidate_json_requires_the_complete_signed_monetary_plan() {
+        let candidate = candidate();
+        let original: InstructionBox = candidate.clone().into();
+        let value = crate::instruction_to_json_value(&original).unwrap();
+        for replacement in [
+            None,
+            Some(Value::Null),
+            Some(Value::Object(Default::default())),
+        ] {
+            let mut altered = value.clone();
+            let registration = altered
+                .as_object_mut()
+                .unwrap()
+                .get_mut("RegisterPublicLaneCandidate")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .get_mut("registration")
+                .unwrap()
+                .as_object_mut()
+                .unwrap();
+            registration.remove("monetary_plan");
+            if let Some(replacement) = replacement {
+                registration.insert("monetary_plan".into(), replacement);
+            }
+            assert!(crate::value_to_instruction(altered).is_err());
+        }
+        let restored = crate::value_to_instruction(value).unwrap();
+        let restored = restored
+            .as_any()
+            .downcast_ref::<RegisterPublicLaneCandidate>()
+            .unwrap();
+        assert_eq!(
+            restored.registration.monetary_plan,
+            candidate.registration.monetary_plan
+        );
+        let PublicLaneMonetaryScopeV1::Network(network_id) =
+            restored.registration.monetary_plan.network_scope
+        else {
+            panic!("candidate must authorize its exact network");
+        };
+        let mut authorization = PublicLaneCandidateAuthorization::new(
+            network_id,
+            restored.registration.clone(),
+            restored.activation_height,
+        );
+        restored
+            .peer_signature
+            .verify(restored.registration.peer_id.public_key(), &authorization)
+            .unwrap();
+        authorization.registration.monetary_plan.destination_asset = authorization
+            .registration
+            .monetary_plan
+            .source_asset
+            .clone();
+        assert!(
+            restored
+                .peer_signature
+                .verify(restored.registration.peer_id.public_key(), &authorization)
+                .is_err()
         );
     }
 }

@@ -1111,7 +1111,9 @@ pub(super) mod tests {
                 .collect::<Vec<_>>();
             let network_id = test_network_id(0x81);
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 100, &roster);
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                    network_id, 100, &roster,
+                );
             let context = wire::HeightContext {
                 network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
@@ -1424,6 +1426,7 @@ pub(super) mod tests {
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:

@@ -202,9 +202,7 @@ STAGES = (
     )),
     ("occupied runtime and service unit recovery", (
         "taira_public_reset::host::occupied::tests::occupied_runtime_rejects_builder_tools_and_each_missing_runtime_role",
-        "taira_public_reset::host::epoch_supervisor::tests::prior_release_protection_preserves_independent_authenticated_tool_roots",
-        "taira_public_reset::host::epoch_supervisor::tests::prior_release_protection_rejects_malformed_state_or_plan",
-        "taira_public_reset::host::tests::cleanup_preserves_prior_supervisor_release_across_hosts_and_replay",
+        "taira_public_reset::host::tests::cleanup_preserves_prior_release_during_discovery_and_replay",
         "taira_public_reset::host::occupied::tests::occupied_runtime_accepts_split_source_and_configuration_binding",
         "taira_public_reset::host::occupied::tests::occupied_runtime_rejects_incomplete_or_foreign_artifact_custody",
         "taira_public_reset::host::occupied::tests::occupied_runtime_wire_requires_explicit_artifacts_and_argv",
@@ -1242,8 +1240,8 @@ MODEL_MONETARY_CODEC_STAGES = (('canonical monetary authority payload schemas an
     'isi::kagemusha_v1::epoch_binding_codec_tests::beacon_epoch_binding_roundtrips_both_variants_and_registers_payload_schema',
     'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_decisions_roundtrip_all_discriminants_and_reject_untagged_json',
     'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_authorization_binding_keeps_fixed_width_identity',
-    'nexus::staking::monetary_codec_tests::monetary_scope_roundtrips_both_variants_and_rejects_unknown_envelope_fields',
-    'nexus::staking::monetary_codec_tests::monetary_preconditions_roundtrip_complete_payloads_and_register_schema',
+    'nexus::staking::monetary_codec_tests::monetary_variants_roundtrip_canonical_binary_and_tagged_json',
+    'nexus::staking::monetary_codec_tests::monetary_schema_names_every_variant_and_distinct_named_payload',
 )),)
 DATA_MODEL_STAGES += MODEL_MONETARY_CODEC_STAGES
 
@@ -1277,21 +1275,19 @@ NETWORK_OBSERVATION_STAGES = (("signed genesis paid authority and public failure
 )), ("exact retained-height replay observation", (
     "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
 )),)
-# Linux qualification exercises the supervised retention/restart owner within the
-# same full application workload. macOS retains the finite observer case.
+# Every platform qualifies retained authority generations against the same four
+# independent genesis-anchored chains and full application workload.
 BEACON_NETWORK_TEST = (
-    'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_retains_and_resumes_after_owned_restart'
-    if sys.platform == "linux" else
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
-BEACON_NETWORK_STAGES = (("fresh beacon custody, paid deployment, catalog replay and both route snapshot sequences"
-                          + (", supervised retention and restart" if sys.platform == "linux" else ""), (
+BEACON_NETWORK_STAGES = (("fresh beacon custody, retained authority, paid deployment, catalog replay and both route snapshot sequences", (
     BEACON_NETWORK_TEST,
 )),)
 
-NETWORK_OBSERVATION_STAGES += (('public epoch maintenance fixture admission', (
-    'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup',
-    'production_beacon_bootstrap::epoch_maintenance::retained_authorization_requires_exact_keys_beacon_interval_and_predecessor',
+NETWORK_OBSERVATION_STAGES += (('authenticated epoch retention fixture admission', (
+    'production_beacon_bootstrap::epoch_retention::production_epoch_retention_requires_exact_source_identity_before_setup',
+    'production_beacon_bootstrap::epoch_retention::production_epoch_retention_binds_exact_generation_beacon_and_interval',
+    'production_beacon_bootstrap::epoch_retention::production_epoch_retention_rejects_changed_generation_beacon_parent_and_schedule',
 )),)
 
 NETWORK_OBSERVATION_STAGES += (('retained native canary failure evidence', (
@@ -1449,7 +1445,7 @@ TORII_SHARED_STAGES += (("strict finality attestation tip progress details", (
 TORII_STAGES += (("public faucet policy discovery", (
     "accounts_faucet::accounts_faucet_policy_exposes_exact_public_configuration",
     "accounts_faucet::accounts_faucet_policy_resolves_configured_asset_alias",
-    "accounts_faucet::accounts_faucet_policy_preserves_disabled_forbidden_response",
+    "accounts_faucet::accounts_faucet_discovery_reports_disabled_service",
 )), )
 
 TORII_UNIT_STAGES += (("public faucet policy discovery", (
@@ -1537,18 +1533,8 @@ KAGAMI_STAGES = (("canonical Kagami export projection", (
 )),)
 
 
-KAGAMI_STAGES += (("native epoch derivation and bounded public maintenance schedule", (
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::derived_parameter_matches_core_and_binds_network_epoch_and_order',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::public_context_rejects_malformed_network_epoch_count_order_and_duplicates',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::parser_exposes_only_public_arguments_and_numeric_pipe_descriptor',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::seed_reader_enforces_exact_bound_and_wipes_success_rejections_and_unwind',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::read_errors_are_redacted_and_partial_seeds_are_wiped',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::buffered_output_failures_are_returned',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::inherited_descriptor_ownership_is_closed',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_matches_native_parameters_and_preserves_exact_public_caps',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_rejects_empty_unbounded_overflowed_and_zero_fee_ranges',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_command_consumes_one_private_pipe_and_emits_only_complete_public_json',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_parser_requires_explicit_bounded_public_range_and_fee_cap',
+KAGAMI_STAGES += (("retired epoch key derivation commands are rejected", (
+    'kagemusha::tests::parser_rejects_epoch_key_derivation_commands',
 )),)
 
 
@@ -1762,37 +1748,16 @@ STAGES += (("native beacon reset authority, bounded recovery and public input as
     'taira_public_reset::inputs::tests::assembler_rejects_incomplete_topology_before_reading_runtime_inputs',
 )), )
 
-STAGES += (('native epoch maintenance and authenticated current height', (
-    'taira_dataspace_deploy::epoch_maintenance::tests::automatic_retention_requires_actual_successor_and_complete_unchanged_authority',
-    'taira_dataspace_deploy::epoch_maintenance::tests::retention_cursor_is_independent_of_valid_quorum_witness_and_unchanged_reproposal',
-    'taira_dataspace_deploy::epoch_maintenance::tests::retention_parser_exposes_no_seeds_provisioner_fee_or_mutating_commands',
+STAGES += (('authenticated current height', (
+    'taira::tests::retired_epoch_maintenance_commands_are_rejected',
     'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_repeat_current_preserves_freshness_and_advancing_contract',
     'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_restart_transport_never_masks_fixed_peer_identity',
 )),)
 
-STAGES += (("native epoch supervisor custody and restart continuity", (
-    'taira_dataspace_deploy::epoch_maintenance::tests::partial_retention_initialization_never_replaces_evidence_or_renews_deadlines',
-    'taira_dataspace_deploy::epoch_maintenance::tests::retention_restart_reauthenticates_immutable_receipt_original_trust_and_cursor',
-    'taira_dataspace_deploy::epoch_maintenance::tests::retention_preserves_original_trust_across_explicit_release_and_rejects_identity_drift',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_status_parser_has_no_seed_or_mutation_inputs',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_readiness_names_bind_policy_and_process_incarnation',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::retention_input_custody_rejects_mutation_shared_links_and_writable_ancestors',
-)),)
 
 
-STAGES += (("native epoch supervisor journal quiescence", (
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_excludes_active_worker_until_drop',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_absence_is_read_only_and_revalidated',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_never_repairs_missing_lock',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_rejects_symlink_parent_and_child',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_rejects_parent_and_child_rebinding',
-)), )
 
 
-if sys.platform == "linux":
-    STAGES += (("native epoch supervisor process incarnation", (
-        'taira_public_reset::host::epoch_worker_process_identity_binds_current_kernel_incarnation',
-    )),)
 
 
 KAGAMI_STAGES += (('native beacon history physical input and execution root distinction', (
@@ -1800,70 +1765,36 @@ KAGAMI_STAGES += (('native beacon history physical input and execution root dist
 )), )
 
 
-STAGES += (('native epoch supervisor pure generation admission', (
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_accepts_exact_public_inputs_without_files',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_foreign_origin_and_taira_profile',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_administrator_identity_drift',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_shared_operator_key',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_changed_trust_and_network',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_requires_bounded_closed_schemas',
+
+
+STAGES += (("shared deployment exclusion and durable reset ownership", (
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_owner_rejects_foreign_missing_and_expired_recovery',
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_owner_cannot_restart_from_existing_host_progress',
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_terminal_replay_requires_exact_action_and_retained_intent',
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_owner_waits_for_all_local_seals_and_rollbacks',
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_lock_excludes_other_descriptors_and_rejects_rebinding',
+)),)
+
+STAGES += (('native reset schema and ordered service barriers', (
+    'taira_public_reset::executor_model::tests::reset_execution_preserves_beacon_and_service_order_without_epoch_writer',
+    'taira_public_reset::executor_model::tests::retired_inventory_fields_and_seven_artifact_closure_are_rejected',
+    'taira_public_reset::executor_model::tests::retired_epoch_supervisor_commands_and_inputs_are_rejected',
+    'taira_public_reset::inputs::tests::authorization_rejects_retired_supervisor_fields',
+    'taira_public_reset::host::tests::host_frontier_preserves_four_beacon_activations_before_restart',
 )), )
 
 
-STAGES += (('native reset epoch authority custody and ordered service barriers', (
-    'taira_public_reset::executor_model::tests::epoch_supervisor_pause_and_start_are_explicit_ordered_barriers',
-    'taira_public_reset::executor_model::tests::epoch_supervisor_pause_failure_prevents_validator_stop',
-    'taira_public_reset::executor_model::tests::maintenance_admin_admission_rejects_canary_operator_and_network_substitution',
-    'taira_public_reset::executor_model::tests::old_inventory_shape_and_seven_artifact_closure_are_rejected',
-    'taira_public_reset::inputs::tests::maintenance_grant_requires_registration_and_survives_no_revocation',
-    'taira_public_reset::inputs::tests::ongoing_supervisor_authorization_is_explicit_and_separate_from_reset_expiry',
-    'taira_public_reset::host::epoch_supervisor::tests::unit_matches_exact_native_retention_argv_and_lifecycle_golden',
-    'taira_public_reset::host::epoch_supervisor::tests::first_install_pause_requires_genuine_manager_absence',
-    'taira_public_reset::host::epoch_supervisor::tests::plan_rejects_wrong_administrator_origin_and_duplicate_roster_mapping',
-    'taira_public_reset::host::epoch_supervisor::tests::retention_plan_rejects_retired_rotation_fields',
-    'taira_public_reset::host::epoch_supervisor::tests::status_argv_contains_only_readonly_native_operation_and_exact_worker',
-    'taira_public_reset::host::epoch_supervisor::tests::paths_reject_expansion_and_finite_reset_aliases',
-    'taira_public_reset::host::epoch_supervisor::tests::native_status_rejects_previous_worker_or_changed_manager_incarnation',
-    'taira_public_reset::host::tests::epoch_supervisor_host_frontier_has_one_pause_and_one_post_beacon_start',
-)), )
 
 
-if sys.platform == "linux":
-    STAGES += (('native Linux epoch generation activation intent', (
-        'taira_public_reset::host::epoch_generation::linux::tests::preparation_requires_explicit_installed_and_successor_intent',
-        'taira_public_reset::host::epoch_generation::linux::tests::generation_binding_rejects_alternate_cli_and_private_path',
-        'taira_public_reset::host::epoch_generation::linux::tests::service_intent_never_infers_activation_from_original_absence',
-    )), )
 
 
-STAGES += (("native epoch public admission restores caller profile", (
-    'taira_public_reset::host::epoch_supervisor::tests::epoch_public_admission_scopes_taira_and_restores_foreign_caller_profile',
-)), )
-
-
-STAGES += (("native public reset and epoch input producer closure", (
-    'taira_public_reset::host::epoch_generation::public_binding_tests::public_projection_cannot_satisfy_native_credential_admission',
-    'taira_public_reset::host::epoch_generation::public_binding_tests::public_binding_still_rejects_changed_hash_argv_and_network',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_derives_exact_retention_policy_unit_and_update_binding',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_implicit_prior_and_invalid_ongoing_bounds',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_unmapped_cli_and_admin_genesis_substitution',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_requires_explicit_until_stopped_cli_intent',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_publication_is_atomic_and_never_replaces',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_first_install_derives_exact_native_closure_without_private_files',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_rejects_incomplete_or_changed_build_and_operation',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_preserves_original_intent_separately_from_installed_state',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_rejects_rebased_authority_trust_and_seed_sources',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_closed_preparation_has_no_implicit_state_or_receipt',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_output_is_atomic_private_and_never_replaced',
+STAGES += (("native public reset input producer closure", (
     'taira_public_reset::inputs::tests::topology_context_checks_scope_and_budget_before_custody',
     'taira_public_reset::inputs::tests::native_context_rejects_scope_before_opening_actual_inputs',
-    'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_precedes_supervisor_plan_without_weakening_export',
+    'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_precedes_artifact_closure_without_weakening_export',
     'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_rejects_truncated_or_extra_slot_vectors',
     'taira_public_reset::inputs::context_release::tests::reset_context_artifact_derives_real_bytes_and_retains_drift_custody',
     'taira_public_reset::inputs::context_release::tests::reset_context_artifact_rejects_wrong_mode_and_symlink_before_projection',
-    'taira_public_reset::host::epoch_generation::completed_wrapper_tests::materialization_output_is_complete_closed_update_input',
-    'taira_public_reset::host::epoch_generation::completed_wrapper_tests::completed_update_keeps_original_intent_and_actual_installed_state_distinct',
-    'taira_public_reset::host::epoch_generation::completed_wrapper_tests::completed_update_rejects_foreign_receipt_and_network',
 )), )
 
 

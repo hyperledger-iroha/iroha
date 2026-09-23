@@ -5,7 +5,7 @@ Requires completed maintained preparation and an owner-public deployment record.
 --plan-only contacts no host. The default command
 requires previously prepared same-release daemon, CLI and Kagami and executes
 the reviewed guest controller. --prepare-artifacts creates those exact binaries
-via native cat/SSH before native supervisor generation materialization. No secret files are read. Failed attempts are never overwritten.
+via native cat/SSH before the reviewed update. No secret files are read. Failed attempts are never overwritten.
 An explicit --failed-start-chain authenticates every failed startup since the
 completed deployment. Unchanged binaries can be retried in a fresh operation.
 Both pinned guest and Mac backing routes are required. Storage admission runs
@@ -17,7 +17,8 @@ import argparse
 import fcntl
 from urllib.parse import urlsplit
 import taira_retry as retry
-from taira_update_guest import COHORT_MAX_TIMEOUT_SECONDS, MAX_FAILED_START_ATTEMPTS
+from taira_update_guest import (COHORT_MAX_TIMEOUT_SECONDS, MAX_FAILED_START_ATTEMPTS,
+                                validate_update_plan_shape)
 import base64
 import hashlib
 import importlib.util
@@ -167,10 +168,10 @@ def failed_start_inputs(reference, deployment, prior, guest, operation, candidat
 
     installed, entries = guest.validate_failed_start_chain(
         reference, deployment, prior, operation, load_attempt, candidate=candidate)
-    return dict(reference, installed=installed), entries[-1][0], entries[-1][1]['failure.json']['epoch_supervisor_installed']
+    return dict(reference, installed=installed), entries[-1][0]
 
 
-def make_plan(build, deployment, prior, guest, operation, failed_start=None, *, supervisor):
+def make_plan(build, deployment, prior, guest, operation, failed_start=None):
     commit = build['commit']
     artifacts = validate_build(build, commit)
     current = deployment['current']
@@ -184,27 +185,12 @@ def make_plan(build, deployment, prior, guest, operation, failed_start=None, *, 
     need([row['role'] for row in prior['units']] == deployment['roles'], 'predecessor cohort differs')
     value = {'schema':'taira.daemon-update.plan.v1', 'commit':commit,
              'network_id':deployment['network_id'], 'artifacts':artifacts,
-             'operation':operation, 'deployment':deployment,
-             'epoch_supervisor':supervisor}
+             'operation':operation, 'deployment':deployment}
     installed_plan = prior
     if failed_start is not None:
-        value['failed_start'], installed_plan, supervisor_installed = failed_start_inputs(
+        value['failed_start'], installed_plan = failed_start_inputs(
             failed_start, deployment, prior, guest, operation, value)
     guest.validate_candidate_transition(commit, artifacts, current['commit'], installed_plan)
-    guest.validate_supervisor_update(supervisor, deployment, operation, commit, artifacts)
-    if failed_start is not None:
-        previous = installed_plan['epoch_supervisor']
-        need(previous['original_service_state'] == supervisor['original_service_state']
-             and previous['successor_service_state'] == supervisor['successor_service_state']
-             and previous['before'] == supervisor['before'],
-             'failed supervisor transition changed original operator intent')
-        need(supervisor['installed'] == supervisor_installed,
-             'supervisor installed binding differs from retained failure observation')
-        value['epoch_supervisor_installed'] = supervisor_installed
-    else:
-        need(supervisor['installed'] == supervisor['before'],
-             'initial supervisor installed binding differs from original')
-        value['epoch_supervisor_installed'] = supervisor['before']
     guest.configure(value)
     units = []
     for row in installed_plan['units']:
@@ -220,12 +206,9 @@ def make_plan(build, deployment, prior, guest, operation, failed_start=None, *, 
         capacity_sha256=sha(read_public(HERE / 'taira_disk_capacity.py')),
         runner_sha256=sha(read_public(HERE / 'taira_update.py')),
         renderer_sha256=deployment['renderer_sha256'], secret_contents_read=False,
-        transaction_submission=supervisor['successor_service_state'] == 'running',
+        transaction_submission=False,
         python_transaction_submission=False)
-    unit_renderer = module(HERE / 'taira_epoch_supervisor_unit.py', 'epoch_supervisor_renderer')
-    need(unit_renderer.render(supervisor['after']['unit_spec']).decode() == supervisor['after']['unit_bytes'],
-         'successor supervisor unit differs from the shared fixed renderer')
-    value['epoch_supervisor_renderer_sha256'] = sha(read_public(HERE / 'taira_epoch_supervisor_unit.py'))
+    validate_update_plan_shape(value)
     return value
 
 
@@ -265,13 +248,12 @@ base=Path({plan['deployment']['runtime_root']!r})
 assert os.geteuid()==0 and base.resolve()==base
 for ancestor in [base,*base.parents]:
  s=ancestor.lstat();assert stat.S_ISDIR(s.st_mode) and s.st_uid==0 and not s.st_mode&0o022
-state=Path('/var/lib/taira-epoch-supervisor')
+state=Path('/var/lib/taira-deployment')
 for ancestor in state.parents:
  s=ancestor.lstat();assert stat.S_ISDIR(s.st_mode) and s.st_uid==0 and not s.st_mode&0o022
-state.mkdir(mode=0o700,exist_ok=True)
 s=state.lstat();assert state.resolve()==state and stat.S_ISDIR(s.st_mode) and s.st_uid==s.st_gid==0 and stat.S_IMODE(s.st_mode)==0o700
 lock_path=state/'.deployment.lock'
-lock=os.open(lock_path,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
+lock=os.open(lock_path,os.O_RDWR|os.O_NOFOLLOW)
 s=os.fstat(lock);assert stat.S_ISREG(s.st_mode) and s.st_uid==s.st_gid==0 and s.st_nlink==1 and stat.S_IMODE(s.st_mode)==0o600
 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 t=lock_path.lstat();assert (s.st_dev,s.st_ino)==(t.st_dev,t.st_ino)
@@ -395,7 +377,7 @@ def admit_storage(plan, phase, output):
 
 
 def prepare_artifacts(args, deployment, build_raw):
-    """Explicit create-new artifact phase before native generation materialization."""
+    """Explicit create-new artifact phase before the reviewed runtime update."""
     build = retry.decode(build_raw)
     artifacts = validate_build(build, build['commit'])
     need(re.fullmatch('update-[0-9a-f]{32}', args.operation)
@@ -422,14 +404,14 @@ def prepare_artifacts(args, deployment, build_raw):
         write_new(args.output / (artifact['name'] + '-transfer.json'),
             json.dumps({'exit_code': 0, 'name': artifact['name'], 'size': artifact['size']}).encode())
     report = verify_prepared_remote(plan, argv, args.output)
-    print(json.dumps(report | {'next_action': 'native epoch-supervisor-host materialize using the prepared candidate CLI'}))
+    print(json.dumps(report | {'next_action': 'review the update plan for the prepared candidate artifacts'}))
 
 
 def apply_plan(args):
     raw = read_public(args.plan)
     need(sha(raw) == args.plan_sha256, 'reviewed plan digest differs')
     plan = json.loads(raw)
-    need(plan.get('schema') == 'taira.daemon-update.plan.v1', 'plan schema differs')
+    validate_update_plan_shape(plan)
     validate_deployment(plan['deployment'])
     build_raw = read_public(Path(plan['build_result_path']))
     need(sha(build_raw) == plan['build_result_sha256'], 'bound preparation result changed')
@@ -440,23 +422,16 @@ def apply_plan(args):
         need(sha(read_public(HERE / name)) == plan[field], 'reviewed coordinator source changed')
     need(sha(read_public(ROOT / 'scripts/taira_validator_unit.py')) == plan['renderer_sha256'],
          'reviewed custody renderer changed')
-    need(sha(read_public(HERE / 'taira_epoch_supervisor_unit.py')) == plan['epoch_supervisor_renderer_sha256'],
-         'reviewed supervisor renderer changed')
-    guest = module(HERE / 'taira_update_guest.py', 'runtime_update_supervisor_validation')
-    guest.validate_supervisor_update(plan['epoch_supervisor'], plan['deployment'],
-                                    plan['operation'], plan['commit'], plan['artifacts'])
     if 'failed_start' in plan:
         current = plan['deployment']['current']
         prior = retry.decode(retry.public_record(current['local_plan'], current['local_plan_sha256']))
         guest = module(HERE / 'taira_update_guest.py', 'runtime_update_recovery_validation')
         reference = {key: value for key, value in plan['failed_start'].items() if key != 'installed'}
         rebound = make_plan(json.loads(build_raw), plan['deployment'], prior, guest,
-                            plan['operation'], reference, supervisor=plan['epoch_supervisor'])
+                            plan['operation'], reference)
         need(rebound['failed_start'] == plan['failed_start'] and rebound['units'] == plan['units']
              and rebound['retained_predecessor'] == plan['retained_predecessor'],
              'failed-start recovery plan differs from its public inputs')
-        need(rebound['epoch_supervisor_installed'] == plan['epoch_supervisor_installed'],
-             'failed-start supervisor installed closure differs')
     need(args.output.is_absolute() and args.output.parent.resolve() == args.output.parent
          and not args.output.exists(), 'fresh absolute local output required')
     argv = retry.validate_ssh(plan['deployment']['guest_ssh'])
@@ -492,11 +467,9 @@ def main():
     parser.add_argument('--prepared-result', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--operation',
-                        help='explicit fresh update-<32hex> already bound by supervisor preparation')
-    parser.add_argument('--supervisor-plan', type=Path,
-                        help='public immutable preprovisioned supervisor transition and native receipt')
+                        help='explicit fresh update-<32hex> operation identity')
     parser.add_argument('--prepare-artifacts', action='store_true',
-                        help='create and verify the exact three candidate binaries before native materialize')
+                        help='create and verify the exact three candidate binaries before the reviewed runtime update')
     parser.add_argument('--plan-only', action='store_true', help='write the exact local plan without SSH')
     parser.add_argument('--failed-start-chain', type=Path,
                         help='ordered digest-bound failed attempts since the last completed deployment')
@@ -509,17 +482,15 @@ def main():
     if args.bind_backing_storage:
         need(args.backing_route is not None and args.backing_path is not None
              and args.prepared_result is None and args.operation is None
-             and args.supervisor_plan is None and not args.prepare_artifacts
+             and not args.prepare_artifacts
              and not args.plan_only and args.failed_start_chain is None,
              'backing authoring requires only deployment, backing-route, backing-path and fresh output')
     else:
         need(args.backing_route is None and args.backing_path is None
              and args.prepared_result is not None and args.operation is not None,
              'update requires prepared-result and operation; backing authoring is a separate local command')
-    need(args.bind_backing_storage or (args.prepare_artifacts and args.supervisor_plan is None and not args.plan_only
-          and args.failed_start_chain is None)
-         or (not args.prepare_artifacts and args.supervisor_plan is not None),
-         'prepare-artifacts is separate; normal apply and plan-only require a supervisor plan')
+    need(not args.prepare_artifacts or (not args.plan_only and args.failed_start_chain is None),
+         'prepare-artifacts is separate from plan-only and failed-start recovery')
     os.umask(0o077)
     need(subprocess.check_output(['git', 'branch', '--show-current'], cwd=ROOT, text=True).strip()
          == 'optimizations', 'only optimizations is allowed')
@@ -549,8 +520,7 @@ def main():
         value = make_plan(retry.decode(build_raw), deployment, retry.decode(prior_raw), guest,
                           args.operation,
                           retry.decode(read_public(args.failed_start_chain))
-                          if args.failed_start_chain is not None else None,
-                          supervisor=retry.decode(read_public(args.supervisor_plan)))
+                          if args.failed_start_chain is not None else None)
         value.update(build_result_path=str(args.prepared_result), build_result_sha256=sha(build_raw))
         raw = (json.dumps(value, sort_keys=True)+'\n').encode()
         if args.plan_only:

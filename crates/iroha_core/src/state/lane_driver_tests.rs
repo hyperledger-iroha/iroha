@@ -808,3 +808,66 @@ state_test! { sync native_driver_owned_ingress_without_original_fair_evidence_fa
     assert!(guard.restart_required());
     driver.shutdown().join().unwrap();
 }
+
+// A signed replacement remains valid Native evidence but cannot replace the
+// exact physical occurrence authenticated by the independent fair queue.
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_driver_owned_control_and_decision_require_exact_message_bytes
+    use crate::sumeragi::{
+        message::BlockMessage,
+        output_guard::ConsensusOutputGuard,
+        v2_core::{EventTag, Generation},
+        v2_lane_driver::{NativeLaneDriver, NativeLaneOwnedAdmission,
+            native_driver_owned_ingress_for_test},
+        v2_lane_wire::LaneAuthenticator,
+    };
+    let now = std::time::Instant::now();
+    let fixture = native_process_fixture(false, now);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let FirstLaneAdmittedInputReadV1::Ready(source) =
+        fixture.state.first_lane_admitted_input(&observed, lane).unwrap()
+    else { panic!("real authenticated first input"); };
+    let LaneInputBodyPreparationV1::Ready(body) =
+        fixture.state.prepare_lane_input_body(&observed, lane, &source).unwrap()
+    else { panic!("original complete input body"); };
+    let control = native_driver_control_for_test(&fixture, lane, 1);
+    let replacement_control = native_driver_control_for_test(&fixture, lane, 2);
+    let decision = sign_native_group_decision_for_test(lane, &fixture.keys, &body, 0, 0);
+    let replacement_decision = sign_native_group_decision_for_test(lane, &fixture.keys, &body, 0, 1);
+    let auth = LaneAuthenticator::new(lane);
+    let tag = EventTag::new(lane.reducer_context().height(), 0, Generation::INITIAL);
+    auth.event(&control.message, tag).unwrap();
+    auth.event(&replacement_control.message, tag).unwrap();
+    auth.decision_certificate(&decision).unwrap();
+    auth.decision_certificate(&replacement_decision).unwrap();
+    let control = BlockMessage::NativeLane(control);
+    let decision = BlockMessage::NativeLaneDecision(Box::new(decision));
+    let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
+    for (original, replacement, other_family) in [
+        (control.clone(), BlockMessage::NativeLane(replacement_control), decision.clone()),
+        (decision, BlockMessage::NativeLaneDecision(Box::new(replacement_decision)), control),
+    ] {
+        let inbound = native_driver_owned_ingress_for_test(
+            original, lane.frozen().committee[1].clone());
+        let ownership = inbound.ingress_ownership().unwrap();
+        assert!(ownership.validate_exact());
+        assert!(ownership.matches_message(inbound.message()),
+            "both Native families must retain their original canonical body");
+        assert!(!ownership.matches_message(&replacement),
+            "another correctly signed message cannot replace the admitted bytes");
+        assert!(!ownership.matches_message(&other_family),
+            "Native control and Decision owners are not interchangeable");
+        assert!(ownership.matches_semantic_origin(inbound.sender()));
+        assert!(ownership.matches_reply_routes(inbound.reply_routes()));
+        let guard = ConsensusOutputGuard::isolated();
+        let mut driver = NativeLaneDriver::new(Arc::clone(&fixture.state), Arc::clone(&guard),
+            native_process_key(&fixture, lane, 0), native_driver_limits_for_test()).unwrap();
+        assert!(matches!(driver.admit_owned(inbound).unwrap(), NativeLaneOwnedAdmission::Accepted),
+            "the exact original must also cross the actual driver ownership seam");
+        assert!(!guard.restart_required());
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap(), before,
+            "fair ownership and Native admission do not authorize economic Apply");
+        driver.shutdown().join().unwrap();
+    }
+}

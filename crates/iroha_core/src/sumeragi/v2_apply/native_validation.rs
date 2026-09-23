@@ -37,7 +37,6 @@ pub(crate) fn fail_next_post_publication_queue_tail_for_test() {
     FAIL_POST_PUBLICATION_QUEUE_TAIL.set(true);
 }
 
-
 /// Credits for both coexisting World wrapper sets and the actual effects box.
 /// The original pool reservation moves with the journals until final destruction.
 pub(crate) struct CarrierShellAdmission {
@@ -284,7 +283,8 @@ impl NativeValidationCandidate {
                 if FAIL_POST_PUBLICATION_QUEUE_TAIL.replace(false) {
                     return Err(LocalValidationRefusal::RecoveryRequired(
                         "injected post-publication Queue completion refusal".into(),
-                    ).into());
+                    )
+                    .into());
                 }
                 service
                     .queue
@@ -337,7 +337,11 @@ impl NativeValidationCandidate {
     #[cfg(test)]
     pub(crate) fn published_progress_for_test(&self) -> Option<(usize, bool, bool)> {
         match self.phase.as_ref().as_ref()? {
-            NativeValidationPhase::Published { outbox_published, queue_cleaned, .. } => Some((
+            NativeValidationPhase::Published {
+                outbox_published,
+                queue_cleaned,
+                ..
+            } => Some((
                 std::ptr::from_ref(self.phase.as_ref()) as usize,
                 *outbox_published,
                 *queue_cleaned,
@@ -414,7 +418,9 @@ impl V2ApplyService {
 
     /// Subscribe before publication to count actual completion notifications.
     #[cfg(test)]
-    pub(crate) fn events_for_test(&self) -> tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox> {
+    pub(crate) fn events_for_test(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox> {
         self.events_sender.subscribe()
     }
 
@@ -428,7 +434,10 @@ impl V2ApplyService {
 impl OwnedNativeCarrierValidator {
     // These are disjoint first-release producers. Failed Native authentication
     // never enters the genesis/control producer or a second execution attempt.
-    fn classify_source(&self, body: &SignedBlock) -> Result<CurrentCarrierSourceClass, V2ApplyError> {
+    fn classify_source(
+        &self,
+        body: &SignedBlock,
+    ) -> Result<CurrentCarrierSourceClass, V2ApplyError> {
         if !body.is_resultless_proposal() {
             return Err(V2ApplyError::ResultBearingProposal);
         }
@@ -438,12 +447,16 @@ impl OwnedNativeCarrierValidator {
                 || !bundle.autonomous_lane_payloads.is_empty()
         }) {
             return Err(V2ApplyError::Validation(
-                "obsolete merge, lane-ownership and autonomous payload carriers are unsupported".into(),
+                "obsolete merge, lane-ownership and autonomous payload carriers are unsupported"
+                    .into(),
             ));
         }
-        let native = body.execution_context().is_some_and(|bundle| bundle.native_lane_decisions.is_some());
+        let native = body
+            .execution_context()
+            .is_some_and(|bundle| bundle.native_lane_decisions.is_some());
         if self.context.context().height == 1 {
-            if native || body.header().prev_block_hash().is_some()
+            if native
+                || body.header().prev_block_hash().is_some()
                 || self.context.context().parent_commit_qc.is_some()
                 || self.context.context().snapshot_bootstrap.is_some()
             {
@@ -456,21 +469,31 @@ impl OwnedNativeCarrierValidator {
                 "current economic inputs require their authenticated Native Decision batch".into(),
             ));
         }
-        Ok(if native { CurrentCarrierSourceClass::Native } else { CurrentCarrierSourceClass::Control })
+        Ok(if native {
+            CurrentCarrierSourceClass::Native
+        } else {
+            CurrentCarrierSourceClass::Control
+        })
     }
 
     fn execute_source(
         &self,
         mut waiting: AwaitingNativeSource,
     ) -> Result<NativeValidationPhase, V2ApplyError> {
-        if matches!(waiting.class, CurrentCarrierSourceClass::Genesis | CurrentCarrierSourceClass::Control) {
+        if matches!(
+            waiting.class,
+            CurrentCarrierSourceClass::Genesis | CurrentCarrierSourceClass::Control
+        ) {
             if waiting.pending.is_some() || !waiting.recovered.is_empty() {
                 return Err(LocalValidationRefusal::RecoveryRequired(
                     "control carrier acquired a foreign Native source recovery owner".into(),
-                ).into());
+                )
+                .into());
             }
             let prepared = self.service.prepare_current_control_source_admitted(
-                &waiting.proposal, &waiting.context, waiting.shell_admission,
+                &waiting.proposal,
+                &waiting.context,
+                waiting.shell_admission,
             )?;
             return Self::detach_prepared(prepared);
         }

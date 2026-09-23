@@ -21220,6 +21220,7 @@ pub(super) mod tests {
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
@@ -21744,9 +21745,18 @@ pub(super) mod tests {
             .collect::<Vec<_>>();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
             if let Some(length) = npos_epoch_length {
-                crate::kagemusha_v1_test_fixtures::mint_finality_scheduled_authorization(network_id, context_epoch, length, &roster)
+                crate::kagemusha_v1_test_fixtures::mint_finality_scheduled_authorization(
+                    network_id,
+                    context_epoch,
+                    length,
+                    &roster,
+                )
             } else {
-                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, context_epoch_end_height, &roster)
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                    network_id,
+                    context_epoch_end_height,
+                    &roster,
+                )
             };
         let mut context = wire::HeightContext {
             network_id,
@@ -21844,30 +21854,50 @@ pub(super) mod tests {
                     parent_context.kagemusha_mint_finality_authorization,
                     parent_context.kagemusha_mint_finality_authority,
                 ) = if let Some(length) = npos_epoch_length {
-                    crate::kagemusha_v1_test_fixtures::mint_finality_scheduled_authorization(network_id, parent_context.epoch, length, &parent_context.roster)
+                    crate::kagemusha_v1_test_fixtures::mint_finality_scheduled_authorization(
+                        network_id,
+                        parent_context.epoch,
+                        length,
+                        &parent_context.roster,
+                    )
                 } else {
-                    crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, parent_context.epoch_end_height, &parent_context.roster)
+                    crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                        network_id,
+                        parent_context.epoch_end_height,
+                        &parent_context.roster,
+                    )
                 };
                 if block_height == parent_context.epoch_end_height {
-                    let length = npos_epoch_length.expect("only NPoS has a finite fixture boundary");
-                    let (authorization, authority) = crate::kagemusha_v1_test_fixtures::mint_finality_scheduled_authorization(
-                        network_id, parent_context.epoch + 1, length, &parent_context.roster,
-                    );
-                    authorization.validate_successor(&parent_context.kagemusha_mint_finality_authorization)
+                    let length =
+                        npos_epoch_length.expect("only NPoS has a finite fixture boundary");
+                    let (authorization, authority) =
+                        crate::kagemusha_v1_test_fixtures::mint_finality_scheduled_authorization(
+                            network_id,
+                            parent_context.epoch + 1,
+                            length,
+                            &parent_context.roster,
+                        );
+                    authorization
+                        .validate_successor(&parent_context.kagemusha_mint_finality_authorization)
                         .expect("durable parent authorizes its exact scheduled successor");
-                    parent_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
-                        epoch: authorization.epoch,
-                        kagemusha_mint_finality_authorization: authorization,
-                        kagemusha_mint_finality_authority: authority,
-                        epoch_end_height: authorization.last_height,
-                        mode,
-                        roster: parent_context.roster.clone(),
-                        validator_set_pops: keys.iter().map(|key| {
-                            iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("fixture successor PoP")
-                        }).collect(),
-                        quorum: parent_context.quorum,
-                        leader_seed: parent_context.leader_seed,
-                    });
+                    parent_context.next_epoch_snapshot =
+                        Some(wire::finality::FinalizedNextEpochSnapshot {
+                            epoch: authorization.epoch,
+                            kagemusha_mint_finality_authorization: authorization,
+                            kagemusha_mint_finality_authority: authority,
+                            epoch_end_height: authorization.last_height,
+                            mode,
+                            roster: parent_context.roster.clone(),
+                            validator_set_pops: keys
+                                .iter()
+                                .map(|key| {
+                                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                                        .expect("fixture successor PoP")
+                                })
+                                .collect(),
+                            quorum: parent_context.quorum,
+                            leader_seed: parent_context.leader_seed,
+                        });
                 }
                 let signed_block: &SignedBlock = block.as_ref();
                 let finality = signed_finality_artifact(
@@ -22745,7 +22775,12 @@ pub(super) mod tests {
         (
             successor.kagemusha_mint_finality_authorization,
             successor.kagemusha_mint_finality_authority,
-        ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(successor.network_id, successor.epoch, successor.epoch_end_height, &successor.roster);
+        ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
+            successor.network_id,
+            successor.epoch,
+            successor.epoch_end_height,
+            &successor.roster,
+        );
         successor
             .validate()
             .expect("valid immediate successor context");
@@ -24757,11 +24792,14 @@ pub(super) mod tests {
         assert_eq!(adapter.obsolete_merge_sidecar_generation_hints.len(), 1);
         let _ = apply_retired_merge_sidecar_requests(&mut adapter, &services)
             .expect("clear the request retirement from the fixture");
-        crate::sumeragi::v2_runner::apply_obsolete_merge_sidecar_generation_hints(
-            &mut adapter,
-            &services,
-        )
-        .expect("cancel the generation-fenced service-owned Close before global output retry");
+        assert!(
+            crate::sumeragi::v2_runner::apply_obsolete_merge_sidecar_generation_hints(
+                &mut adapter,
+                &services,
+            )
+            .expect("cancel the generation-fenced service-owned Close before global output retry")
+                > 0
+        );
         assert!(
             !reconcile_terminal_lane_output_handoffs(
                 LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
@@ -28194,8 +28232,13 @@ pub(super) mod tests {
         assert_eq!(durable.prepare_qc, retained.prepare_qc);
         assert_eq!(durable.commit_qc, retained.commit_qc);
     }
-    #[test]
-    fn canonical_lane_recovery_restores_handoff_after_losing_carrier_retirement() {
+    fn with_recovered_canonical_lane_handoff(
+        check: impl FnOnce(
+            &mut V2LaneWorkAdapter,
+            &LaneBlockProposalV1,
+            &wire::finality::V2FinalityArtifact,
+        ),
+    ) {
         let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
         let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
         let mut losing = proposal.clone();
@@ -28321,6 +28364,118 @@ pub(super) mod tests {
                 .expect("idempotent recovery"),
             0
         );
+        check(&mut adapter, &proposal, &artifact);
+    }
+
+    #[test]
+    fn canonical_lane_recovery_restores_handoff_after_losing_carrier_retirement() {
+        with_recovered_canonical_lane_handoff(|_, _, _| {});
+    }
+
+    fn repeat_complete_lane_recovery_consumer(discard_custody: bool) {
+        with_recovered_canonical_lane_handoff(|adapter, proposal, finality| {
+            let receipt = adapter.kura.read_lane_completion_receipt(proposal).unwrap();
+            let certificate = adapter
+                .kura
+                .read_lane_completion_certificate(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .unwrap();
+            assert!(receipt.is_some() && certificate.is_some());
+            let state_height = adapter.state.committed_height();
+            let height = NonZeroUsize::new(usize::try_from(finality.height).unwrap()).unwrap();
+            let canonical_hash = adapter.kura.get_durable_block_hash(height);
+            assert_eq!(canonical_hash, Some(finality.block_hash));
+            assert_eq!(adapter.persist_anchored_sessions().unwrap(), 0);
+            assert!(
+                adapter
+                    .durable_completion_matches_finality(finality)
+                    .unwrap()
+            );
+            let started = std::time::Instant::now();
+            for _ in 0..32 {
+                if discard_custody {
+                    adapter.kura.clear_receipt_namespace_durability_for_tests();
+                }
+                assert_eq!(adapter.persist_anchored_sessions().unwrap(), 0);
+                assert!(
+                    adapter
+                        .durable_completion_matches_finality(finality)
+                        .unwrap()
+                );
+                assert_eq!(
+                    adapter.kura.read_lane_completion_receipt(proposal).unwrap(),
+                    receipt
+                );
+                assert_eq!(
+                    adapter
+                        .kura
+                        .read_lane_completion_certificate(
+                            proposal.descriptor.lane_id,
+                            proposal.descriptor.lane_block_height,
+                        )
+                        .unwrap(),
+                    certificate
+                );
+                assert_eq!(adapter.state.committed_height(), state_height);
+                assert_eq!(adapter.kura.get_durable_block_hash(height), canonical_hash);
+                assert!(!adapter.output_guard.restart_required());
+            }
+            println!(
+                "receipt_namespace_complete_consumer discard_custody={discard_custody} cycles=32 elapsed_ns={}",
+                started.elapsed().as_nanos()
+            );
+        });
+    }
+
+    #[test]
+    fn canonical_lane_recovery_repeated_complete_consumer_control() {
+        repeat_complete_lane_recovery_consumer(true);
+    }
+
+    #[test]
+    fn canonical_lane_recovery_repeated_complete_consumer_retained() {
+        repeat_complete_lane_recovery_consumer(false);
+    }
+
+    #[test]
+    fn canonical_lane_recovery_complete_consumer_preserves_receipt_directory_barrier() {
+        struct ResetReceiptDirectoryFault;
+        impl Drop for ResetReceiptDirectoryFault {
+            fn drop(&mut self) {
+                Kura::receipt_namespace_directory_failure_for_tests(false);
+            }
+        }
+        let _reset = ResetReceiptDirectoryFault;
+        with_recovered_canonical_lane_handoff(|adapter, _, finality| {
+            assert_eq!(adapter.persist_anchored_sessions().unwrap(), 0);
+            assert!(
+                adapter
+                    .durable_completion_matches_finality(finality)
+                    .unwrap()
+            );
+            assert!(!Kura::receipt_namespace_directory_failure_for_tests(true));
+            assert_eq!(adapter.persist_anchored_sessions().unwrap(), 0);
+            assert!(
+                adapter
+                    .durable_completion_matches_finality(finality)
+                    .unwrap()
+            );
+            assert!(
+                Kura::receipt_namespace_directory_failure_for_tests(true),
+                "whole consumer must retain the receipt-only directory barrier"
+            );
+            adapter.kura.clear_receipt_namespace_durability_for_tests();
+            assert!(
+                adapter.persist_anchored_sessions().is_err(),
+                "discarded custody must expose the same pending receipt barrier failure"
+            );
+            assert!(
+                !Kura::receipt_namespace_directory_failure_for_tests(false),
+                "the receipt namespace barrier must consume its own failure"
+            );
+        });
     }
     #[test]
     fn globally_applied_lane_body_without_certificate_remains_recoverable() {
@@ -29064,9 +29219,12 @@ pub(super) mod tests {
             signature: Vec::new(),
         };
         let authority = &context.kagemusha_mint_finality_authority;
-        if let Some(message) = crate::zk::kagemusha_v1_recursion::build_kagemusha_mint_finality_seal_message_v1(
-            authority, context, &vote,
-        ).expect("derive fixture boundary mint authority statement") {
+        if let Some(message) =
+            crate::zk::kagemusha_v1_recursion::build_kagemusha_mint_finality_seal_message_v1(
+                authority, context, &vote,
+            )
+            .expect("derive fixture boundary mint authority statement")
+        {
             let seals = commit_qc.signers.iter().map(|index| {
                 let seed = 0xA0_u8.wrapping_add(u8::try_from(*index).expect("fixture signer index"));
                 let signer = crate::zk::kagemusha_v1_recursion::KagemushaMintFinalitySignerV1::from_seed(
@@ -29075,15 +29233,20 @@ pub(super) mod tests {
                 crate::zk::kagemusha_v1_recursion::sign_kagemusha_mint_finality_seal_v1(&signer, &message)
                     .expect("paired fixture boundary signature")
             }).collect();
-            let bundle = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySealBundleV1 { message, seals };
+            let bundle = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySealBundleV1 {
+                message,
+                seals,
+            };
             crate::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_seal_bundle_v1(
                 authority, context, &commit_qc, &bundle,
-            ).expect("exact quorum and authority of fixture boundary seals");
+            )
+            .expect("exact quorum and authority of fixture boundary seals");
             commit_qc.aggregate_signature = wire::encode_kagemusha_consensus_signature_envelope_v1(
                 wire::KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,
                 &commit_qc.aggregate_signature,
                 &norito::codec::Encode::encode(&bundle),
-            ).expect("encode both fixture finality certificates");
+            )
+            .expect("encode both fixture finality certificates");
         }
         let validator_set_pops = keys
             .iter()

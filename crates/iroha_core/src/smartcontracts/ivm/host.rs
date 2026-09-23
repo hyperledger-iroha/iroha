@@ -25150,14 +25150,11 @@ seiyaku DurableOwner {
             BlockHeader::new(nonzero!(1_u64), None, None, 1_700_000_000_000, 0),
         )
         .build_with_signature(0, ALICE_KEYPAIR.private_key());
+        // State authenticates the lane's physical storage before history is retained.
+        let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
         kura.store_block(Arc::new(authenticated_block.clone()))
             .expect("store authenticated ledger-time fixture block");
-        let state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
-        {
-            let mut block_hashes = state.block_hashes.block();
-            block_hashes.push_for_tests(authenticated_block.hash());
-            block_hashes.commit_for_tests();
-        }
+        state.append_committed_block_header_for_tests(authenticated_block.header());
         let source = r#"
             seiyaku ValidationFeeCreditReader {
                 state quantity AvailableValidationFeeCredit;
