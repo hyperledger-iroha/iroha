@@ -519,7 +519,7 @@ fn kagami_stubs_materialize_complete_manifests_with_exact_supplied_authority() {
         "materialized-stub-chain",
         "supplied-generation",
         placeholder
-            .epoch_roster
+            .authority_generation
             .validators
             .iter()
             .map(|keys| keys.validator.clone()),

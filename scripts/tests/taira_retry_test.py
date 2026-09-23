@@ -262,6 +262,27 @@ def derived_capacity(inputs=None, runtime=None, build=None):
     )
 
 
+class MintFinalityContinuityTests(unittest.TestCase):
+    def test_capture_reads_only_generation_zero_authority(self):
+        rows = [{"validator": f"peer-{i}"} for i in range(4)]
+        manifest = {"kagemusha_mint_finality": {"authority_generation": {
+            "version": 1, "generation": 0, "validators": rows,
+        }}}
+        self.assertEqual(retry._continuity_mint_finality_peers(manifest),
+                         [row["validator"] for row in rows])
+        for altered in (
+            {"kagemusha_mint_finality": {"epoch_roster": {"validators": rows}}},
+            {"kagemusha_mint_finality": {"authority_generation": {
+                "version": 1, "generation": 1, "validators": rows,
+            }}},
+            {"kagemusha_mint_finality": {"authority_generation": {
+                "version": 1, "generation": 0, "validators": rows[:3] + [rows[0]],
+            }}},
+        ):
+            with self.assertRaises(RuntimeError):
+                retry._continuity_mint_finality_peers(altered)
+
+
 class RetryTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

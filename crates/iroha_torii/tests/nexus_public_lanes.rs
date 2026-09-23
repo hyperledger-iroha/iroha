@@ -24,6 +24,11 @@ use iroha_data_model::{
         consensus_keys::RegisterConsensusKey,
         staking::{BondPublicLaneStake, RegisterPublicLaneValidator},
     },
+    nexus::{
+        PublicLaneBondPreconditionV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+        PublicLaneMonetaryScopeV1, PublicLaneRegistrationPreconditionV1,
+    },
+    parameter::{Parameter, system::SumeragiNposParameters},
     permission::Permission,
 };
 use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
@@ -49,6 +54,7 @@ fn with_loopback_connect_info(mut request: Request<Body>) -> Request<Body> {
 }
 fn configure_nexus_staking(state: &mut State, escrow: &AccountId) {
     let mut nexus = state.nexus_snapshot();
+    nexus.staking.stake_asset_id = stake_asset_definition_id().to_string();
     nexus.staking.stake_escrow_account_id = escrow.to_string();
     nexus.staking.slash_sink_account_id = escrow.to_string();
     state
@@ -67,7 +73,7 @@ async fn nexus_public_lane_endpoints_exist() {
     let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
     configure_nexus_staking(&mut state, &escrow);
     relax_consensus_key_activation_for_tests(&mut state);
-    seed_public_lane_state(&state, &validator_keypair, &validator, &delegator);
+    seed_public_lane_state(&state, &validator_keypair, &validator, &delegator, &escrow);
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
     let resp = fixtures::request(
@@ -95,7 +101,7 @@ async fn nexus_public_lane_endpoints_list_records() {
     let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
     configure_nexus_staking(&mut state, &escrow);
     relax_consensus_key_activation_for_tests(&mut state);
-    seed_public_lane_state(&state, &validator_keypair, &validator, &delegator);
+    seed_public_lane_state(&state, &validator_keypair, &validator, &delegator, &escrow);
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
     let resp = fixtures::request(
@@ -151,10 +157,7 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let escrow_id = AccountId::new(escrow_keypair.public_key().clone());
     let escrow = Account::new(escrow_id.clone()).build(&escrow_id);
     let domain = Domain::new(domain_id.clone()).build(&validator_id);
-    let asset_definition_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("nexus", "universal").expect("domain id"),
-        "xor".parse().expect("asset definition name"),
-    );
+    let asset_definition_id = stake_asset_definition_id();
     let asset_definition = AssetDefinition::numeric(
         asset_definition_id.clone(),
         "xor".to_owned(),
@@ -174,6 +177,16 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
         [validator_asset, delegator_asset],
         [],
     );
+    let mut npos = SumeragiNposParameters::default();
+    npos.xor_asset_definition_id = asset_definition_id;
+    {
+        let mut block = world.block();
+        block
+            .parameters
+            .get_mut()
+            .set_parameter(Parameter::Custom(npos.into_custom_parameter()));
+        block.commit();
+    }
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     (
         world,
@@ -183,11 +196,18 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
         escrow_id,
     )
 }
+fn stake_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::derive_from_components(
+        DomainId::try_new("nexus", "universal").expect("domain id"),
+        "xor".parse().expect("asset definition name"),
+    )
+}
 fn seed_public_lane_state(
     state: &State,
     validator_keypair: &KeyPair,
     validator: &AccountId,
     delegator: &AccountId,
+    escrow: &AccountId,
 ) {
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
@@ -223,13 +243,28 @@ fn seed_public_lane_state(
         Name::from_str("alias").expect("alias key"),
         Json::from("validator-01"),
     );
+    let stake_definition = stake_asset_definition_id();
+    let escrow_asset = AssetId::new(stake_definition.clone(), escrow.clone());
+    let network_scope = PublicLaneMonetaryScopeV1::Network(*state.network_id_ref());
     RegisterPublicLaneValidator {
         lane_id: LaneId::SINGLE,
         validator: validator.clone(),
         peer_id: PeerId::from(validator.expect_single_signatory().clone()),
         stake_account: validator.clone(),
-        initial_stake: iroha_primitives::numeric::Quantity::from(1000_u32),
+        initial_stake: Quantity::from(1000_u32),
         metadata,
+        monetary_plan: PublicLaneMonetaryPlanV1 {
+            network_scope,
+            valid_until_height: 1,
+            source_asset: AssetId::new(stake_definition.clone(), validator.clone()),
+            destination_asset: escrow_asset.clone(),
+            amount: Quantity::from(1000_u32),
+            precondition: PublicLaneMonetaryPreconditionV1::Registration(
+                PublicLaneRegistrationPreconditionV1 {
+                    activation_height: 1,
+                },
+            ),
+        },
     }
     .execute(validator, &mut tx)
     .expect("validator registration");
@@ -237,8 +272,19 @@ fn seed_public_lane_state(
         lane_id: LaneId::SINGLE,
         validator: validator.clone(),
         staker: delegator.clone(),
-        amount: iroha_primitives::numeric::Quantity::from(250_u32),
+        amount: Quantity::from(250_u32),
         metadata: Metadata::default(),
+        monetary_plan: PublicLaneMonetaryPlanV1 {
+            network_scope,
+            valid_until_height: 1,
+            source_asset: AssetId::new(stake_definition, delegator.clone()),
+            destination_asset: escrow_asset,
+            amount: Quantity::from(250_u32),
+            precondition: PublicLaneMonetaryPreconditionV1::Bond(PublicLaneBondPreconditionV1 {
+                activation_height: 1,
+                peer_id,
+            }),
+        },
     }
     .execute(delegator, &mut tx)
     .expect("bond stake");
