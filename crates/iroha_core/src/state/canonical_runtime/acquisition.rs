@@ -188,6 +188,7 @@ pub(super) struct RuntimeBlockAcquisition<'state> {
     transactions: Option<TransactionsBlock<'state>>,
     cells: CellPhase<'state>,
     block_hashes: Option<BlockHashesBlock<'state>>,
+    membership: Option<storage_transactions::PreparedMembershipStart>,
     target: &'state State,
     started: bool,
     complete: bool,
@@ -195,34 +196,42 @@ pub(super) struct RuntimeBlockAcquisition<'state> {
 
 impl<'state> RuntimeBlockAcquisition<'state> {
     /// Inert slots and the already detached original funded successor only.
-    pub(super) fn new(target: &'state State, block_hashes: BlockHashesBlock<'state>) -> Self {
+    pub(super) fn new(
+        target: &'state State,
+        block_hashes: BlockHashesBlock<'state>,
+        membership: storage_transactions::PreparedMembershipStart,
+    ) -> Self {
         Self {
             world: None,
             transactions: None,
             cells: CellPhase::new(target),
             block_hashes: Some(block_hashes),
+            membership: Some(membership),
             target,
             started: false,
             complete: false,
         }
     }
 
-    pub(super) fn initialize(
-        &mut self,
-        replacement: bool,
-    ) -> Result<(), mv::storage::AdmittedStorageError> {
+    pub(super) fn initialize(&mut self, replacement: bool) -> Result<(), StateAdmissionError> {
         assert!(!self.started, "original State acquisition is one-shot");
         self.started = true;
         self.world = Some(if replacement {
-            self.target.world.try_block_and_revert()?
+            self.target
+                .world
+                .try_block_and_revert()
+                .map_err(StateStorageAdmissionError::World)?
         } else {
-            self.target.world.try_block()?
+            self.target
+                .world
+                .try_block()
+                .map_err(StateStorageAdmissionError::World)?
         });
-        self.transactions = Some(if replacement {
-            self.target.transactions.block_and_revert()
-        } else {
-            self.target.transactions.block()
-        });
+        self.transactions = Some(
+            self.target
+                .transactions
+                .attach_prepared(&mut self.membership)?,
+        );
         self.cells.initialize(if replacement {
             BlockMode::Replace
         } else {
@@ -230,6 +239,13 @@ impl<'state> RuntimeBlockAcquisition<'state> {
         });
         self.complete = true;
         Ok(())
+    }
+
+    pub(super) fn retain_refused_membership(&mut self) {
+        self.release();
+        if let Some(original) = self.membership.take() {
+            self.target.transactions.retain_preparation(original);
+        }
     }
 
     pub(super) fn world(&self) -> &WorldBlock<'state> {

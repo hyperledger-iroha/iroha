@@ -525,6 +525,9 @@ fn guard_cells<F: KagemushaPoseidonFieldV1>(
     KagemushaAssignedGuardBundleV1 {
         guard_digest: constant_bytes(&[0; 32]).try_into().unwrap(),
         credential_digests: std::array::from_fn(|_| constant_bytes(&[0; 32]).try_into().unwrap()),
+        credential_app_policy_binding_digests: std::array::from_fn(|_| {
+            constant_bytes(&[0; 32]).try_into().unwrap()
+        }),
         credential_issuance_digests: std::array::from_fn(|_| {
             constant_bytes(&[0; 32]).try_into().unwrap()
         }),

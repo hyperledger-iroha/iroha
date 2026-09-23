@@ -213,8 +213,13 @@ fn candidate_preparation_retains_actual_prefix_and_context_without_publication()
         .unwrap_or_else(|(_, error)| panic!("candidate execution: {error}"));
         staged.execution_commitment_for_testing(&valid).unwrap()
     };
-    let prepared = prepare(&state, proposal.clone(), &topology, &context)
+    let mut prepared = prepare(&state, proposal.clone(), &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("candidate preparation: {error}"));
+    assert_eq!(
+        prepared.autoscale_retirement_binding().unwrap(),
+        None,
+        "this exact prepared candidate has no pending or prospective retirement"
+    );
     assert_eq!(prepared.execution_prefix_commitment(), expected_prefix);
     assert_eq!(prepared.context(), &context);
     assert_eq!(prepared.block().hash(), proposal.hash());

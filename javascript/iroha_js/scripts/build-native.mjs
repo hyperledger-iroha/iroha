@@ -52,6 +52,8 @@ const MAX_CARGO_JSON_BYTES = 64 * 1024 * 1024;
 const MAX_CARGO_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_TOOLCHAIN_PROBE_BYTES = 64 * 1024;
 const TOOLCHAIN_PROBE_TIMEOUT_MS = 15_000;
+const MACOS_SDK_SETTINGS_BYTES = 1024 * 1024;
+const MACOS_VERSION_PATTERN = /^\d+(?:\.\d+){1,2}$/u;
 const REQUIRED_BUILD_ENVIRONMENT = Object.freeze({
   CARGO_BUILD_JOBS: "1",
   CARGO_INCREMENTAL: "0",
@@ -199,7 +201,9 @@ function requiredExecutable(env, key, executableName) {
   return path;
 }
 
-function probePinnedExecutable(executable, args, repoRoot, env, runTool) {
+function probePinnedExecutable(
+  executable, args, repoRoot, env, runTool, stream = "stdout",
+) {
   const result = runTool(executable, args, {
     cwd: repoRoot,
     env,
@@ -212,14 +216,14 @@ function probePinnedExecutable(executable, args, repoRoot, env, runTool) {
     result?.error !== undefined ||
     result?.status !== 0 ||
     (result.signal !== undefined && result.signal !== null) ||
-    typeof result.stdout !== "string" ||
-    Buffer.byteLength(result.stdout, "utf8") > MAX_TOOLCHAIN_PROBE_BYTES
+    typeof result[stream] !== "string" ||
+    Buffer.byteLength(result[stream], "utf8") > MAX_TOOLCHAIN_PROBE_BYTES
   ) {
     throw new Error(
       "Native build could not verify " + basename(executable) + " " + args.join(" ") + ".",
     );
   }
-  return result.stdout.trim();
+  return result[stream].trim();
 }
 
 function validatePinnedExecutables(repoRoot, env, runTool) {
@@ -260,6 +264,81 @@ function validatePinnedExecutables(repoRoot, env, runTool) {
     throw new Error("Native build executables must share the bin directory of rustc's reported sysroot.");
   }
   return Object.freeze({ cargoPath, rustcPath, rustdocPath });
+}
+
+function macosBuildIdentity(repoRoot, env, runTool) {
+  if (typeof env.MACOSX_DEPLOYMENT_TARGET !== "string" ||
+      !MACOS_VERSION_PATTERN.test(env.MACOSX_DEPLOYMENT_TARGET)) {
+    throw new Error("Native macOS build requires an explicit MACOSX_DEPLOYMENT_TARGET version.");
+  }
+  const xcrun = canonicalRegularFile("/usr/bin/xcrun", "Native build xcrun", {
+    executable: true,
+  });
+  const requestedSdk = env.SDKROOT ?? probePinnedExecutable(
+    xcrun, ["--sdk", "macosx", "--show-sdk-path"], repoRoot, env, runTool,
+  );
+  const sdkRoot = canonicalDirectory(
+    realpathSync(requestedSdk), "Native build macOS SDKROOT",
+  ).canonicalPath;
+  const settings = readStableRegularFile(join(sdkRoot, "SDKSettings.json"), {
+    label: "Native build macOS SDK settings",
+    maximumBytes: MACOS_SDK_SETTINGS_BYTES,
+    requireNonempty: true,
+  }).bytes;
+  let sdkVersion;
+  try {
+    sdkVersion = JSON.parse(settings.toString("utf8")).Version;
+  } catch {
+    throw new Error("Native build macOS SDK settings are invalid.");
+  }
+  if (typeof sdkVersion !== "string" || !MACOS_VERSION_PATTERN.test(sdkVersion)) {
+    throw new Error("Native build macOS SDK version is invalid.");
+  }
+  const clangPath = canonicalRegularFile(
+    realpathSync(probePinnedExecutable(
+      xcrun, ["--find", "clang"], repoRoot, env, runTool,
+    )), "Native build Apple clang", { executable: true },
+  );
+  const linkerPath = canonicalRegularFile(
+    realpathSync(probePinnedExecutable(
+      xcrun, ["--find", "ld"], repoRoot, env, runTool,
+    )), "Native build Apple linker", { executable: true },
+  );
+  const clangVersion = probePinnedExecutable(
+    clangPath, ["--version"], repoRoot, env, runTool,
+  ).split("\n", 1)[0];
+  const linkerVersion = probePinnedExecutable(
+    linkerPath, ["-v"], repoRoot, env, runTool, "stderr",
+  ).split("\n", 1)[0];
+  if (!clangVersion.startsWith("Apple clang version ") ||
+      !linkerVersion.startsWith("@(#)PROGRAM:ld PROJECT:ld-")) {
+    throw new Error("Native build Apple compiler or linker version is invalid.");
+  }
+  return Object.freeze({
+    sdk_root: sdkRoot,
+    sdk_version: sdkVersion,
+    sdk_settings_sha256: createHash("sha256").update(settings).digest("hex"),
+    deployment_target: env.MACOSX_DEPLOYMENT_TARGET,
+    clang_path: clangPath,
+    clang_version: clangVersion,
+    linker_path: linkerPath,
+    linker_version: linkerVersion,
+  });
+}
+
+function macosCargoEnvironment(env, identity) {
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify(identity)).digest("hex");
+  const metadataFlag = `-Cmetadata=iroha_js_macos_${fingerprint}`;
+  const cargoEnv = { ...env, SDKROOT: identity.sdk_root };
+  if (env.CARGO_ENCODED_RUSTFLAGS !== undefined) {
+    cargoEnv.CARGO_ENCODED_RUSTFLAGS = env.CARGO_ENCODED_RUSTFLAGS
+      ? `${env.CARGO_ENCODED_RUSTFLAGS}\x1f${metadataFlag}` : metadataFlag;
+  } else {
+    cargoEnv.RUSTFLAGS = env.RUSTFLAGS
+      ? `${env.RUSTFLAGS} ${metadataFlag}` : metadataFlag;
+  }
+  return cargoEnv;
 }
 
 function validateRequiredEnvironment(env) {
@@ -1002,6 +1081,8 @@ export function runNativeBuild({
   const root = canonicalRepoRoot(repoRoot);
   const inputs = canonicalBuildInputs(root, env);
   const executables = validatePinnedExecutables(root, env, runTool);
+  const macosBuild = platform === "darwin"
+    ? macosBuildIdentity(root, env, runTool) : undefined;
   const target = canonicalTargetRoot(root, env);
   const nativePath = nativeBuildOutputPath({
     repoRoot: root,
@@ -1058,7 +1139,7 @@ export function runNativeBuild({
     ...cargoBuildArgsForNativeProfile(cargoProfile),
   ];
   const cargoEnv = {
-    ...env,
+    ...(macosBuild === undefined ? env : macosCargoEnvironment(env, macosBuild)),
     CARGO: executables.cargoPath,
     CARGO_TARGET_DIR: target.canonicalPath,
     [NATIVE_BUILD_CARGO_LOCK_ENV]: inputs.cargoLock,
@@ -1080,6 +1161,10 @@ export function runNativeBuild({
     );
   }
   if (build?.status !== 0) return build?.status ?? 1;
+  if (macosBuild !== undefined &&
+      JSON.stringify(macosBuildIdentity(root, env, runTool)) !== JSON.stringify(macosBuild)) {
+    throw new Error("Native build macOS SDK or Apple toolchain changed while Cargo was running.");
+  }
 
   const artifact = verifyCargoArtifactMessages(build.stdout, {
     cargoProfile,
@@ -1104,6 +1189,7 @@ export function runNativeBuild({
   const sourceAfter = readSourceState(root, { env });
   const provenance = createProvenance({
     cargoProfile,
+    macosBuild,
     nativePath,
     sourceBefore,
     sourceAfter,
@@ -1126,6 +1212,10 @@ export function runNativeBuild({
       throw new Error(
         "Native build source changed while provenance was published.",
       );
+    }
+    if (macosBuild !== undefined &&
+        JSON.stringify(macosBuildIdentity(root, env, runTool)) !== JSON.stringify(macosBuild)) {
+      throw new Error("Native build macOS SDK or Apple toolchain changed during publication.");
     }
     verifyFinalPublication(
       nativePath, sealedOutput, expectedReceiptBytes, publishedReceipt.identity, assertDirectories,

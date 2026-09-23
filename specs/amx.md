@@ -193,7 +193,16 @@ The canonical data-model types live in
 | `AxtProofEnvelope.fastpq_binding` | Required FastPQ V1 source, claim, witness, policy, effect, verifier, and target-dataspace binding. |
 | `AxtFastpqBinding.remote_spend_intent_commitments` | Canonical strictly ordered, duplicate-free set of at most 65,536 V1 commitments. Each commitment covers the exact authenticated handle replay key (dataspace, asset-definition incarnation, descriptor binding, era, sub-nonce, and target lane), exact `AssetDefinitionId`, `transfer` operation, canonical `from`/`to` accounts, and effective `Quantity`. Generic proofs may leave the set empty; every proof consumed by `USE_ASSET_HANDLE` must contain and consume exactly one matching claim. |
 | `committed_amount` | Optional non-zero scalar that must exactly match the canonical 16-byte little-endian `u128` in `axt_fastpq_committed_amount_v1` metadata inserted before the FastPQ batch seal and proof are generated. Missing or mismatched proof-bound metadata is rejected. |
-| `amount_commitment` | Optional deterministic hidden-amount copy checked against the spend intent; recomputing it cannot replace or alter the proof-bound `committed_amount`. |
+| `amount_commitment` | Optional deterministic envelope/amount consistency digest. It does not hide or authenticate an amount, and recomputing it cannot replace the proof-bound `committed_amount`. |
+
+V1 handle admission requires a non-zero clear `RemoteSpendIntent.op.amount`.
+The host, persisted-fragment conversion, and block amount resolver reject a
+redacted (`None`) amount even if the proof envelope carries a public
+`committed_amount` scalar. That scalar is visible to every verifier and cannot
+implement a private spend. The private-amount path remains a release blocker
+until the proof binds a confidential value, conservation, and the authenticated
+budget comparison without exposing the amount. A structurally signed anchored
+spend draft or matching envelope digest alone does not authorize it.
 
 The final anchored-spend wire is `AxtAnchoredSpendV1`. Its
 `AxtFinalizedSpendAnchorV1` binds the genesis-derived network identity and exact

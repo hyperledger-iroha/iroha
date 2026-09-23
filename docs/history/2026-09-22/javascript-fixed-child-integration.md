@@ -1,8 +1,8 @@
 # Fixed JavaScript child and runtime review checkpoint
 
 Work remains in `/Users/takemiyamakoto/devstuff/iroha` on `optimizations`, with
-HEAD `bdadfae6175a89e5fdb56292a5a64b93b44a231f`. No branch, worktree, commit or
-release candidate was created. All fourteen integrated release goals remain
+initial HEAD `bdadfae6175a89e5fdb56292a5a64b93b44a231f`. This agent created no
+branch, worktree, commit or release candidate. All fourteen integrated release goals remain
 open; this record establishes component implementation and scoped validation.
 
 ## Integrated child and CI changes
@@ -84,3 +84,26 @@ block-hash debt does not justify introducing that membership deadlock. The
 correction must retain the actual notification beyond all enclosing fences and
 preserve wakes, poison and refusal ownership. Full State funding, ordinary
 execution retention and Native production cutover remain open.
+
+## Subsequent concurrent source advance
+
+Other work advanced the same `optimizations` branch during review, through
+`4aaa84eeb8f8d9055b105b826e384f8f9c6e0fc8` to observed
+`1b8e5f92b6dadb1dcdd16f945286560e31b347ff`, incorporating the JavaScript changes
+and adding independent membership/Merkle-map/Norito and other work. The pending
+74-file runtime proposal now has a changed canonical preimage at
+`crates/iroha_core/src/state/storage_transactions.rs`; it must be reconciled
+with the new membership-record/root owners before application.
+
+`target/first-release-external-source-advance-20260922.json` records the read-only
+comparison (`aa11d8bf0bc847b9e3da3213bc1d7f1e6b0eb472a0642a8da9b2f9bdae38a5ec`).
+Three of the earlier 873 observed inputs changed after validation: the two
+Taira release scripts from concurrent work, and the qualification-source spec
+updated here to describe the implemented child. The historical test interval
+still had zero drift; its result is not a test of every subsequent source.
+
+The later source-budget diagnostic reports 276 findings across 12,687 files,
+with no limit or baseline change. Its Norito finding differs from the prior
+diagnostic because concurrent source reduced that file further; this is not an
+immutable-candidate pass. Historical archive verification passed for 64,736
+records and 67,311 occurrences. Root status/roadmap remain within 300 lines.

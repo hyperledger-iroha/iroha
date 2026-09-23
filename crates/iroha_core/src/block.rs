@@ -2725,6 +2725,10 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
             crate::state::StateBlockStartError::Storage(error) => {
                 Self::StateStorageAdmission(error)
             }
+            crate::state::StateBlockStartError::History(error) => Self::BlockHashAdmission(error),
+            crate::state::StateBlockStartError::Membership(error) => {
+                Self::MembershipAdmission(error)
+            }
             crate::state::StateBlockStartError::Stage(error) => error,
         }
     }
@@ -2732,8 +2736,12 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
 /// Errors occurred on block validation
 #[derive(Debug, displaydoc::Display, PartialEq, Eq, Error)]
 pub enum BlockValidationError {
-    /// Local hash-history admission failed before State execution: {0}
+    /// Local World storage admission failed before State execution: {0}
     StateStorageAdmission(crate::state::StateStorageAdmissionError),
+    /// Local hash-history admission failed before State execution: {0}
+    BlockHashAdmission(crate::state::BlockHashAdmissionError),
+    /// Local membership-history admission failed before State execution: {0}
+    MembershipAdmission(crate::state::MembershipAdmissionError),
     /// Block has committed transactions
     HasCommittedTransactions,
     /// Block contained no committed overlays
@@ -2932,11 +2940,15 @@ impl BlockValidationError {
             MergeLedgerCommitError::StateStorageAdmission(error) => {
                 Self::StateStorageAdmission(error)
             }
+            MergeLedgerCommitError::BlockHashAdmission(error) => Self::BlockHashAdmission(error),
+            MergeLedgerCommitError::MembershipAdmission(error) => Self::MembershipAdmission(error),
             MergeLedgerCommitError::NativeControlValidation(error) => *error,
             MergeLedgerCommitError::MissingCertifiedMergeSidecar { entry_hash } => {
                 Self::MissingCertifiedMergeSidecar { entry_hash }
             }
             local @ (MergeLedgerCommitError::NativeResourceAdmission(_)
+            | MergeLedgerCommitError::ExecutionObservationChanged
+            | MergeLedgerCommitError::ExecutionRecorderConflict(_)
             | MergeLedgerCommitError::Persistence(_)
             | MergeLedgerCommitError::LocalDrainObservation(_)) => {
                 Self::LocalStorageRecoveryRequired {
@@ -2951,7 +2963,20 @@ impl BlockValidationError {
 
     /// Keep local resource refusal outside the deterministic NPoS verdict channel.
     pub(crate) fn from_npos_application_error(error: eyre::Report, stage: &str) -> Self {
-        if let Some(local) = error.downcast_ref::<crate::state::StateStorageAdmissionError>() {
+        if let Some(local) = error.downcast_ref::<crate::state::StateAdmissionError>() {
+            match local {
+                crate::state::StateAdmissionError::Storage(error) => {
+                    Self::StateStorageAdmission(error.clone())
+                }
+                crate::state::StateAdmissionError::History(error) => {
+                    Self::BlockHashAdmission(error.clone())
+                }
+                crate::state::StateAdmissionError::Membership(error) => {
+                    Self::MembershipAdmission(error.clone())
+                }
+            }
+        } else if let Some(local) = error.downcast_ref::<crate::state::StateStorageAdmissionError>()
+        {
             Self::StateStorageAdmission(local.clone())
         } else {
             Self::NposEffectsInvalid(format!("{stage}: {error}"))
@@ -2978,6 +3003,23 @@ fn native_resource_refusal_is_a_local_certified_merge_staging_error() {
         error,
         BlockValidationError::LocalStorageRecoveryRequired { .. }
     ));
+}
+#[cfg(test)]
+#[test]
+fn native_execution_observation_and_recorder_conflicts_require_local_recovery() {
+    for error in [
+        crate::state::MergeLedgerCommitError::ExecutionObservationChanged,
+        crate::state::MergeLedgerCommitError::ExecutionRecorderConflict(
+            "recorder is already owned".to_owned(),
+        ),
+    ] {
+        let classified = BlockValidationError::from_certified_merge_stage_error(error);
+        assert!(matches!(
+            &classified,
+            BlockValidationError::LocalStorageRecoveryRequired { .. }
+        ));
+        assert!(event::map_block_err_to_reason(&classified).is_none());
+    }
 }
 /// Error during signature verification
 #[derive(Debug, displaydoc::Display, Clone, Copy, PartialEq, Eq, Error)]
@@ -3246,13 +3288,14 @@ fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGen
 }
 /// Canonical millisecond time strictly after every timed execution input.
 /// Admission controls are not execution inputs and do not advance this clock.
-fn creation_time_after_inputs<'a>(
-    minimum: Duration,
-    inputs: impl IntoIterator<Item = &'a TransactionEntrypoint>,
-) -> Option<Duration> {
+fn creation_time_after_inputs<I, T>(minimum: Duration, inputs: I) -> Option<Duration>
+where
+    I: IntoIterator<Item = T>,
+    T: core::borrow::Borrow<TransactionEntrypoint>,
+{
     let mut milliseconds = u64::try_from(minimum.as_millis()).ok()?;
     for input in inputs {
-        if let Some(created) = input.creation_time_ms() {
+        if let Some(created) = input.borrow().creation_time_ms() {
             milliseconds = milliseconds.max(created.checked_add(1)?);
         }
     }
@@ -3342,12 +3385,15 @@ mod input_clock_tests {
         assert!(
             creation_time_after_inputs(
                 Duration::from_millis(u64::MAX) + Duration::from_millis(1),
-                std::iter::empty()
+                std::iter::empty::<&TransactionEntrypoint>()
             )
             .is_none()
         );
         assert_eq!(
-            creation_time_after_inputs(Duration::from_millis(u64::MAX), std::iter::empty()),
+            creation_time_after_inputs(
+                Duration::from_millis(u64::MAX),
+                std::iter::empty::<&TransactionEntrypoint>(),
+            ),
             Some(Duration::from_millis(u64::MAX))
         );
     }
@@ -5699,7 +5745,7 @@ pub(crate) mod valid {
                             ivm::axt::HandleAmountResolutionError::MissingAmount => {
                                 (
                                     AxtRejectReason::Budget,
-                                    "intent amount is absent and no committed proof amount was provided",
+                                    "redacted remote spend amount has no qualified private proof relation",
                                 )
                             }
                             ivm::axt::HandleAmountResolutionError::InvalidProofEnvelope => {
@@ -5742,22 +5788,13 @@ pub(crate) mod valid {
                         resolved_proof_amounts.insert(amount_cache_key, resolved.clone());
                         resolved
                     };
-                    if fragment.intent.op.amount.is_some() {
-                        if fragment.amount.as_ref() != Some(&resolved_amount.amount) {
-                            return Err(make_env_error(
-                                envelope_lane,
-                                AxtRejectReason::Budget,
-                                "handle fragment amount does not match the resolved intent amount",
-                                Some(fragment.intent.asset_dsid),
-                                None,
-                                None,
-                            ));
-                        }
-                    } else if fragment.amount.is_some() {
+                    if fragment.intent.op.amount.as_ref() != Some(&resolved_amount.amount)
+                        || fragment.amount.as_ref() != Some(&resolved_amount.amount)
+                    {
                         return Err(make_env_error(
                             envelope_lane,
                             AxtRejectReason::Budget,
-                            "hidden handle amount must be redacted in fragment",
+                            "handle fragment amount does not match the clear intent amount",
                             Some(fragment.intent.asset_dsid),
                             None,
                             None,
@@ -7075,13 +7112,125 @@ pub(crate) mod valid {
             block_cadence: Duration,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
-        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
+        ) -> Result<ValidatedReplayExecution<'state>, Error> {
             let authority = match VerifiedReplayProposal::new(&executed, verified, merge_entry) {
                 Ok(authority) => authority,
-                Err(error) => return WithEvents::new(Err((Box::new(executed), Box::new(error)))),
+                Err(error) => return Err((Box::new(executed), Box::new(error))),
             };
+            let proposal = executed.canonical_resultless_proposal();
+            if proposal
+                .execution_context()
+                .is_some_and(|bundle| bundle.native_lane_decisions.is_some())
+            {
+                // Current finality alone does not authenticate epoch continuity.
+                // Rejoin the original parent receipt or the exact audited snapshot
+                // before taking any State execution writers.
+                let native =
+                    (|| -> Result<ValidatedReplayExecution<'state>, BlockValidationError> {
+                        authority.validate(&proposal, &state.query_view())?;
+                        let frozen = &verified.height_context;
+                        if !topology
+                            .as_ref()
+                            .iter()
+                            .eq(frozen.roster.iter().map(|entry| &entry.validator))
+                        {
+                            return Err(Self::execution_context_error(
+                                "Native replay topology differs from verified finality",
+                            ));
+                        }
+                        let context = if frozen.snapshot_bootstrap.is_some() {
+                        let bootstrap = state.authenticated_snapshot_v2_bootstrap()
+                            .filter(|record| record.context == *frozen && record.validator_set_pops == verified.validator_set_pops)
+                            .ok_or_else(|| Self::execution_context_error("Native replay lacks its exact authenticated snapshot context"))?;
+                        crate::sumeragi::v2::VerifiedHeightContext::snapshot_bootstrap(bootstrap)
+                    } else {
+                        let parent_height = frozen.height.checked_sub(1)
+                            .filter(|height| *height != 0)
+                            .ok_or_else(|| Self::execution_context_error("Native replay requires an authenticated predecessor"))?;
+                        let (parent, receipt) = state.kura().v2_finality_artifact_with_receipt(parent_height)
+                            .map_err(|error| Self::execution_context_error(error.to_string()))?
+                            .ok_or_else(|| Self::execution_context_error("Native replay parent finality is unavailable"))?;
+                        crate::sumeragi::v2::VerifiedHeightContext::successor(
+                            frozen.clone(), verified.validator_set_pops.clone(), &parent, &receipt, &parent.validator_set_pops,
+                        )
+                    }.map_err(|error| Self::execution_context_error(error.to_string()))?;
+                        let group_count = super::native_lane_batch_for_execution(&proposal)
+                            .map_err(Self::execution_context_error)?
+                            .groups
+                            .len();
+                        let budget = mv::allocation::AllocationBudget::new(
+                            state.nexus.read().storage.retained_carrier_shell_bytes,
+                        );
+                        let admission =
+                            crate::state::NativeExecutionResourceAdmission::try_reserve_source(
+                                &budget,
+                                group_count,
+                            )
+                            .map_err(|error| {
+                                BlockValidationError::LocalStorageRecoveryRequired {
+                                    reason: format!(
+                                        "Native replay source admission refused: {error}"
+                                    ),
+                                }
+                            })?;
+                        let source = match state.prepare_proposed_native_lane_batch_source(
+                            proposal,
+                            &[],
+                            admission,
+                        )
+                        .map_err(|error| {
+                            BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: format!("Native replay source preparation: {error}"),
+                            }
+                        })? {
+                        crate::state::NativeLaneBatchSourcePreparationV1::Ready(source) => source,
+                        crate::state::NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired { .. } => {
+                            return Err(BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: "Native replay first input body is unavailable".to_owned(),
+                            });
+                        }
+                        crate::state::NativeLaneBatchSourcePreparationV1::ObservationChanged { .. } => {
+                            return Err(BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: "Native replay pre-State observation changed".to_owned(),
+                            });
+                        }
+                        crate::state::NativeLaneBatchSourcePreparationV1::AdmissionMismatch { .. } => {
+                            return Err(BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: "Native replay source reservation differs from its exact batch".to_owned(),
+                            });
+                        }
+                    };
+                        let input = Self::validate_and_record_native_candidate(
+                            source,
+                            context,
+                            genesis_account,
+                            time_source,
+                            block_cadence,
+                        )
+                        .map_err(|error| match error {
+                            NativeCandidatePreparationError::Preflight(error) => *error,
+                            NativeCandidatePreparationError::Execution(error) => {
+                                BlockValidationError::from_certified_merge_stage_error(error)
+                            }
+                            NativeCandidatePreparationError::Preparation(error) => {
+                                classify_carrier_preparation_error(error)
+                            }
+                        })?
+                        .ok_or_else(|| {
+                            BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: "Native replay source observation changed".to_owned(),
+                            }
+                        })?;
+                        Ok(ValidatedReplayExecution {
+                            valid: input.valid,
+                            state: input.state,
+                            native: input.native,
+                        })
+                    })();
+                return native.map_err(|error| (Box::new(executed), Box::new(error)));
+            }
             Self::validate_keep_voting_block_inner(
-                executed.canonical_resultless_proposal(),
+                proposal,
                 topology,
                 genesis_account,
                 time_source,
@@ -7097,6 +7246,12 @@ pub(crate) mod valid {
                 true,
                 None,
             )
+            .unpack(|_| {})
+            .map(|(valid, state)| ValidatedReplayExecution {
+                valid,
+                state,
+                native: None,
+            })
         }
         /// Exercise a Sumeragi-v2 unit fixture with an externally prevalidated block signature.
         ///
@@ -7280,6 +7435,11 @@ pub(crate) mod valid {
                     .parent_commit_qc
                     .as_ref()
                     .map(|qc| qc.subject.block_hash)
+                    .or_else(|| {
+                        frozen
+                            .snapshot_bootstrap
+                            .map(|anchor| anchor.snapshot_block_hash)
+                    })
                     != view.latest_block_hash()
             {
                 return Err(Self::execution_context_error(
@@ -7747,6 +7907,12 @@ pub(crate) mod valid {
                         let error = match error {
                             crate::state::StateBlockStartError::Storage(error) => {
                                 BlockValidationError::StateStorageAdmission(error)
+                            }
+                            crate::state::StateBlockStartError::History(error) => {
+                                BlockValidationError::BlockHashAdmission(error)
+                            }
+                            crate::state::StateBlockStartError::Membership(error) => {
+                                BlockValidationError::MembershipAdmission(error)
                             }
                             crate::state::StateBlockStartError::Stage(error) => {
                                 BlockValidationError::LocalStorageRecoveryRequired {
@@ -8526,7 +8692,19 @@ pub(crate) mod valid {
             let expected_actions = applier
                 .derive_npos_penalty_actions(&block.header())
                 .map_err(|err| {
-                    if let Some(local) =
+                    if let Some(local) = err.downcast_ref::<crate::state::StateAdmissionError>() {
+                        match local {
+                            crate::state::StateAdmissionError::Storage(e) => {
+                                BlockValidationError::StateStorageAdmission(e.clone())
+                            }
+                            crate::state::StateAdmissionError::History(e) => {
+                                BlockValidationError::BlockHashAdmission(e.clone())
+                            }
+                            crate::state::StateAdmissionError::Membership(e) => {
+                                BlockValidationError::MembershipAdmission(e.clone())
+                            }
+                        }
+                    } else if let Some(local) =
                         err.downcast_ref::<crate::state::StateStorageAdmissionError>()
                     {
                         BlockValidationError::StateStorageAdmission(local.clone())
@@ -21988,6 +22166,36 @@ mod commit {
             proof_seed: &[u8],
             asset_policy: iroha_data_model::asset::AssetBalancePolicy,
         ) -> (State, AxtEnvelopeRecord) {
+            amount_fixture_with_asset_policy(dsid, manifest_tag, proof_seed, asset_policy, false)
+        }
+        fn clear_amount_fixture(
+            dsid: u64,
+            manifest_tag: u8,
+            proof_seed: &[u8],
+        ) -> (State, AxtEnvelopeRecord) {
+            amount_fixture_with_asset_policy(
+                dsid,
+                manifest_tag,
+                proof_seed,
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                true,
+            )
+        }
+        fn clear_amount_fixture_with_asset_policy(
+            dsid: u64,
+            manifest_tag: u8,
+            proof_seed: &[u8],
+            asset_policy: iroha_data_model::asset::AssetBalancePolicy,
+        ) -> (State, AxtEnvelopeRecord) {
+            amount_fixture_with_asset_policy(dsid, manifest_tag, proof_seed, asset_policy, true)
+        }
+        fn amount_fixture_with_asset_policy(
+            dsid: u64,
+            manifest_tag: u8,
+            proof_seed: &[u8],
+            asset_policy: iroha_data_model::asset::AssetBalancePolicy,
+            clear: bool,
+        ) -> (State, AxtEnvelopeRecord) {
             let dsid = DataSpaceId::new(dsid);
             let lane = LaneId::new(1);
             let (state, issuer, issuer_uaid, manifest_roots) =
@@ -22006,11 +22214,11 @@ mod commit {
             };
             let binding = binding_for_descriptor(&descriptor);
             let mut handle = sample_handle(binding, lane, dsid, 5, manifest_root);
-            handle.intent.op.amount = None;
-            handle.amount = None;
+            let effective_amount = Quantity::from(5_u64);
+            handle.intent.op.amount = clear.then(|| effective_amount.clone());
+            handle.amount = clear.then(|| effective_amount.clone());
             let mut handle =
                 sign_axt_validation_handle(handle, &state, &issuer, issuer_uaid, manifest_root);
-            let effective_amount = Quantity::from(5_u64);
             let (proof, commitment) = proof_blob_for_with_authenticated_amount(
                 dsid,
                 manifest_root,
@@ -23052,7 +23260,7 @@ mod commit {
         include!("block/axt_shared_budget_across_envelopes_test.rs");
         #[test]
         fn axt_validation_rejects_duplicate_authenticated_handle_usage() {
-            let (state, mut envelope) = hidden_amount_fixture(119, 0x77, b"duplicate-proof-claim");
+            let (state, mut envelope) = clear_amount_fixture(119, 0x77, b"duplicate-proof-claim");
             envelope.handles.push(envelope.handles[0].clone());
             expect_axt_envelope_error(
                 &state,
@@ -23394,7 +23602,7 @@ mod commit {
         #[test]
         fn axt_validation_rejects_proof_reused_for_another_remote_spend_recipient() {
             let (state, mut envelope) =
-                hidden_amount_fixture(71, 0x71, b"remote-spend-recipient-binding");
+                clear_amount_fixture(71, 0x71, b"remote-spend-recipient-binding");
             envelope.handles[0].intent.op.to = ACCOUNT_FROM_LITERAL.to_owned();
             expect_axt_envelope_error(
                 &state,
@@ -23405,7 +23613,7 @@ mod commit {
         }
         #[test]
         fn axt_validation_rejects_mutated_proof_amount_with_recomputed_commitment() {
-            let (state, mut envelope) = hidden_amount_fixture(18, 0x32, b"mutated-hidden-amount");
+            let (state, mut envelope) = clear_amount_fixture(18, 0x32, b"mutated-proof-amount");
             let handle = &mut envelope.handles[0];
             let proof = handle
                 .proof
@@ -23436,7 +23644,7 @@ mod commit {
         #[test]
         fn axt_validation_rejects_stale_fragment_commitment() {
             let (state, mut envelope) =
-                hidden_amount_fixture(19, 0x33, b"stale-fragment-commitment");
+                clear_amount_fixture(19, 0x33, b"stale-fragment-commitment");
             envelope.handles[0]
                 .amount_commitment
                 .as_mut()
@@ -23451,7 +23659,7 @@ mod commit {
         #[test]
         fn axt_validation_rejects_account_alias_in_remote_spend_intent() {
             let (state, mut envelope) =
-                hidden_amount_fixture(20, 0x34, b"noncanonical-intent-account");
+                clear_amount_fixture(20, 0x34, b"noncanonical-intent-account");
             envelope.handles[0].intent.op.to = "merchant@wonder".to_owned();
             expect_axt_envelope_error(
                 &state,
@@ -24152,7 +24360,7 @@ mod commit {
             );
         }
         #[test]
-        fn axt_validation_rejects_unanchored_hidden_amount_commitment() {
+        fn axt_validation_rejects_redacted_intent_before_unanchored_spend() {
             let (state, envelope) = hidden_amount_fixture(61, 0x61, b"hidden-amount");
             let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
             snapshot.entries[0].policy.next_handle_counter = 2;
@@ -24161,16 +24369,23 @@ mod commit {
             let mut state_block = state.block(block.header());
             {
                 let mut executed = state_block.transaction();
-                executed
+                let error = executed
                     .record_axt_envelope(envelope)
-                    .expect("hidden-amount commitment control must execute");
-                executed.apply();
+                    .expect_err("redacted intent cannot stage family budget consumption");
+                assert!(
+                    error.to_string().contains("MissingAmount"),
+                    "unexpected redacted amount rejection: {error}"
+                );
             }
             let result = validate_axt_envelopes(&block, &state_block);
-            expect_unanchored_axt_spend_rejection(result);
+            expect_axt_error(
+                result.expect_err("public proof scalar cannot authorize a redacted intent"),
+                AxtRejectReason::Budget,
+                "redacted remote spend amount has no qualified private proof relation",
+            );
         }
         #[test]
-        fn axt_validation_rejects_hidden_amount_commitment_mismatch() {
+        fn axt_validation_rejects_clear_amount_commitment_mismatch() {
             let dsid = DataSpaceId::new(62);
             let lane = LaneId::new(9);
             let (mut state, issuer, issuer_uaid, manifest_root) =
@@ -24195,15 +24410,15 @@ mod commit {
             let proof = proof_blob_for_with_amount(
                 dsid,
                 policy.manifest_root,
-                b"hidden-amount-mismatch",
+                b"clear-amount-mismatch",
                 9,
                 Some(5),
                 None,
                 Vec::new(),
             );
             let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
-            handle.intent.op.amount = None;
-            handle.amount = None;
+            handle.intent.op.amount = Some(Quantity::from(5_u64));
+            handle.amount = Some(Quantity::from(5_u64));
             handle.amount_commitment = Some([0xFF; 32]);
             let handle =
                 sign_axt_validation_handle(handle, &state, &issuer, issuer_uaid, manifest_root);
@@ -24413,7 +24628,9 @@ mod event {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
         Some(match err {
             BlockValidationError::LocalStorageRecoveryRequired { .. }
-            | BlockValidationError::StateStorageAdmission(_) => return None,
+            | BlockValidationError::StateStorageAdmission(_)
+            | BlockValidationError::BlockHashAdmission(_)
+            | BlockValidationError::MembershipAdmission(_) => return None,
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
             BlockValidationError::DuplicateTransactions

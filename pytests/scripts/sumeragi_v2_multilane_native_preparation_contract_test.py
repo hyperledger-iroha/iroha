@@ -344,14 +344,14 @@ def test_native_preparation_rejects_each_owner_ledger_mutation(fixture, mutation
     ("BODY_STORE", "verify_origin_block_signature", "signatures.next().is_some() || signature.index() != expected_index", "false"),
     ("BODY_STORE", "validate_envelope", "verify_origin_block_signature(&self.context, &block, &self.signature_policy)?", "Ok::<(), V2BodyStoreError>(())?"),
     ("CONTROLS", "validate_execution_context_header", "bundle.native_lane_decisions.is_some()", "false"),
-    ("BLOCK", "prepare_native_candidate", "verify_origin_block_signature(", "unchecked_origin_signature("),
-    ("BLOCK", "prepare_native_candidate", "length > frozen.da_layout.max_payload_size_bytes", "false"),
-    ("BLOCK", "prepare_native_candidate", "Self::validate_static_state_dependent(", "unchecked_static_state("),
-    ("BLOCK", "prepare_native_candidate", "Self::validate_static_with_snapshot(", "unchecked_snapshot("),
-    ("BLOCK", "prepare_native_candidate", "generation != state.state_view_generation()", "false"),
+    ("BLOCK", "validate_and_record_native_candidate", "verify_origin_block_signature(", "unchecked_origin_signature("),
+    ("BLOCK", "validate_and_record_native_candidate", "length > frozen.da_layout.max_payload_size_bytes", "false"),
+    ("BLOCK", "validate_and_record_native_candidate", "Self::validate_static_state_dependent(", "unchecked_static_state("),
+    ("BLOCK", "validate_and_record_native_candidate", "Self::validate_static_with_snapshot(", "unchecked_snapshot("),
+    ("BLOCK", "validate_and_record_native_candidate", "generation != state.state_view_generation()", "false"),
     ("NATIVE_SOURCE", "preparation_input", "self.is_current()", "true"),
     ("NATIVE_SOURCE", "preparation_input", "self.generation", "self.state.state_view_generation()"),
-    ("BLOCK", "prepare_native_candidate", "native: Some(native)", "native: None"),
+    ("BLOCK", "validate_and_record_native_candidate", "native: Some(native)", "native: None"),
     ("NATIVE_STAGE", "into_preparation_parts", "context: self.context", "context: other_context"),
     ("NATIVE_STAGE", "into_preparation_parts", "verify_execution_output_seal(&self.carrier)", "verify_execution_output_seal(&other_carrier)"),
     ("NATIVE_STAGE", "into_preparation_parts", "validate_native_output_source(&self.carrier)", "validate_native_output_source(&other_carrier)"),
@@ -368,7 +368,7 @@ def test_native_preparation_rejects_each_owner_ledger_mutation(fixture, mutation
     ("NATIVE_METADATA", "seal_native_execution_outputs", "verify_native_execution_metadata(block, executions)", "verify_native_execution_metadata(block, other_executions)"),
     ("NATIVE_METADATA", "seal_native_execution_outputs", "verify_native_execution_metadata(source, executions)", "verify_native_execution_metadata(source, other_executions)"),
     ("NATIVE_METADATA", "seal_native_execution_outputs", "                    routes,", "                    other_routes,"),
-    ("NATIVE_METADATA", "seal_native_execution_outputs", "std::iter::empty::<HashOf<TransactionEntrypoint>>()", "ordinary_membership.into_iter()"),
+    ("NATIVE_METADATA", "seal_native_execution_outputs", "stage_canonical_carrier_membership(Vec::new(), height)", "stage_canonical_carrier_membership(ordinary_membership, height)"),
     ("NATIVE_METADATA", "seal_native_execution_outputs", "verify_execution_output_seal(block)", "verify_execution_output_seal(other_block)"),
     ("NATIVE_METADATA", "native_execution_finality_statements", "executions.len() != routes.len()", "executions.len() == routes.len()"),
     ("NATIVE_METADATA", "native_execution_finality_statements", "plan.coordinator_route() != *route", "plan.coordinator_route() == *route"),
@@ -556,7 +556,7 @@ def test_native_common_metadata_refuses_policy_before_autoscale(fixture):
                  "block.header().da_proof_policies_hash() != block.header().da_proof_policies_hash()",
                  id="active-da-policy"),
     pytest.param("NATIVE_FINALIZED", "project",
-                 "carrier: block.canonical_resultless_proposal()", "carrier: carrier_without_controls(block)",
+                 "let carrier = block.into_resultless_proposal();", "let carrier = block_without_controls.into_resultless_proposal();",
                  id="complete-finalized-projection"),
     pytest.param("NATIVE_STAGE", "validate_native_pristine_control_owner",
                  "!std::ptr::eq(self.state_ref, state)", "!std::ptr::eq(self.state_ref, self.state_ref)",
@@ -566,11 +566,11 @@ def test_native_common_metadata_refuses_policy_before_autoscale(fixture):
                  "// Self::validate_npos_effects_with_state(block, state, Some(frozen.mode), Some(frozen))?;",
                  id="authenticated-npos-controls"),
     pytest.param("NATIVE_SOURCE", "record_execution",
-                 "carrier != *self.input", "carrier.header() != self.input.header()",
+                 "let carrier = self.input.into_inner();", "let carrier = other.into_inner();",
                  id="complete-original-carrier"),
     pytest.param("NATIVE_SOURCE", "record_execution",
-                 "record_native_lane_decision_batch(carrier, self.groups, context)",
-                 "record_native_lane_decision_batch(carrier, self.groups.clone(), context)",
+                 "record_native_lane_decision_batch(\n            carrier,\n            self.groups,\n            self.admission,\n            context,\n        )",
+                 "record_native_lane_decision_batch(\n            carrier,\n            other_groups,\n            self.admission,\n            context,\n        )",
                  id="original-source-custody"),
     pytest.param("NATIVE_SOURCE", "stage_with_start_hooks",
                  "crate::block::native_lane_batch_for_scratch(&self.input)",
@@ -998,6 +998,29 @@ def test_native_preparation_ledger_tokens_match_exact_reviewed_items(fixture):
     assert errors == []
 
 
+@pytest.mark.parametrize("path,symbol,old,new", [
+    ("vendor/concread/src/internals/lincowcell/mod.rs", "LinCowCell::acquire_owned",
+     "if !Shared::ptr_eq(&self.write, &owned.root)", "if false"),
+    ("vendor/concread/src/bptree/admission.rs", "BptreeMapWriterAcquisition::write_with_source",
+     "plan_writer_start::<K, V, P>(source, shells)", "writer_start_plan::<K, V, P>(shells)"),
+    ("crates/iroha_core/src/state/history_reader_releases.rs", "StateViewReleases::try_view_once",
+     "&mut self.lifecycle.membership", "&mut other.membership"),
+    ("crates/iroha_core/src/state/history_reader_releases.rs", "StateViewReleases::into_retirement",
+     "_membership: membership", "_membership: DeferredReleaseBatch::default()"),
+])
+def test_split_original_owners_reject_source_substitution(fixture, path, symbol, old, new):
+    root, _, checker, _ = fixture
+    errors = []
+    item = checker._rust_binding_item(root, path, "method", symbol, "split owner mutation", errors)
+    assert item is not None and not errors
+    source = root / path
+    source.write_text(_mutate_complete_preparation_item(
+        checker, source.read_text(), "method", symbol, item, old, new,
+    ))
+    assert any("Native preparation" in error and "missing executable relation" in error
+               for error in validate(fixture))
+
+
 @pytest.mark.parametrize("owner,anchor,old,new", [
     pytest.param("STATE", "type BlockHashFamily", "concread::bptree::BptreeMapFamily<usize, HashOf<BlockHeader>, BlockHashMode>", "Arc<()>", id="real-family-storage"),
     pytest.param("STATE", "struct NativeLaneStateOwner", "(BlockHashFamily)", "(Arc<()>)", id="no-synthetic-owner"),
@@ -1055,7 +1078,8 @@ def test_shared_history_cleanup_and_publication_order(fixture, owner, anchor, fi
 
 
 @pytest.mark.parametrize("owner,anchor,old,new", [
-    pytest.param("HASH_ADMISSION", "impl StateStorageAdmissionError", "Self::Busy(wait) | Self::Changed(wait) => Some(wait)", "Self::Busy(wait) | Self::Changed(wait) => None", id="original-physical-release"),
+    pytest.param("HASH_ADMISSION", "impl BlockHashAdmissionError", "Self::Busy(wait) | Self::Changed(wait) => Some(wait)", "Self::Busy(wait) | Self::Changed(wait) => None", id="original-physical-release"),
+    pytest.param("HASH_ADMISSION", "impl StateAdmissionError", "Self::Membership(e) => e.release_wait()", "Self::Membership(_) => None", id="membership-release-survives-admission-wrapper"),
     pytest.param("HASH_ADMISSION", "impl<E: std::fmt::Debug> StateBlockStartError", "Self::Storage(error) => error.release_wait()", "Self::Storage(error) => None", id="history-release-survives-stage-wrapper"),
     pytest.param("HASH_RESTORE", "fn emergency_fast_block_hashes", "BlockHashes::new_emergency_fast_empty()", "BlockHashes::default()", id="empty-fast-remains-readonly"),
     pytest.param("STATE", "fn new_emergency_fast_empty", "inner: BlockHashStorage::EmergencyFastEmpty", "inner: BlockHashStorage::Owned(other)", id="empty-fast-has-no-mutable-tree"),
@@ -1094,7 +1118,7 @@ def test_shared_history_cleanup_and_publication_order(fixture, owner, anchor, fi
     pytest.param("HASH_ADMISSION", "fn try_new", "budget.with_deferred_refund_notifications", "other.with_deferred_refund_notifications", id="constructor-original-refund-scope"),
     pytest.param("HASH_ADMISSION", "fn try_new", "budget: budget.clone()", "budget: other.clone()", id="startup-original-pool"),
     pytest.param("HASH_ADMISSION", "fn try_new", "owner.admit_successor(existing, additional)", "owner.admit(additional)", id="startup-permanent-floor"),
-    pytest.param("HASH_ADMISSION", "fn try_next_block", "self.map().ok_or(StateStorageAdmissionError::ReadOnly)?", "other.map().unwrap()", id="readonly-original-family"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", "self.map().ok_or(BlockHashAdmissionError::ReadOnly)?", "other.map().unwrap()", id="readonly-original-family"),
     pytest.param("HASH_ADMISSION", "fn try_next_block", "view.len().saturating_sub(1)", "view.len()", id="replacement-tip-overwrite"),
     pytest.param("HASH_ADMISSION", "fn try_next_block", "view.predecessor().retain()", "other.predecessor().retain()", id="pinned-reader-predecessor"),
     pytest.param("HASH_ADMISSION", "fn try_next_block", "self.admit_successor(existing, additional)", "self.admit(additional)", id="no-permanent-capacity-wait"),
@@ -1112,7 +1136,7 @@ def test_shared_history_cleanup_and_publication_order(fixture, owner, anchor, fi
     pytest.param('RETAINED_HASH_SLOT', 'fn try_prepare', 'self.reserved_tip.is_some()', 'false', id='unfinished-tip-not-publishable'),
     pytest.param("APPLY", "fn classify_validation_failure", "Some(wait) => super::v2_body_store::LocalValidationRefusal::PhysicalBusy(", "Some(wait) => super::v2_body_store::LocalValidationRefusal::RecoveryRequired(", id="capacity-refund-schedules-retry"),
     pytest.param("APPLY", "fn classify_validation_failure", "self.queue.sumeragi_waker()", "other.sumeragi_waker()", id="original-service-retry-waker"),
-    pytest.param("CONTROLS", "fn map_block_err_to_reason", "| BlockValidationError::StateStorageAdmission(_) => return None", "=> return None", id="local-refusal-no-peer-rejection"),
+    pytest.param("CONTROLS", "fn map_block_err_to_reason", "| BlockValidationError::MembershipAdmission(_) => return None", "| BlockValidationError::MembershipAdmission(_) => Some(Reason::Other)", id="local-refusal-no-peer-rejection"),
 ])
 def test_prepaid_history_keeps_exact_funding_tip_and_local_refusal(fixture, owner, anchor, old, new):
     root, helper, checker, _ = fixture
@@ -1370,10 +1394,10 @@ def test_autoscale_queue_refusal_retains_cleanup_through_lifecycle(fixture):
     ('crates/iroha_core/src/kura/publication_lease.rs', 'fn try_publication_lease', 'let mut fences = AcquiredKuraPublicationFences::new(self);', 'let mut fences = AcquiredKuraPublicationFences::new(other);'),
     ('crates/iroha_core/src/kura/publication_lease.rs', 'fn authenticate_archive_capture', 'fences.canonical = Some(self.canonical_chain_lock.lock());', 'fences.canonical = Some(other.canonical_chain_lock.lock());'),
     ('vendor/concread/src/release.rs', 'fn deferred_batch', 'released: false', 'released: true'),
-    ('vendor/concread/src/release.rs', 'fn try_release_into<R>', 'if !Arc::ptr_eq(&self.notification.state, &batch.notification.state)', 'if false'),
+    ('vendor/concread/src/release.rs', 'fn try_release_into<R>', 'if !ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state)', 'if false'),
     ('vendor/concread/src/release.rs', 'fn try_release_into<R>', 'return Err(self);', 'drop(self); panic!();'),
     ('vendor/concread/src/release.rs', 'fn try_release_into<R>', 'self.batch.released = true;', 'self.batch.released = false;'),
-    ('vendor/concread/src/release.rs', 'fn try_release_into<R>', 'self.poison_on_unwind && std::thread::panicking()', 'false'),
+    ('vendor/concread/src/release.rs', 'fn try_release_into<R>', 'self.poison.observe()', 'false'),
     ('vendor/concread/src/release.rs', 'fn try_release_into<R>', 'let result = release(inner);\n        drop(record);', 'drop(record);\n        let result = release(inner);'),
     ('vendor/concread/src/release.rs', 'impl Drop for DeferredReleaseBatch', 'if self.released', 'if true'),
     ('crates/iroha_core/src/publication_lock.rs', 'fn try_release_into', '.try_release_into(batch, drop)', '.try_release_into(other, drop)'),
@@ -1528,7 +1552,7 @@ def test_fresh_pair_acquisition_requires_original_joint_custody(fixture, symbol,
     pytest.param('BlockAcquisitionSlot::release', '    fn release(&mut self) {\n        self.complete = false;\n        self.started = true;\n        match &mut self.phase {\n            AcquisitionPhase::Empty => {}\n            AcquisitionPhase::Block(block) => crate::BlockRetirement::release_writers(block),\n            AcquisitionPhase::Writers(writers) => writers.release(),\n            AcquisitionPhase::Pending(pending) => {\n                let target = self.target;\n                if let Some(current) = pending.blocks.take() {\n                    current\n                        .try_release_into_observed(&mut self.current_release, drop, || {\n                            target.blocks.is_poisoned()\n                        })\n                        .unwrap_or_else(|_| unreachable!("original current release source"));\n                }\n                if let Some(undo) = pending.revert.take() {\n                    undo.try_release_into_observed(&mut self.undo_release, drop, || {\n                        target.revert.is_poisoned()\n                    })\n                    .unwrap_or_else(|_| unreachable!("original undo release source"));\n                }\n            }\n        }\n    }', '    fn release(&mut self) {\n        self.complete = false;\n        self.started = true;\n        match &mut self.phase {\n            AcquisitionPhase::Empty => {}\n            AcquisitionPhase::Block(block) => crate::BlockRetirement::release_writers(block),\n            AcquisitionPhase::Writers(writers) => writers.release(),\n            AcquisitionPhase::Pending(pending) => {\n                let target = self.target;\n                if let Some(current) = pending.blocks.take() {\n                    current\n                        .try_release_into_observed(&mut self.current_release, drop, || {\n                            std::thread::panicking()\n                        })\n                        .unwrap_or_else(|_| unreachable!("original current release source"));\n                }\n                if let Some(undo) = pending.revert.take() {\n                    undo.try_release_into_observed(&mut self.undo_release, drop, || {\n                        std::thread::panicking()\n                    })\n                    .unwrap_or_else(|_| unreachable!("original undo release source"));\n                }\n            }\n        }\n    }', id='both-native-poison-verdicts'),
     pytest.param('CellWriters::detach_retaining', 'let (revert, undo_release) = revert.release_deferred(|writer| writer.detach());', 'let (revert, undo_release) = revert.release_deferred(|writer| writer.detach());\n        drop(revert);\n        let revert = panic!("lost original undo");', id='detach-keeps-both-owned-generations'),
     pytest.param('CellWriters::release', 'let (undo, undo_release) = revert.release_deferred(|writer| writer.detach());', 'let (undo, undo_release) = revert.release_deferred(|writer| writer.detach());\n        drop(undo);\n        let undo = panic!("original undo prematurely reclaimed");', id='abandon-keeps-undo-until-current-unlock'),
-    pytest.param('ReleaseGuard::release_deferred', 'let poisoned = self.poison_on_unwind && std::thread::panicking();', 'let poisoned = false;', id='abandon-reports-physical-verdict'),
+    pytest.param('ReleaseGuard::release_deferred', 'let poisoned = policy.observe();', 'let poisoned = false;', id='abandon-reports-physical-verdict'),
     pytest.param('Cell::acquire_charged_writers', 'CellWriters::acquire(self, charges)', '{ drop(charges); panic!("lost original charges") }', id='cell-common-constructor-delegates-pair'),
     pytest.param('BlockAcquisitionSlot::initialize', 'self.initialize_writers();\n        let predecessor = self.target.publication.capture();', 'let predecessor = self.target.publication.capture();\n        self.initialize_writers();', id='block_charged-captures-after-pair'),
     pytest.param('BlockAcquisitionSlot::initialize', 'self.initialize_writers();\n        let predecessor = self.target.publication.capture();', 'let predecessor = self.target.publication.capture();\n        self.initialize_writers();', id='block_and_revert_charged-captures-after-pair'),
@@ -1570,12 +1594,12 @@ def test_ebr_fresh_pair_acquisition_requires_original_joint_custody(fixture, sym
 
 
 @pytest.mark.parametrize("path,kind,symbol,old,new", [
-    pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_map_preserving_release_into', '!Arc::ptr_eq(&self.notification.state, &batch.notification.state)', 'false', id='callee-unwind-keeps-exact-native-source'),
+    pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_map_preserving_release_into', '!ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state)', 'false', id='callee-unwind-keeps-exact-native-source'),
     pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_map_preserving_release_into', 'let transferred = std::mem::ManuallyDrop::new(self);', 'let transferred = self;', id='callee-unwind-does-not-run-local-notifier'),
     pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_map_preserving_release_into', 'let result = consume(inner);\n        record.armed = false;', 'record.armed = false;\n        let result = consume(inner);', id='callee-unwind-record-remains-armed'),
     pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_map_preserving_release_into', 'record.armed = false;\n        drop(record);', 'drop(record);', id='normal-phase-transfer-does-not-release'),
     pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_map_preserving_release_into', 'self.batch.poisoned |= (self.observe_poison)();', 'self.batch.poisoned |= std::thread::panicking();', id='callee-unwind-native-poison-only'),
-    pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_release_into_observed', '!Arc::ptr_eq(&self.notification.state, &batch.notification.state)', 'false', id='retirement-does-not-rebind-source'),
+    pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_release_into_observed', '!ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state)', 'false', id='retirement-does-not-rebind-source'),
     pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_release_into_observed', 'let result = release(inner);\n        drop(record);', 'drop(record);\n        let result = release(inner);', id='physical-release-before-observed-verdict'),
     pytest.param('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_release_into_observed', 'self.batch.poisoned |= (self.observe_poison)();', 'self.batch.poisoned = false;', id='known-poison-survives-normal-retirement'),
     pytest.param('vendor/concread/src/bptree/mod.rs', 'method', 'BptreeMapWriteTxn::abort_retaining', '_inner: self.inner.detach(),', '_inner: { self.inner.as_ref().len(); self.inner.detach() },', id='failed-map-cursor-can-retire-without-read'),
@@ -2290,9 +2314,7 @@ def test_hydration_concrete_guards_use_reviewed_release_kernel(fixture, guard, o
     pytest.param('crates/iroha_core/src/state/carrier_preparation/journals.rs', 'method', 'PreparedCarrier::prepare_journals', '        let mut pending = StateJournalCapture::new(\n            world.capture_slot(),\n            runtime_journals::RuntimeCapture::new(\n                canonical_runtime.into_executing(),\n                commit_topology.into_executing(),\n                prev_commit_topology.into_executing(),\n                lane_consensus_contexts.into_executing(),\n            ),\n            transactions.into_capture(),\n            block_hashes.into_executing(),\n        );\n        pending.try_capture().map_err(|error| match error {\n            StateCaptureError::World(error) => CarrierJournalPreparationError::WorldCapture(error),\n            StateCaptureError::Membership(error) => {\n                CarrierJournalPreparationError::Membership(error)\n            }\n        })?;\n        let components = pending.into_components();\n        // Successful capture freed all original State writers; no journal authority\n        // is derived from these completed, same-source notification batches.\n        drop(da_rewind_releases);', '        drop(da_rewind_releases);\n        let mut pending = StateJournalCapture::new(\n            world.capture_slot(),\n            runtime_journals::RuntimeCapture::new(\n                canonical_runtime.into_executing(),\n                commit_topology.into_executing(),\n                prev_commit_topology.into_executing(),\n                lane_consensus_contexts.into_executing(),\n            ),\n            transactions.into_capture(),\n            block_hashes.into_executing(),\n        );\n        pending.try_capture().map_err(|error| match error {\n            StateCaptureError::World(error) => CarrierJournalPreparationError::WorldCapture(error),\n            StateCaptureError::Membership(error) => {\n                CarrierJournalPreparationError::Membership(error)\n            }\n        })?;\n        let components = pending.into_components();\n        // Successful capture freed all original State writers; no journal authority\n        // is derived from these completed, same-source notification batches.\n', id='capture-rewind-notices-survive-partial-slots'),
     pytest.param('crates/iroha_core/src/state/carrier_preparation/journals.rs', 'method', 'PreparedCarrier::prepare_journals', '        let components = pending.into_components();\n        // Successful capture freed all original State writers; no journal authority\n        // is derived from these completed, same-source notification batches.\n        drop(da_rewind_releases);', '        drop(da_rewind_releases);\n        let components = pending.into_components();\n        // Successful capture freed all original State writers; no journal authority\n        // is derived from these completed, same-source notification batches.\n', id='capture-rewind-notices-retire-after-all-writers'),
     pytest.param('crates/iroha_core/src/state.rs', 'method', 'State::block_and_revert_with_pristine_stage', 'acquired\n                .rewind_da_indexes_to_height(target_height)', 'self.rewind_da_indexes_to_height(target_height)', id='replacement-rewind-retains-original-acquisition'),
-    pytest.param('crates/iroha_core/src/state/canonical_runtime.rs', 'method', 'State::acquire_canonical_runtime_block', 'let baseline = self.lane_manifests.read().clone();\n            let mut registry_cache = self.sccp_registry_cache.lock().clone();\n            // All constructors use the same order. Every guard is dropped before\n            // retry; a World-only generation check cannot bind the predecessor.\n            // Hash construction detaches its private tree before waiting for World.\n            let block_hashes = self.block_hashes.try_next_block(replacement)?;\n            // Projection payloads outlive joint physical retirement on refusal\n            // and unwind. Every Cell slot remains in this caller while initializing.\n            let projection_result;\n            let mut projection;\n            let mut sccp_registry;\n            let mut pending = acquisition::RuntimeBlockAcquisition::new(self, block_hashes);\n            pending.initialize(replacement);', '\n            let mut registry_cache = self.sccp_registry_cache.lock().clone();\n            // All constructors use the same order. Every guard is dropped before\n            // retry; a World-only generation check cannot bind the predecessor.\n            // Hash construction detaches its private tree before waiting for World.\n            let block_hashes = self.block_hashes.try_next_block(replacement)?;\n            // Projection payloads outlive joint physical retirement on refusal\n            // and unwind. Every Cell slot remains in this caller while initializing.\n            let projection_result;\n            let mut projection;\n            let mut sccp_registry;\n            let mut pending = acquisition::RuntimeBlockAcquisition::new(self, block_hashes);\n            pending.initialize(replacement);let baseline = self.lane_manifests.read().clone();', id='acquisition-manifest-snapshot-before-writers'),
-    pytest.param('crates/iroha_core/src/state/canonical_runtime.rs', 'method', 'State::acquire_canonical_runtime_block', 'let mut registry_cache = self.sccp_registry_cache.lock().clone();\n            // All constructors use the same order. Every guard is dropped before\n            // retry; a World-only generation check cannot bind the predecessor.\n            // Hash construction detaches its private tree before waiting for World.\n            let block_hashes = self.block_hashes.try_next_block(replacement)?;\n            // Projection payloads outlive joint physical retirement on refusal\n            // and unwind. Every Cell slot remains in this caller while initializing.\n            let projection_result;\n            let mut projection;\n            let mut sccp_registry;\n            let mut pending = acquisition::RuntimeBlockAcquisition::new(self, block_hashes);\n            pending.initialize(replacement);', '\n            // All constructors use the same order. Every guard is dropped before\n            // retry; a World-only generation check cannot bind the predecessor.\n            // Hash construction detaches its private tree before waiting for World.\n            let block_hashes = self.block_hashes.try_next_block(replacement)?;\n            // Projection payloads outlive joint physical retirement on refusal\n            // and unwind. Every Cell slot remains in this caller while initializing.\n            let projection_result;\n            let mut projection;\n            let mut sccp_registry;\n            let mut pending = acquisition::RuntimeBlockAcquisition::new(self, block_hashes);\n            pending.initialize(replacement);let mut registry_cache = self.sccp_registry_cache.lock().clone();', id='acquisition-sccp-snapshot-before-writers'),
-    pytest.param('crates/iroha_core/src/state/canonical_runtime.rs', 'method', 'State::acquire_canonical_runtime_block', '&baseline,', '&self.lane_manifests.read().clone(),', id='acquisition-projection-uses-preacquisition-baseline'),
+            pytest.param('crates/iroha_core/src/state/canonical_runtime.rs', 'method', 'State::acquire_canonical_runtime_block', '&baseline,', '&self.lane_manifests.read().clone(),', id='acquisition-projection-uses-preacquisition-baseline'),
     pytest.param('crates/iroha_core/src/state/canonical_runtime.rs', 'method', 'State::acquire_canonical_runtime_block', '&mut registry_cache,', '&mut self.sccp_registry_cache.lock(),', id='acquisition-registry-uses-preacquisition-snapshot'),
     pytest.param('crates/iroha_core/src/state/canonical_runtime.rs', 'method', 'State::acquire_canonical_runtime_block', 'pending.world().sccp_registry.get(),', 'other_world.sccp_registry.get(),', id='acquisition-registry-validates-actual-world-wire'),
 
@@ -2311,6 +2333,30 @@ def test_rewind_and_acquisition_keep_original_notification_owners(fixture, path,
     diagnostic = "missing or reorders executable relation" if ordered_capture else "missing executable relation"
     assert any(f"Native preparation {symbol} {diagnostic}" in error for error in errors), errors
     assert all(error.startswith("Native preparation ") and (" missing executable relation " in error or " missing or reorders executable relation " in error) for error in errors), errors
+
+
+@pytest.mark.parametrize("declaration", [
+    "let baseline = self.lane_manifests.read().clone();",
+    "let mut registry_cache = self.sccp_registry_cache.lock().clone();",
+])
+def test_acquisition_captures_original_indexes_before_writers(fixture, declaration):
+    root, _, checker, _ = fixture
+    path = "crates/iroha_core/src/state/canonical_runtime.rs"
+    symbol = "State::acquire_canonical_runtime_block"
+    errors = []
+    item = checker._rust_binding_item(root, path, "method", symbol, "acquisition mutation", errors)
+    assert item is not None and not errors and item.count(declaration) == 1
+    without = item.replace(declaration, "", 1)
+    projection = "projection_result = self.project_canonical_runtime_with_manifests("
+    assert without.count(projection) == 1
+    changed = without.replace(projection, declaration + "\n            " + projection, 1)
+    source = root / path
+    contents = source.read_text()
+    assert contents.count(item) == 1
+    source.write_text(contents.replace(item, changed, 1))
+    errors = validate(fixture)
+    assert any("Native preparation State::acquire_canonical_runtime_block missing executable relation"
+               in error for error in errors), errors
 
 @pytest.mark.parametrize("path,kind,symbol,old,new", [
     pytest.param('crates/iroha_core/src/state/lifecycle_index_publication.rs', 'method', 'LaneLifecycleReleases::new', 'header: state.latest_block_header.defer_notifications(),', 'header: other.latest_block_header.defer_notifications(),', id='lifecycle-original-header'),
@@ -2598,3 +2644,295 @@ def test_native_preparation_prepublication_keeps_exact_typed_manifest(generic_fi
     with checker._reviewed_rust_source_cache():
         checker._validate_native_prepublication_contract(root, models, errors)
     assert any("PrefixPreparation::capture" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    pytest.param('archive_refusal', 'E::Provider(error) if matches!(error.as_ref(), P::IndexBusy { .. }) => {\n            let P::IndexBusy { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("provider_archive_index", wait, wake)\n        }', 'E::Provider(error) if matches!(error.as_ref(), P::IndexBusy { .. }) => {\n            let P::IndexBusy { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("provider_archive_index", replacement_wait, wake)\n        }', id='archive_refusal-typed-arm-0'),
+    pytest.param('archive_refusal', 'E::Provider(error) if matches!(error.as_ref(), P::IndexBusy { .. }) => {\n            let P::IndexBusy { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("provider_archive_index", wait, wake)\n        }', 'E::Provider(error) if matches!(error.as_ref(), P::IndexBusy { .. }) => {\n            let R::IndexBusy { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("provider_archive_index", wait, wake)\n        }', id='archive_refusal-foreign-destructure-0'),
+    pytest.param('archive_refusal', 'E::Reputation(error) if matches!(error.as_ref(), R::IndexBusy { .. }) => {\n            let R::IndexBusy { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("reputation_archive_index", wait, wake)\n        }', 'E::Reputation(error) if matches!(error.as_ref(), R::IndexBusy { .. }) => {\n            let R::IndexBusy { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("reputation_archive_index", replacement_wait, wake)\n        }', id='archive_refusal-typed-arm-1'),
+    pytest.param('archive_refusal', 'E::Reputation(error) if matches!(error.as_ref(), R::IndexBusy { .. }) => {\n            let R::IndexBusy { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("reputation_archive_index", wait, wake)\n        }', 'E::Reputation(error) if matches!(error.as_ref(), R::IndexBusy { .. }) => {\n            let P::IndexBusy { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("reputation_archive_index", wait, wake)\n        }', id='archive_refusal-foreign-destructure-1'),
+    pytest.param('archive_refusal', 'E::Provider(error) if matches!(error.as_ref(), P::CaptureReserved { .. }) => {\n            let P::CaptureReserved { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("provider_archive_capture", wait.release_wait(), wake)\n        }', 'E::Provider(error) if matches!(error.as_ref(), P::CaptureReserved { .. }) => {\n            let P::CaptureReserved { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("provider_archive_capture", replacement_wait, wake)\n        }', id='archive_refusal-typed-arm-2'),
+    pytest.param('archive_refusal', 'E::Provider(error) if matches!(error.as_ref(), P::CaptureReserved { .. }) => {\n            let P::CaptureReserved { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("provider_archive_capture", wait.release_wait(), wake)\n        }', 'E::Provider(error) if matches!(error.as_ref(), P::CaptureReserved { .. }) => {\n            let R::CaptureReserved { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("provider_archive_capture", wait.release_wait(), wake)\n        }', id='archive_refusal-foreign-destructure-2'),
+    pytest.param('archive_refusal', 'E::Reputation(error) if matches!(error.as_ref(), R::CaptureReserved { .. }) => {\n            let R::CaptureReserved { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("reputation_archive_capture", wait.release_wait(), wake)\n        }', 'E::Reputation(error) if matches!(error.as_ref(), R::CaptureReserved { .. }) => {\n            let R::CaptureReserved { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("reputation_archive_capture", replacement_wait, wake)\n        }', id='archive_refusal-typed-arm-3'),
+    pytest.param('archive_refusal', 'E::Reputation(error) if matches!(error.as_ref(), R::CaptureReserved { .. }) => {\n            let R::CaptureReserved { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("reputation_archive_capture", wait.release_wait(), wake)\n        }', 'E::Reputation(error) if matches!(error.as_ref(), R::CaptureReserved { .. }) => {\n            let P::CaptureReserved { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("reputation_archive_capture", wait.release_wait(), wake)\n        }', id='archive_refusal-foreign-destructure-3'),
+    pytest.param('physical_refusal', 'E::Provider(P::IndexBusy { wait }) | E::Archive(A::Provider(P::IndexBusy { wait })) => {\n            busy("provider_archive_index", wait, wake)\n        }', 'E::Provider(P::IndexBusy { wait }) | E::Archive(A::Provider(P::IndexBusy { wait })) => {\n            busy("provider_archive_index", replacement_wait, wake)\n        }', id='physical_refusal-typed-arm-0'),
+    pytest.param('physical_refusal', 'E::Reputation(RArch::IndexBusy { wait })\n        | E::Archive(A::Reputation(RArch::IndexBusy { wait })) => {\n            busy("reputation_archive_index", wait, wake)\n        }', 'E::Reputation(RArch::IndexBusy { wait })\n        | E::Archive(A::Reputation(RArch::IndexBusy { wait })) => {\n            busy("reputation_archive_index", replacement_wait, wake)\n        }', id='physical_refusal-typed-arm-1'),
+    pytest.param("RetainedCarrier::try_publish", "target: &State,", "target: &mut State,", id="target-borrow"),
+    pytest.param("RetainedCarrier::try_publish", "queue: &OriginalCarrierQueue<'_>,", "queue: &Queue,", id="original-queue-owner"),
+    pytest.param("RetainedCarrier::try_publish", "finality: VerifiedV2FinalityArtifact,", "finality: V2FinalityArtifact,", id="verified-finality"),
+    pytest.param("RetainedCarrier::try_publish", "(Self, LocalValidationRefusal)", "(Self, SemanticRejection)", id="typed-local-refusal"),
+    pytest.param("RetainedCarrier::try_publish", "Err((owner, error)) => return Err((owner, archive_refusal(&error, &wake)))", "Err((owner, error)) => return Err((replacement, archive_refusal(&error, &wake)))", id="capture-original-owner"),
+    pytest.param("RetainedCarrier::try_publish", "if !matches_target || !queue.belongs_to(target)", "if !matches_target && !queue.belongs_to(target)", id="reject-either-foreign-owner"),
+    pytest.param("RetainedCarrier::try_publish", "journals.bind_decision(finality.clone())", "journals.bind_decision(other.clone())", id="bind-original-decision"),
+    pytest.param("RetainedCarrier::try_publish", "Self::Validated(refusal.journals)", "Self::Validated(replacement)", id="decision-refusal-journals"),
+    pytest.param("RetainedCarrier::try_publish", "Self::Decided(decision) => decision.finality() == finality.artifact()", "Self::Decided(decision) => true", id="decided-retry-finality"),
+    pytest.param("RetainedCarrier::try_publish", "Self::Checkpointed(decision) => decision.finality() == finality.artifact()", "Self::Checkpointed(decision) => true", id="checkpointed-retry-finality"),
+    pytest.param("RetainedCarrier::try_publish", "if !same_finality", "if false", id="retry-finality-guard"),
+    pytest.param("RetainedCarrier::try_publish", "let kura = &decision.journals.kura;", "let kura = &other_kura;", id="original-kura"),
+    pytest.param("RetainedCarrier::try_publish", "kura.store_block(decision.block().clone())?;", "kura.store_block(replacement.clone())?;", id="original-body"),
+    pytest.param("RetainedCarrier::try_publish", "let artifact = decision.finality();", "let artifact = other.artifact();", id="original-artifact"),
+    pytest.param("RetainedCarrier::try_publish", "let checkpoint = decision.journals.checkpoint;", "let checkpoint = CapturedStateSnapshot::capture(target).hash();", id="never-recapture-live-state"),
+    pytest.param("RetainedCarrier::try_publish", "kura.store_wsv_checkpoint(artifact.height, artifact.block_hash, checkpoint)?;", "kura.store_wsv_checkpoint(artifact.height + 1, artifact.block_hash, checkpoint)?;", id="exact-checkpoint-boundary"),
+    pytest.param("RetainedCarrier::try_publish", "                            checkpoint,\n                            None,", "                            replacement_checkpoint,\n                            None,", id="manifest-captured-checkpoint"),
+    pytest.param("RetainedCarrier::try_publish", ".with_authenticated_v2_commit_authority(artifact)", ".with_authenticated_v2_commit_authority(other)", id="manifest-original-authority"),
+    pytest.param("RetainedCarrier::try_publish", "let receipt = kura.store_v2_finality_artifact(artifact)?;", "let receipt = kura.store_v2_finality_artifact(other)?;", id="exact-finality-receipt"),
+    pytest.param("RetainedCarrier::try_publish", "&receipt,\n                        decision.journals.checkpoint,", "&other_receipt,\n                        decision.journals.checkpoint,", id="checkpoint-original-finality-receipt"),
+    pytest.param("RetainedCarrier::try_publish", "decision.attach_checkpoint(checkpoint)", "decision.attach_checkpoint(other_checkpoint)", id="attach-original-receipt"),
+    pytest.param("RetainedCarrier::try_publish", "Self::Decided(decision),\n                            LocalValidationRefusal::RecoveryRequired", "Self::Decided(replacement),\n                            LocalValidationRefusal::RecoveryRequired", id="durable-error-retains-decision"),
+    pytest.param("RetainedCarrier::try_publish", "decision.try_prepare_physical(target, Some(queue))", "decision.try_prepare_physical(target, None)", id="physical-original-queue"),
+    pytest.param("RetainedCarrier::try_publish", "Self::Checkpointed(decision),\n                    physical_refusal", "Self::Checkpointed(replacement),\n                    physical_refusal", id="physical-refusal-retains-checkpoint"),
+    pytest.param("RetainedCarrier::try_publish", "(Self::Checkpointed(decision), refusal)", "(Self::Checkpointed(replacement), refusal)", id="visibility-refusal-retains-checkpoint"),
+    pytest.param("RetainedCarrier::try_publish", ") => busy(field, wait, &wake)", ") => LocalValidationRefusal::RecoveryRequired(error.to_string())", id="visibility-busy-retains-wake"),
+    pytest.param("busy", "wait.clone(), wake.clone()", "other_wait.clone(), wake.clone()", id="busy-original-release"),
+    pytest.param("busy", "wait.clone(), wake.clone()", "wait.clone(), other_wake.clone()", id="busy-original-waker"),
+    pytest.param("archive_refusal", 'busy("provider_archive_capture", wait.release_wait(), wake)', 'busy("provider_archive_capture", other_wait, wake)', id="archive-release"),
+    pytest.param("archive_refusal", "_ => LocalValidationRefusal::RecoveryRequired(error.to_string())", "_ => LocalValidationRefusal::SemanticRejected(error.to_string())", id="archive-not-semantic"),
+    pytest.param("physical_refusal", 'E::Queue(Q::Pending { wait, .. }) => busy("retiring_lane_queue", wait, wake)', 'E::Queue(Q::Pending { wait, .. }) => busy("retiring_lane_queue", other_wait, wake)', id="queue-retirement-release"),
+    pytest.param("physical_refusal", ")) => busy(refusal.field, release, wake)", ")) => busy(refusal.field, other_release, wake)", id="world-admission-release"),
+    pytest.param("physical_refusal", '\n        _ => LocalValidationRefusal::RecoveryRequired(format!("carrier publication: {error:?}"))', '\n        _ => LocalValidationRefusal::SemanticRejected(format!("carrier publication: {error:?}"))', id="physical-not-semantic"),
+])
+def test_live_retained_publication_both_consumers_reject_owner_substitution(generic_fixture, symbol, old, new):
+    """Mutate the actual source while both real consumers retain the reviewed ledger."""
+    root, helper, checker, _ = generic_fixture
+    path = root / checker.native_preparation_contract.SERVICE_PUBLICATION
+    helper.replace_once_after(path, "fn " + symbol.rsplit("::", 1)[-1], old, new)
+    assert any("source-binding token" in error for error in generic_native_errors(generic_fixture))
+    errors = validate(generic_fixture)
+    assert any("executable relation" in error or "Native live publication" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("phase", ["Validated", "Decided", "Checkpointed"])
+def test_live_retained_publication_each_phase_authenticates_target(fixture, phase):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.SERVICE_PUBLICATION
+    old = "target.matches_kura_instance(&journals.kura)" if phase == "Validated" else "target.matches_kura_instance(&decision.journals.kura)"
+    helper.replace_once_after(path, "Self::" + phase + "(", old, "true")
+    assert any("exact phase identity" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("operation", [
+    "store_block", "store_wsv_checkpoint", "store_commit_manifest",
+    "store_v2_finality_artifact", "persist_wsv_checkpoint_for_v2_commit",
+    "try_prepare_physical", "publish",
+])
+def test_live_retained_publication_rejects_early_duplicate_writes(fixture, operation):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.SERVICE_PUBLICATION
+    helper.replace_once_after(path, "fn try_publish", "let original = match self.resume_capture()", f"other.{operation}(replacement)?;\n        let original = match self.resume_capture()")
+    errors = validate(fixture)
+    assert any("repeats or omits original operation" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("cut", ["finality-before-checkpoint", "receipt-before-manifest", "physical-before-durable"])
+def test_live_retained_publication_rejects_durable_order_inversion(fixture, cut):
+    root, _, checker, _ = fixture
+    path = root / checker.native_preparation_contract.SERVICE_PUBLICATION
+    source = path.read_text()
+    if cut == "finality-before-checkpoint":
+        moving = "                    let receipt = kura.store_v2_finality_artifact(artifact)?;\n"
+        before = "                    kura.store_wsv_checkpoint(artifact.height, artifact.block_hash, checkpoint)?;"
+    elif cut == "receipt-before-manifest":
+        moving = "                    kura.persist_wsv_checkpoint_for_v2_commit(\n                        &receipt,\n                        decision.journals.checkpoint,\n                    )"
+        before = "                    kura.store_commit_manifest("
+    else:
+        moving = "        let prepared = match decision.try_prepare_physical(target, Some(queue)) {\n            Ok(prepared) => prepared,\n            Err((decision, error)) => {\n                return Err((\n                    Self::Checkpointed(decision),\n                    physical_refusal(&error, &wake),\n                ));\n            }\n        };\n"
+        before = "        let original = match self.resume_capture()"
+    assert source.count(moving) == 1 and source.count(before) == 1
+    source = source.replace(moving, "", 1).replace(before, moving + "\n" + before, 1)
+    path.write_text(source)
+    errors = validate(fixture)
+    assert any("reorders authenticated publication" in error for error in errors), errors
+    assert not any("missing executable relation" in error for error in errors), errors
+
+
+def test_live_retained_publication_ledger_cannot_omit_live_owner(fixture):
+    _, _, checker, models = fixture
+    model, = [row for row in models if row["module"] == checker.native_preparation_contract.MODEL]
+    model["production_symbols"] = [row for row in model["production_symbols"] if row["symbol"] != "RetainedCarrier::try_publish"]
+    assert any("ledger owner RetainedCarrier::try_publish must occur exactly once" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    pytest.param("Kura::store_commit_manifest", "self.ensure_checkpoint_accepts_manifest_write(&manifest)?;", "self.ensure_checkpoint_accepts_manifest_write(&manifest).ok();", id="manifest-original-checkpoint-gate"),
+    pytest.param("Kura::store_commit_manifest", "let namespace = self.open_bound_progress_namespace(&path, &path)?;", "let namespace = self.open_bound_progress_namespace(&other, &other)?;", id="manifest-original-namespace"),
+    pytest.param("Kura::store_commit_manifest", "file.sync_data()", "Ok(())", id="manifest-bytes-durable"),
+    pytest.param("Kura::store_commit_manifest", "Self::sync_bound_progress_intent_directories(&namespace)", "Self::sync_bound_progress_intent_directories(&other)", id="manifest-original-ancestors"),
+    pytest.param("Kura::store_commit_manifest", "if !self.bound_progress_namespace_unchanged(&namespace)", "if false", id="manifest-namespace-recheck"),
+    pytest.param("Kura::store_commit_manifest", "self.bind_wsv_checkpoint_to_manifest(&manifest)?;", "self.bind_wsv_checkpoint_to_manifest(&replacement)?;", id="manifest-original-binding"),
+    pytest.param("Kura::resync_verified_v2_finality_record", "&verified.metadata)?;", "&replacement.metadata)?;", id="resync-original-file"),
+    pytest.param("Kura::resync_verified_v2_finality_record", "file.sync_all()", "other.sync_all()", id="resync-file-barrier"),
+    pytest.param("Kura::resync_verified_v2_finality_record", "Self::sync_bound_progress_intent_directories(&namespace)", "Self::sync_bound_progress_intent_directories(&other)", id="resync-directory-barriers"),
+    pytest.param("Kura::resync_verified_v2_finality_record", "readback.bytes != verified.bytes", "false", id="resync-exact-bytes"),
+    pytest.param("Kura::resync_verified_v2_finality_record", "readback.bytes_hash != verified.bytes_hash", "false", id="resync-exact-bytes-hash"),
+    pytest.param("Kura::resync_verified_v2_finality_record", "!Self::stable_sidecar_file_binding_unchanged(&verified.metadata, &readback.metadata)", "false", id="resync-path-file-identity"),
+    pytest.param("Kura::resync_verified_v2_finality_record", "!Self::sidecar_file_metadata_unchanged(&verified.metadata.file, &opened)", "false", id="resync-open-descriptor-identity"),
+    pytest.param("Kura::resync_verified_v2_finality_record", "!self.bound_progress_namespace_unchanged(&namespace)", "false", id="resync-original-namespace"),
+    pytest.param("Kura::store_v2_finality_artifact", "let _canonical_chain_guard = self.canonical_chain_lock.lock();", "let _canonical_chain_guard = other.canonical_chain_lock.lock();", id="finality-original-canonical-guard"),
+    pytest.param("Kura::store_v2_finality_artifact", "self.verify_v2_finality_crypto(artifact)?;", "self.verify_v2_finality_crypto(artifact).ok();", id="finality-authenticate-before-write"),
+])
+def test_live_kura_durability_both_consumers_reject_identity_or_barrier_substitution(generic_fixture, symbol, old, new):
+    root, helper, checker, _ = generic_fixture
+    helper.replace_once_after(root / checker.native_preparation_contract.KURA, "fn " + symbol.rsplit("::", 1)[-1] + "(", old, new)
+    assert any("source-binding token" in error for error in generic_native_errors(generic_fixture))
+    errors = validate(generic_fixture)
+    assert any("executable relation" in error or "Native live durability" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("branch", ["existing", "no-clobber"])
+@pytest.mark.parametrize("operation", ["skip-authentication", "skip-resync", "early-receipt", "late-resync"])
+def test_live_kura_durability_each_existing_finality_branch_gates_receipt(fixture, branch, operation):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.KURA
+    anchor = ("if let Some((existing, read_identity)) = self.decode_v2_finality_record_at(&path, &dir)?"
+              if branch == "existing" else "if !self.write_atomic_synced_noclobber(&path, &bytes)?")
+    verify = "self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;"
+    resync = "self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;"
+    if operation == "skip-authentication":
+        helper.replace_once_after(path, anchor, verify, "// authentication removed")
+    elif operation == "skip-resync":
+        helper.replace_once_after(path, anchor, resync, "// synchronization removed")
+    elif operation == "early-receipt":
+        helper.replace_once_after(path, anchor, resync, "return Ok(v2_commit_receipt(&existing.artifact));\n            " + resync)
+    else:
+        source = path.read_text();start = source.index(anchor, source.index("pub fn store_v2_finality_artifact("));tail=source[start:]
+        tail=tail.replace(resync, "", 1).replace("return Ok(v2_commit_receipt(&existing.artifact));", "return Ok(v2_commit_receipt(&existing.artifact));\n            " + resync, 1)
+        path.write_text(source[:start] + tail)
+    assert any("Native live durability Kura::store_v2_finality_artifact" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("cut", ["manifest-binding-before-sync", "manifest-binding-before-recheck", "resync-return-before-sync"])
+def test_live_kura_durability_rejects_receipt_or_binding_before_barrier(fixture, cut):
+    root, _, checker, _ = fixture
+    path = root / checker.native_preparation_contract.KURA
+    source = path.read_text()
+    if cut.startswith("manifest-"):
+        start = source.index("pub(crate) fn store_commit_manifest(")
+        moving = "        self.bind_wsv_checkpoint_to_manifest(&manifest)?;\n"
+        before = ("        Self::sync_bound_progress_intent_directories(&namespace)"
+                  if cut == "manifest-binding-before-sync" else "        if !self.bound_progress_namespace_unchanged(&namespace)")
+        tail = source[start:];assert tail.count(moving)==1
+        tail = tail.replace(moving, "", 1).replace(before, moving + before, 1)
+    else:
+        start = source.index("fn resync_verified_v2_finality_record(")
+        tail = source[start:]
+        tail = tail.replace("        file.sync_all()", "        return Ok(());\n        file.sync_all()", 1)
+    path.write_text(source[:start] + tail)
+    assert any("Native live durability" in error for error in validate(fixture))
+
+@pytest.mark.parametrize("owner,symbol,old,new", [
+    ("BLOCK", "prepare_native_candidate", "PreparedCarrier::prepare(execution)", "PreparedCarrier::prepare(other_execution)"),
+    ("BLOCK", "validate_and_record_native_candidate", "source.record_execution(context)?", "source.record_execution(other_context)?"),
+    ("BLOCK", "validate_and_record_native_candidate", "anchor.snapshot_block_hash", "anchor.other_block_hash"),
+    ("CONTROLS", "prepare_native_execution_controls", "anchor.snapshot_block_hash", "anchor.other_block_hash"),
+    ("CONTROLS", "VerifiedReplayProposal::new", "Hash::new(&wire) != commitment.executed_block_wire_hash", "false"),
+    ("CONTROLS", "VerifiedReplayProposal::validate", "Hash::new(&wire) != self.proposal_wire_hash", "false"),
+    ("CONTROLS", "validate_sumeragi_v2_replay_keep_voting_block", "authority.validate(&proposal, &state.query_view())?;", "unchecked_prefix(&proposal, &state.query_view())?;"),
+    ("CONTROLS", "validate_sumeragi_v2_replay_keep_voting_block", ".eq(frozen.roster.iter().map(|entry| &entry.validator))", ".eq(other_roster.iter())"),
+    ("CONTROLS", "validate_sumeragi_v2_replay_keep_voting_block", "record.context == *frozen && record.validator_set_pops == verified.validator_set_pops", "true"),
+    ("CONTROLS", "validate_sumeragi_v2_replay_keep_voting_block", "VerifiedHeightContext::snapshot_bootstrap(bootstrap)", "VerifiedHeightContext::snapshot_bootstrap(other_bootstrap)"),
+    ("CONTROLS", "validate_sumeragi_v2_replay_keep_voting_block", "frozen.height.checked_sub(1)", "frozen.height.checked_sub(2)"),
+    ("CONTROLS", "validate_sumeragi_v2_replay_keep_voting_block", "&parent, &receipt, &parent.validator_set_pops", "&parent, &other_receipt, &parent.validator_set_pops"),
+    ("CONTROLS", "validate_sumeragi_v2_replay_keep_voting_block", "proposal,\n                            &[],\n                            admission,", "other_proposal,\n                            &[],\n                            admission,"),
+    ("CONTROLS", "validate_sumeragi_v2_replay_keep_voting_block", "native: input.native", "native: None"),
+    ("STATE", "replay_blocks_from_kura_range_inner", "!native.retains_carrier(replay.valid.as_ref(), &finality.height_context)", "!native.retains_carrier(other.as_ref(), &finality.height_context)"),
+    ("STATE", "replay_blocks_from_kura_range_inner", "replay.state.staged_merge_entry()", "None"),
+    ("STATE", "replay_blocks_from_kura_range_inner", "if replayed_execution_commitment != finality.commit_qc.execution_commitment", "if false"),
+    ("STATE", "replay_blocks_from_kura_range_inner", ".authorize_execution_output_publication(&committed_block, &witness)", ".authorize_execution_output_publication(&other_block, &witness)"),
+    ("STATE", "replay_blocks_from_kura_range_inner", ".apply_without_execution_with_verified_v2_finality_for_replay(&committed_block)", ".apply_without_execution_with_verified_v2_finality_for_replay(&other_block)"),
+    ("STATE", "replay_blocks_from_kura_range_inner", "if actual != wsv_checkpoint.state_hash()", "if false"),
+    ("STATE", "replay_blocks_from_kura_range_inner", "!native.retains_carrier(committed_block.as_ref(), &finality.height_context)", "!native.retains_carrier(other.as_ref(), &finality.height_context)"),
+    ("STATE", "verify_replay_bootstrap_binding", "if live_state_hash != anchor.snapshot_state_hash", "if false"),
+])
+def test_native_replay_both_consumers_reject_exact_source_substitution(generic_fixture, owner, symbol, old, new):
+    root, helper, checker, _ = generic_fixture
+    path = root / getattr(checker.native_preparation_contract, owner)
+    if "::" in symbol:
+        qualified = symbol
+        errors = []
+        item = checker._rust_binding_item(root, str(path.relative_to(root)), "method", qualified, "Native replay mutation", errors)
+        assert not errors and item is not None and old in item
+        text = path.read_text()
+        assert text.count(item) == 1
+        path.write_text(text.replace(item, item.replace(old, new, 1), 1))
+    else:
+        helper.replace_once_after(path, "fn " + symbol, old, new)
+    assert validate(generic_fixture), (symbol, old)
+    assert generic_native_errors(generic_fixture), (symbol, old)
+
+
+@pytest.mark.parametrize("site,field", [(site, field) for site in (0, 1) for field in ("presence", "state")])
+def test_native_replay_both_tail_checks_retain_custody(fixture, site, field):
+    root, _, checker, _ = fixture
+    path = root / checker.native_preparation_contract.STATE
+    old = ("replay.native.is_some() != has_native_inputs" if field == "presence" else "!native.retains_state(&replay.state)")
+    text = path.read_text()
+    start = text.index("fn replay_blocks_from_kura_range_inner(")
+    head, tail = text[:start], text[start:]
+    assert tail.count(old) == 2
+    index = tail.index(old) if site == 0 else tail.rindex(old)
+    tail = tail[:index] + "false" + tail[index + len(old):]
+    path.write_text(head + tail)
+    assert any("Native replay" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("case", ["drop-order", "early-drop", "live-capture", "source-refusal", "observation-refusal", "admission-refusal"])
+def test_native_replay_rejects_custody_or_phase_shortcuts(fixture, case):
+    root, helper, checker, _ = fixture
+    c = checker.native_preparation_contract
+    if case == "drop-order":
+        path = root / c.BLOCK
+        old = "pub(crate) state: Box<StateBlock<'state>>,\n    pub(crate) native: Option<crate::state::NativeExecutionCustody>,"
+        new = "pub(crate) native: Option<crate::state::NativeExecutionCustody>,\n    pub(crate) state: Box<StateBlock<'state>>,"
+        helper.replace_once_after(path, "struct ValidatedReplayExecution", old, new)
+    elif case == "early-drop":
+        path = root / c.STATE
+        text = path.read_text()
+        assert text.count("drop(replay.native);") == 1
+        text = text.replace("drop(replay.native);", "", 1)
+        old = "replay.state.commit().map_err(|err|"
+        assert text.count(old) == 1
+        path.write_text(text.replace(old, "drop(replay.native); " + old, 1))
+    elif case == "live-capture":
+        helper.replace_once_after(root / c.CONTROLS, "fn validate_sumeragi_v2_replay_keep_voting_block", "Ok(ValidatedReplayExecution {", "PreparedCarrier::prepare(input)?; Ok(ValidatedReplayExecution {")
+    else:
+        path = root / c.CONTROLS
+        variant = {
+            "source-refusal": "FirstInputRecoveryRequired",
+            "observation-refusal": "ObservationChanged",
+            "admission-refusal": "AdmissionMismatch",
+        }[case]
+        old = f'NativeLaneBatchSourcePreparationV1::{variant} {{ .. }} => {{\n                            return Err(BlockValidationError::LocalStorageRecoveryRequired {{'
+        new = f'NativeLaneBatchSourcePreparationV1::{variant} {{ .. }} => {{\n                            return Ok(unchecked_execution());'
+        helper.replace_once_after(path, "fn validate_sumeragi_v2_replay_keep_voting_block", old, new)
+    assert any("Native replay" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("replacement", ["false", "bundle.merge_entry.is_some()"])
+def test_native_replay_custody_presence_comes_from_actual_native_batch(generic_fixture, replacement):
+    root, helper, checker, _ = generic_fixture
+    path = root / checker.native_preparation_contract.STATE
+    helper.replace_once_after(path, "let has_native_inputs = signed_block", "bundle.native_lane_decisions.is_some()", replacement)
+    assert validate(generic_fixture)
+    assert generic_native_errors(generic_fixture)
+
+
+@pytest.mark.parametrize("anchor,old,new", [
+    ("let native_amx_manifest =", "replay.state.staged_merge_entry()", "None"),
+    ("let lane_finality_manifest =", "replay.valid.as_ref()", "other_valid.as_ref()"),
+    ("let replayed_execution_commitment =", "&witness,", "&other_witness,"),
+    ("let replayed_execution_commitment =", "&native_amx_manifest,", "&other_native_manifest,"),
+    ("let replayed_execution_commitment =", "&lane_finality_manifest,", "&other_lane_manifest,"),
+    ("let replayed_execution_commitment =", "replay.valid.as_ref()", "other_valid.as_ref()"),
+    ("let result_check = ensure_replayed_results_match_committed(", "&signed_block,", "&other_signed_block,"),
+])
+def test_native_replay_tail_binds_exact_manifest_witness_and_wire(generic_fixture, anchor, old, new):
+    root, helper, checker, _ = generic_fixture
+    path = root / checker.native_preparation_contract.STATE
+    # These names occur in other functions too; isolate the defining replay tail.
+    text = path.read_text(); offset = text.index("fn replay_blocks_from_kura_range_inner(")
+    index = text.index(anchor, offset); position = text.index(old, index)
+    path.write_text(text[:position] + new + text[position + len(old):])
+    assert validate(generic_fixture)
+    assert generic_native_errors(generic_fixture)

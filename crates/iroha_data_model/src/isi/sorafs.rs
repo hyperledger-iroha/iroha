@@ -3290,3 +3290,4 @@ mod tests {
 include!("sorafs/stream_token_custody.rs");
 include!("sorafs/final_promotion_authority.rs");
 include!("sorafs/final_promotion_account_custody.rs");
+include!("sorafs/release_manifest_authority.rs");

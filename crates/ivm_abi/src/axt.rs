@@ -141,7 +141,7 @@ impl AxtProofUseFacts {
 /// Errors returned by [`resolve_handle_amount`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandleAmountResolutionError {
-    /// No cleartext amount was provided and no committed amount could be loaded from proof.
+    /// No cleartext amount was provided; a public proof scalar cannot authorize a private amount.
     MissingAmount,
     /// The supplied proof payload is not a canonical AXT proof envelope.
     InvalidProofEnvelope,
@@ -182,7 +182,7 @@ fn proof_scalar_to_quantity(amount: u128) -> Quantity {
         .parse()
         .expect("every u128 is an exact scale-zero Quantity")
 }
-/// Build a deterministic amount commitment used for hidden-amount fragments.
+/// Build a deterministic amount commitment over an AXT envelope and amount.
 ///
 /// This digest links the envelope and fragment copies for consistency; it does
 /// not authenticate the amount. Amount authenticity comes from the
@@ -248,10 +248,11 @@ fn derive_amount_commitment_from_normalized_payload(
         },
     )
 }
-/// Resolve an effective amount and commitment for a handle usage.
+/// Resolve an effective amount and commitment for a clear-amount handle usage.
 ///
-/// This supports both cleartext (`intent.op.amount`) and hidden modes where the cleartext amount is
-/// redacted and a committed amount is carried in the [`AxtProofEnvelope`].
+/// A redacted intent cannot be authorized by the public `committed_amount` scalar
+/// in [`AxtProofEnvelope`]. Private amounts remain unavailable until their
+/// proof-bound relation and budget checks are implemented.
 pub fn resolve_handle_amount(
     intent: &RemoteSpendIntent,
     proof: Option<&ProofBlob>,
@@ -267,7 +268,7 @@ pub fn resolve_handle_amount(
 ///
 /// Keeping this conversion in one place prevents the two consensus-critical
 /// validation layers from disagreeing about fractional quantities, proof
-/// scalar bounds, hidden amounts, or commitment derivation.
+/// scalar bounds, redacted-amount rejection, or commitment derivation.
 ///
 /// # Errors
 ///
@@ -278,10 +279,11 @@ pub fn resolve_handle_amount_components(
     intent_amount: Option<&Quantity>,
     proof_payload: Option<&[u8]>,
 ) -> Result<ResolvedHandleAmount, HandleAmountResolutionError> {
+    // TODO: Admit private amounts only after a proof-bound confidential value,
+    // conservation relation, and budget comparison replace this public scalar.
+    let intent_amount = intent_amount.ok_or(HandleAmountResolutionError::MissingAmount)?;
     let Some(proof_payload) = proof_payload else {
-        let amount = intent_amount
-            .cloned()
-            .ok_or(HandleAmountResolutionError::MissingAmount)?;
+        let amount = intent_amount.clone();
         if amount.is_zero() {
             return Err(HandleAmountResolutionError::ZeroAmount);
         }
@@ -296,7 +298,7 @@ pub fn resolve_handle_amount_components(
     let envelope = decode_canonical_norito::<AxtProofEnvelope>(proof_payload)
         .map_err(|_| HandleAmountResolutionError::InvalidProofEnvelope)?;
     let facts = AxtProofUseFacts::from_canonical_envelope(envelope);
-    resolve_handle_amount_components_from_proof_facts(asset_dsid, intent_amount, &facts)
+    resolve_handle_amount_components_from_proof_facts(asset_dsid, Some(intent_amount), &facts)
 }
 /// Resolve an effective handle amount from cached, verified proof facts.
 ///
@@ -306,8 +308,8 @@ pub fn resolve_handle_amount_components(
 /// # Errors
 ///
 /// Returns [`HandleAmountResolutionError`] when the dataspace or amount does
-/// not match the verified proof facts, or when the amount is absent, zero, or
-/// not exactly representable by the V1 proof scalar.
+/// not match the verified proof facts, or when the intent amount is absent,
+/// zero, or not exactly representable by the V1 proof scalar.
 pub fn resolve_handle_amount_components_from_proof_facts(
     asset_dsid: DataSpaceId,
     intent_amount: Option<&Quantity>,
@@ -316,24 +318,22 @@ pub fn resolve_handle_amount_components_from_proof_facts(
     if facts.dsid != asset_dsid {
         return Err(HandleAmountResolutionError::InvalidProofEnvelope);
     }
+    let intent_amount = intent_amount.ok_or(HandleAmountResolutionError::MissingAmount)?;
     let committed_amount = facts.committed_amount;
-    let amount = match (intent_amount, &committed_amount) {
-        (Some(intent_amount), Some(committed_amount)) => {
-            if quantity_to_proof_scalar(intent_amount)? != *committed_amount {
+    let amount = match committed_amount {
+        Some(committed_amount) => {
+            if quantity_to_proof_scalar(intent_amount)? != committed_amount {
                 return Err(HandleAmountResolutionError::Mismatch);
             }
             intent_amount.clone()
         }
-        (Some(intent_amount), None) => intent_amount.clone(),
-        (None, Some(committed_amount)) => proof_scalar_to_quantity(*committed_amount),
-        (None, None) => return Err(HandleAmountResolutionError::MissingAmount),
+        None => intent_amount.clone(),
     };
     if amount.is_zero() {
         return Err(HandleAmountResolutionError::ZeroAmount);
     }
     let supplied_commitment = facts.supplied_amount_commitment;
-    let commitment_required =
-        intent_amount.is_none() || committed_amount.is_some() || supplied_commitment.is_some();
+    let commitment_required = committed_amount.is_some() || supplied_commitment.is_some();
     let amount_commitment = commitment_required.then(|| {
         facts.fixed_amount_commitment.unwrap_or_else(|| {
             derive_amount_commitment_from_normalized_payload(
@@ -901,7 +901,7 @@ pub struct SpendOp {
     pub from: String,
     /// Destination account id in canonical I105 form.
     pub to: String,
-    /// Cleartext amount, or `None` when the proof carries a hidden amount.
+    /// Cleartext amount. A redacted value is rejected by V1 handle admission.
     pub amount: Option<Quantity>,
 }
 /// Validate context-free invariants of a remote spend intent.
@@ -909,7 +909,7 @@ pub struct SpendOp {
 /// # Errors
 ///
 /// Returns [`VMError::NoritoInvalid`] for empty or non-canonical operation and account strings, and
-/// [`VMError::PermissionDenied`] for an explicit zero amount.
+/// [`VMError::PermissionDenied`] for an absent or zero amount.
 pub fn validate_remote_spend_intent(intent: &RemoteSpendIntent) -> Result<(), VMError> {
     if intent.op.kind != "transfer" {
         return Err(VMError::NoritoInvalid);
@@ -919,7 +919,9 @@ pub fn validate_remote_spend_intent(intent: &RemoteSpendIntent) -> Result<(), VM
             return Err(VMError::NoritoInvalid);
         }
     }
-    if intent.op.amount.as_ref().is_some_and(Quantity::is_zero) {
+    // TODO: Admit private amounts only with a proof-bound confidential value,
+    // conservation relation, and budget comparison; a public scalar is not private.
+    if intent.op.amount.as_ref().is_none_or(Quantity::is_zero) {
         return Err(VMError::PermissionDenied);
     }
     Ok(())
@@ -987,7 +989,9 @@ pub fn validate_remote_spend_intent_commitment(
     effective_amount: &Quantity,
     proof: &ProofBlob,
 ) -> Result<(), VMError> {
-    if handle.asset_definition_id != intent.op.asset_definition_id {
+    if intent.op.amount.as_ref() != Some(effective_amount)
+        || handle.asset_definition_id != intent.op.asset_definition_id
+    {
         return Err(VMError::PermissionDenied);
     }
     validate_remote_spend_intent_commitment_components(
@@ -1009,7 +1013,9 @@ pub fn validate_model_remote_spend_intent_commitment(
     effective_amount: &Quantity,
     proof: &ModelProofBlob,
 ) -> Result<(), VMError> {
-    if handle.asset_definition_id != intent.op.asset_definition_id {
+    if intent.op.amount.as_ref() != Some(effective_amount)
+        || handle.asset_definition_id != intent.op.asset_definition_id
+    {
         return Err(VMError::PermissionDenied);
     }
     validate_remote_spend_intent_commitment_components(
@@ -1033,7 +1039,8 @@ pub fn validate_model_remote_spend_intent_commitment_from_proof_facts(
     effective_amount: &Quantity,
     facts: &AxtProofUseFacts,
 ) -> Result<(), VMError> {
-    if facts.dsid != intent.asset_dsid
+    if intent.op.amount.as_ref() != Some(effective_amount)
+        || facts.dsid != intent.asset_dsid
         || handle.asset_definition_id != intent.op.asset_definition_id
     {
         return Err(VMError::PermissionDenied);
@@ -1507,6 +1514,9 @@ pub struct HandleUsage {
 impl TryFrom<&HandleUsage> for AxtHandleFragment {
     type Error = VMError;
     fn try_from(usage: &HandleUsage) -> Result<Self, Self::Error> {
+        if usage.intent.op.amount.as_ref() != Some(&usage.amount) {
+            return Err(VMError::PermissionDenied);
+        }
         let handle = ModelAssetHandle::try_from(&usage.handle)?;
         let intent = ModelRemoteSpendIntent {
             asset_dsid: usage.intent.asset_dsid,
@@ -1522,24 +1532,12 @@ impl TryFrom<&HandleUsage> for AxtHandleFragment {
             payload: p.payload.clone(),
             expiry_slot: p.expiry_slot,
         });
-        let amount_hidden = usage.intent.op.amount.is_none();
-        let amount_commitment = if amount_hidden {
-            usage.amount_commitment.or_else(|| {
-                Some(derive_amount_commitment(
-                    usage.intent.asset_dsid,
-                    &usage.amount,
-                    usage.proof.as_ref().map(|blob| blob.payload.as_slice()),
-                ))
-            })
-        } else {
-            usage.amount_commitment
-        };
         Ok(AxtHandleFragment {
             handle,
             intent,
             proof,
-            amount: (!amount_hidden).then(|| usage.amount.clone()),
-            amount_commitment,
+            amount: Some(usage.amount.clone()),
+            amount_commitment: usage.amount_commitment,
         })
     }
 }
@@ -1936,6 +1934,11 @@ mod tests {
             validate_remote_spend_intent(&sample_intent(dsid, Some(0))),
             Err(VMError::PermissionDenied)
         );
+        assert_eq!(
+            validate_remote_spend_intent(&sample_intent(dsid, None)),
+            Err(VMError::PermissionDenied),
+            "a redacted intent cannot be authorized by a public proof scalar"
+        );
         for kind in ["mint", "Transfer", " transfer", "transfer "] {
             let mut invalid = valid.clone();
             invalid.op.kind = kind.to_owned();
@@ -2134,16 +2137,16 @@ mod tests {
         let dsid = DataSpaceId::new(93);
         let descriptor_binding = [0x93; 32];
         let clear = sample_intent(dsid, Some(5));
-        let mut hidden = sample_intent(dsid, None);
-        hidden.op.to = ACCOUNT_FROM_LITERAL.to_owned();
+        let mut second = sample_intent(dsid, Some(7));
+        second.op.to = ACCOUNT_FROM_LITERAL.to_owned();
         let clear_amount = quantity(5);
-        let hidden_amount = quantity(7);
+        let second_amount = quantity(7);
         let clear_handle = sample_handle(dsid, descriptor_binding, 10, Some(10));
-        let mut hidden_handle = clear_handle.clone();
-        hidden_handle.sub_nonce += 1;
+        let mut second_handle = clear_handle.clone();
+        second_handle.sub_nonce += 1;
         let proof = proof_for_remote_spends(&[
             (&clear_handle, &clear, clear_amount.clone()),
-            (&hidden_handle, &hidden, hidden_amount.clone()),
+            (&second_handle, &second, second_amount.clone()),
         ]);
         assert_eq!(
             validate_remote_spend_intent_commitment(&clear_handle, &clear, &clear_amount, &proof,),
@@ -2151,12 +2154,24 @@ mod tests {
         );
         assert_eq!(
             validate_remote_spend_intent_commitment(
-                &hidden_handle,
-                &hidden,
-                &hidden_amount,
+                &second_handle,
+                &second,
+                &second_amount,
                 &proof,
             ),
             Ok(())
+        );
+        let mut redacted = second.clone();
+        redacted.op.amount = None;
+        assert_eq!(
+            validate_remote_spend_intent_commitment(
+                &second_handle,
+                &redacted,
+                &second_amount,
+                &proof,
+            ),
+            Err(VMError::PermissionDenied),
+            "semantic membership cannot admit a public-scalar hidden route"
         );
         let envelope = decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
             .expect("decode reusable proof once");
@@ -2180,6 +2195,30 @@ mod tests {
         })
         .expect("convert fixture handle")
         .handle;
+        let mut model_redacted = model_clear.clone();
+        model_redacted.op.amount = None;
+        let model_proof = ModelProofBlob {
+            payload: proof.payload.clone(),
+            expiry_slot: proof.expiry_slot,
+        };
+        assert_eq!(
+            validate_model_remote_spend_intent_commitment(
+                &model_handle,
+                &model_redacted,
+                &clear_amount,
+                &model_proof,
+            ),
+            Err(VMError::PermissionDenied)
+        );
+        assert_eq!(
+            validate_model_remote_spend_intent_commitment_from_proof_facts(
+                &model_handle,
+                &model_redacted,
+                &clear_amount,
+                &facts,
+            ),
+            Err(VMError::PermissionDenied)
+        );
         assert_eq!(
             validate_model_remote_spend_intent_commitment_from_proof_facts(
                 &model_handle,
@@ -2316,11 +2355,11 @@ mod tests {
         let clear_commitment =
             expected_remote_spend_intent_commitment_v1(&clear_handle, &clear, &clear_amount)
                 .expect("fixture commitment");
-        let hidden_commitment =
-            expected_remote_spend_intent_commitment_v1(&hidden_handle, &hidden, &hidden_amount)
+        let second_commitment =
+            expected_remote_spend_intent_commitment_v1(&second_handle, &second, &second_amount)
                 .expect("fixture commitment");
         assert_eq!(
-            facts.validate_remote_spend_consumption(&[hidden_commitment, clear_commitment]),
+            facts.validate_remote_spend_consumption(&[second_commitment, clear_commitment]),
             Ok(())
         );
         assert_eq!(
@@ -2555,25 +2594,27 @@ mod tests {
         );
     }
     #[test]
-    fn resolve_handle_amount_uses_proof_commit_when_intent_hidden() {
+    fn resolve_handle_amount_rejects_public_scalar_for_redacted_intent() {
         let dsid = DataSpaceId::new(91);
         let intent = sample_intent(dsid, None);
         let proof = proof_with_amount(dsid, Some(77), None);
-        let resolved = resolve_handle_amount(&intent, Some(&proof)).expect("resolve amount");
-        assert_eq!(resolved.amount, quantity(77));
         assert_eq!(
-            resolved.amount_commitment,
-            Some(derive_amount_commitment(
-                dsid,
-                &quantity(77),
-                Some(proof.payload.as_slice())
-            ))
+            resolve_handle_amount(&intent, Some(&proof)),
+            Err(HandleAmountResolutionError::MissingAmount)
+        );
+        assert_eq!(
+            resolve_handle_amount(&intent, None),
+            Err(HandleAmountResolutionError::MissingAmount)
+        );
+        assert_eq!(
+            resolve_handle_amount_components(dsid, None, Some(&proof.payload)),
+            Err(HandleAmountResolutionError::MissingAmount)
         );
     }
     #[test]
     fn resolve_handle_amount_authenticates_supplied_commitment_without_circular_hashing() {
         let dsid = DataSpaceId::new(97);
-        let intent = sample_intent(dsid, None);
+        let intent = sample_intent(dsid, Some(77));
         let proof = proof_with_derived_amount_commitment(dsid, 77);
         let resolved = resolve_handle_amount(&intent, Some(&proof))
             .expect("canonical supplied commitment must resolve");
@@ -2595,7 +2636,7 @@ mod tests {
     #[test]
     fn resolve_handle_amount_rejects_attacker_supplied_commitment() {
         let dsid = DataSpaceId::new(98);
-        let intent = sample_intent(dsid, None);
+        let intent = sample_intent(dsid, Some(9));
         let proof = proof_with_amount(dsid, Some(9), Some([0xA5; 32]));
         assert_eq!(
             resolve_handle_amount(&intent, Some(&proof)),
@@ -2619,7 +2660,7 @@ mod tests {
     #[test]
     fn cached_proof_facts_match_payload_amount_resolution() {
         let dsid = DataSpaceId::new(96);
-        let intent = sample_intent(dsid, None);
+        let intent = sample_intent(dsid, Some(31));
         let proof = proof_with_derived_amount_commitment(dsid, 31);
         let expected = resolve_handle_amount(&intent, Some(&proof)).expect("payload resolution");
         let envelope = decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
@@ -2640,6 +2681,11 @@ mod tests {
                 &facts,
             ),
             Err(HandleAmountResolutionError::InvalidProofEnvelope)
+        );
+        assert_eq!(
+            resolve_handle_amount_components_from_proof_facts(dsid, None, &facts),
+            Err(HandleAmountResolutionError::MissingAmount),
+            "cached verified proof facts cannot authorize a redacted intent"
         );
         assert_eq!(
             resolve_handle_amount_components_from_proof_facts(dsid, Some(&quantity(32)), &facts,),
@@ -2714,7 +2760,7 @@ mod tests {
     #[test]
     fn resolve_handle_amount_rejects_zero_committed_scalar() {
         let dsid = DataSpaceId::new(95);
-        let intent = sample_intent(dsid, None);
+        let intent = sample_intent(dsid, Some(0));
         let proof = proof_with_amount(dsid, Some(0), None);
         assert_eq!(
             resolve_handle_amount(&intent, Some(&proof)),
@@ -2722,7 +2768,7 @@ mod tests {
         );
     }
     #[test]
-    fn try_from_usage_redacts_hidden_amount() {
+    fn try_from_usage_rejects_redacted_public_scalar_amount() {
         let dsid = DataSpaceId::new(93);
         let descriptor = AxtDescriptor {
             dsids: vec![dsid],
@@ -2735,17 +2781,29 @@ mod tests {
         let binding = compute_binding(&descriptor).expect("binding");
         let intent = sample_intent(dsid, None);
         let proof = proof_with_amount(dsid, Some(5), None);
-        let resolved = resolve_handle_amount(&intent, Some(&proof)).expect("resolve amount");
         let usage = HandleUsage {
             handle: sample_handle(dsid, binding, 10, Some(10)),
             intent,
             proof: Some(proof),
-            amount: resolved.amount,
-            amount_commitment: resolved.amount_commitment,
+            amount: quantity(5),
+            amount_commitment: Some([0xA5; 32]),
         };
-        let fragment = AxtHandleFragment::try_from(&usage).expect("fragment conversion");
-        assert_eq!(fragment.amount, None);
-        assert_eq!(fragment.amount_commitment, resolved.amount_commitment);
+        assert_eq!(
+            AxtHandleFragment::try_from(&usage),
+            Err(VMError::PermissionDenied)
+        );
+        let mut mismatched = usage.clone();
+        mismatched.intent.op.amount = Some(quantity(6));
+        assert_eq!(
+            AxtHandleFragment::try_from(&mismatched),
+            Err(VMError::PermissionDenied),
+            "the recorded effective amount must match the clear signed intent"
+        );
+        mismatched.intent.op.amount = Some(quantity(5));
+        mismatched.amount_commitment = None;
+        let fragment = AxtHandleFragment::try_from(&mismatched)
+            .expect("a matching clear amount can be materialized");
+        assert_eq!(fragment.amount, Some(quantity(5)));
     }
     #[test]
     fn snapshot_policy_rejects_excess_skew_request() {

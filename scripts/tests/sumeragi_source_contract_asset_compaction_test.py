@@ -16,8 +16,8 @@ SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
 EXPECTED_CASE_COUNT = 55
 # Pin the reviewed semantic asset. Historical compaction byte counts and host
 # hashes belong to Git history: current Rust hosts may add independent tests.
-EXPECTED_ASSET_LENGTH = 677_471
-EXPECTED_ASSET_SHA256 = "77354a934a4af4e43cf768b7ae5715dec209c79b08648be5e4c11deee3b965ee"
+EXPECTED_ASSET_LENGTH = 681_242
+EXPECTED_ASSET_SHA256 = "8cba9d9b61bb9e5c98629e31fe3a9d88f0a96638bf54e2a166a147c6ab1d28ac"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 MIGRATED_TESTS = {
@@ -63,7 +63,7 @@ NEW_CASE_CONTRACT_COUNTS = {
 }
 MIGRATED_CASE_SHA256 = {
     "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "be7471d4e85fcfbbcadbae26edf7628c422d9ca60b2244a11041f089a79108c5",
-    "registry_remains_inert_and_scheduler_free": "cf3a858cc7345c7663edfef709da6191758b48b881a93cd031c88d0b9878bc93",
+    "registry_remains_inert_and_scheduler_free": "8ba324d986d94692046569a610f8a9701444599acec0a50b1ea1589d2fd89226",
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": "71ea3bb6e8824dc8151382fa4c18cfba4cc75c6093a15d5f6a849fd6a451236d",
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "9819e8836f8893f55626f44ba4b6532c21d1a09aec4a6efcb39145f9165fcf14",
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "bda488863750adfa085b4a11b068ec66b7d4281868fbd0501ed6abcaaa7371b1",

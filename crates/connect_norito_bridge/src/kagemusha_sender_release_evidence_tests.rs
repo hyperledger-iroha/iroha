@@ -42,6 +42,7 @@ fn number(value: &Value, key: &str) -> u64 {
 
 fn credential(value: &Value) -> KagemushaHardwareCredentialV1 {
     KagemushaHardwareCredentialV1 {
+        app_policy_binding_digest: [0xA6; 32],
         version: 1,
         credential_id: digest(value, "credential_id"),
         network_id: HashOf::from_untyped_unchecked(Hash::prehashed(digest(value, "network_id")))
@@ -69,6 +70,7 @@ fn credential(value: &Value) -> KagemushaHardwareCredentialV1 {
 
 fn profile(value: &Value) -> KagemushaHardwareProfileV1 {
     KagemushaHardwareProfileV1 {
+        app_attestation_authority_policy_digest: [0xA5; 32],
         version: 1,
         protocol_version: 1,
         hardware_profile_id: digest(value, "hardware_profile_id"),

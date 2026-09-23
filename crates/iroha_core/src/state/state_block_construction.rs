@@ -181,6 +181,7 @@ impl State {
             let block = StateBlock::from_fields(StateBlockFields {
                 local_storage_refusal: None,
                 state_ref: self,
+                read_releases: StateViewReleases::new(self),
                 da_rewind_releases,
                 canonical_runtime: block_field::BlockField::new(canonical_runtime),
                 block_hashes: block_hash_field::BlockHashField::new(block_hashes),

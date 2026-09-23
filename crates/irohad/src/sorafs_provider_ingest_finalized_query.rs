@@ -20,9 +20,11 @@ use iroha_config::parameters::actual::SorafsProviderIngestFinalizedArchive;
 use iroha_core::{
     kura::Kura,
     query::provider_ingest_finalized::{
-        ProviderIngestFinalizedArchiveBoundsV1, ProviderIngestFinalizedArchiveCursorV1,
-        ProviderIngestFinalizedArchiveErrorV1, ProviderIngestFinalizedArchiveKeyV1,
-        ProviderIngestFinalizedArchivePageV1, ProviderIngestFinalizedArchiveQualificationV1,
+        ProviderIngestFinalizedArchiveAssignmentLookupV1,
+        ProviderIngestFinalizedArchiveAssignmentV1, ProviderIngestFinalizedArchiveBoundsV1,
+        ProviderIngestFinalizedArchiveCursorV1, ProviderIngestFinalizedArchiveErrorV1,
+        ProviderIngestFinalizedArchiveKeyV1, ProviderIngestFinalizedArchivePageV1,
+        ProviderIngestFinalizedArchiveQualificationV1,
         ProviderIngestFinalizedArchiveReconcileOutcomeV1,
         ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
         ProviderIngestFinalizedArchiveRetentionAuthorityV1, ProviderIngestFinalizedArchiveV1,
@@ -36,15 +38,15 @@ use iroha_data_model::{
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
-            PinManifestFinalizedCursorV1, PinManifestFinalizedRecordV1,
-            ProviderIngestCompletionAuthorityV1, ReplicationOrderId,
+            PinManifestFinalizedCursorV1, PinManifestFinalizedRecordV1, PinStatus,
+            ProviderIngestCompletionAuthorityV1, ReplicationOrderId, ReplicationOrderStatus,
         },
     },
 };
 #[cfg(test)]
 use iroha_model_base::chain::ChainId;
 use sorafs_node::{
-    ProviderIngestCompletedMusubiCaptureRequestV1,
+    FinalizedProviderIngestAuthorizationV1, ProviderIngestCompletedMusubiCaptureRequestV1,
     ProviderIngestCompletedMusubiCaptureSourcePageV1,
     ProviderIngestCompletedMusubiCaptureSourceRowV1,
     ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
@@ -52,8 +54,9 @@ use sorafs_node::{
     ProviderIngestCompletedMusubiSignedCapturePageV1, ProviderIngestFinalizedAssignmentPageV1,
     ProviderIngestFinalizedAssignmentV1, ProviderIngestFinalizedClaimFactoryV1,
     ProviderIngestFinalizedCursorV1, ProviderIngestFinalizedLedgerErrorV1,
-    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1,
+    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1, ProviderIngestSourceFetchErrorV1,
     provider_ingest_completed_musubi_capture_transcript_digest_v1,
+    provider_ingest_runtime::ProviderIngestSourceRequestV1,
 };
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -734,6 +737,52 @@ struct ActiveArchiveScanV1 {
     key: ProviderIngestFinalizedArchiveKeyV1,
     cursor: ProviderIngestFinalizedArchiveCursorV1,
 }
+/// One current State/Kura-qualified assignment, retained only inside the daemon.
+///
+/// This contains no endpoint, admission, advert, credential, token, or grant authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderIngestCurrentAssignmentSnapshotV1 {
+    key: ProviderIngestFinalizedArchiveKeyV1,
+    provider_state_root: [u8; 32],
+    assignment: ProviderIngestFinalizedArchiveAssignmentV1,
+    source_provider_ids: Vec<[u8; 32]>,
+}
+impl ProviderIngestCurrentAssignmentSnapshotV1 {
+    /// Bind a source request and revision to this independently read current assignment.
+    /// A request is only a payload-free transport input; it cannot authenticate itself.
+    fn matches_source_request(
+        &self,
+        source_provider_id: [u8; 32],
+        request: &ProviderIngestSourceRequestV1,
+        assignment_revision: u64,
+    ) -> bool {
+        let musubi_matches = match (
+            self.assignment.musubi_archive.as_ref(),
+            request.musubi_archive(),
+        ) {
+            (None, None) => true,
+            (Some(current), Some(candidate)) => {
+                candidate.network_id() == &self.key.network_id
+                    && candidate.provider_id() == *self.assignment.provider_id.as_bytes()
+                    && candidate.binding() == current
+                    && candidate.observed_finalized_cursor().height <= self.key.height
+                    && (candidate.observed_finalized_cursor().height != self.key.height
+                        || candidate.observed_finalized_cursor().block_hash == self.key.block_hash)
+            }
+            _ => false,
+        };
+        assignment_revision != 0
+            && assignment_revision == self.assignment.expected_assignment_revision
+            && self.source_provider_ids.as_slice() == request.source_provider_ids()
+            && self
+                .source_provider_ids
+                .binary_search(&source_provider_id)
+                .is_ok()
+            && request.authorization().provider_id() == *self.assignment.provider_id.as_bytes()
+            && self.provider_state_root != [0; 32]
+            && musubi_matches
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArchiveActivationGateV1 {
     StrictLive,
@@ -846,6 +895,53 @@ impl fmt::Debug for ArchivedProviderIngestFinalizedLedgerV1 {
     }
 }
 impl ArchivedProviderIngestFinalizedLedgerV1 {
+    /// Test-only reader with no committed State/Kura head for fail-closed HTTP evidence checks.
+    #[cfg(test)]
+    pub(crate) fn unfinalized_for_https_evidence_test(
+        network_id: NetworkId,
+        provider_id: ProviderId,
+    ) -> (tempfile::TempDir, Self) {
+        let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+        std::fs::create_dir_all(&target).expect("workspace target directory");
+        let target = target.canonicalize().expect("normalized workspace target");
+        let root = tempfile::Builder::new()
+            .prefix("irohad-provider-ingest-https-evidence-")
+            .tempdir_in(target)
+            .expect("temporary finalized archive");
+        let bounds = ProviderIngestFinalizedArchiveBoundsV1::try_new(
+            2 * 1024 * 1024,
+            8,
+            16 * 1024 * 1024,
+            8,
+            8,
+            16,
+            2,
+        )
+        .expect("archive bounds");
+        let archive = Arc::new(
+            ProviderIngestFinalizedArchiveV1::try_open(root.path().join("archive"), bounds)
+                .expect("open archive"),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+            iroha_core::state::World::default(),
+            Arc::clone(&kura),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+            ChainId::from("provider-ingest-https-evidence-unfinalized"),
+            network_id,
+        ));
+        let reader = Self::new(ArchivedProviderIngestFinalizedLedgerArgsV1 {
+            network_id,
+            provider_id,
+            archive,
+            kura,
+            state,
+            max_page_rows: 2,
+            max_kura_tip_lag_blocks: 0,
+            activation_gate: ArchiveActivationGateV1::StrictLive,
+        });
+        (root, reader)
+    }
     fn new(args: ArchivedProviderIngestFinalizedLedgerArgsV1) -> Self {
         Self::new_with_capture_mode(args, None)
     }
@@ -1190,6 +1286,126 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             },
         )
     }
+    /// Read an exact current assignment without consuming the worker's page cursor.
+    ///
+    /// The old admission cursor is an immutable job identity, not the current assignment
+    /// revision. This method rechecks the visible committed State/Kura key and archive generation
+    /// after the direct read, and returns no grant or transport authority.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid or no-longer-pending assignment binding; fails closed when current
+    /// finality, archive qualification, or a stable head cannot be authenticated.
+    // TODO: connect this exact source to a separately governed admission/advert/pin/token
+    // resolver before enabling production HTTPS grant issuance.
+    pub(crate) fn lookup_current_assignment(
+        &self,
+        network_id: NetworkId,
+        source_provider_id: [u8; 32],
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+    ) -> Result<ProviderIngestCurrentAssignmentSnapshotV1, ProviderIngestFinalizedLedgerErrorV1>
+    {
+        if self.replay_safe_capture
+            || network_id != self.network_id
+            || source_provider_id == [0; 32]
+            || source_provider_id == *self.provider_id.as_bytes()
+            || authorization.validate().is_err()
+            || authorization.provider_id() != *self.provider_id.as_bytes()
+        {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+        }
+        for _ in 0..LIVE_SELECTION_ATTEMPTS_V1 {
+            if !self
+                .activation_ready()
+                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?
+            {
+                return Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable);
+            }
+            let before = self
+                .select_visible_committed_key()
+                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+            let generation_before = self
+                .archive
+                .health_generation()
+                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+            let lookup = self.archive.read_provider_assignment(
+                &before,
+                self.provider_id,
+                ReplicationOrderId::new(authorization.order_id()),
+            );
+            let after = self
+                .select_visible_committed_key()
+                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+            let generation_after = self
+                .archive
+                .health_generation()
+                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+            if before != after || generation_before != generation_after {
+                continue;
+            }
+            if !self
+                .activation_ready()
+                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?
+            {
+                return Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable);
+            }
+            return authenticate_current_assignment(
+                network_id,
+                self.provider_id,
+                source_provider_id,
+                authorization,
+                lookup.map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?,
+            );
+        }
+        Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable)
+    }
+    /// Validate an externally supplied observation between two exact current assignment reads.
+    ///
+    /// The observation may check admission, advert, revocation, and transport pins, but this
+    /// method neither issues a grant nor confers readiness. Its caller must authenticate those
+    /// independent inputs and recheck them at every grant use boundary. A changed finalized head,
+    /// provider root, source inventory, or revision during observation fails closed.
+    pub(crate) fn validate_with_current_source_request(
+        &self,
+        network_id: NetworkId,
+        source_provider_id: [u8; 32],
+        request: &ProviderIngestSourceRequestV1,
+        assignment_revision: u64,
+        inspect: impl FnOnce() -> Result<(), ProviderIngestSourceFetchErrorV1>,
+    ) -> Result<(), ProviderIngestSourceFetchErrorV1> {
+        let lookup = || {
+            self.lookup_current_assignment(network_id, source_provider_id, request.authorization())
+                .map_err(|error| match error {
+                    ProviderIngestFinalizedLedgerErrorV1::Unavailable => {
+                        ProviderIngestSourceFetchErrorV1::Unavailable
+                    }
+                    ProviderIngestFinalizedLedgerErrorV1::Rejected => {
+                        ProviderIngestSourceFetchErrorV1::Rejected
+                    }
+                })
+        };
+        let generation_before = self
+            .archive
+            .health_generation()
+            .map_err(|_| ProviderIngestSourceFetchErrorV1::Unavailable)?;
+        let before = lookup()?;
+        if !before.matches_source_request(source_provider_id, request, assignment_revision) {
+            return Err(ProviderIngestSourceFetchErrorV1::Rejected);
+        }
+        inspect()?;
+        let after = lookup()?;
+        let generation_after = self
+            .archive
+            .health_generation()
+            .map_err(|_| ProviderIngestSourceFetchErrorV1::Unavailable)?;
+        if before != after
+            || generation_before != generation_after
+            || !after.matches_source_request(source_provider_id, request, assignment_revision)
+        {
+            return Err(ProviderIngestSourceFetchErrorV1::Rejected);
+        }
+        Ok(())
+    }
     fn read_page_with_claim_factory(
         &self,
         claim_factory: Option<&ProviderIngestFinalizedClaimFactoryV1>,
@@ -1480,6 +1696,103 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1
         })
     }
 }
+fn authenticate_current_assignment(
+    network_id: NetworkId,
+    destination_provider_id: ProviderId,
+    source_provider_id: [u8; 32],
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    lookup: ProviderIngestFinalizedArchiveAssignmentLookupV1,
+) -> Result<ProviderIngestCurrentAssignmentSnapshotV1, ProviderIngestFinalizedLedgerErrorV1> {
+    let ProviderIngestFinalizedArchiveAssignmentLookupV1 {
+        key,
+        provider_id,
+        provider_state_root,
+        assignment,
+        source_provider_ids,
+    } = lookup;
+    let row = assignment.ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+    let mut previous_source = None;
+    for source in &source_provider_ids {
+        if *source == [0; 32]
+            || source == destination_provider_id.as_bytes()
+            || previous_source.is_some_and(|previous| previous >= *source)
+        {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+        }
+        previous_source = Some(*source);
+    }
+    let admission_cursor = authorization.admission_finalized_cursor();
+    // A lower height only bounds the immutable job anchor in time. It does not prove that the
+    // historical hash is an ancestor of this head. The independent finalized admission service
+    // must authenticate that lineage and current revocation before any grant is issued or used.
+    let has_current_admission_anchor = admission_cursor.height < key.height
+        || admission_cursor.height == key.height && admission_cursor.block_hash == key.block_hash;
+    let musubi_matches = match (
+        authorization.musubi_context(),
+        row.replication_order.musubi_archive,
+        row.musubi_archive.as_ref(),
+    ) {
+        (None, None, None) => true,
+        (Some(context), Some(archive_id), Some(binding)) => {
+            context.network_id() == &network_id
+                && context.archive_id() == archive_id
+                && binding.archive_id == archive_id
+                && binding.replication_order == row.replication_order.order_id
+                && binding.validate().is_ok()
+                && binding.commitment.root_cid == row.pin_manifest.root_cid
+                && binding.commitment.chunker == row.pin_manifest.chunker
+                && binding.commitment.chunk_plan_digest.as_bytes()
+                    == &row.pin_manifest.chunk_digest_sha3_256
+                && binding.commitment.por_root.as_bytes() == &row.pin_manifest.por_root
+                && binding.commitment.content_length == row.pin_manifest.content_length
+        }
+        _ => false,
+    };
+    if authorization.validate().is_err()
+        || key.network_id != network_id
+        || provider_id != destination_provider_id
+        || row.provider_id != destination_provider_id
+        || provider_state_root == [0; 32]
+        || source_provider_id == [0; 32]
+        || source_provider_id == *destination_provider_id.as_bytes()
+        || !source_provider_ids.contains(&source_provider_id)
+        || authorization.provider_id() != *destination_provider_id.as_bytes()
+        || !has_current_admission_anchor
+        || row.finalized_anchor.height != key.height
+        || row.finalized_anchor.block_hash != key.block_hash
+        || row.finalized_at_unix_ms != key.finalized_at_unix_ms
+        || row.replication_order.order_id.as_bytes() != &authorization.order_id()
+        || row.expected_assignment_revision == 0
+        || row.expected_assignment_revision != row.replication_order.assignment_revision
+        || row
+            .replication_order
+            .provider_completion(destination_provider_id)
+            .is_some()
+        || !matches!(
+            &row.replication_order.status,
+            ReplicationOrderStatus::Pending
+        )
+        || !matches!(&row.pin_manifest.status, PinStatus::Approved(_))
+        || row.completion_epoch.is_none()
+        || row.pin_manifest.digest.as_bytes() != &authorization.manifest_digest()
+        || row.replication_order.manifest_digest != row.pin_manifest.digest
+        || row.pin_manifest.root_cid.as_bytes() != authorization.manifest_cid()
+        || row.replication_order.manifest_root_cid != row.pin_manifest.root_cid
+        || row.pin_manifest.chunker.to_handle() != authorization.chunker_handle()
+        || row.pin_manifest.chunk_digest_sha3_256 != authorization.chunk_digest_sha3_256()
+        || row.pin_manifest.por_root != authorization.por_root()
+        || row.pin_manifest.content_length != authorization.content_length()
+        || !musubi_matches
+    {
+        return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+    }
+    Ok(ProviderIngestCurrentAssignmentSnapshotV1 {
+        key,
+        provider_state_root,
+        assignment: row,
+        source_provider_ids,
+    })
+}
 fn map_archive_page(
     expected_network_id: NetworkId,
     expected_provider_id: ProviderId,
@@ -1695,6 +2008,7 @@ mod tests {
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
         ReplicationOrderV1,
     };
+    use sorafs_node::FinalizedProviderIngestMusubiContextV1;
     fn physical_tempdir() -> std::io::Result<tempfile::TempDir> {
         let temp_root = std::env::temp_dir().canonicalize()?;
         tempfile::Builder::new()
@@ -2607,6 +2921,351 @@ mod tests {
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
             "a substituted exclusive boundary must fail before archive access"
         );
+    }
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test checks one immutable job across exact archive revisions and source rotation"
+    )]
+    fn current_assignment_binding_tracks_new_revision_and_rejects_stale_source() {
+        let daemon_root = physical_tempdir().expect("daemon root");
+        let bounds = ProviderIngestFinalizedArchiveBoundsV1::try_new(
+            2 * 1024 * 1024,
+            8,
+            16 * 1024 * 1024,
+            8,
+            8,
+            16,
+            2,
+        )
+        .expect("archive bounds");
+        let archive = ProviderIngestFinalizedArchiveV1::try_open(
+            daemon_root.path().join("current-assignment-archive"),
+            bounds,
+        )
+        .expect("open archive");
+        let network_id = test_network_id(0x70);
+        let destination = ProviderId::new([0x51; 32]);
+        let old_source = ProviderId::new([0x52; 32]);
+        let new_source = ProviderId::new([0x53; 32]);
+        let mut shared = replay_safe_archived_order(0x61, destination);
+        let mut canonical = norito::decode_from_bytes::<ReplicationOrderV1>(
+            &shared.replication_order.canonical_order,
+        )
+        .expect("decode source order");
+        canonical.target_replicas = 2;
+        canonical.assignments.push(ReplicationAssignmentV1 {
+            provider_id: *old_source.as_bytes(),
+            slice_gib: 1,
+            lane: None,
+        });
+        canonical.validate().expect("two-provider canonical order");
+        shared.replication_order.canonical_order =
+            norito::to_bytes(&canonical).expect("encode two-provider order");
+        let first_key =
+            ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 7, [0x71; 32], 7_000)
+                .expect("first key");
+        let first = ProviderIngestFinalizedProjectionV1 {
+            key: first_key,
+            providers: vec![
+                ProviderIngestFinalizedProviderProjectionV1 {
+                    provider_id: destination,
+                    expected_owner: None,
+                    expected_signer_policy: None,
+                    orders: vec![shared.clone()],
+                },
+                ProviderIngestFinalizedProviderProjectionV1 {
+                    provider_id: old_source,
+                    expected_owner: None,
+                    expected_signer_policy: None,
+                    orders: vec![shared.clone()],
+                },
+                ProviderIngestFinalizedProviderProjectionV1 {
+                    provider_id: new_source,
+                    expected_owner: None,
+                    expected_signer_policy: None,
+                    orders: Vec::new(),
+                },
+            ],
+        };
+        archive
+            .insert(first.clone())
+            .expect("insert first assignment");
+        let original_lookup = archive
+            .read_provider_assignment(&first_key, destination, shared.replication_order.order_id)
+            .expect("original lookup");
+        let row = original_lookup.assignment.as_ref().expect("original row");
+        let authorization = FinalizedProviderIngestAuthorizationV1::from_finalized_state(
+            first_key.height,
+            first_key.block_hash,
+            *destination.as_bytes(),
+            *row.replication_order.order_id.as_bytes(),
+            *row.pin_manifest.digest.as_bytes(),
+            row.pin_manifest.root_cid.as_bytes().to_vec(),
+            row.pin_manifest.chunker.to_handle(),
+            row.pin_manifest.chunk_digest_sha3_256,
+            row.pin_manifest.por_root,
+            row.pin_manifest.content_length,
+        )
+        .expect("original immutable job");
+        let original = authenticate_current_assignment(
+            network_id,
+            destination,
+            *old_source.as_bytes(),
+            &authorization,
+            original_lookup,
+        )
+        .expect("original current assignment");
+        assert_eq!(original.key, first_key);
+        assert_eq!(original.assignment.expected_assignment_revision, 1);
+        assert_eq!(original.source_provider_ids, vec![*old_source.as_bytes()]);
+        let original_request = ProviderIngestSourceRequestV1::new(
+            authorization.clone(),
+            vec![*old_source.as_bytes()],
+            None,
+        )
+        .expect("original source request");
+        assert!(original.matches_source_request(*old_source.as_bytes(), &original_request, 1));
+        let mut next = first;
+        next.key = ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 8, [0x72; 32], 8_000)
+            .expect("next key");
+        canonical.assignments[1].provider_id = *new_source.as_bytes();
+        canonical.validate().expect("rotated canonical order");
+        shared.replication_order.canonical_order =
+            norito::to_bytes(&canonical).expect("encode rotated order");
+        shared.replication_order.assignment_revision = 2;
+        next.providers[0].orders[0] = shared.clone();
+        next.providers[1].orders.clear();
+        next.providers[2].orders.push(shared.clone());
+        archive
+            .insert(next.clone())
+            .expect("insert rotated assignment");
+        let current_lookup = archive
+            .read_provider_assignment(&next.key, destination, shared.replication_order.order_id)
+            .expect("current lookup");
+        let current = authenticate_current_assignment(
+            network_id,
+            destination,
+            *new_source.as_bytes(),
+            &authorization,
+            current_lookup.clone(),
+        )
+        .expect("current source and revision");
+        assert_eq!(current.key, next.key);
+        assert_eq!(current.assignment.expected_assignment_revision, 2);
+        assert_eq!(current.source_provider_ids, vec![*new_source.as_bytes()]);
+        let current_request = ProviderIngestSourceRequestV1::new(
+            authorization.clone(),
+            vec![*new_source.as_bytes()],
+            None,
+        )
+        .expect("rotated source request");
+        assert!(current.matches_source_request(*new_source.as_bytes(), &current_request, 2));
+        assert!(!current.matches_source_request(*new_source.as_bytes(), &current_request, 1));
+        assert!(!current.matches_source_request(*old_source.as_bytes(), &original_request, 2));
+        assert!(!original.matches_source_request(*new_source.as_bytes(), &current_request, 2));
+        assert_eq!(
+            current.provider_state_root,
+            current_lookup.provider_state_root
+        );
+        assert_eq!(
+            authenticate_current_assignment(
+                network_id,
+                destination,
+                *old_source.as_bytes(),
+                &authorization,
+                current_lookup.clone(),
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+        let mut changed_pin = current_lookup;
+        changed_pin
+            .assignment
+            .as_mut()
+            .expect("current row")
+            .pin_manifest
+            .por_root[0] ^= 1;
+        assert_eq!(
+            authenticate_current_assignment(
+                network_id,
+                destination,
+                *new_source.as_bytes(),
+                &authorization,
+                changed_pin,
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+    }
+    #[test]
+    fn current_assignment_rejects_substituted_musubi_binding() {
+        let mut page = archive_page_with_raw_musubi_binding();
+        let row = page.rows.first_mut().expect("bound assignment");
+        row.pin_manifest.status = PinStatus::Approved(1);
+        let archive_id = row
+            .musubi_archive
+            .as_ref()
+            .expect("Musubi binding")
+            .archive_id;
+        let authorization = FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
+            page.key.height,
+            page.key.block_hash,
+            *page.provider_id.as_bytes(),
+            *row.replication_order.order_id.as_bytes(),
+            *row.pin_manifest.digest.as_bytes(),
+            row.pin_manifest.root_cid.as_bytes().to_vec(),
+            row.pin_manifest.chunker.to_handle(),
+            row.pin_manifest.chunk_digest_sha3_256,
+            row.pin_manifest.por_root,
+            row.pin_manifest.content_length,
+            FinalizedProviderIngestMusubiContextV1::new(page.key.network_id, archive_id)
+                .expect("Musubi context"),
+        )
+        .expect("immutable Musubi authorization");
+        let source = [0x52; 32];
+        let lookup = ProviderIngestFinalizedArchiveAssignmentLookupV1 {
+            key: page.key,
+            provider_id: page.provider_id,
+            provider_state_root: page.provider_state_root,
+            assignment: Some(row.clone()),
+            source_provider_ids: vec![source],
+        };
+        authenticate_current_assignment(
+            page.key.network_id,
+            page.provider_id,
+            source,
+            &authorization,
+            lookup.clone(),
+        )
+        .expect("complete Musubi binding");
+        let mut substituted_order = lookup.clone();
+        substituted_order
+            .assignment
+            .as_mut()
+            .expect("bound assignment")
+            .musubi_archive
+            .as_mut()
+            .expect("Musubi binding")
+            .replication_order = ReplicationOrderId::new([0x62; 32]);
+        assert_eq!(
+            authenticate_current_assignment(
+                page.key.network_id,
+                page.provider_id,
+                source,
+                &authorization,
+                substituted_order,
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+        let mut substituted_commitment = lookup;
+        substituted_commitment
+            .assignment
+            .as_mut()
+            .expect("bound assignment")
+            .musubi_archive
+            .as_mut()
+            .expect("Musubi binding")
+            .commitment
+            .content_length += 1;
+        assert_eq!(
+            authenticate_current_assignment(
+                page.key.network_id,
+                page.provider_id,
+                source,
+                &authorization,
+                substituted_commitment,
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+    }
+    #[test]
+    fn current_assignment_lookup_fails_closed_without_head_and_preserves_worker_cursor() {
+        let daemon_root = physical_tempdir().expect("daemon root");
+        let bounds = ProviderIngestFinalizedArchiveBoundsV1::try_new(
+            2 * 1024 * 1024,
+            8,
+            16 * 1024 * 1024,
+            8,
+            8,
+            16,
+            2,
+        )
+        .expect("archive bounds");
+        let archive = Arc::new(
+            ProviderIngestFinalizedArchiveV1::try_open(
+                daemon_root.path().join("head-unavailable-archive"),
+                bounds,
+            )
+            .expect("open archive"),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let network_id = test_network_id(0x73);
+        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            ChainId::from("provider-ingest-current-head-unavailable"),
+            network_id,
+        ));
+        let destination = ProviderId::new([0x51; 32]);
+        let source = [0x52; 32];
+        let query = ArchivedProviderIngestFinalizedLedgerV1::new(
+            ArchivedProviderIngestFinalizedLedgerArgsV1 {
+                network_id,
+                provider_id: destination,
+                archive,
+                kura,
+                state,
+                max_page_rows: 2,
+                max_kura_tip_lag_blocks: 0,
+                activation_gate: ArchiveActivationGateV1::StrictLive,
+            },
+        );
+        let key = ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 1, [0x74; 32], 1_000)
+            .expect("cursor key");
+        let scan = ActiveArchiveScanV1 {
+            key,
+            cursor: ProviderIngestFinalizedArchiveCursorV1 {
+                key,
+                provider_id: destination,
+                provider_state_root: [0x75; 32],
+                after_order_id: ReplicationOrderId::new([0x76; 32]),
+            },
+        };
+        *query.active.lock().expect("active scan") = Some(scan.clone());
+        let order = replay_safe_archived_order(0x61, destination);
+        let authorization = FinalizedProviderIngestAuthorizationV1::from_finalized_state(
+            1,
+            key.block_hash,
+            *destination.as_bytes(),
+            *order.replication_order.order_id.as_bytes(),
+            *order.pin_manifest.digest.as_bytes(),
+            order.pin_manifest.root_cid.as_bytes().to_vec(),
+            order.pin_manifest.chunker.to_handle(),
+            order.pin_manifest.chunk_digest_sha3_256,
+            order.pin_manifest.por_root,
+            order.pin_manifest.content_length,
+        )
+        .expect("immutable job");
+        assert_eq!(
+            query.lookup_current_assignment(network_id, source, &authorization),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable),
+            "height-zero State/Kura cannot be treated as a current finalized assignment"
+        );
+        let request = ProviderIngestSourceRequestV1::new(authorization, vec![source], None)
+            .expect("payload-free request");
+        let inspected = std::cell::Cell::new(false);
+        assert_eq!(
+            query.validate_with_current_source_request(network_id, source, &request, 1, || {
+                inspected.set(true);
+                Ok(())
+            }),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            "missing live finality must stop before inspecting other authority inputs"
+        );
+        assert!(!inspected.get());
+        let after = query.active.lock().expect("retained active scan");
+        assert_eq!(after.as_ref().map(|scan| scan.key), Some(scan.key));
+        assert_eq!(after.as_ref().map(|scan| scan.cursor), Some(scan.cursor));
     }
     #[test]
     fn raw_musubi_binding_requires_runtime_issued_claim_factory() {

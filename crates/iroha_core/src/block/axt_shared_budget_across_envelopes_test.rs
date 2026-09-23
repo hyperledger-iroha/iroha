@@ -73,7 +73,7 @@ fn axt_validation_enforces_shared_budget_across_envelopes() {
 }
 
 #[test]
-fn axt_validation_persists_hidden_family_budget_across_blocks() {
+fn axt_validation_persists_clear_family_budget_across_blocks() {
     fn run_case(
         previous_amount: Option<u64>,
         current_amount: u64,
@@ -96,8 +96,8 @@ fn axt_validation_persists_hidden_family_budget_across_blocks() {
             let amount_quantity = Quantity::from(amount);
             let mut handle = sample_handle(binding, lane, dsid, 20, manifest_root);
             handle.handle.sub_nonce = sub_nonce;
-            handle.intent.op.amount = None;
-            handle.amount = None;
+            handle.intent.op.amount = Some(amount_quantity.clone());
+            handle.amount = Some(amount_quantity.clone());
             let mut handle =
                 sign_axt_validation_handle(handle, &state, &issuer, issuer_uaid, manifest_root);
             let (proof, amount_commitment) = proof_blob_for_with_authenticated_amount(
@@ -142,7 +142,7 @@ fn axt_validation_persists_hidden_family_budget_across_blocks() {
                     &Quantity::from(previous_amount),
                     current.handles[0].handle.expiry_slot,
                 )
-                .expect("the prior block's hidden amount fits its signed budget");
+                .expect("the prior block's clear amount fits its signed budget");
             let mut ledger = state.world.axt_handle_budget_ledger.block();
             ledger.insert(budget_key.clone(), budget_record.clone());
             ledger.commit();
@@ -245,9 +245,8 @@ fn axt_validation_persists_hidden_family_budget_across_blocks() {
         validate_axt_envelopes(&block, &state_block)
     }
 
-    let error = run_case(Some(7), 7, false).expect_err(
-        "splitting one hidden-amount family across blocks must not reset its allowance",
-    );
+    let error = run_case(Some(7), 7, false)
+        .expect_err("splitting one clear-amount family across blocks must not reset its allowance");
     expect_axt_error(
         error,
         AxtRejectReason::Budget,
@@ -258,8 +257,8 @@ fn axt_validation_persists_hidden_family_budget_across_blocks() {
 }
 
 #[test]
-fn axt_validation_rejects_unanchored_authenticated_hidden_amount() {
-    let (state, envelope) = hidden_amount_fixture(17, 0x31, b"authenticated-hidden-amount");
+fn axt_validation_rejects_unanchored_authenticated_clear_amount() {
+    let (state, envelope) = clear_amount_fixture(17, 0x31, b"authenticated-clear-amount");
     let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
     snapshot.entries[0].policy.next_handle_counter = 2;
     snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
@@ -269,7 +268,7 @@ fn axt_validation_rejects_unanchored_authenticated_hidden_amount() {
         let mut executed = state_block.transaction();
         executed
             .record_axt_envelope(envelope)
-            .expect("authenticated hidden-amount control must execute");
+            .expect("authenticated clear-amount control must execute");
         executed.apply();
     }
     expect_unanchored_axt_spend_rejection(validate_axt_envelopes(&block, &state_block));
@@ -307,7 +306,7 @@ fn axt_validation_rejects_opaque_authorization_carrier_at_generic_boundary() {
 #[test]
 fn axt_validation_enforces_registered_asset_balance_policy() {
     let (restricted_state, restricted_envelope) =
-        hidden_amount_fixture(118, 0x76, b"restricted-private-dataspace-control");
+        clear_amount_fixture(118, 0x76, b"restricted-private-dataspace-control");
     let mut restricted_snapshot = axt_policy_snapshot_for_validation_test(&restricted_state);
     restricted_snapshot.entries[0].policy.next_handle_counter = 2;
     restricted_snapshot.version = AxtPolicySnapshot::compute_version(&restricted_snapshot.entries);
@@ -327,7 +326,7 @@ fn axt_validation_enforces_registered_asset_balance_policy() {
     ));
     drop(restricted_state_block);
 
-    let (global_state, global_envelope) = hidden_amount_fixture_with_asset_policy(
+    let (global_state, global_envelope) = clear_amount_fixture_with_asset_policy(
         118,
         0x76,
         b"restricted-private-dataspace-control",

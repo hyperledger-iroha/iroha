@@ -27,7 +27,7 @@ pub mod map;
 
 mod buffer;
 
-pub use buffer::{ChargedBuffer, ChargedBufferError};
+pub use buffer::{ChargedBuffer, ChargedBufferError, ChargedBufferFromChargeError};
 
 thread_local! {
     // Scope records live on this thread's stack; registration allocates nothing.

@@ -488,13 +488,13 @@ fn anchored_spend_signature_binds_proof_amount_anchor_expiry_and_nonce() {
     changed_amount.draft.amount = Some(Quantity::from(6_u64));
     assert_eq!(
         changed_amount.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
-        Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+        Err(AxtAnchoredSpendValidationErrorV1::Amount)
     );
     let mut changed_commitment = signed.clone();
     changed_commitment.draft.amount_commitment = Some([0x44; 32]);
     assert_eq!(
         changed_commitment.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
-        Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+        Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment)
     );
     let mut changed_anchor = signed.clone();
     changed_anchor.authorization.anchor.committee_digest =
@@ -509,6 +509,93 @@ fn anchored_spend_signature_binds_proof_amount_anchor_expiry_and_nonce() {
         Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
     );
     assert_anchored_spend_authority(&signed, &context, &anchor, &issuer);
+}
+
+#[test]
+fn anchored_spend_rejects_clear_and_hidden_amount_mirror_drift_before_signing() {
+    let issuer = KeyPair::from_seed(vec![0x35; 32], Algorithm::Ed25519);
+    let context = issuer_context(
+        test_network_id(b"amount-mirror-network"),
+        DataSpaceId::new(7),
+    );
+    let handle = sample_asset_handle_draft()
+        .sign_by_issuer_v1(context, issuer.private_key())
+        .expect("sign reusable handle");
+    let anchor =
+        sample_finalized_spend_anchor(context.network_id, context.asset_dsid, handle.target_lane);
+    let nonce = AxtSpendNonceV1::try_new([0x7A; 32]).expect("non-zero nonce");
+    let draft = sample_anchored_spend_draft(handle, &anchor);
+
+    let mut wrong_clear_mirror = draft.clone();
+    wrong_clear_mirror.amount = Some(Quantity::from(6_u64));
+    assert_eq!(
+        wrong_clear_mirror.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::Amount)
+    );
+
+    let mut wrong_clear_proof = draft.clone();
+    let proof = wrong_clear_proof.proof.as_mut().expect("proof");
+    let mut envelope: AxtProofEnvelope =
+        norito::decode_canonical(&proof.payload).expect("canonical envelope");
+    envelope.committed_amount = Some(6);
+    proof.payload = norito::to_bytes(&envelope).expect("re-encode envelope");
+    assert_eq!(
+        wrong_clear_proof.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::Amount)
+    );
+
+    let mut hidden = draft;
+    hidden.intent.op.amount = None;
+    hidden.amount = None;
+    let proof = hidden.proof.as_mut().expect("proof");
+    let mut envelope: AxtProofEnvelope =
+        norito::decode_canonical(&proof.payload).expect("canonical envelope");
+    envelope.committed_amount = None;
+    envelope.amount_commitment = Some([0x55; 32]);
+    proof.payload = norito::to_bytes(&envelope).expect("re-encode envelope");
+    hidden.amount_commitment = envelope.amount_commitment;
+    let signed = hidden
+        .clone()
+        .sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key())
+        .expect("structurally consistent hidden amount can be signed");
+    assert_eq!(
+        signed.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
+        Ok(())
+    );
+
+    let mut revealed_mirror = hidden.clone();
+    revealed_mirror.amount = Some(Quantity::from(5_u64));
+    assert_eq!(
+        revealed_mirror.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::Amount)
+    );
+    let mut disclosed_proof_amount = hidden.clone();
+    let proof = disclosed_proof_amount.proof.as_mut().expect("proof");
+    let mut envelope: AxtProofEnvelope =
+        norito::decode_canonical(&proof.payload).expect("canonical envelope");
+    envelope.committed_amount = Some(5);
+    proof.payload = norito::to_bytes(&envelope).expect("re-encode envelope");
+    assert_eq!(
+        disclosed_proof_amount.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::Amount)
+    );
+    let mut wrong_commitment = hidden.clone();
+    wrong_commitment.amount_commitment = Some([0x56; 32]);
+    assert_eq!(
+        wrong_commitment.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment)
+    );
+    let mut missing_commitment = hidden;
+    let proof = missing_commitment.proof.as_mut().expect("proof");
+    let mut envelope: AxtProofEnvelope =
+        norito::decode_canonical(&proof.payload).expect("canonical envelope");
+    envelope.amount_commitment = None;
+    proof.payload = norito::to_bytes(&envelope).expect("re-encode envelope");
+    missing_commitment.amount_commitment = None;
+    assert_eq!(
+        missing_commitment.sign_by_issuer_v1(anchor, 100, nonce, issuer.private_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment)
+    );
 }
 
 #[test]

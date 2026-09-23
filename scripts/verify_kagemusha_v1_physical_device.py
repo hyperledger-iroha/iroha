@@ -251,8 +251,8 @@ def _validate_profile(value: Any) -> Mapping[str, Any]:
     ):
         _digest(profile[field], f"profile.{field}")
     _integer(profile["policy_epoch"], "profile.policy_epoch", minimum=1, maximum=(1 << 64) - 1)
-    if _integer(profile["capability_mask"], "profile.capability_mask", maximum=0xFFFF) != 0xFFFF:
-        _fail("profile.capability_mask must contain every KAGEMUSHA V1 capability bit")
+    if _integer(profile["capability_mask"], "profile.capability_mask", maximum=0xFFFFFFFF) != 0xFFFF:
+        _fail("physical secure-element qualification requires the exact OEM checkpoint guarantee mask")
     return profile
 
 

@@ -51,7 +51,7 @@ fn zk_ballot_unqualified_keys_cannot_register_or_create_an_election() {
         let retained = closed_registry::retained_election(&id, &record);
         let request = CreateElection {
             election_id: "ref-vk".to_owned(),
-            options: 1,
+            options: 2,
             eligible_root: retained.eligible_root,
             start_ts: 0,
             end_ts: 0,

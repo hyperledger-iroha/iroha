@@ -395,6 +395,12 @@ Verifier behavior (native STARK)
   full-bootstrap native AIR proofs must use the BFV-specific full-material
   verifier path. The public-padding-only entry points reject unconditionally:
   sampled public rows do not establish low degree for hidden trace columns.
+  The canonical BFV arithmetic trace has 38 Goldilocks columns. Columns 5–12
+  encode the complete 32-byte statement hash as eight little-endian `u32`
+  words, each injected into the field without modular reduction. The former
+  four-`u64` modulo-field packing was non-injective and is not a first-release
+  layout. The trace profile, AIR contract, proof-key digests, and two-slot
+  conformance fixture bind this exact layout.
   Generic preverification rejects metadata-valid OpenVerify wrappers that
   advertise either reserved circuit id, including backend-prefixed colon/slash
   spellings, before deduplication. The canonical ZK-ACE id is accepted only by

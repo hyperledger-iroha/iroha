@@ -60,7 +60,7 @@ fn successor_reader_contention_wakes_from_original_reader_release() {
         Err(error) => error,
         Ok(_) => panic!("actual reader mutex is held"),
     };
-    let StateStorageAdmissionError::Busy(wait) = error else {
+    let BlockHashAdmissionError::Busy(wait) = error else {
         panic!("reader contention must retain its original wait");
     };
     assert_eq!(wait, expected);
@@ -117,7 +117,7 @@ fn successor_admission_signals_only_actual_writer_after_unlock() {
         .poisoning_guard(owner.map().unwrap().try_acquire_writer().unwrap());
     assert!(matches!(
         owner.try_next_block(false),
-        Err(StateStorageAdmissionError::Busy(_))
+        Err(BlockHashAdmissionError::Busy(_))
     ));
     assert_eq!(
         counter.wakes.load(Ordering::SeqCst),
@@ -135,7 +135,7 @@ fn successor_admission_signals_only_actual_writer_after_unlock() {
     assert!(wait.as_mut().poll(&mut context).is_pending());
     assert!(matches!(
         owner.try_next_block(false),
-        Err(StateStorageAdmissionError::Capacity(
+        Err(BlockHashAdmissionError::Capacity(
             AllocationRefusal::Capacity { .. }
         ))
     ));
@@ -166,7 +166,7 @@ fn current_tree_plus_successor_is_a_permanent_bound_not_a_refund_wait() {
     assert_eq!(calibration.budget.reserved_bytes(), existing);
     let owner = empty(existing + additional - 1);
     assert!(
-        matches!(owner.try_next_block(false), Err(StateStorageAdmissionError::Capacity(
+        matches!(owner.try_next_block(false), Err(BlockHashAdmissionError::Capacity(
         AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes }
     )) if requested_bytes == existing + additional && limit_bytes == requested_bytes - 1)
     );
@@ -184,9 +184,9 @@ fn private_successor_refund_wakes_original_capacity_wait() {
     let owner = empty(existing + additional);
     let original = owner.try_next_block(false).unwrap();
     let wait = match owner.try_next_block(false) {
-        Err(StateStorageAdmissionError::Capacity(AllocationRefusal::Capacity {
-            release, ..
-        })) => release,
+        Err(BlockHashAdmissionError::Capacity(AllocationRefusal::Capacity { release, .. })) => {
+            release
+        }
         _ => panic!("original private successor must hold its exact finite credits"),
     };
     let mut future = std::pin::pin!(wait.wait_for_release());
@@ -211,9 +211,9 @@ fn old_reader_refunds_only_when_its_original_generation_is_released() {
     publish(owner.try_next_block(false).unwrap(), 1);
     assert!(old.is_empty());
     let wait = match owner.try_next_block(false) {
-        Err(StateStorageAdmissionError::Capacity(AllocationRefusal::Capacity {
-            release, ..
-        })) => release,
+        Err(BlockHashAdmissionError::Capacity(AllocationRefusal::Capacity { release, .. })) => {
+            release
+        }
         _ => panic!("original old reader must retain its charged allocations"),
     };
     let mut future = std::pin::pin!(wait.wait_for_release());
@@ -307,7 +307,7 @@ fn cold_history_owner_prepays_its_exact_shared_layout() {
     let refused = BlockHashes::try_new(std::iter::empty(), insufficient.clone());
     assert!(matches!(
         refused,
-        Err(StateStorageAdmissionError::Capacity(
+        Err(BlockHashAdmissionError::Capacity(
             AllocationRefusal::ExceedsLimit {
                 requested_bytes,
                 ..
@@ -330,10 +330,7 @@ fn cold_construction_refusal_refunds_every_partially_built_owner() {
     for bytes in [1, 4096] {
         let budget = AllocationBudget::new(bytes);
         let result = BlockHashes::try_new((0..100_000).map(|i| hash(i as u8)), budget.clone());
-        assert!(matches!(
-            result,
-            Err(StateStorageAdmissionError::Capacity(_))
-        ));
+        assert!(matches!(result, Err(BlockHashAdmissionError::Capacity(_))));
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
@@ -368,7 +365,7 @@ fn state_refuses_before_world_acquisition_and_before_either_start_stage() {
         |_, ()| -> Result<(), ()> { panic!("after-start stage ran before admission") },
     );
     let error = match result {
-        Err(StateBlockStartError::Storage(error)) => error,
+        Err(StateBlockStartError::History(error)) => error,
         _ => panic!("original configured pool must refuse before waiting for World"),
     };
     assert!(error.release_wait().is_some());
@@ -411,8 +408,8 @@ fn replacement_capacity_refusal_preserves_all_da_indexes_and_durable_journal() {
     );
     assert!(matches!(
         result,
-        Err(StateBlockStartError::Storage(
-            StateStorageAdmissionError::Capacity(AllocationRefusal::Capacity { .. })
+        Err(StateBlockStartError::History(
+            BlockHashAdmissionError::Capacity(AllocationRefusal::Capacity { .. })
         ))
     ));
     assert_eq!(snapshot(), before);
@@ -432,11 +429,11 @@ fn empty_fast_history_is_read_only_and_uses_no_mutable_tree_credit() {
     assert_eq!(owner.budget.limit_bytes(), 0);
     assert!(matches!(
         owner.try_next_block(false),
-        Err(StateStorageAdmissionError::ReadOnly)
+        Err(BlockHashAdmissionError::ReadOnly)
     ));
     assert!(matches!(
         owner.try_next_block(true),
-        Err(StateStorageAdmissionError::ReadOnly)
+        Err(BlockHashAdmissionError::ReadOnly)
     ));
 }
 
@@ -445,27 +442,27 @@ fn only_releasable_local_refusals_expose_an_original_wait() {
     let notification = concread::release::ReleaseNotification::default();
     let wait = notification.observe();
     assert_eq!(
-        StateStorageAdmissionError::Busy(wait.clone()).release_wait(),
+        BlockHashAdmissionError::Busy(wait.clone()).release_wait(),
         Some(&wait)
     );
     assert_eq!(
-        StateStorageAdmissionError::Changed(wait.clone()).release_wait(),
+        BlockHashAdmissionError::Changed(wait.clone()).release_wait(),
         Some(&wait)
     );
     for error in [
-        StateStorageAdmissionError::ReadOnly,
-        StateStorageAdmissionError::Poisoned,
-        StateStorageAdmissionError::Capacity(AllocationRefusal::ExceedsLimit {
+        BlockHashAdmissionError::ReadOnly,
+        BlockHashAdmissionError::Poisoned,
+        BlockHashAdmissionError::Capacity(AllocationRefusal::ExceedsLimit {
             requested_bytes: 2,
             limit_bytes: 1,
         }),
-        StateStorageAdmissionError::Capacity(AllocationRefusal::DemandOverflow),
+        BlockHashAdmissionError::Capacity(AllocationRefusal::DemandOverflow),
     ] {
         assert!(error.release_wait().is_none());
     }
     assert!(StateBlockStartError::Stage(()).release_wait().is_none());
     assert_eq!(
-        StateBlockStartError::<()>::Storage(StateStorageAdmissionError::Busy(wait.clone()))
+        StateBlockStartError::<()>::History(BlockHashAdmissionError::Busy(wait.clone()))
             .release_wait(),
         Some(&wait)
     );

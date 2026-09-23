@@ -29,8 +29,12 @@ use norito::codec::DecodeAll as _;
 
 #[test]
 fn local_storage_recovery_emits_no_block_rejection() {
-    use crate::state::{LaneLifecycleError, MergeLedgerCommitError};
+    use crate::state::{
+        BlockHashAdmissionError, LaneLifecycleError, MembershipAdmissionError,
+        MergeLedgerCommitError,
+    };
     use iroha_data_model::block::error::BlockRejectionReason;
+    use mv::allocation::AllocationRefusal;
 
     let header = BlockHeader::new(
         nonzero_ext::nonzero!(2_u64),
@@ -50,6 +54,14 @@ fn local_storage_recovery_emits_no_block_rejection() {
             MergeLedgerCommitError::LocalDrainObservation(Box::new(
                 MergeLedgerCommitError::ExecutionMarkerConflict(diagnostic.to_owned()),
             )),
+        ),
+        BlockValidationError::from_certified_merge_stage_error(
+            MergeLedgerCommitError::MembershipAdmission(MembershipAdmissionError::Capacity(
+                AllocationRefusal::DemandOverflow,
+            )),
+        ),
+        BlockValidationError::from_certified_merge_stage_error(
+            MergeLedgerCommitError::BlockHashAdmission(BlockHashAdmissionError::ReadOnly),
         ),
     ];
     let mut events = Vec::new();
@@ -75,6 +87,33 @@ fn local_storage_recovery_emits_no_block_rejection() {
         event.status,
         BlockStatus::Rejected(BlockRejectionReason::TransactionValidationFailed)
     );
+}
+
+#[test]
+fn npos_local_admission_keeps_all_resource_refusals_out_of_rejection() {
+    use crate::state::{
+        BlockHashAdmissionError, MembershipAdmissionError, StateAdmissionError,
+        StateStorageAdmissionError,
+    };
+    use concread::bptree::PlanningError;
+    use mv::{allocation::AllocationRefusal, storage::AdmittedStorageError};
+
+    let refusals = [
+        StateAdmissionError::Storage(StateStorageAdmissionError::World(
+            AdmittedStorageError::Planning(PlanningError::Overflow),
+        )),
+        StateAdmissionError::History(BlockHashAdmissionError::ReadOnly),
+        StateAdmissionError::Membership(MembershipAdmissionError::Capacity(
+            AllocationRefusal::DemandOverflow,
+        )),
+    ];
+    for refusal in refusals {
+        let error = BlockValidationError::from_npos_application_error(
+            eyre::Report::new(refusal),
+            "NPoS preflight",
+        );
+        assert!(map_block_err_to_reason(&error).is_none());
+    }
 }
 
 fn event_signed_transaction(network_seed: u8) -> (SignedTransaction, iroha_crypto::KeyPair) {

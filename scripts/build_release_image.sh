@@ -302,6 +302,10 @@ if [[ "$seen_binaries" != *" $required_daemon "* ]]; then
   printf 'binary inventory for config %s must include %s\n' "$config" "$required_daemon" >&2
   exit 1
 fi
+if [[ "$seen_binaries" != *" sorafs_external_software_signer "* ]]; then
+  printf 'release image binary inventory must include sorafs_external_software_signer\n' >&2
+  exit 1
+fi
 
 if [[ -z "$prebuilt_bin_dir" ]]; then
   printf '%s\n' '--prebuilt-bin-dir is required for deterministic release images' >&2
@@ -875,7 +879,7 @@ manifest = {
     "binaries": binaries.split(),
     "prebuilt_provenance_sha256": prebuilt_provenance_sha256,
     "external_software_signer": {
-        "backend": "software",
+        "packaged": "sorafs_external_software_signer" in binaries.split(),
         "binary": "/usr/local/bin/sorafs_external_software_signer",
         "broker_alias": "/usr/local/libexec/iroha-runtime-provider-broker-v1",
         "smoke": "native-build-stage",

@@ -17,6 +17,7 @@ fn projection<'a>(
 }
 
 fn accept(
+    f: &Fixture,
     pending: PendingIssuerEnrollmentV1,
     challenge: &KagemushaRetailEnrollmentChallengeV1,
 ) -> AcceptedIssuerChallengeV1 {
@@ -25,6 +26,7 @@ fn accept(
         .accept_challenge(
             &challenge.canonical_bytes().unwrap(),
             projection(challenge, &command),
+            f.verified_app(challenge),
         )
         .unwrap()
 }
@@ -43,7 +45,7 @@ fn prepare(
 ) {
     let pending = f.begin();
     let proof = f.proof(pending.client_nonce().unwrap());
-    let prepared = accept(pending, &proof.challenge)
+    let prepared = accept(f, pending, &proof.challenge)
         .prepare_proof(&account_signature(&proof), &proof.device_response)
         .unwrap();
     (prepared, proof)
@@ -80,7 +82,7 @@ fn phases_retain_exact_qualification_signing_inputs_proof_and_issuer_response() 
         norito::encode_canonical(&f.qualification).unwrap()
     );
     let proof = f.proof(nonce);
-    let accepted = accept(pending, &proof.challenge);
+    let accepted = accept(&f, pending, &proof.challenge);
     assert_eq!(
         accepted.account_signing_message().unwrap(),
         proof.challenge.account_signing_message().unwrap()
@@ -158,6 +160,7 @@ fn begin_rejects_self_consistent_qualification_outside_native_owner_and_release(
         assert_eq!(
             PendingIssuerEnrollmentV1::begin(
                 f.policy.clone(),
+                f.app_policy.clone(),
                 f.release.clone(),
                 f.owner.clone(),
                 f.native_key,
@@ -189,6 +192,7 @@ fn begin_rejects_noncanonical_oversized_or_unsigned_qualification() {
         assert_eq!(
             PendingIssuerEnrollmentV1::begin(
                 f.policy.clone(),
+                f.app_policy.clone(),
                 f.release.clone(),
                 f.owner.clone(),
                 f.native_key,
@@ -237,10 +241,81 @@ fn challenge_cannot_replace_any_retained_native_selection() {
                 .accept_challenge(
                     &challenge.canonical_bytes().unwrap(),
                     projection(&challenge, &command),
+                    f.verified_app(&challenge),
                 )
                 .err(),
             Some(InitialEnrollmentErrorV1::Binding),
             "challenge mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn challenge_rejects_a_substituted_or_replayed_verified_app_result() {
+    let f = Fixture::new();
+    for mutation in 0..3 {
+        let pending = f.begin();
+        let challenge = f.proof(pending.client_nonce().unwrap()).challenge;
+        let mut other = challenge.clone();
+        let token = match mutation {
+            0 => {
+                other.server_nonce[0] ^= 1;
+                f.verified_app(&other)
+            }
+            1 => {
+                other.client_nonce[0] ^= 1;
+                f.verified_app(&other)
+            }
+            _ => f.verified_app(&challenge),
+        };
+        let mut presented = challenge;
+        if mutation == 2 {
+            presented.app_attestation_digest[0] ^= 1;
+        }
+        let command = KagemushaDeviceReadCredentialCommandV1::canonical_bytes().unwrap();
+        assert_eq!(
+            pending
+                .accept_challenge(
+                    &presented.canonical_bytes().unwrap(),
+                    projection(&presented, &command),
+                    token,
+                )
+                .err(),
+            Some(InitialEnrollmentErrorV1::Binding),
+            "app binding mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn challenge_requires_the_independently_pinned_app_authority_policy() {
+    let f = Fixture::new();
+    for mutation in 0..4 {
+        let mut pending = f.begin();
+        let challenge = f.proof(pending.client_nonce().unwrap()).challenge;
+        let token = f.verified_app(&challenge);
+        let pinned = Arc::make_mut(&mut pending.app_policy);
+        match mutation {
+            0 => {
+                pinned.authority_key = KeyPair::from_seed(vec![78; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .clone()
+            }
+            1 => pinned.app_signing_identity_digest = [79; 32],
+            2 => pinned.app_release_digest = [80; 32],
+            _ => pinned.maximum_lifetime_ms += 1,
+        }
+        let command = KagemushaDeviceReadCredentialCommandV1::canonical_bytes().unwrap();
+        assert_eq!(
+            pending
+                .accept_challenge(
+                    &challenge.canonical_bytes().unwrap(),
+                    projection(&challenge, &command),
+                    token,
+                )
+                .err(),
+            Some(InitialEnrollmentErrorV1::Binding),
+            "authority policy mutation {mutation}"
         );
     }
 }
@@ -264,7 +339,11 @@ fn each_server_projection_must_equal_its_local_derivation() {
         }
         assert_eq!(
             pending
-                .accept_challenge(&challenge.canonical_bytes().unwrap(), projected)
+                .accept_challenge(
+                    &challenge.canonical_bytes().unwrap(),
+                    projected,
+                    f.verified_app(&challenge),
+                )
                 .err(),
             Some(InitialEnrollmentErrorV1::Binding),
             "projection mutation {mutation}"
@@ -299,6 +378,7 @@ fn challenge_interval_must_fit_both_policy_and_credential_without_a_utc_claim() 
                 .accept_challenge(
                     &challenge.canonical_bytes().unwrap(),
                     projection(&challenge, &command),
+                    f.verified_app(&challenge),
                 )
                 .err(),
             Some(InitialEnrollmentErrorV1::Binding)
@@ -321,7 +401,11 @@ fn challenge_decode_rejects_trailing_bytes_and_bounds_before_signing() {
         let command = KagemushaDeviceReadCredentialCommandV1::canonical_bytes().unwrap();
         assert_eq!(
             pending
-                .accept_challenge(&bytes, projection(&challenge, &command))
+                .accept_challenge(
+                    &bytes,
+                    projection(&challenge, &command),
+                    f.verified_app(&challenge),
+                )
                 .err(),
             Some(InitialEnrollmentErrorV1::Encoding)
         );
@@ -334,7 +418,7 @@ fn account_and_device_proofs_cannot_replay_another_challenge_with_the_same_clien
     for mutation in 0..4 {
         let pending = f.begin();
         let proof = f.proof(pending.client_nonce().unwrap());
-        let accepted = accept(pending, &proof.challenge);
+        let accepted = accept(&f, pending, &proof.challenge);
         let mut different_challenge = proof.challenge.clone();
         if mutation < 2 {
             different_challenge.server_nonce[0] ^= 1;
@@ -364,7 +448,7 @@ fn account_proof_requires_the_exact_controller_typed_hash_and_purpose() {
     for mutation in 0..4 {
         let pending = f.begin();
         let proof = f.proof(pending.client_nonce().unwrap());
-        let accepted = accept(pending, &proof.challenge);
+        let accepted = accept(&f, pending, &proof.challenge);
         let payload = proof.challenge.account_signing_payload().unwrap();
         let bytes = norito::encode_canonical(&payload).unwrap();
         let wrong_signer = KeyPair::from_seed(vec![14; 32], Algorithm::Ed25519);
@@ -400,7 +484,7 @@ fn a_valid_device_signature_cannot_replace_the_retained_qualification() {
         let mut f = Fixture::new();
         let pending = f.begin();
         let proof = f.proof(pending.client_nonce().unwrap());
-        let accepted = accept(pending, &proof.challenge);
+        let accepted = accept(&f, pending, &proof.challenge);
         match mutation {
             0 => f.qualification.release_id = [88; 32],
             1 => f.qualification.core_authorization_key_reference = [88; 32],
@@ -429,7 +513,7 @@ fn preparation_rejects_signature_and_device_frame_bounds() {
     for mutation in 0..6 {
         let pending = f.begin();
         let proof = f.proof(pending.client_nonce().unwrap());
-        let accepted = accept(pending, &proof.challenge);
+        let accepted = accept(&f, pending, &proof.challenge);
         let mut signature = account_signature(&proof);
         let mut response = proof.device_response.clone();
         match mutation {
@@ -507,14 +591,18 @@ fn expiry_precedes_parsing_and_signing_in_every_retained_phase() {
     );
     assert_eq!(
         pending
-            .accept_challenge(&[], projection(&proof.challenge, &command))
+            .accept_challenge(
+                &[],
+                projection(&proof.challenge, &command),
+                f.verified_app(&proof.challenge),
+            )
             .err(),
         Some(InitialEnrollmentErrorV1::Expired)
     );
 
     let pending = f.begin();
     let proof = f.proof(pending.client_nonce().unwrap());
-    let mut accepted = accept(pending, &proof.challenge);
+    let mut accepted = accept(&f, pending, &proof.challenge);
     accepted.pending.deadline = NativeDeadlineV1::expired_for_test();
     assert_eq!(
         accepted.account_signing_message().err(),
@@ -557,7 +645,7 @@ fn all_challenge_transitions_share_the_original_continuous_deadline() {
     let certificate = f.certificate(&proof).canonical_bytes().unwrap();
     let original = NativeDeadlineV1::start(Duration::from_secs(2)).unwrap();
     pending.deadline = original.clone();
-    let prepared = accept(pending, &proof.challenge)
+    let prepared = accept(&f, pending, &proof.challenge)
         .prepare_proof(&account_signature(&proof), &proof.device_response)
         .unwrap();
     let admission = prepared.complete(&certificate).unwrap();

@@ -30,6 +30,7 @@ export const NATIVE_BUILD_PROVENANCE_FILENAME =
 export const NATIVE_BUILD_EXECUTION_POLICY = "trusted-local-cargo-v1";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const REVISION_PATTERN = /^[0-9a-f]{40}$/u;
+const MACOS_VERSION_PATTERN = /^\d+(?:\.\d+){1,2}$/u;
 const MAX_PROVENANCE_BYTES = 16 * 1024;
 const MAX_GIT_INVENTORY_BYTES = 32 * 1024 * 1024;
 const MAX_GIT_STATUS_BYTES = 16 * 1024 * 1024;
@@ -1341,6 +1342,7 @@ export function cleanupNativeBuildSourceSnapshot(snapshot) {
 
 export function createNativeBuildProvenance({
   cargoProfile,
+  macosBuild,
   nativePath,
   sourceBefore,
   sourceAfter,
@@ -1380,15 +1382,16 @@ export function createNativeBuildProvenance({
       "Native build source tree changed while Cargo was running.",
     );
   }
-  return Object.freeze({
-    version: 3,
+  return validateNativeBuildProvenance({
+    version: 4,
     build_execution_policy: NATIVE_BUILD_EXECUTION_POLICY,
     cargo_profile: cargoProfile,
+    ...(macosBuild === undefined ? {} : { macos_build: macosBuild }),
     native_sha256: sha256NativeFile(nativePath),
     source_git_revision: sourceAfter.sourceGitRevision,
     source_tree_clean: sourceAfter.sourceTreeClean,
     source_tree_sha256: sourceAfter.sourceTreeSha256,
-  });
+  }, nativePath);
 }
 
 export function nativeBuildProvenancePath(nativePath) {
@@ -1503,12 +1506,39 @@ export function writeNativeBuildProvenance(nativePath, provenance) {
   return path;
 }
 
-export function validateNativeBuildProvenance(provenance, nativePath) {
+function validMacosBuildIdentity(identity) {
+  try {
+    assertExactKeys(identity, [
+      "sdk_root", "sdk_version", "sdk_settings_sha256",
+      "deployment_target", "clang_path", "clang_version",
+      "linker_path", "linker_version",
+    ], "native build macOS identity");
+  } catch {
+    return false;
+  }
+  return [identity.sdk_root, identity.clang_path, identity.linker_path].every(
+    (path) => typeof path === "string" && isAbsolute(path) && resolve(path) === path,
+  ) &&
+    MACOS_VERSION_PATTERN.test(identity.sdk_version) &&
+    SHA256_PATTERN.test(identity.sdk_settings_sha256) &&
+    MACOS_VERSION_PATTERN.test(identity.deployment_target) &&
+    typeof identity.clang_version === "string" &&
+    identity.clang_version.startsWith("Apple clang version ") &&
+    typeof identity.linker_version === "string" &&
+    identity.linker_version.startsWith("@(#)PROGRAM:ld PROJECT:ld-");
+}
+
+export function validateNativeBuildProvenance(
+  provenance, nativePath,
+  { platform = nativePath.endsWith(".dylib") ? "darwin" : "other" } = {},
+) {
+  const macos = platform === "darwin";
   assertExactKeys(
     provenance,
     [
       "build_execution_policy",
       "cargo_profile",
+      ...(macos ? ["macos_build"] : []),
       "native_sha256",
       "source_git_revision",
       "source_tree_clean",
@@ -1518,8 +1548,9 @@ export function validateNativeBuildProvenance(provenance, nativePath) {
     "native build provenance",
   );
   if (
-    provenance.version !== 3 ||
+    provenance.version !== 4 ||
     provenance.build_execution_policy !== NATIVE_BUILD_EXECUTION_POLICY ||
+    (macos && !validMacosBuildIdentity(provenance.macos_build)) ||
     (provenance.cargo_profile !== "debug" &&
       provenance.cargo_profile !== "release" &&
       provenance.cargo_profile !== "deploy") ||
@@ -1534,7 +1565,7 @@ export function validateNativeBuildProvenance(provenance, nativePath) {
   return Object.freeze({ ...provenance });
 }
 
-export function readNativeBuildProvenance(nativePath) {
+export function readNativeBuildProvenance(nativePath, options) {
   const path = nativeBuildProvenancePath(nativePath);
   const before = readStableRegularFile(path, {
     label: "Native build provenance",
@@ -1547,7 +1578,7 @@ export function readNativeBuildProvenance(nativePath) {
   } catch {
     throw new Error("Native build provenance is invalid or unreadable.");
   }
-  const validated = validateNativeBuildProvenance(parsed, nativePath);
+  const validated = validateNativeBuildProvenance(parsed, nativePath, options);
   const after = readStableRegularFile(path, {
     label: "Native build provenance",
     maximumBytes: MAX_PROVENANCE_BYTES,

@@ -147,6 +147,12 @@ def test_candidate_archive_is_reproducible_and_clean_smoked(tmp_path: Path) -> N
         manifest = json.load(manifest_member)
     assert manifest["schema"] == candidate.SCHEMA
     assert manifest["payload_file_count"] == first["payload_file_count"]
+    assert manifest["external_software_signer"] == {
+        "packaged": True,
+        "broker_alias": candidate.BROKER_ALIAS,
+        "binary": candidate.SIGNER_BINARY,
+        "windows_supported": False,
+    }
     assert [row["path"] for row in manifest["files"]] == sorted(
         row["path"] for row in manifest["files"]
     )
@@ -161,6 +167,11 @@ def test_candidate_archive_uses_windows_binary_names(tmp_path: Path) -> None:
     archive = tmp_path / "out" / str(summary["archive"])
     with tarfile.open(archive, mode="r:gz") as package:
         names = {member.name for member in package.getmembers()}
+        manifest_member = package.extractfile(
+            f"sorafs-cli-{VERSION}-{WINDOWS_TARGET}/PACKAGE-MANIFEST.json"
+        )
+        assert manifest_member is not None
+        manifest = json.load(manifest_member)
     prefix = f"sorafs-cli-{VERSION}-{WINDOWS_TARGET}"
     assert f"{prefix}/sorafs_cli.exe" in names
     assert f"{prefix}/sorafs_fetch.exe" in names
@@ -169,6 +180,12 @@ def test_candidate_archive_uses_windows_binary_names(tmp_path: Path) -> None:
     assert not any("sorafs_external_software_signer" in name for name in names)
     assert not any("runtime-provider-broker-v1" in name for name in names)
     assert summary["clean_smoke_binary_count"] == 3
+    assert manifest["external_software_signer"] == {
+        "packaged": False,
+        "broker_alias": None,
+        "binary": None,
+        "windows_supported": False,
+    }
 
 
 def test_candidate_archive_closes_macos_signer_launchd_inventory(
@@ -193,6 +210,16 @@ def test_candidate_packager_rejects_signer_alias_substitution(tmp_path: Path) ->
         "#!/bin/sh\nexit 0\n", encoding="utf-8"
     )
     with pytest.raises(candidate.CandidateError, match="not byte-identical"):
+        _package(input_dir, tmp_path / "out")
+
+
+def test_candidate_packager_rejects_missing_signer_before_claiming_packaged(
+    tmp_path: Path,
+) -> None:
+    input_dir = tmp_path / "candidate"
+    _write_candidate(input_dir)
+    (input_dir / candidate.SIGNER_BINARY).unlink()
+    with pytest.raises(candidate.CandidateError, match="missing required release files"):
         _package(input_dir, tmp_path / "out")
 
 

@@ -81,6 +81,7 @@ fn hardware_credential(
     tag: u8,
 ) -> KagemushaHardwareCredentialV1 {
     let credential = KagemushaHardwareCredentialV1 {
+        app_policy_binding_digest: [0xA6; 32],
         version: KAGEMUSHA_WIRE_VERSION_V1,
         credential_id: [0; 32],
         network_id,

@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,11 +30,21 @@ import run_sorafs_production_readiness as promotion_runner  # noqa: E402
 import run_sorafs_production_readiness_negative_archive as negative_runner  # noqa: E402
 import sorafs_final_promotion_cosign as final_promotion_cosign  # noqa: E402
 import sorafs_final_promotion_evidence as final_promotion_evidence  # noqa: E402
+import sorafs_l1_lane_evidence_inventory as lane_inventory  # noqa: E402
+import sorafs_l1_lane_inventory_integration as inventory_integration  # noqa: E402
+import sorafs_topology_qualification as topology_qualification  # noqa: E402
+import sorafs_verifier_process as verifier_process  # noqa: E402
+from sorafs_production_readiness_contract import (  # noqa: E402
+    FOUNDATIONAL_SIGNER_RECEIPT_BUNDLE_FIELDS,
+    FOUNDATIONAL_SIGNER_RECEIPT_BUNDLE_SCHEMA,
+)
 from check_sorafs_production_readiness import (  # noqa: E402
     MAX_SUMMARY_BYTES,
+    ValidationOptions,
     canonical_lower_hex,
     canonical_public_provenance_url,
     canonical_string,
+    validate_foundational_prerequisite_summary,
 )
 from sccp_release_common import verify_ed25519  # noqa: E402
 from sorafs_checker_preflight import (  # noqa: E402
@@ -68,6 +79,49 @@ DEFAULT_MAX_PROVENANCE_AGE_SECS = 14 * 24 * 60 * 60
 MAX_TIMESTAMP = (1 << 63) - 1
 MAX_PROMOTION_PROVENANCE_BYTES = 256 * 1024
 MAX_COSIGN_BUNDLE_BYTES = 16 * 1024 * 1024
+MAX_INNER_TRUST_BYTES = 16 * 1024
+INNER_APPROVAL_INPUTS = (
+    ("topology_qualification", "inner_topology_qualification"),
+    ("topology_qualification_envelope", "inner_topology_qualification_envelope"),
+    ("resilience_qualification", "inner_resilience_qualification"),
+    ("l1_lane_evidence_inventory", "inner_l1_lane_evidence_inventory"),
+    ("foundational_prerequisite", "inner_foundational_prerequisite"),
+)
+INNER_LANE_SUMMARY_FLAG = "--inner-lane-summary"
+INNER_APPROVAL_TRUST_SCHEMA = "sorafs.production_readiness.inner_approval_trust.v1"
+INNER_APPROVAL_TRUST_FIELDS = frozenset({
+    "schema", "topology", "resilience", "lane_inventory", "foundational",
+    "foundational_receipt_verifier_sha256",
+})
+INNER_APPROVAL_SIGNER_FIELDS = frozenset({
+    "public_key_hex", "service_id", "administrator_id", "key_revision",
+    "policy_revision", "policy_digest_sha256",
+})
+INNER_APPROVAL_RELEASE_BLOCKER = (
+    "production promotion remains blocked: foundational, topology, resilience and lane-inventory "
+    "purpose-owned completed-operation and finalized-state verification is not integrated; "
+    "complete and verify the inner approval chain"
+)
+TOPOLOGY_NATIVE_AUTHORITY_BLOCKER = (
+    "inner approval topology requires the candidate-bound role-16 receipt, independent "
+    "current signer authorization and a completed native operation with finalized Check; "
+    "the detached topology envelope is qualification-only"
+)
+RESILIENCE_NATIVE_AUTHORITY_BLOCKER = (
+    "inner approval resilience requires its own governed signer purpose, current authorization "
+    "and verified completed native operation; the detached resilience receipt is "
+    "qualification-only"
+)
+LANE_INVENTORY_NATIVE_AUTHORITY_BLOCKER = (
+    "inner approval lane-inventory requires its own governed signer purpose, current "
+    "authorization and verified completed native operation; the signed inventory is "
+    "qualification-only"
+)
+FOUNDATIONAL_NATIVE_AUTHORITY_BLOCKER = (
+    "inner approval foundational requires independently authenticated finalized custody and "
+    "the exact completed native signing operation; the replayed software signer receipt "
+    "alone does not establish native finality"
+)
 
 PROMOTION_PROVENANCE_FIELDS = frozenset(
     {
@@ -145,6 +199,8 @@ class PositiveReplayEvidence:
 
     input_count: int
     input_set_sha256: str
+    input_sha256: dict[str, str]
+    aggregate: dict[str, Any]
     output_sha256: dict[str, str]
 
 
@@ -250,6 +306,8 @@ def load_positive_replay(
         PositiveReplayEvidence(
             input_count=len(snapshot),
             input_set_sha256=promotion_runner.input_set_sha256(snapshot),
+            input_sha256=dict(snapshot),
+            aggregate=replay.payload,
             output_sha256={
                 "first_aggregate_sha256": replay.first_sha256,
                 "second_aggregate_sha256": replay.second_sha256,
@@ -796,18 +854,615 @@ def _cross_validate_positive_and_negative(
     return errors
 
 
-def validate_inner_approval_chain() -> list[str]:
-    """Keep production closed until every prerequisite's custody proof is independently verified."""
+def _load_inner_approval_inputs(
+    args: argparse.Namespace,
+    positive: PositiveReplayEvidence,
+    errors: list[str],
+) -> dict[str, tuple[dict[str, Any], bytes]]:
+    """Reopen the five exact inner inputs named by the positive replay manifest."""
 
-    # TODO: Migrate foundational, topology, resilience and lane-inventory authorities together.
-    # Their aggregate/replay schemas carry signatures and digest summaries,
-    # not independently verified purpose-owned signer custody and completed-operation proofs.
-    # Replacing those labels, or signing their hashes with the outer signing key, cannot supply
-    # the missing authority. Replace this gate only with verification of all four actual contracts.
-    return [
-        "production promotion remains blocked: foundational, topology, resilience and lane-inventory "
-        "signer custody proofs are not integrated; complete and verify the inner approval chain"
+    result: dict[str, tuple[dict[str, Any], bytes]] = {}
+    for slot, attribute in INNER_APPROVAL_INPUTS:
+        path = getattr(args, attribute, None)
+        if not isinstance(path, Path):
+            errors.append(f"inner approval {slot} requires its exact replay input")
+            continue
+        loaded = _load_json_bytes(
+            path, MAX_SUMMARY_BYTES, label=f"inner approval {slot}", errors=errors,
+        )
+        if loaded is None:
+            continue
+        payload, raw = loaded
+        if _sha256(raw) != positive.input_sha256.get(slot):
+            errors.append(f"inner approval {slot} must match the positive replay input SHA-256")
+            continue
+        result[slot] = (payload, raw)
+    return result
+
+
+def _load_inner_lane_summaries(
+    args: argparse.Namespace,
+    positive: PositiveReplayEvidence,
+    errors: list[str],
+) -> dict[str, bytes]:
+    """Capture each exact replayed lane byte string in canonical 17-gate order."""
+
+    values = getattr(args, "inner_lane_summary", None)
+    if not isinstance(values, list):
+        errors.append("inner approval requires exactly 17 ordered lane summary inputs")
+        return {}
+    try:
+        specs = lane_inventory.parse_summary_specs(values)
+    except (ValueError, TypeError, lane_inventory.InventoryError):
+        errors.append("inner approval requires exactly 17 ordered lane summary inputs")
+        return {}
+    result: dict[str, bytes] = {}
+    for lane, path in specs:
+        loaded = _load_json_bytes(
+            path, MAX_SUMMARY_BYTES,
+            label=f"inner approval lane {lane}", errors=errors,
+        )
+        if loaded is None:
+            continue
+        _payload, raw = loaded
+        if _sha256(raw) != positive.input_sha256.get(lane):
+            errors.append(f"inner approval lane {lane} must match the positive replay input SHA-256")
+            continue
+        result[lane] = raw
+    return result
+
+
+def _load_inner_reviewed_policy(
+    args: argparse.Namespace,
+    positive: PositiveReplayEvidence,
+    errors: list[str],
+) -> tuple[int, int, str] | None:
+    """Require independently reviewed freshness and foundational chain position."""
+
+    max_age = getattr(args, "inner_max_summary_artifact_age_secs", None)
+    sequence = getattr(args, "inner_foundational_release_sequence", None)
+    predecessor = canonical_lower_hex(
+        getattr(args, "inner_foundational_previous_envelope_sha256", None), 64
+    )
+    if type(max_age) is not int or not 0 <= max_age <= MAX_TIMESTAMP:
+        errors.append("inner approval requires a reviewed maximum summary age")
+    if type(sequence) is not int or not 0 < sequence <= MAX_TIMESTAMP:
+        errors.append("inner approval requires a reviewed foundational release sequence")
+    if predecessor is None:
+        errors.append("inner approval requires a reviewed foundational predecessor SHA-256")
+    if errors:
+        return None
+    assert predecessor is not None
+    if (sequence == 1) != (not any(bytes.fromhex(predecessor))):
+        errors.append("inner approval foundational sequence and predecessor must agree")
+    thresholds = positive.aggregate.get("thresholds")
+    if (
+        not isinstance(thresholds, dict)
+        or type(thresholds.get("max_summary_artifact_age_secs")) is not int
+        or max_age != thresholds["max_summary_artifact_age_secs"]
+    ):
+        errors.append("inner approval maximum summary age must match the positive aggregate")
+    return None if errors else (max_age, sequence, predecessor)
+
+
+def _load_inner_approval_trust(
+    args: argparse.Namespace,
+    errors: list[str],
+) -> dict[str, Any] | None:
+    """Load only independently pinned public trust, never trust copied from an approval."""
+
+    path = getattr(args, "inner_approval_trust", None)
+    expected_sha256 = _canonical_nonzero_sha256(
+        getattr(args, "inner_approval_trust_sha256", None)
+    )
+    if not isinstance(path, Path) or expected_sha256 is None:
+        errors.append("inner approvals require an independently pinned trust document")
+        return None
+    loaded = _load_json_bytes(
+        path, MAX_INNER_TRUST_BYTES, label="inner approval trust", errors=errors,
+    )
+    if loaded is None:
+        return None
+    trust, raw = loaded
+    if _sha256(raw) != expected_sha256:
+        errors.append("inner approval trust must match the independently reviewed SHA-256")
+        return None
+    if set(trust) != INNER_APPROVAL_TRUST_FIELDS or trust.get("schema") != INNER_APPROVAL_TRUST_SCHEMA:
+        errors.append("inner approval trust must have the exact V1 schema")
+        return None
+    if _canonical_nonzero_sha256(trust.get("foundational_receipt_verifier_sha256")) is None:
+        errors.append("inner approval foundational receipt verifier requires a reviewed SHA-256")
+        return None
+    for name in ("topology", "resilience", "lane_inventory", "foundational"):
+        signer = trust.get(name)
+        if not isinstance(signer, dict) or set(signer) != INNER_APPROVAL_SIGNER_FIELDS:
+            errors.append(f"inner approval {name} requires an exact independent signer tuple")
+            continue
+        public_key_hex = canonical_lower_hex(signer.get("public_key_hex"), 64)
+        if public_key_hex is None or not any(bytes.fromhex(public_key_hex)):
+            errors.append(f"inner approval {name} requires a non-zero trusted Ed25519 key")
+        if signer.get("service_id") == signer.get("administrator_id"):
+            errors.append(f"inner approval {name} signer and administrator must differ")
+        for field in ("service_id", "administrator_id"):
+            if not isinstance(signer.get(field), str) or canonical_string(signer[field]) is None:
+                errors.append(f"inner approval {name} {field} must be canonical")
+        for field in ("key_revision", "policy_revision"):
+            value = signer.get(field)
+            if type(value) is not int or not 0 < value < 1 << 63:
+                errors.append(f"inner approval {name} {field} must be positive")
+        if _canonical_nonzero_sha256(signer.get("policy_digest_sha256")) is None:
+            errors.append(f"inner approval {name} policy digest must be canonical")
+    if errors:
+        return None
+    fingerprints = [
+        _sha256(bytes.fromhex(trust[name]["public_key_hex"]))
+        for name in ("topology", "resilience", "lane_inventory", "foundational")
     ]
+    administrators = [
+        trust[name]["administrator_id"]
+        for name in ("topology", "resilience", "lane_inventory", "foundational")
+    ]
+    if len(set(fingerprints)) != 4 or len(set(administrators)) != 4:
+        errors.append("inner approvals require four independent signer keys and administrators")
+        return None
+    outer_key = canonical_lower_hex(
+        getattr(args, "provenance_verification_public_key_hex", None), 64
+    )
+    if outer_key is not None and _sha256(bytes.fromhex(outer_key)) in fingerprints:
+        errors.append("inner approval signer keys must differ from the outer promotion key")
+    outer_administrator = getattr(args, "provenance_signer_administrator_id", None)
+    if outer_administrator in administrators:
+        errors.append("inner approval administrators must differ from the outer promotion administrator")
+    if errors:
+        return None
+    return trust
+
+
+def _inner_signer_matches(
+    observed: Mapping[str, Any], trusted: Mapping[str, Any], errors: list[str], label: str,
+) -> None:
+    """Require an approval's own public signer coordinates to match pinned trust."""
+
+    expected = {
+        "signer_service_id": trusted["service_id"],
+        "signer_administrator_id": trusted["administrator_id"],
+        "signer_key_revision": trusted["key_revision"],
+        "signer_policy_revision": trusted["policy_revision"],
+        "signer_policy_digest_sha256": trusted["policy_digest_sha256"],
+        "signer_public_key_fingerprint_sha256": _sha256(
+            bytes.fromhex(trusted["public_key_hex"])
+        ),
+    }
+    for field, value in expected.items():
+        if observed.get(field) != value:
+            errors.append(f"inner approval {label} {field} must match independent trust")
+
+
+def _topology_native_authority_errors(
+    signed_topology: Mapping[str, Any] | None,
+    replayed_topology: object,
+    trusted_signer: Mapping[str, Any],
+) -> list[str]:
+    """Validate the qualification-only claim, never promote it to native authority.
+
+    The detached envelope has no canonical role-16 subject, operation receipt or
+    finalized Check. These checks close the trust projection even if a loader's
+    authenticated binding is accidentally widened; they cannot fill that gap.
+    """
+
+    if signed_topology is None or not promotion_runner.exact_json_equal(
+        signed_topology, replayed_topology
+    ):
+        return []
+    errors: list[str] = []
+    if set(signed_topology) != topology_qualification.AUTHENTICATED_TOPOLOGY_BINDING_FIELDS:
+        errors.append("inner approval topology must retain the exact qualification-only binding")
+    else:
+        if signed_topology.get("signer_authentication_kind") != "external-ed25519":
+            errors.append("inner approval topology requires the authenticated Ed25519 envelope")
+        _inner_signer_matches(signed_topology, trusted_signer, errors, "topology")
+    # TODO: Verify the role-16 topology subject, current native Check, exact executed
+    # input/result/output and immutable completion with a purpose-owned verifier.
+    # The existing envelope has no operation receipt or finalized-state anchor.
+    errors.append(TOPOLOGY_NATIVE_AUTHORITY_BLOCKER)
+    return errors
+
+
+def _resilience_native_authority_errors(
+    signed_resilience: Mapping[str, Any] | None,
+    replayed_resilience: object,
+    trusted_signer: Mapping[str, Any],
+    expected_summary_sha256: str | None,
+) -> list[str]:
+    """Bind the detached resilience receipt exactly, without granting native authority.
+
+    The source has no resilience-owned signer purpose, current custody or native
+    completed-operation proof. A foreign role's receipt cannot substitute for it.
+    """
+
+    if signed_resilience is None or not promotion_runner.exact_json_equal(
+        signed_resilience, replayed_resilience
+    ):
+        return []
+    errors: list[str] = []
+    if (
+        set(signed_resilience) != promotion_runner.RESILIENCE_QUALIFICATION_BINDING_FIELDS
+        or signed_resilience.get("schema")
+        != promotion_runner.RESILIENCE_QUALIFICATION_BINDING_SCHEMA
+    ):
+        errors.append("inner approval resilience must retain its exact purpose-specific binding")
+    else:
+        if signed_resilience.get("summary_sha256") != expected_summary_sha256:
+            errors.append("inner approval resilience must bind the exact replayed summary bytes")
+        _inner_signer_matches(signed_resilience, trusted_signer, errors, "resilience")
+    # TODO: Replace this with a purpose-owned native custody/operation Check verifier, never
+    # a role-5 promotion receipt or the detached resilience signature alone.
+    errors.append(RESILIENCE_NATIVE_AUTHORITY_BLOCKER)
+    return errors
+
+
+def _lane_inventory_native_authority_errors(
+    verification: Mapping[str, Any] | None,
+    replayed_verification: object,
+    trusted_signer: Mapping[str, Any],
+    expected_inventory_sha256: str | None,
+    expected_topology: Mapping[str, Any] | None,
+) -> list[str]:
+    """Bind the authenticated inventory projection, without claiming native completion."""
+
+    if verification is None or not promotion_runner.exact_json_equal(
+        verification, replayed_verification
+    ):
+        return []
+    errors: list[str] = []
+    if (
+        set(verification) != inventory_integration.VERIFICATION_FIELDS
+        or verification.get("schema") != lane_inventory.VERIFICATION_SCHEMA
+        or verification.get("status") != "ready"
+        or type(verification.get("summary_file_count")) is not int
+        or verification.get("summary_file_count") != 17
+        or type(verification.get("recognized_summary_count")) is not int
+        or verification.get("recognized_summary_count") != 17
+    ):
+        errors.append("inner approval lane-inventory must retain the exact verification schema")
+    if (
+        _canonical_nonzero_sha256(expected_inventory_sha256) is None
+        or verification.get("inventory_sha256") != expected_inventory_sha256
+    ):
+        errors.append("inner approval lane-inventory must bind exact replayed inventory bytes")
+    signer = verification.get("signer")
+    expected_signer = lane_inventory.trusted_signer_binding(
+        trusted_signer["public_key_hex"],
+        service_id=trusted_signer["service_id"],
+        administrator_id=trusted_signer["administrator_id"],
+        key_revision=trusted_signer["key_revision"],
+        policy_revision=trusted_signer["policy_revision"],
+        policy_digest_sha256=trusted_signer["policy_digest_sha256"],
+    )
+    if not promotion_runner.exact_json_equal(signer, expected_signer):
+        errors.append("inner approval lane-inventory signer must match its independent purpose and trust")
+    deployment = verification.get("deployment")
+    anchors = verification.get("anchors")
+    if (
+        expected_topology is None
+        or not isinstance(deployment, Mapping)
+        or set(deployment) != lane_inventory.DEPLOYMENT_FIELDS
+        or not isinstance(anchors, Mapping)
+        or set(anchors) != lane_inventory.ANCHOR_FIELDS
+        or not promotion_runner.exact_json_equal(
+            deployment,
+            {
+                field: expected_topology.get(field)
+                for field in lane_inventory.DEPLOYMENT_FIELDS
+            },
+        )
+        or any(
+            anchors.get(inventory_field) != expected_topology.get(topology_field)
+            for inventory_field, topology_field in (
+                ("topology_qualification_summary_sha256", "qualification_summary_sha256"),
+                ("topology_manifest_sha256", "manifest_sha256"),
+                ("topology_canonical_manifest_sha256", "canonical_manifest_sha256"),
+                ("validator_ids_sha256", "validator_ids_sha256"),
+            )
+        )
+    ):
+        errors.append("inner approval lane-inventory must bind the exact authenticated topology")
+    # TODO: Replace this with purpose-owned native custody, Reserve/Complete and finalized
+    # Check input/result/output verification; the inventory signature is not that authority.
+    errors.append(LANE_INVENTORY_NATIVE_AUTHORITY_BLOCKER)
+    return errors
+
+
+def _foundational_native_authority_errors(
+    summary: Mapping[str, Any],
+    signed_payload: Mapping[str, Any],
+    trusted_signer: Mapping[str, Any],
+    trusted_verifier_sha256: str,
+    reviewed: tuple[int, int, str],
+    expected_inventory_sha256: str | None,
+    expected_topology: Mapping[str, Any] | None,
+    expected_resilience: Mapping[str, Any] | None,
+    expected_lanes: Mapping[str, str],
+) -> list[str]:
+    """Check exact foundational replay claims, without inferring finalized execution."""
+
+    errors: list[str] = []
+    _max_age, sequence, predecessor = reviewed
+    if (
+        summary.get("schema") != promotion_runner.FOUNDATIONAL_PREREQUISITE_SCHEMA
+        or summary.get("present") is not True
+        or summary.get("valid") is not True
+        or summary.get("errors") != []
+    ):
+        errors.append("inner approval foundational must retain a valid exact replay projection")
+    _inner_signer_matches(summary, trusted_signer, errors, "foundational")
+    if (
+        type(summary.get("release_sequence")) is not int
+        or summary.get("release_sequence") != sequence
+        or summary.get("previous_envelope_sha256") != predecessor
+    ):
+        errors.append("inner approval foundational must bind reviewed release continuity")
+    if (
+        _canonical_nonzero_sha256(expected_inventory_sha256) is None
+        or summary.get("l1_lane_evidence_inventory_sha256") != expected_inventory_sha256
+    ):
+        errors.append("inner approval foundational must bind exact replayed inventory bytes")
+    if (
+        expected_topology is None
+        or not promotion_runner.exact_json_equal(
+            summary.get("topology_qualification"), expected_topology
+        )
+        or expected_resilience is None
+        or not promotion_runner.exact_json_equal(
+            summary.get("resilience_qualification"), expected_resilience
+        )
+    ):
+        errors.append("inner approval foundational must bind exact inner prerequisites")
+    expected_lane_rows = [
+        {"gate": lane, "sha256": expected_lanes.get(lane)}
+        for lane in promotion_runner.DEFAULT_REQUIRED_GATES
+    ]
+    if not promotion_runner.exact_json_equal(
+        summary.get("lane_summary_sha256"), expected_lane_rows
+    ):
+        errors.append("inner approval foundational must bind all exact replayed lane bytes")
+    receipt_bundle = signed_payload.get("signer_receipt_bundle")
+    if (
+        not isinstance(receipt_bundle, Mapping)
+        or set(receipt_bundle) != FOUNDATIONAL_SIGNER_RECEIPT_BUNDLE_FIELDS
+        or receipt_bundle.get("schema") != FOUNDATIONAL_SIGNER_RECEIPT_BUNDLE_SCHEMA
+        or receipt_bundle.get("verifier_sha256") != trusted_verifier_sha256
+    ):
+        errors.append("inner approval foundational must retain the pinned signer receipt bundle")
+    # The pinned verify-receipt command checks local purpose/audit/provenance consistency;
+    # no finalized native custody/operation reader is connected to this approval.
+    errors.append(FOUNDATIONAL_NATIVE_AUTHORITY_BLOCKER)
+    return errors
+
+
+def _verify_inner_approval_signatures(
+    args: argparse.Namespace,
+    positive: PositiveReplayEvidence,
+    inputs: Mapping[str, dict[str, Any]],
+    trust: Mapping[str, Any],
+    reviewed: tuple[int, int, str],
+) -> list[str]:
+    """Replay each approval's signature and its full prerequisite semantics."""
+
+    errors: list[str] = []
+    aggregate = positive.aggregate
+    deployment = aggregate.get("deployment")
+    if not isinstance(deployment, dict):
+        return ["inner approval deployment context is unavailable"]
+    max_summary_age_secs, release_sequence, predecessor = reviewed
+    deployment_id = deployment.get("deployment_id")
+    environment = deployment.get("environment")
+    topology_trust = trust["topology"]
+    topology, topology_errors = topology_qualification.load_signed_topology_qualification_binding(
+        args.inner_topology_qualification,
+        args.inner_topology_qualification_envelope,
+        trusted_public_key=bytes.fromhex(topology_trust["public_key_hex"]),
+        trusted_signer_service_id=topology_trust["service_id"],
+        trusted_signer_administrator_id=topology_trust["administrator_id"],
+        trusted_key_revision=topology_trust["key_revision"],
+        trusted_policy_revision=topology_trust["policy_revision"],
+        trusted_policy_digest_hex=topology_trust["policy_digest_sha256"],
+        now_unix=args.now_unix,
+        expected_deployment_id=deployment_id,
+        expected_environment=environment,
+    )
+    errors.extend(f"inner approval topology: {error}" for error in topology_errors)
+    if topology is None or not promotion_runner.exact_json_equal(
+        topology, aggregate.get("topology_qualification")
+    ):
+        errors.append("inner approval topology must match the positive aggregate binding")
+    errors.extend(_topology_native_authority_errors(
+        topology, aggregate.get("topology_qualification"), topology_trust,
+    ))
+
+    resilience_trust = trust["resilience"]
+    resilience, resilience_errors = promotion_runner.load_resilience_qualification_binding(
+        args.inner_resilience_qualification,
+        expected_deployment_id=deployment_id,
+        expected_environment=environment,
+        expected_topology_qualification=topology,
+        now_unix=args.now_unix,
+        max_age_secs=max_summary_age_secs,
+        trusted_public_key=bytes.fromhex(resilience_trust["public_key_hex"]),
+    )
+    errors.extend(f"inner approval resilience: {error}" for error in resilience_errors)
+    replayed_resilience = (
+        aggregate.get("resilience_qualification") or {}
+    ).get("binding")
+    if resilience is None or not promotion_runner.exact_json_equal(
+        resilience, replayed_resilience
+    ):
+        errors.append("inner approval resilience must match the positive aggregate binding")
+    errors.extend(_resilience_native_authority_errors(
+        resilience, replayed_resilience, resilience_trust,
+        positive.input_sha256.get("resilience_qualification"),
+    ))
+
+    inventory_trust = trust["lane_inventory"]
+    verified_inventory: inventory_integration.VerifiedLaneInventory | None = None
+    try:
+        inventory, raw = lane_inventory.load_canonical_inventory_file(
+            args.inner_l1_lane_evidence_inventory
+        )
+        lane_specs = lane_inventory.parse_summary_specs(args.inner_lane_summary)
+        verification = lane_inventory.verify_inventory(
+            inventory, lane_specs,
+            deployment_id=deployment_id,
+            environment=environment,
+            evaluation_now=args.now_unix,
+            verification_public_key_hex=inventory_trust["public_key_hex"],
+            service_id=inventory_trust["service_id"],
+            administrator_id=inventory_trust["administrator_id"],
+            key_revision=inventory_trust["key_revision"],
+            policy_revision=inventory_trust["policy_revision"],
+            policy_digest_sha256=inventory_trust["policy_digest_sha256"],
+            expected_topology_qualification_summary_sha256=(
+                None if topology is None else topology.get("qualification_summary_sha256")
+            ),
+            expected_topology_manifest_sha256=(
+                None if topology is None else topology.get("manifest_sha256")
+            ),
+            expected_topology_canonical_manifest_sha256=(
+                None if topology is None else topology.get("canonical_manifest_sha256")
+            ),
+            expected_validator_ids_sha256=(
+                None if topology is None else topology.get("validator_ids_sha256")
+            ),
+        )
+        summary_sha256 = {
+            row["lane"]: row["summary_sha256"]
+            for row in inventory["summaries"]
+        }
+        if (
+            tuple(summary_sha256) != promotion_runner.DEFAULT_REQUIRED_GATES
+            or any(
+                summary_sha256[lane] != positive.input_sha256.get(lane)
+                for lane in promotion_runner.DEFAULT_REQUIRED_GATES
+            )
+        ):
+            errors.append("inner approval lane-inventory must bind every replayed lane")
+        verified_inventory = inventory_integration.VerifiedLaneInventory(
+            verification, summary_sha256,
+        )
+        observed_inventory = (
+            aggregate.get("l1_lane_evidence_inventory") or {}
+        ).get("binding")
+        if (
+            verification["inventory_sha256"] != _sha256(raw)
+            or not promotion_runner.exact_json_equal(observed_inventory, verification)
+        ):
+            errors.append("inner approval lane-inventory must match the positive aggregate binding")
+        errors.extend(_lane_inventory_native_authority_errors(
+            verification, observed_inventory, inventory_trust,
+            positive.input_sha256.get("l1_lane_evidence_inventory"), topology,
+        ))
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError, lane_inventory.InventoryError):
+        errors.append("inner approval lane-inventory full replay could not be verified")
+
+    foundation = inputs["foundational_prerequisite"]
+    foundation_trust = trust["foundational"]
+    foundation_summary, foundation_errors, _context = validate_foundational_prerequisite_summary(
+        foundation,
+        ValidationOptions(
+            now_unix=args.now_unix,
+            max_summary_artifact_age_secs=max_summary_age_secs,
+            deployment_id=deployment_id,
+            environment=environment,
+            foundational_signer_public_key=bytes.fromhex(foundation_trust["public_key_hex"]),
+            foundational_release_sequence=release_sequence,
+            foundational_previous_envelope_sha256=predecessor,
+            foundational_signer_verifier=getattr(args, "inner_foundational_receipt_verifier", None),
+            foundational_signer_verifier_sha256=trust["foundational_receipt_verifier_sha256"],
+            replay_foundational_signer_receipt=True,
+            topology_qualification=topology,
+            resilience_qualification=resilience,
+            resilience_qualification_errors=tuple(resilience_errors),
+            l1_lane_evidence_inventory=verified_inventory,
+            l1_lane_evidence_inventory_errors=(
+                () if verified_inventory is not None else ("inventory replay failed",)
+            ),
+        ),
+    )
+    errors.extend(f"inner approval foundational: {error}" for error in foundation_errors)
+    foundational_binding = aggregate.get("foundational_prerequisites")
+    if not isinstance(foundational_binding, dict):
+        errors.append("inner approval foundational must match the positive aggregate binding")
+    else:
+        observed_summary = dict(foundational_binding)
+        observed_digest = observed_summary.pop("sha256", None)
+        observed_path = observed_summary.pop("path", None)
+        if (
+            not isinstance(observed_path, str)
+            or observed_digest != positive.input_sha256.get("foundational_prerequisite")
+            or not promotion_runner.exact_json_equal(observed_summary, foundation_summary)
+        ):
+            errors.append("inner approval foundational must match the positive aggregate binding")
+        elif not foundation_errors:
+            errors.extend(_foundational_native_authority_errors(
+                foundation_summary, foundation, foundation_trust,
+                trust["foundational_receipt_verifier_sha256"], reviewed,
+                positive.input_sha256.get("l1_lane_evidence_inventory"),
+                topology, resilience,
+                positive.input_sha256,
+            ))
+    return errors
+
+
+def validate_inner_approval_chain(
+    args: argparse.Namespace,
+    positive: PositiveReplayEvidence | None,
+) -> list[str]:
+    """Require inner inputs and trust, then retain the finalized-operation release block."""
+
+    errors: list[str] = []
+    trust = _load_inner_approval_trust(args, errors)
+    if positive is None:
+        errors.append("inner approvals require a validated positive replay")
+    else:
+        inputs = _load_inner_approval_inputs(args, positive, errors)
+        lane_inputs = _load_inner_lane_summaries(args, positive, errors)
+        reviewed = _load_inner_reviewed_policy(args, positive, errors)
+        if (
+            len(inputs) == len(INNER_APPROVAL_INPUTS)
+            and len(lane_inputs) == len(promotion_runner.DEFAULT_REQUIRED_GATES)
+            and trust is not None and reviewed is not None and not errors
+        ):
+            try:
+                temporary_root = Path(tempfile.gettempdir()).resolve(strict=True)
+                source_root = SCRIPT_DIR.parent.resolve(strict=True)
+                if temporary_root == source_root or source_root in temporary_root.parents:
+                    raise OSError("inner approval temporary root is within the source tree")
+                with tempfile.TemporaryDirectory(
+                    prefix="sorafs-inner-approval-", dir=temporary_root
+                ) as temporary:
+                    private_args = argparse.Namespace(**vars(args))
+                    snapshots: dict[str, dict[str, Any]] = {}
+                    for slot, attribute in INNER_APPROVAL_INPUTS:
+                        payload, raw = inputs[slot]
+                        path = Path(temporary) / f"{slot}.json"
+                        verifier_process.write_private_input(path, raw)
+                        setattr(private_args, attribute, path)
+                        snapshots[slot] = payload
+                    private_args.inner_lane_summary = []
+                    for lane in promotion_runner.DEFAULT_REQUIRED_GATES:
+                        path = Path(temporary) / f"lane-{lane}.json"
+                        verifier_process.write_private_input(path, lane_inputs[lane])
+                        private_args.inner_lane_summary.append(f"{lane}={path}")
+                    errors.extend(_verify_inner_approval_signatures(
+                        private_args, positive, snapshots, trust, reviewed,
+                    ))
+            except (OSError, RuntimeError, ValueError, KeyError, TypeError, AttributeError):
+                errors.append("inner approval signature verification failed closed")
+    # TODO: Connect purpose-owned native completed-operation/current-state verification for
+    # topology, resilience and lane-inventory, and finalized state for the foundational receipt.
+    # The outer final-promotion receipt cannot prove any of these inner operations.
+    errors.append(INNER_APPROVAL_RELEASE_BLOCKER)
+    return errors
 
 
 def validate_bundle(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
@@ -913,7 +1568,7 @@ def validate_bundle(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]
             errors.extend(final_promotion_cosign.verify_final_promotion_cosign(
                 args, promotion_cosign_subject_bytes(unsigned_subject), cosign_bundle.raw,
             ))
-    errors.extend(validate_inner_approval_chain())
+    errors.extend(validate_inner_approval_chain(args, positive))
     qualified = not errors
     summary: dict[str, Any] = {
         "schema": PROMOTION_SUMMARY_SCHEMA,
@@ -974,6 +1629,40 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--cosign-bundle",
         type=Path,
         help="Exact non-empty cosign JSON bundle bound by the signed receipt.",
+    )
+    for slot, _attribute in INNER_APPROVAL_INPUTS:
+        parser.add_argument(
+            f"--inner-{slot.replace('_', '-')}", type=Path,
+            help=f"Exact {slot} input named by the positive replay manifest.",
+        )
+    parser.add_argument(
+        INNER_LANE_SUMMARY_FLAG,
+        action="append", default=[], metavar="GATE=PATH",
+        help="Repeat exactly 17 times in canonical gate order with exact replayed lane bytes.",
+    )
+    parser.add_argument(
+        "--inner-approval-trust", type=Path,
+        help="Four independent public signer tuples and foundational verifier pin.",
+    )
+    parser.add_argument(
+        "--inner-approval-trust-sha256",
+        help="Independently reviewed SHA-256 of the exact inner trust document.",
+    )
+    parser.add_argument(
+        "--inner-foundational-receipt-verifier", type=Path,
+        help="Pinned external software signer receipt verifier for the foundational approval.",
+    )
+    parser.add_argument(
+        "--inner-max-summary-artifact-age-secs", type=non_negative_int_arg,
+        help="Operator-reviewed maximum age shared with the positive aggregate.",
+    )
+    parser.add_argument(
+        "--inner-foundational-release-sequence", type=positive_int_arg,
+        help="Operator-reviewed foundational release sequence.",
+    )
+    parser.add_argument(
+        "--inner-foundational-previous-envelope-sha256",
+        help="Operator-reviewed predecessor digest; zero only for sequence one.",
     )
     parser.add_argument(
         "--provenance-verification-public-key-hex",

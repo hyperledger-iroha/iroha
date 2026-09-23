@@ -20,6 +20,7 @@ mod challenge_phases;
 struct Fixture {
     release: Arc<KagemushaAuthenticatedReleaseV1>,
     policy: Arc<KagemushaRetailEnrollmentIssuerPolicyV1>,
+    app_policy: Arc<KagemushaAppAttestationAuthorityPolicyV1>,
     issuer: KeyPair,
     account: KeyPair,
     device: SigningKey,
@@ -30,8 +31,16 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let release = catalog::authenticated_release();
         let issuer = KeyPair::from_seed(vec![81; 32], Algorithm::Ed25519);
+        let app_authority = KeyPair::from_seed(vec![73; 32], Algorithm::Ed25519);
+        let app_policy = Arc::new(KagemushaAppAttestationAuthorityPolicyV1 {
+            authority_key: app_authority.public_key().clone(),
+            platform_class: KagemushaHardwarePlatformClassV1::DedicatedSecureElement,
+            app_signing_identity_digest: [74; 32],
+            app_release_digest: [75; 32],
+            maximum_lifetime_ms: 1_000,
+        });
+        let release = catalog::authenticated_release(app_policy.canonical_digest().unwrap());
         let account = KeyPair::from_seed(vec![12; 32], Algorithm::Ed25519);
         let device = SigningKey::from_bytes((&[3; 32]).into()).unwrap();
         let native_key = public(&SigningKey::from_bytes((&[4; 32]).into()).unwrap());
@@ -71,7 +80,19 @@ impl Fixture {
         let enabled = release.enabled_profiles()[0];
         let profile = enabled.hardware_profile;
         let device_public_key = public(&device);
+        let device_key_reference = kagemusha_device_key_reference_v1(&device_public_key);
+        let app_policy_binding_digest = KagemushaAppDevicePolicyBindingV1 {
+            app_signing_identity_digest: app_policy.app_signing_identity_digest,
+            app_release_digest: app_policy.app_release_digest,
+            release_id: release.release_id(),
+            hardware_profile_id: profile.hardware_profile_id,
+            device_key_reference,
+            lane_id: owner.lane_id,
+        }
+        .canonical_digest()
+        .unwrap();
         let mut credential = KagemushaHardwareCredentialV1 {
+            app_policy_binding_digest,
             version: 1,
             credential_id: [0; 32],
             network_id: policy.runtime.network_id,
@@ -83,7 +104,7 @@ impl Fixture {
             hardware_epoch_id: [1; 32],
             hardware_epoch_generation: 1,
             device_public_key,
-            device_key_reference: kagemusha_device_key_reference_v1(&device_public_key),
+            device_key_reference,
             issued_at_ms: 200,
             expires_at_ms: 9000,
             governance_signature: KagemushaDeviceSignatureV1::from_raw_bytes(&[1; 64]).unwrap(),
@@ -111,6 +132,7 @@ impl Fixture {
         Self {
             release,
             policy,
+            app_policy,
             issuer,
             account,
             device,
@@ -123,6 +145,7 @@ impl Fixture {
     fn begin(&self) -> PendingIssuerEnrollmentV1 {
         PendingIssuerEnrollmentV1::begin(
             self.policy.clone(),
+            self.app_policy.clone(),
             self.release.clone(),
             self.owner.clone(),
             self.native_key,
@@ -132,7 +155,7 @@ impl Fixture {
     }
 
     fn proof(&self, nonce: [u8; 32]) -> KagemushaRetailEnrollmentPossessionProofV1 {
-        let challenge = KagemushaRetailEnrollmentChallengeV1 {
+        let mut challenge = KagemushaRetailEnrollmentChallengeV1 {
             version: 1,
             client_nonce: nonce,
             server_nonce: [93; 32],
@@ -147,10 +170,47 @@ impl Fixture {
                     .core_authorization_key_reference,
                 credential: self.qualification.credential,
             },
+            app_attestation_digest: [0; 32],
             issued_at_ms: 1000,
             expires_at_ms: 2000,
         };
+        challenge.app_attestation_digest = self.verified_app(&challenge).digest();
         self.sign_proof(challenge)
+    }
+
+    /// Synthetic authority result for tests only. Production requires a real platform verifier.
+    fn verified_app(
+        &self,
+        challenge: &KagemushaRetailEnrollmentChallengeV1,
+    ) -> KagemushaVerifiedAppEnrollmentV1 {
+        let key = KeyPair::from_seed(vec![73; 32], Algorithm::Ed25519);
+        let policy = self.app_policy.as_ref();
+        let selection = KagemushaAppEnrollmentSelectionV1::for_credential(
+            challenge.client_nonce,
+            challenge.server_nonce,
+            challenge.issuance.release_id,
+            &challenge.issuance.credential,
+        );
+        let assertion = KagemushaAppEnrollmentAssertionV1 {
+            version: 1,
+            domain: "iroha:kagemusha:v1:app-device-enrollment".to_owned(),
+            client_nonce: selection.client_nonce,
+            server_nonce: selection.server_nonce,
+            app_signing_identity_digest: policy.app_signing_identity_digest,
+            app_release_digest: policy.app_release_digest,
+            platform_evidence_digest: [76; 32],
+            release_id: selection.release_id,
+            hardware_profile_id: selection.hardware_profile_id,
+            device_key_reference: selection.device_key_reference,
+            lane_id: selection.lane_id,
+            issued_at_ms: 1_000,
+            expires_at_ms: 2_000,
+        };
+        let certificate = KagemushaAppEnrollmentCertificateV1 {
+            signature: SignatureOf::try_new(key.private_key(), &assertion).unwrap(),
+            assertion,
+        };
+        certificate.authenticate(policy, selection, 1_500).unwrap()
     }
 
     fn sign_proof(
@@ -209,6 +269,7 @@ impl Fixture {
             owner: proof.challenge.owner.clone(),
             issuance: proof.challenge.issuance.clone(),
             challenge_evidence_digest: proof.canonical_evidence_digest().unwrap(),
+            app_attestation_digest: proof.challenge.app_attestation_digest,
             issued_at_ms: 1000,
             expires_at_ms: 3000,
         };
@@ -240,7 +301,13 @@ fn initial_admission_authenticates_full_catalog_and_three_signatures_and_retains
     let certificate = f.certificate(&proof);
     let proof_bytes = proof.canonical_bytes().unwrap();
     let certificate_bytes = certificate.canonical_bytes().unwrap();
-    let admission = pending.complete(&proof_bytes, &certificate_bytes).unwrap();
+    let admission = pending
+        .complete(
+            &proof_bytes,
+            &certificate_bytes,
+            &f.verified_app(&proof.challenge),
+        )
+        .unwrap();
     assert_eq!(admission.evidence().certificate(), &certificate);
     assert_eq!(admission.evidence().client_nonce(), nonce);
     assert_eq!(admission.canonical_proof(), proof_bytes);
@@ -250,6 +317,57 @@ fn initial_admission_authenticates_full_catalog_and_three_signatures_and_retains
     assert_eq!(admission.issuer_policy(), f.policy.as_ref());
     assert_eq!(admission.release().release_id(), f.release.release_id());
     admission.deadline().unwrap().check().unwrap();
+}
+
+#[test]
+fn initial_admission_rejects_another_governed_app_policy_or_signed_binding() {
+    let f = Fixture::new();
+    let mut other_policy = f.app_policy.as_ref().clone();
+    other_policy.app_release_digest[0] ^= 1;
+    assert_eq!(
+        PendingIssuerEnrollmentV1::begin(
+            f.policy.clone(),
+            Arc::new(other_policy),
+            f.release.clone(),
+            f.owner.clone(),
+            f.native_key,
+            &norito::encode_canonical(&f.qualification).unwrap(),
+        )
+        .err(),
+        Some(InitialEnrollmentErrorV1::Binding),
+    );
+
+    let mut qualification = f.qualification.clone();
+    let prior_credential_id = qualification.credential.credential_id;
+    qualification.credential.app_policy_binding_digest[0] ^= 1;
+    qualification.credential = qualification.credential.seal_credential_id().unwrap();
+    assert_ne!(qualification.credential.credential_id, prior_credential_id);
+    let seed = qualification.profile.provider_id[0].wrapping_add(5);
+    let governance = SigningKey::from_bytes((&[seed; 32]).into()).unwrap();
+    let signature: p256::ecdsa::Signature =
+        governance.sign(&qualification.credential.canonical_signing_bytes().unwrap());
+    qualification.credential.governance_signature = KagemushaDeviceSignatureV1::from_raw_bytes(
+        &signature.normalize_s().unwrap_or(signature).to_bytes(),
+    )
+    .unwrap();
+    assert!(
+        qualification
+            .credential
+            .validate_against_profile(&qualification.profile)
+            .is_ok()
+    );
+    assert_eq!(
+        PendingIssuerEnrollmentV1::begin(
+            f.policy,
+            f.app_policy,
+            f.release,
+            f.owner,
+            f.native_key,
+            &norito::encode_canonical(&qualification).unwrap(),
+        )
+        .err(),
+        Some(InitialEnrollmentErrorV1::Binding),
+    );
 }
 
 #[test]
@@ -263,7 +381,8 @@ fn a_saved_issuer_response_cannot_complete_a_new_native_attempt() {
     assert_eq!(
         new.complete(
             &proof.canonical_bytes().unwrap(),
-            &certificate.canonical_bytes().unwrap()
+            &certificate.canonical_bytes().unwrap(),
+            &f.verified_app(&proof.challenge),
         )
         .err(),
         Some(InitialEnrollmentErrorV1::Binding)
@@ -271,6 +390,7 @@ fn a_saved_issuer_response_cannot_complete_a_new_native_attempt() {
     old.complete(
         &proof.canonical_bytes().unwrap(),
         &certificate.canonical_bytes().unwrap(),
+        &f.verified_app(&proof.challenge),
     )
     .unwrap();
 }
@@ -295,7 +415,8 @@ fn changed_native_owner_release_policy_or_core_key_cannot_be_supplied_by_the_iss
             pending
                 .complete(
                     &proof.canonical_bytes().unwrap(),
-                    &certificate.canonical_bytes().unwrap()
+                    &certificate.canonical_bytes().unwrap(),
+                    &f.verified_app(&proof.challenge),
                 )
                 .err(),
             Some(InitialEnrollmentErrorV1::Binding),
@@ -325,7 +446,8 @@ fn valid_issuer_signature_cannot_replace_account_or_device_possession() {
             pending
                 .complete(
                     &proof.canonical_bytes().unwrap(),
-                    &certificate.canonical_bytes().unwrap()
+                    &certificate.canonical_bytes().unwrap(),
+                    &f.verified_app(&proof.challenge),
                 )
                 .err(),
             Some(InitialEnrollmentErrorV1::Authority)
@@ -358,7 +480,8 @@ fn wrong_issuer_and_changed_proof_commitment_are_rejected() {
             pending
                 .complete(
                     &proof.canonical_bytes().unwrap(),
-                    &certificate.canonical_bytes().unwrap()
+                    &certificate.canonical_bytes().unwrap(),
+                    &f.verified_app(&proof.challenge),
                 )
                 .err(),
             Some(InitialEnrollmentErrorV1::Authority)
@@ -370,6 +493,7 @@ fn wrong_issuer_and_changed_proof_commitment_are_rejected() {
 fn expired_native_attempt_is_rejected_before_proof_parsing_or_clock_renewal() {
     let f = Fixture::new();
     let mut pending = f.begin();
+    let proof = f.proof(pending.client_nonce().unwrap());
     pending.deadline = NativeDeadlineV1::expired_for_test();
     assert_eq!(
         pending.client_nonce().err(),
@@ -380,7 +504,9 @@ fn expired_native_attempt_is_rejected_before_proof_parsing_or_clock_renewal() {
         Some(InitialEnrollmentErrorV1::Expired)
     );
     assert_eq!(
-        pending.complete(&[], &[]).err(),
+        pending
+            .complete(&[], &[], &f.verified_app(&proof.challenge))
+            .err(),
         Some(InitialEnrollmentErrorV1::Expired)
     );
 }
@@ -400,7 +526,9 @@ fn canonical_input_bounds_and_trailing_bytes_are_rejected() {
             _ => c = vec![0; 16385],
         }
         assert_eq!(
-            pending.complete(&p, &c).err(),
+            pending
+                .complete(&p, &c, &f.verified_app(&proof.challenge))
+                .err(),
             Some(InitialEnrollmentErrorV1::Encoding)
         );
     }
@@ -423,6 +551,7 @@ fn begin_rejects_a_different_runtime_or_non_ed25519_account() {
         assert_eq!(
             PendingIssuerEnrollmentV1::begin(
                 f.policy.clone(),
+                f.app_policy.clone(),
                 f.release.clone(),
                 owner,
                 f.native_key,
@@ -444,7 +573,11 @@ fn initial_possession_preserves_exact_issuer_admission_and_requires_a_new_device
     let proof_bytes = proof.canonical_bytes().unwrap();
     let certificate_bytes = certificate.canonical_bytes().unwrap();
     let admission = enrollment
-        .complete(&proof_bytes, &certificate_bytes)
+        .complete(
+            &proof_bytes,
+            &certificate_bytes,
+            &f.verified_app(&proof.challenge),
+        )
         .unwrap();
     let open = PendingEnrolledOpenV1::from_fresh_issuer_admission(admission).unwrap();
     assert_ne!(open.nonce(), proof.challenge.device_request_id().unwrap());
@@ -476,6 +609,7 @@ fn transitioning_to_possession_does_not_restart_the_native_deadline() {
         .complete(
             &proof.canonical_bytes().unwrap(),
             &certificate.canonical_bytes().unwrap(),
+            &f.verified_app(&proof.challenge),
         )
         .unwrap();
     // An actual short native clock interval catches an accidental new 120-second lease.
@@ -504,6 +638,7 @@ fn admission_expiry_between_issuer_verification_and_possession_start_is_rejected
         .complete(
             &proof.canonical_bytes().unwrap(),
             &certificate.canonical_bytes().unwrap(),
+            &f.verified_app(&proof.challenge),
         )
         .unwrap();
     admission.pending.deadline = NativeDeadlineV1::expired_for_test();

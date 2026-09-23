@@ -8,6 +8,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     num::NonZeroUsize,
     panic::{AssertUnwindSafe, catch_unwind},
+    sync::Arc,
 };
 
 struct FileIo {
@@ -155,7 +156,7 @@ fn attempt(
     store.io.start = store.complete;
     store.cursor = store.complete;
     AppendInner {
-        preparation: Arc::clone(&prepared.next_identity),
+        preparation: prepared.next_identity.clone(),
         baseline: baseline.clone(),
         workspace: Workspace::new(),
         store,

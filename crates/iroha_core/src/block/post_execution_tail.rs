@@ -57,11 +57,7 @@ impl ValidBlock {
         );
         state
             .stage_canonical_carrier_membership(membership, height)
-            .map_err(|error| {
-                Self::execution_context_error(format!(
-                    "failed to stage canonical carrier membership: {error}"
-                ))
-            })?;
+            .map_err(BlockValidationError::from_certified_merge_stage_error)?;
         state
             .resolve_queue_plan_pending_obligations_from_block(block)
             .map_err(|error| {

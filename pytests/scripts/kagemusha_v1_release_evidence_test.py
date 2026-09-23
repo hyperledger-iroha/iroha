@@ -554,6 +554,7 @@ def _fixture(tmp_path: Path, *, provider_commitment: str = "d1" * 32) -> Evidenc
         ),
         "valid_from_ms": 1,
         "expires_at_ms": 1_800_000_000_000,
+        "app_attestation_authority_policy_digest": "a7" * 32,
     }
     hardware_profile["hardware_profile_id"] = VERIFIER.rust_hardware_profile_id(
         hardware_profile
@@ -1964,6 +1965,44 @@ def native_golden_protocols() -> dict[str, Any]:
         for name, eq, ep in [("mint_credit", 1, 2), ("mint_hash_shard", 4, 5),
                              ("mint_hash_claim", 6, 7)]
     ]}
+
+
+def test_hardware_profile_codec_binds_u32_class_specific_guarantees() -> None:
+    assert VERIFIER._required_platform_guarantees("dedicated_secure_element") == 0xFFFF
+    assert VERIFIER._required_platform_guarantees("apple_app_attest") == 0x70000
+    assert VERIFIER._required_platform_guarantees("android_key_mint") == 0xB0000
+    profile = {
+        "version": 1,
+        "protocol_version": 1,
+        "provider_id": "41" * 32,
+        "platform_class": "dedicated_secure_element",
+        "product_class_digest": "42" * 32,
+        "firmware_policy_digest": "43" * 32,
+        "enrollment_attestation_verifier_digest": "44" * 32,
+        "attestation_trust_roots_digest": "45" * 32,
+        "allowed_suite_commitment": VERIFIER._suite_commitment("51" * 32),
+        "policy_epoch": 0x41,
+        "governance_credential_public_key": (
+            "04"
+            "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
+            "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
+        ),
+        "capability_mask": 0xFFFF,
+        "qualification_report_digest": "61" * 32,
+        "valid_from_ms": 1,
+        "expires_at_ms": 100_000,
+        "app_attestation_authority_policy_digest": "a5" * 32,
+    }
+    assert len(VERIFIER._norito_frame(
+        VERIFIER.HARDWARE_PROFILE_SCHEMA,
+        VERIFIER._hardware_profile_preimage_payload(profile),
+    )) == 413
+    assert VERIFIER.rust_hardware_profile_id(profile) == (
+        "a0a2b5d1a83a45f04e4552e4110893861c54aa5c03af4d466e7fa8aa3ef0a841"
+    )
+    for platform, mask in (("apple_app_attest", 0x70000), ("android_key_mint", 0xB0000)):
+        candidate = {**profile, "platform_class": platform, "capability_mask": mask}
+        assert VERIFIER.rust_hardware_profile_id(candidate) != VERIFIER.rust_hardware_profile_id(profile)
 
 
 def test_native_profile_digest_matches_rust_tagged_golden_and_binds_all_fields() -> None:

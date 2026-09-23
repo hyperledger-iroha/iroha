@@ -530,6 +530,7 @@ class _TranscriptBuilder:
             "policy_epoch": p["policy_epoch"], "governance_credential_public_key": _p256_public(1),
             "capability_mask": p["capability_mask"], "qualification_report_digest": p["qualification_report_digest"],
             "valid_from_ms": 1, "expires_at_ms": 1_800_000_000_000,
+            "app_attestation_authority_policy_digest": _digest("app-attestation-policy"),
         }
         profile["hardware_profile_id"] = release.rust_hardware_profile_id(profile)
         p["hardware_profile_id"] = profile["hardware_profile_id"]

@@ -63,6 +63,9 @@ enum SnapshotFault {
     OutOfRangeEphemeral,
     OutOfRangeError,
     ZeroNonce,
+    FinalLayoutDrift,
+    FinalMainDigestDrift,
+    FinalNonceDigestDrift,
 }
 
 struct TestChunk {
@@ -114,13 +117,37 @@ impl ZkAmsMkheRnsNativeSourceSnapshotV1 for TestSnapshot {
     type Chunk = TestChunk;
 
     fn layout(&self) -> ZkAmsMkheRnsNativeSourceLayoutV1 {
+        if self.next_record == OPENING_COUNT_V1
+            && matches!(self.fault, SnapshotFault::FinalLayoutDrift)
+        {
+            return ZkAmsMkheRnsNativeSourceLayoutV1::new(
+                self.layout.profile_digest(),
+                self.layout.topology_digest(),
+                self.layout.release_candidate_digest(),
+                digest(b"substituted-statement", self.context, 0),
+                self.layout.operational_context_digest(),
+            )
+            .expect("different valid final-read layout");
+        }
         self.layout
     }
 
     fn snapshot_digest(&self, arena: ZkAmsMkheRnsNativeSourceArenaV1) -> [u8; 32] {
+        let drift = self.next_record == OPENING_COUNT_V1
+            && matches!(
+                (self.fault, arena),
+                (
+                    SnapshotFault::FinalMainDigestDrift,
+                    ZkAmsMkheRnsNativeSourceArenaV1::Main
+                ) | (
+                    SnapshotFault::FinalNonceDigestDrift,
+                    ZkAmsMkheRnsNativeSourceArenaV1::Nonce
+                )
+            );
+        let context = self.context + u16::from(drift);
         match arena {
-            ZkAmsMkheRnsNativeSourceArenaV1::Main => digest(b"main-snapshot", self.context, 0),
-            ZkAmsMkheRnsNativeSourceArenaV1::Nonce => digest(b"nonce-snapshot", self.context, 0),
+            ZkAmsMkheRnsNativeSourceArenaV1::Main => digest(b"main-snapshot", context, 0),
+            ZkAmsMkheRnsNativeSourceArenaV1::Nonce => digest(b"nonce-snapshot", context, 0),
         }
     }
 
@@ -954,6 +981,7 @@ fn pretranscript_facts_are_exact_mutation_closed_and_expose_one_pass_blocker() {
         derive_rns_native_pre_transcript_record_facts_v1(
             &mut snapshot,
             fixture.layout,
+            &fixture.receipt,
             fixture.epoch,
             fixture.roster_digest,
             &fixture.public_a,
@@ -1158,4 +1186,197 @@ fn complete_preflight_is_move_only_non_authorizing_and_anchor_bound() {
         .map(|_| ()),
         Err(RnsNativeRlweSourceStatementErrorV1::InvalidAnchor)
     );
+}
+
+/// Instrument the existing canonical-byte fixture without granting any live
+/// source authority. The final receipt failure models a broken backend owner.
+struct ObservedSnapshot {
+    inner: TestSnapshot,
+    fail_final_receipt: bool,
+    reads: std::rc::Rc<std::cell::Cell<u64>>,
+    drops: std::rc::Rc<std::cell::Cell<u32>>,
+}
+
+impl Drop for ObservedSnapshot {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
+    }
+}
+
+impl ZkAmsMkheRnsNativeSourceSnapshotV1 for ObservedSnapshot {
+    type Chunk = TestChunk;
+
+    fn layout(&self) -> ZkAmsMkheRnsNativeSourceLayoutV1 {
+        self.inner.layout()
+    }
+
+    fn snapshot_digest(&self, arena: ZkAmsMkheRnsNativeSourceArenaV1) -> [u8; 32] {
+        self.inner.snapshot_digest(arena)
+    }
+
+    fn structural_receipt(
+        &self,
+    ) -> Result<ZkAmsMkheRnsNativeSourceReceiptV1, ZkAmsMkheRnsNativeSourceErrorV1> {
+        if self.fail_final_receipt && self.inner.next_record == OPENING_COUNT_V1 {
+            return Err(ZkAmsMkheRnsNativeSourceErrorV1::Authentication);
+        }
+        self.inner.structural_receipt()
+    }
+
+    fn read_slot(
+        &mut self,
+        arena: ZkAmsMkheRnsNativeSourceArenaV1,
+        slot: u64,
+    ) -> Result<Self::Chunk, ZkAmsMkheRnsNativeSourceErrorV1> {
+        let result = self.inner.read_slot(arena, slot);
+        self.reads.set(self.inner.reads);
+        result
+    }
+}
+
+#[test]
+fn source_replay_rejects_identity_drift_on_the_final_successful_read() {
+    let fixture = Fixture::new(30);
+    let public = fixture.public_view();
+    let validated = validate_public_artifact_v1(&fixture.transcript, fixture.layout, public)
+        .expect("original public artifact");
+    for fault in [
+        SnapshotFault::FinalLayoutDrift,
+        SnapshotFault::FinalMainDigestDrift,
+        SnapshotFault::FinalNonceDigestDrift,
+    ] {
+        let mut snapshot = TestSnapshot::new(fixture.layout, fixture.context, fault);
+        assert_eq!(snapshot.structural_receipt().unwrap(), fixture.receipt);
+        assert_eq!(
+            validate_source_snapshot_v1(
+                &mut snapshot,
+                fixture.layout,
+                fixture.receipt,
+                public,
+                validated.public_key_digest,
+            ),
+            Err(RnsNativeRlweSourceStatementErrorV1::InvalidContext)
+        );
+        assert_eq!(snapshot.reads, RNS_NATIVE_PRETRANSCRIPT_SOURCE_READS_V1);
+        assert_eq!(snapshot.next_record, OPENING_COUNT_V1);
+        assert_ne!(snapshot.structural_receipt().unwrap(), fixture.receipt);
+    }
+}
+
+#[test]
+fn pretranscript_source_facts_do_not_escape_after_final_read_identity_drift() {
+    let fixture = Fixture::new(31);
+    for fault in [
+        SnapshotFault::FinalLayoutDrift,
+        SnapshotFault::FinalMainDigestDrift,
+        SnapshotFault::FinalNonceDigestDrift,
+    ] {
+        let mut snapshot = TestSnapshot::new(fixture.layout, fixture.context, fault);
+        assert_eq!(snapshot.structural_receipt().unwrap(), fixture.receipt);
+        assert_eq!(
+            derive_rns_native_pre_transcript_record_facts_v1(
+                &mut snapshot,
+                fixture.layout,
+                &fixture.receipt,
+                fixture.epoch,
+                fixture.roster_digest,
+                &fixture.public_a,
+                &fixture.public_b,
+                &fixture.ciphertext_c0,
+                &fixture.ciphertext_c1,
+            )
+            .map(|_| ()),
+            Err(RnsNativeRlweSourceStatementErrorV1::InvalidContext)
+        );
+        assert_eq!(snapshot.reads, RNS_NATIVE_PRETRANSCRIPT_SOURCE_READS_V1);
+        assert_ne!(snapshot.structural_receipt().unwrap(), fixture.receipt);
+    }
+}
+
+#[test]
+fn consuming_preflight_drops_the_source_after_final_identity_or_receipt_failure() {
+    let fixture = Fixture::new(32);
+    let anchor = fixture.anchor(b"source-identity-still-requires-authenticated-equality");
+    for (fault, fail_final_receipt, expected) in [
+        (
+            SnapshotFault::FinalMainDigestDrift,
+            false,
+            RnsNativeRlweSourceStatementErrorV1::InvalidContext,
+        ),
+        (
+            SnapshotFault::None,
+            true,
+            RnsNativeRlweSourceStatementErrorV1::SourceUnavailable,
+        ),
+    ] {
+        let reads = std::rc::Rc::new(std::cell::Cell::new(0));
+        let drops = std::rc::Rc::new(std::cell::Cell::new(0));
+        let snapshot = ObservedSnapshot {
+            inner: TestSnapshot::new(fixture.layout, fixture.context, fault),
+            fail_final_receipt,
+            reads: std::rc::Rc::clone(&reads),
+            drops: std::rc::Rc::clone(&drops),
+        };
+        assert_eq!(
+            validate_preflight_parts_v1(
+                &fixture.transcript,
+                fixture.layout,
+                fixture.receipt,
+                fixture.public_view(),
+                &fixture.equation_commitments,
+                &fixture.limb_commitments,
+                snapshot,
+                fixture.qpcs(&anchor),
+            )
+            .map(|_| ()),
+            Err(expected)
+        );
+        assert_eq!(reads.get(), RNS_NATIVE_PRETRANSCRIPT_SOURCE_READS_V1);
+        assert_eq!(drops.get(), 1, "consuming failure retains no retry owner");
+    }
+}
+
+#[test]
+fn source_identity_guard_rejects_stale_receipts_without_an_additional_read() {
+    let fixture = Fixture::new(33);
+    let mut snapshot = TestSnapshot::new(
+        fixture.layout,
+        fixture.context,
+        SnapshotFault::FinalNonceDigestDrift,
+    );
+    validate_source_snapshot_identity_v1(&snapshot, fixture.layout, &fixture.receipt)
+        .expect("original identity");
+    assert_eq!(snapshot.reads, 0);
+    // Isolate the boundary guard; complete-pass tests above exercise the
+    // actual final read rather than this local state mutation.
+    snapshot.next_record = OPENING_COUNT_V1;
+    assert_eq!(
+        validate_source_snapshot_identity_v1(&snapshot, fixture.layout, &fixture.receipt),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidContext)
+    );
+    assert_eq!(snapshot.reads, 0);
+}
+
+#[test]
+fn pretranscript_source_scan_validates_the_caller_receipt_before_reads() {
+    let fixture = Fixture::new(34);
+    let mut receipt = fixture.receipt;
+    receipt.receipt_digest[0] ^= 1;
+    let mut snapshot = TestSnapshot::new(fixture.layout, fixture.context, SnapshotFault::None);
+    assert_eq!(
+        derive_rns_native_pre_transcript_record_facts_v1(
+            &mut snapshot,
+            fixture.layout,
+            &receipt,
+            fixture.epoch,
+            fixture.roster_digest,
+            &fixture.public_a,
+            &fixture.public_b,
+            &fixture.ciphertext_c0,
+            &fixture.ciphertext_c1,
+        )
+        .map(|_| ()),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidContext)
+    );
+    assert_eq!(snapshot.reads, 0);
 }

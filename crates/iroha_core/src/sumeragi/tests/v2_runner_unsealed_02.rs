@@ -859,7 +859,7 @@ fn pending_kura_finalization_closes_and_drains_before_rollover() {
         "drain_finalized_lane_relay_prefix(",
         "if !drained_terminal_ingress && !drained_terminal_relay",
         "break;",
-        "ensure_closed_drained_cut()",
+        "ensure_closed_global_drained_cut()",
         "activated.into_finalized_rollover(&mut active_runner)",
     ] {
         let offset = finalization[cursor..]
@@ -1671,8 +1671,8 @@ fn proposal_history_wait_retries_only_on_original_release_and_retires_with_owner
         None,
     );
     let notification = concread::release::ReleaseNotification::default();
-    let error = crate::state::StateBlockStartError::<()>::Storage(
-        crate::state::StateStorageAdmissionError::Busy(notification.observe()),
+    let error = crate::state::StateBlockStartError::<()>::History(
+        crate::state::BlockHashAdmissionError::Busy(notification.observe()),
     );
     let wake = std::task::Waker::noop();
     let mut state = LocalProposalState::default();
@@ -1684,8 +1684,8 @@ fn proposal_history_wait_retries_only_on_original_release_and_retires_with_owner
     drop(notification.guard(()));
     assert!(!state.history_admission_pending(owner, wake));
     assert!(state.is_pristine());
-    let error = crate::state::StateBlockStartError::<()>::Storage(
-        crate::state::StateStorageAdmissionError::Busy(notification.observe()),
+    let error = crate::state::StateBlockStartError::<()>::History(
+        crate::state::BlockHashAdmissionError::Busy(notification.observe()),
     );
     assert!(state.defer_history_admission(owner, &error, wake));
     state.reconcile(next);

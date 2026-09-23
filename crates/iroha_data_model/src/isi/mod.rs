@@ -357,6 +357,7 @@ impl_direct_instruction_box!(crate::isi::sorafs::CancelSorafsOrderbookOrder);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsStreamTokenCustody);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsFinalPromotionAuthority);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsFinalPromotionAccountCustody);
+impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsReleaseManifestAuthority);
 impl_direct_instruction_box!(crate::isi::sorafs::MatchSorafsOrderbook);
 impl_direct_instruction_box!(crate::isi::sorafs::MaintainSorafsOrderbook);
 impl_direct_instruction_box!(crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt);
@@ -2774,14 +2775,15 @@ pub mod prelude {
             FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
             MaintainSorafsOrderbook, MatchSorafsOrderbook,
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
-            MutateSorafsStreamTokenCustody, PublishSorafsPopRevocationList,
-            RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
-            RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
-            RegisterCapacityDispute, RegisterPinManifest, RegisterSorafsModerationJurorEligibility,
-            RegisterSorafsReserveAccount, RepaySorafsReserveCredit, RequestSorafsReserveMovement,
-            ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
-            ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
-            SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenCustody,
+            PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
+            RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
+            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
+            RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
+            RepaySorafsReserveCredit, RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
+            ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
+            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
+            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
             SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
             SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
             SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,

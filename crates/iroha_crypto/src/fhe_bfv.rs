@@ -1295,7 +1295,7 @@ pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUN
 const BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_MATERIAL_VERSION_V1: u16 = 1;
 const BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_MATERIAL_FIELD_COUNT_V1: u16 = 32;
 /// Number of Goldilocks field elements in each BFV full-bootstrap arithmetic trace row.
-pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1: u16 = 34;
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1: u16 = 38;
 /// Active arithmetic trace row marker for rows carrying BFV coefficient material.
 pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_KIND_ACTIVE_V1: u64 = 1;
 /// Padding arithmetic trace row marker for rows outside the active BFV degree.
@@ -1420,7 +1420,7 @@ const BFV_FULL_BOOTSTRAP_NATIVE_TRANSPARENT_PROVER_PAYLOAD_FIELD_COUNT_V1: u16 =
 /// Number of top-level fields in the canonical native STARK/FRI verifier payload.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_FIELD_COUNT_V1: u16 = 17;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_CIRCUIT_ID_MAX_BYTES: usize = 256;
-const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_STATEMENT_HASH_LIMB_COUNT_V1: u16 = 4;
+const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_STATEMENT_HASH_LIMB_COUNT_V1: u16 = 8;
 /// Maximum diagonal entries admitted in one BFV full-bootstrap linear transform.
 pub const BFV_FULL_BOOTSTRAP_LINEAR_TRANSFORM_MAX_DIAGONALS: usize = 1_024;
 const BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1: u16 = 2;
@@ -2088,16 +2088,18 @@ impl BfvRnsModulusChain {
     ) -> Result<Vec<u128>, BfvError> {
         self.validate_for_parameters(params)?;
         validate_rns_polynomial(params, self, polynomial)?;
-        (0..params.degree())
-            .map(|index| {
-                let residues = polynomial
-                    .residues_by_limb
-                    .iter()
-                    .map(|limb| limb[index])
-                    .collect::<Vec<_>>();
-                reconstruct_rns_coefficient(&residues, &self.moduli)
-            })
-            .collect()
+        let mut coefficients = Vec::with_capacity(params.degree());
+        let mut residues = [0_u64; BFV_RNS_MODULUS_CHAIN_MAX_LIMBS];
+        for index in 0..params.degree() {
+            for (limb_index, limb) in polynomial.residues_by_limb.iter().enumerate() {
+                residues[limb_index] = limb[index];
+            }
+            coefficients.push(reconstruct_rns_coefficient(
+                &residues[..self.moduli.len()],
+                &self.moduli,
+            )?);
+        }
+        Ok(coefficients)
     }
     /// Extend an RNS polynomial from this chain into another modulus chain.
     ///
@@ -2532,8 +2534,8 @@ impl BfvRnsModulusChain {
     /// Add two centered RNS product polynomials and scale-round the sum.
     ///
     /// Both inputs are interpreted as centered negacyclic products represented in this chain's
-    /// product ring. The chain must cover the two-product signed sum exactly before the rounded BFV
-    /// `t/q` boundary.
+    /// product ring. Each input and their sum must satisfy the corresponding centered bound before
+    /// the rounded BFV `t/q` boundary.
     ///
     /// # Errors
     /// Returns [`BfvError`] when the chain is malformed, too narrow for the exact two-product sum,
@@ -2548,13 +2550,16 @@ impl BfvRnsModulusChain {
         self.validate_exact_ciphertext_modulus_negacyclic_product_sum_coverage(params, 2)?;
         validate_rns_polynomial_pair(params, self, lhs, rhs)?;
         let sum = self.add_rns_polynomials(params, lhs, rhs)?;
+        self.validate_centered_product_sum_source_bounds(params, lhs, rhs, &sum)?;
         self.scale_round_centered_product_polynomial_sum_exact(params, &sum, 2)
     }
     /// Add centered product polynomials, target-limb basis-extend, and scale-round.
     ///
     /// This is the signed target-limb counterpart of
     /// [`Self::scale_round_add_centered_product_polynomials_exact`] and covers the rounded BFV
-    /// multiplication cross-term shape `c0_left*c1_right + c1_left*c0_right`.
+    /// multiplication cross-term shape `c0_left*c1_right + c1_left*c0_right`. Each source product
+    /// and their sum must satisfy its centered bound before conversion into a narrower target
+    /// chain; otherwise an out-of-bound source coefficient could alias to an in-bound target one.
     ///
     /// # Errors
     /// Returns [`BfvError`] when either chain is malformed or too narrow for the exact two-product
@@ -2572,9 +2577,43 @@ impl BfvRnsModulusChain {
             .validate_exact_ciphertext_modulus_negacyclic_product_sum_coverage(params, 2)?;
         validate_rns_polynomial_pair(params, self, lhs, rhs)?;
         let sum = self.add_rns_polynomials(params, lhs, rhs)?;
+        self.validate_centered_product_sum_source_bounds(params, lhs, rhs, &sum)?;
         let target_sum =
             self.basis_extend_centered_polynomial_target_limbs(params, &sum, target_chain)?;
         target_chain.scale_round_centered_product_polynomial_sum_exact(params, &target_sum, 2)
+    }
+    fn validate_centered_product_sum_source_bounds(
+        &self,
+        params: &BfvParameters,
+        lhs: &BfvRnsPolynomial,
+        rhs: &BfvRnsPolynomial,
+        sum: &BfvRnsPolynomial,
+    ) -> Result<(), BfvError> {
+        let source_product = self.product()?;
+        let mut residues = [0_u64; BFV_RNS_MODULUS_CHAIN_MAX_LIMBS];
+        for (label, polynomial, product_count) in [
+            ("left product", lhs, 1_u16),
+            ("right product", rhs, 1_u16),
+            ("product sum", sum, 2_u16),
+        ] {
+            let bound =
+                exact_ciphertext_modulus_negacyclic_product_sum_abs_bound(params, product_count)?;
+            for coefficient_index in 0..params.degree() {
+                for (limb_index, limb) in polynomial.residues_by_limb.iter().enumerate() {
+                    residues[limb_index] = limb[coefficient_index];
+                }
+                let coefficient =
+                    reconstruct_rns_coefficient(&residues[..self.moduli.len()], &self.moduli)?;
+                reduce_centered_rns_value_to_i128(coefficient, source_product, bound).map_err(
+                    |err| {
+                        invalid!(
+                            "BFV RNS scale-round {label} coefficient[{coefficient_index}] exceeds source-chain centered bound: {err}"
+                        )
+                    },
+                )?;
+            }
+        }
+        Ok(())
     }
     fn scale_round_centered_product_polynomial_sum_exact(
         &self,
@@ -23872,6 +23911,9 @@ pub fn bfv_full_bootstrap_execution_witness_digest_material_v1(
 /// witness layout, governed full-bootstrap key/material digests, Galois-key-set digest, ciphertext
 /// shapes, public bound model, trace shape, and final trace-to-claim output binding before a
 /// prover/verifier hashes externally held witness material.
+/// The selected raw-sample equation does not authenticate unselected blind-rotation coefficients;
+/// callers requiring the governed computation must also replay concrete artifacts through
+/// [`validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifacts_v1`].
 ///
 /// # Errors
 /// Returns [`BfvError`] when witness metadata is stale, malformed, or internally inconsistent.
@@ -27939,15 +27981,15 @@ fn bfv_full_bootstrap_bound_mode_goldilocks_field_v1(
         BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise => 1,
     }
 }
-fn bfv_full_bootstrap_hash_goldilocks_limbs_v1(hash: Hash) -> [u64; 4] {
+fn bfv_full_bootstrap_hash_goldilocks_limbs_v1(hash: Hash) -> [u64; 8] {
     let bytes: [u8; Hash::LENGTH] = hash.into();
-    let mut limbs = [0_u64; 4];
-    for (index, chunk) in bytes.chunks_exact(8).enumerate() {
-        let mut word = [0_u8; 8];
+    let mut limbs = [0_u64; 8];
+    // Each 32-bit word fits Goldilocks without reduction. Reducing four u64
+    // words modulo the field aliases distinct 32-byte statement hashes.
+    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+        let mut word = [0_u8; 4];
         word.copy_from_slice(chunk);
-        let reduced = u128::from(u64::from_le_bytes(word))
-            % u128::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1);
-        limbs[index] = u64::try_from(reduced).expect("Goldilocks field limb fits u64");
+        limbs[index] = u64::from(u32::from_le_bytes(word));
     }
     limbs
 }
@@ -37566,7 +37608,11 @@ fn reconstruct_rns_coefficient(residues: &[u64], moduli: &[u64]) -> Result<u128,
             residues.len()
         )));
     }
-    let mut mixed = vec![0_u64; residues.len()];
+    invalid_if!(
+        residues.len() > BFV_RNS_MODULUS_CHAIN_MAX_LIMBS,
+        "RNS coefficient exceeds supported limb count {BFV_RNS_MODULUS_CHAIN_MAX_LIMBS}"
+    );
+    let mut mixed = [0_u64; BFV_RNS_MODULUS_CHAIN_MAX_LIMBS];
     for (index, (&residue, &modulus)) in residues.iter().zip(moduli).enumerate() {
         let mut coefficient = residue;
         for (&prior, &prior_modulus) in mixed[..index].iter().zip(moduli.iter()) {
@@ -37580,14 +37626,14 @@ fn reconstruct_rns_coefficient(residues: &[u64], moduli: &[u64]) -> Result<u128,
     }
     let mut value = 0_u128;
     let mut weight = 1_u128;
-    for (index, &coefficient) in mixed.iter().enumerate() {
+    for (index, &coefficient) in mixed[..residues.len()].iter().enumerate() {
         let term = u128::from(coefficient)
             .checked_mul(weight)
             .ok_or_else(|| invalid!("RNS coefficient reconstruction exceeds u128"))?;
         value = value
             .checked_add(term)
             .ok_or_else(|| invalid!("RNS coefficient reconstruction exceeds u128"))?;
-        if index + 1 != mixed.len() {
+        if index + 1 != residues.len() {
             weight = weight
                 .checked_mul(u128::from(moduli[index]))
                 .ok_or_else(|| invalid!("RNS coefficient reconstruction exceeds u128"))?;
@@ -38703,6 +38749,78 @@ mod first_release_hard_cut_tests {
         Sha3_256, Shake256,
         digest::{ExtendableOutput as _, XofReader as _},
     };
+
+    #[test]
+    fn full_bootstrap_statement_hash_trace_limbs_are_injective() {
+        let modulus = BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1;
+        let mut first_bytes = [0xa5_u8; Hash::LENGTH];
+        first_bytes[8..16].fill(0);
+        let mut second_bytes = first_bytes;
+        second_bytes[8..16].copy_from_slice(&modulus.to_le_bytes());
+        let first = Hash::prehashed(first_bytes);
+        let second = Hash::prehashed(second_bytes);
+        assert_ne!(first, second);
+        // The retired four-u64-word reduction mapped both second words to zero.
+        assert_eq!(
+            u64::from_le_bytes(first_bytes[8..16].try_into().unwrap()) % modulus,
+            0
+        );
+        assert_eq!(
+            u64::from_le_bytes(second_bytes[8..16].try_into().unwrap()) % modulus,
+            0
+        );
+
+        let first_limbs = bfv_full_bootstrap_hash_goldilocks_limbs_v1(first);
+        let second_limbs = bfv_full_bootstrap_hash_goldilocks_limbs_v1(second);
+        assert_ne!(first_limbs, second_limbs);
+        for (hash, limbs) in [(first, first_limbs), (second, second_limbs)] {
+            assert!(limbs.iter().all(|&limb| limb < modulus));
+            let reconstructed = limbs
+                .iter()
+                .flat_map(|&limb| u32::try_from(limb).unwrap().to_le_bytes())
+                .collect::<Vec<_>>();
+            let bytes: [u8; Hash::LENGTH] = hash.into();
+            assert_eq!(reconstructed.as_slice(), bytes);
+        }
+
+        let opening_index = u32::from(BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1);
+        let row = bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+            opening_index,
+            first,
+            0,
+            BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+        )
+        .unwrap();
+        let next_row = bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+            opening_index + 1,
+            first,
+            0,
+            BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+        )
+        .unwrap();
+        assert_eq!(&row[5..13], first_limbs.as_slice());
+        validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
+            opening_index,
+            &row,
+            &next_row,
+            first,
+            0,
+            BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+        )
+        .expect("exact eight-limb statement opening validates");
+        assert!(
+            validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
+                opening_index,
+                &row,
+                &next_row,
+                second,
+                0,
+                BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+            )
+            .is_err(),
+            "an old mod-p hash alias must not replay a public opening",
+        );
+    }
 
     // Independent test reference for the pre-consolidation BFV parameter generator.
     const BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1: usize = 3;

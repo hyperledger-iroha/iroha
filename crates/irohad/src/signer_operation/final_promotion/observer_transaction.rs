@@ -87,6 +87,18 @@ pub struct FinalPromotionObserverTransactionsV1 {
     approved_fees: FeePaymentIntent,
 }
 impl FinalPromotionObserverTransactionsV1 {
+    pub(super) const fn receipt_binding(&self) -> &SignerCustodyBindingV1 {
+        &self.receipt_binding
+    }
+
+    pub(super) const fn account_binding(&self) -> &SignerCustodyBindingV1 {
+        &self.account_binding
+    }
+
+    pub(super) const fn observer(&self) -> &AccountId {
+        &self.observer
+    }
+
     /// Pin the two independently configured bindings, distinct observer and exact fee approval.
     ///
     /// # Errors

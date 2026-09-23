@@ -78,18 +78,33 @@ struct DurableExactOutputOwnerNonce {
 pub(crate) struct DurableExactOutputServiceOwner(Arc<DurableExactOutputOwnerNonce>);
 /// Paired endpoint retained beside one exact [`crate::merge_sidecar::MergeSidecarTransport`].
 pub(crate) struct DurableExactOutputTransportOwner(Arc<DurableExactOutputOwnerNonce>);
+/// Mint a service endpoint for a Native lifecycle with no sidecar transport.
+pub(crate) fn durable_exact_output_service_owner() -> DurableExactOutputServiceOwner {
+    DurableExactOutputServiceOwner(Arc::new(DurableExactOutputOwnerNonce {
+        sealed: AtomicBool::new(false),
+    }))
+}
 /// Mint the unique service/transport owner pair for one height-local stack.
 pub(crate) fn durable_exact_output_handoff_owner_pair() -> (
     DurableExactOutputServiceOwner,
     DurableExactOutputTransportOwner,
 ) {
-    let owner = Arc::new(DurableExactOutputOwnerNonce {
-        sealed: AtomicBool::new(false),
-    });
-    (
-        DurableExactOutputServiceOwner(Arc::clone(&owner)),
-        DurableExactOutputTransportOwner(owner),
-    )
+    let service = durable_exact_output_service_owner();
+    let transport = DurableExactOutputTransportOwner(Arc::clone(&service.0));
+    (service, transport)
+}
+#[cfg(test)]
+mod service_only_owner_tests {
+    use super::*;
+
+    #[test]
+    fn native_service_owner_has_no_foreign_transport_authority() {
+        let service = durable_exact_output_service_owner();
+        let (_, foreign_transport) = durable_exact_output_handoff_owner_pair();
+        assert!(!service.is_bound_to_transport_owner(&foreign_transport));
+        assert!(service.seal().is_ok());
+        assert!(service.seal().is_err());
+    }
 }
 impl DurableExactOutputServiceOwner {
     /// Return whether this service endpoint was minted with one transport endpoint.

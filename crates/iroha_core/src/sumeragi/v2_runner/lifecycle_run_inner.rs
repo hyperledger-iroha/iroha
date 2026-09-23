@@ -1244,7 +1244,6 @@ fn run_lifecycle_active_height(
             &mut block_sync_request,
             npos_beacon,
             body_queue_capacity,
-            control_queue_capacity,
             terminal_finalization_cut.as_ref(),
         )?;
         producer_claim = activated.producer_claim_projection()?;
@@ -1501,7 +1500,6 @@ fn run_lifecycle_active_height(
                         candidate_limits,
                         context,
                         local_validator,
-                        &common_config.key_pair,
                         output_guard.as_ref(),
                         state.as_ref(),
                         queue,
@@ -1628,7 +1626,6 @@ fn run_lifecycle_active_height(
                         &mut block_sync_request,
                         npos_beacon,
                         body_queue_capacity,
-                        control_queue_capacity,
                         terminal_finalization_cut.as_ref(),
                     )?;
                     producer_claim = activated.producer_claim_projection()?;
@@ -1856,7 +1853,6 @@ fn run_lifecycle_active_height(
                     &mut block_sync_request,
                     npos_beacon,
                     body_queue_capacity,
-                    control_queue_capacity,
                     terminal_finalization_cut.as_ref(),
                 )?;
                 producer_claim = activated.producer_claim_projection()?;
@@ -1953,7 +1949,7 @@ fn run_lifecycle_active_height(
                 break;
             }
             receiver
-                .ensure_closed_drained_cut()
+                .ensure_closed_global_drained_cut()
                 .map_err(V2RunnerError::Service)?;
             successor_timings
                 .record_first(SuccessorTimingStage::ClosedIngressDrained, Instant::now());
@@ -2123,6 +2119,31 @@ fn run_lifecycle_active_height(
     }
 }
 
+fn consume_staged_genesis_projection(
+    height: u64,
+    expected_hash: Hash,
+    staged: &mut Option<crate::sumeragi::v2_context::StagedGenesisNexusAmxContext>,
+) -> Result<(), V2RunnerError> {
+    if height == 1 {
+        let projection = staged.take().ok_or_else(|| {
+            V2RunnerError::Service(
+                "height one is missing its authenticated staged Nexus/AMX projection".to_owned(),
+            )
+        })?;
+        if projection.hash() != expected_hash {
+            return Err(V2RunnerError::Service(
+                "height one staged Nexus/AMX projection differs from its authenticated context"
+                    .to_owned(),
+            ));
+        }
+    } else if staged.is_some() {
+        return Err(V2RunnerError::Service(
+            "successor height retained a staged genesis Nexus/AMX projection".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Run every ordinary, applied, snapshot, and CompleteTip height through one
 /// lifecycle-owned adapter/executor/service stack.
 ///
@@ -2199,8 +2220,13 @@ pub(super) fn run_non_pending_lifecycle_loop(
         if shutdown_signal.is_sent() {
             return Ok(());
         }
-        queue_plan.rollover(&verified_context)?;
         let context = verified_context.context().clone();
+        consume_staged_genesis_projection(
+            context.height,
+            context.nexus_amx_context_hash,
+            &mut staged_genesis_nexus_amx_context,
+        )?;
+        queue_plan.rollover(&verified_context)?;
         beacon_readiness.begin_height(context.id());
         close_ingress_for_rollover(&ingress_ready, &block_rx);
         block_rx
@@ -2345,8 +2371,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
             factory,
             body_store,
         )?;
-        let (exact_output_service_owner, exact_output_transport_owner) =
-            durable_exact_output_handoff_owner_pair();
+        let exact_output_service_owner = durable_exact_output_service_owner();
         let runtime_started_at = Instant::now();
         let launch_inputs = ProductionLifecycleLaunchInputsV1::new(
             runtime_started_at,
@@ -2712,14 +2737,40 @@ pub(super) fn run_non_pending_lifecycle_loop(
         signature_policy = BlockSignaturePolicy::RotatingLeader;
         first_height_authenticated_genesis = None;
         first_height_genesis = None;
-        staged_genesis_nexus_amx_context = None;
     }
 }
 
 #[cfg(test)]
 mod successor_stage_timing_tests {
-    use super::{SuccessorStageTimings, SuccessorTimingStage};
+    use super::{
+        SuccessorStageTimings, SuccessorTimingStage, V2RunnerError,
+        consume_staged_genesis_projection,
+    };
+    use crate::sumeragi::v2_context::StagedGenesisNexusAmxContext;
+    use iroha_crypto::Hash;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn staged_genesis_projection_is_consumed_once_before_height_one_starts() {
+        let expected = Hash::new(b"staged genesis projection");
+        let other = Hash::new(b"other staged genesis projection");
+        let mut staged = Some(StagedGenesisNexusAmxContext::for_test(expected));
+        consume_staged_genesis_projection(1, expected, &mut staged)
+            .expect("authenticated projection matches height one");
+        assert!(staged.is_none());
+
+        let missing = consume_staged_genesis_projection(1, expected, &mut staged);
+        assert!(matches!(missing, Err(V2RunnerError::Service(_))));
+
+        let mut mismatched = Some(StagedGenesisNexusAmxContext::for_test(other));
+        let mismatch = consume_staged_genesis_projection(1, expected, &mut mismatched);
+        assert!(matches!(mismatch, Err(V2RunnerError::Service(_))));
+
+        let mut unexpected = Some(StagedGenesisNexusAmxContext::for_test(expected));
+        let successor = consume_staged_genesis_projection(2, expected, &mut unexpected);
+        assert!(matches!(successor, Err(V2RunnerError::Service(_))));
+        assert!(unexpected.is_some());
+    }
 
     #[test]
     fn repeated_readiness_does_not_refresh_the_first_stage_observation() {

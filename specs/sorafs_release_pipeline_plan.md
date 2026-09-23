@@ -126,8 +126,9 @@ summary: Current SF-6 release automation and QA surfaces.
   descriptors; directory replacement, symlink substitution or changed output
   inodes abort the output set. Hosts without descriptor-relative no-follow
   publication fail before external execution instead of using a pathname
-  fallback. The HSM custody contract replacement is tracked separately in
-  [G02](sorafs/v1_implementation_goals.md).
+  fallback. The provider-independent software-signing contract is in place;
+  production signer authorization and durable completed-operation integration
+  remain tracked in [G02](sorafs/v1_implementation_goals.md). No HSM is required.
 - `scripts/package_iroha_cli_release.sh` builds or packages
   `iroha` into `dist/iroha-release/`, stages the checked
   `include/sorafs_reference.h` C FFI header for downstream SDK bindings,

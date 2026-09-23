@@ -1812,6 +1812,7 @@ dependencies = [
  "foldhash 0.2.0",
  "function_name",
  "lru 0.16.4",
+ "parking_lot",
  "proptest",
  "rand 0.9.4",
  "serde",

@@ -506,6 +506,23 @@ pub struct ProviderIngestFinalizedArchivePageV1 {
     /// Context-bound exclusive continuation, when another row exists.
     pub next_cursor: Option<ProviderIngestFinalizedArchiveCursorV1>,
 }
+/// One exact provider/order read from an authenticated finalized archive key.
+///
+/// This is an in-process read result, not a new wire layout. An absent assignment still carries
+/// the exact committed provider-state root; source IDs exist only for a present assignment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestFinalizedArchiveAssignmentLookupV1 {
+    /// Exact immutable key selected by the caller.
+    pub key: ProviderIngestFinalizedArchiveKeyV1,
+    /// Exact provider index read from the committed projection.
+    pub provider_id: ProviderId,
+    /// Complete provider-state root of this exact archive record.
+    pub provider_state_root: [u8; 32],
+    /// One exact order assignment, or `None` when it is absent from this provider index.
+    pub assignment: Option<ProviderIngestFinalizedArchiveAssignmentV1>,
+    /// Other assigned providers in the canonical order's strictly increasing identity order.
+    pub source_provider_ids: Vec<[u8; 32]>,
+}
 /// Outcome of publishing one immutable exact-anchor record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestFinalizedArchiveInsertOutcomeV1 {
@@ -2653,6 +2670,145 @@ impl ProviderIngestFinalizedArchiveV1 {
                 maximum: self.bounds.max_page_rows(),
             });
         }
+        let (root, provider) = self.read_provider_projection_at_key(key, provider_id)?;
+        if let Some(cursor) = cursor
+            && (&cursor.key != key
+                || cursor.provider_id != provider_id
+                || cursor.provider_state_root != root)
+        {
+            return Err(ProviderIngestFinalizedArchiveErrorV1::CursorSubstitution);
+        }
+        let orders = provider
+            .as_ref()
+            .map_or(&[][..], |provider| provider.orders.as_slice());
+        let start = cursor.map_or(0, |cursor| {
+            orders
+                .binary_search_by_key(&cursor.after_order_id, |order| order.order_id())
+                .map_or(usize::MAX, |index| index.saturating_add(1))
+        });
+        if start == usize::MAX || start > orders.len() {
+            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidCursorBoundary);
+        }
+        let end = start.saturating_add(limit).min(orders.len());
+        let mut rows = Vec::new();
+        rows.try_reserve(end.saturating_sub(start)).map_err(|_| {
+            ProviderIngestFinalizedArchiveErrorV1::ProjectionAllocation {
+                resource: "provider page",
+            }
+        })?;
+        if let Some(provider) = provider.as_ref() {
+            rows.extend(
+                orders[start..end]
+                    .iter()
+                    .map(|order| project_archive_assignment(key, provider, order)),
+            );
+        }
+        let next_cursor = (end < orders.len()).then(|| ProviderIngestFinalizedArchiveCursorV1 {
+            key: key.clone(),
+            provider_id,
+            provider_state_root: root,
+            after_order_id: orders[end - 1].order_id(),
+        });
+        Ok(ProviderIngestFinalizedArchivePageV1 {
+            key: key.clone(),
+            provider_id,
+            provider_state_root: root,
+            rows,
+            next_cursor,
+        })
+    }
+    /// Read one provider/order assignment directly from an exact finalized anchor.
+    ///
+    /// This does not scan bounded pages, change a runtime cursor, or select a current head.
+    /// The caller must independently authenticate that `key` is the currently visible committed
+    /// State/Kura anchor before using this immutable archive result as current authority.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a malformed provider or order, missing/forked/below-floor anchor, invalid
+    /// canonical order, archive corruption, or a bounded projection allocation failure.
+    pub fn read_provider_assignment(
+        &self,
+        key: &ProviderIngestFinalizedArchiveKeyV1,
+        provider_id: ProviderId,
+        order_id: ReplicationOrderId,
+    ) -> Result<
+        ProviderIngestFinalizedArchiveAssignmentLookupV1,
+        ProviderIngestFinalizedArchiveErrorV1,
+    > {
+        if order_id.as_bytes() == &[0; 32] {
+            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                reason: "queried replication-order identity must be non-zero",
+            });
+        }
+        let (provider_state_root, provider) =
+            self.read_provider_projection_at_key(key, provider_id)?;
+        let archived = provider.as_ref().and_then(|provider| {
+            provider
+                .orders
+                .binary_search_by_key(&order_id, |order| order.order_id())
+                .ok()
+                .map(|index| &provider.orders[index])
+        });
+        let (assignment, source_provider_ids) =
+            if let (Some(provider), Some(archived)) = (provider.as_ref(), archived) {
+                let canonical = validated_replication_order_from_record(
+                    &archived.replication_order.order_id,
+                    &archived.replication_order,
+                )?;
+                if !canonical
+                    .assignments
+                    .iter()
+                    .any(|assignment| assignment.provider_id == *provider_id.as_bytes())
+                {
+                    return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                        reason: "queried provider is absent from the canonical order",
+                    });
+                }
+                let mut sources = Vec::new();
+                sources
+                    .try_reserve(canonical.assignments.len().saturating_sub(1))
+                    .map_err(
+                        |_| ProviderIngestFinalizedArchiveErrorV1::ProjectionAllocation {
+                            resource: "assignment source providers",
+                        },
+                    )?;
+                sources.extend(canonical.assignments.iter().filter_map(|assignment| {
+                    (assignment.provider_id != *provider_id.as_bytes())
+                        .then_some(assignment.provider_id)
+                }));
+                (
+                    Some(project_archive_assignment(key, provider, archived)),
+                    sources,
+                )
+            } else {
+                (None, Vec::new())
+            };
+        Ok(ProviderIngestFinalizedArchiveAssignmentLookupV1 {
+            key: *key,
+            provider_id,
+            provider_state_root,
+            assignment,
+            source_provider_ids,
+        })
+    }
+    fn read_provider_projection_at_key(
+        &self,
+        key: &ProviderIngestFinalizedArchiveKeyV1,
+        provider_id: ProviderId,
+    ) -> Result<
+        (
+            [u8; 32],
+            Option<ProviderIngestFinalizedProviderProjectionV1>,
+        ),
+        ProviderIngestFinalizedArchiveErrorV1,
+    > {
+        key.validate()?;
+        if provider_id.as_bytes() == &[0; 32] {
+            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection {
+                reason: "queried provider identity must be non-zero",
+            });
+        }
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
         let floor = activation_floor_from_index(&index, &key.network_id)?.ok_or(
@@ -2695,75 +2851,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             entry.record.material.provider_state_root
         };
         let provider = reconstruct_provider_projection(&index, key, provider_id, self.bounds)?;
-        if let Some(cursor) = cursor
-            && (&cursor.key != key
-                || cursor.provider_id != provider_id
-                || cursor.provider_state_root != root)
-        {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::CursorSubstitution);
-        }
-        let orders = provider
-            .as_ref()
-            .map_or(&[][..], |provider| provider.orders.as_slice());
-        let start = cursor.map_or(0, |cursor| {
-            orders
-                .binary_search_by_key(&cursor.after_order_id, |order| order.order_id())
-                .map_or(usize::MAX, |index| index.saturating_add(1))
-        });
-        if start == usize::MAX || start > orders.len() {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidCursorBoundary);
-        }
-        let end = start.saturating_add(limit).min(orders.len());
-        let (expected_owner, expected_signer_policy) =
-            provider.as_ref().map_or((None, None), |provider| {
-                (
-                    provider.expected_owner.clone(),
-                    provider.expected_signer_policy,
-                )
-            });
-        let mut rows = Vec::new();
-        rows.try_reserve(end.saturating_sub(start)).map_err(|_| {
-            ProviderIngestFinalizedArchiveErrorV1::ProjectionAllocation {
-                resource: "provider page",
-            }
-        })?;
-        let finalized_unix_epoch = key.finalized_at_unix_ms / MILLIS_PER_UNIX_SECOND;
-        rows.extend(orders[start..end].iter().map(|order| {
-            let completion_epoch = matches!(
-                order.replication_order.status,
-                ReplicationOrderStatus::Pending
-            )
-            .then_some(finalized_unix_epoch)
-            .filter(|epoch| {
-                *epoch >= order.replication_order.issued_epoch
-                    && *epoch <= order.replication_order.deadline_epoch
-            });
-            ProviderIngestFinalizedArchiveAssignmentV1 {
-                provider_id,
-                expected_owner: expected_owner.clone(),
-                expected_signer_policy,
-                expected_assignment_revision: order.replication_order.assignment_revision,
-                finalized_anchor: key.finalized_anchor(),
-                finalized_at_unix_ms: key.finalized_at_unix_ms,
-                pin_manifest: order.pin_manifest.clone(),
-                replication_order: order.replication_order.clone(),
-                musubi_archive: order.musubi_archive.clone(),
-                completion_epoch,
-            }
-        }));
-        let next_cursor = (end < orders.len()).then(|| ProviderIngestFinalizedArchiveCursorV1 {
-            key: key.clone(),
-            provider_id,
-            provider_state_root: root,
-            after_order_id: orders[end - 1].order_id(),
-        });
-        Ok(ProviderIngestFinalizedArchivePageV1 {
-            key: key.clone(),
-            provider_id,
-            provider_state_root: root,
-            rows,
-            next_cursor,
-        })
+        Ok((root, provider))
     }
     /// Return the deterministic immutable path for one exact key.
     ///
@@ -3065,6 +3153,34 @@ fn capture_projection(
     };
     projection.validate(bounds)?;
     Ok(projection)
+}
+fn project_archive_assignment(
+    key: &ProviderIngestFinalizedArchiveKeyV1,
+    provider: &ProviderIngestFinalizedProviderProjectionV1,
+    order: &ProviderIngestFinalizedArchivedOrderV1,
+) -> ProviderIngestFinalizedArchiveAssignmentV1 {
+    let finalized_unix_epoch = key.finalized_at_unix_ms / MILLIS_PER_UNIX_SECOND;
+    let completion_epoch = matches!(
+        order.replication_order.status,
+        ReplicationOrderStatus::Pending
+    )
+    .then_some(finalized_unix_epoch)
+    .filter(|epoch| {
+        *epoch >= order.replication_order.issued_epoch
+            && *epoch <= order.replication_order.deadline_epoch
+    });
+    ProviderIngestFinalizedArchiveAssignmentV1 {
+        provider_id: provider.provider_id,
+        expected_owner: provider.expected_owner.clone(),
+        expected_signer_policy: provider.expected_signer_policy,
+        expected_assignment_revision: order.replication_order.assignment_revision,
+        finalized_anchor: key.finalized_anchor(),
+        finalized_at_unix_ms: key.finalized_at_unix_ms,
+        pin_manifest: order.pin_manifest.clone(),
+        replication_order: order.replication_order.clone(),
+        musubi_archive: order.musubi_archive.clone(),
+        completion_epoch,
+    }
 }
 fn validated_replication_order_from_record(
     order_id: &ReplicationOrderId,
@@ -7582,6 +7698,214 @@ mod tests {
             ],
         }
     }
+    #[test]
+    fn exact_assignment_lookup_matches_committed_page_root_and_excludes_other_providers() {
+        let directory = physical_tempdir().expect("archive tempdir");
+        let archive =
+            ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds())
+                .expect("open archive");
+        let first = projection(7);
+        archive.insert(first.clone()).expect("insert projection");
+        let order_id = ReplicationOrderId::new([0x21; 32]);
+        let exact = archive
+            .read_provider_assignment(&first.key, PROVIDER_A, order_id)
+            .expect("read exact assignment");
+        let page = archive
+            .read_provider_page(&first.key, PROVIDER_A, None, 1)
+            .expect("read first bounded page");
+        assert_eq!(exact.key, page.key);
+        assert_eq!(exact.provider_id, page.provider_id);
+        assert_eq!(exact.provider_state_root, page.provider_state_root);
+        assert_eq!(exact.assignment.as_ref(), page.rows.first());
+        assert_eq!(exact.source_provider_ids, vec![*PROVIDER_B.as_bytes()]);
+        let after_first_page = archive
+            .read_provider_assignment(&first.key, PROVIDER_A, ReplicationOrderId::new([0x22; 32]))
+            .expect("direct lookup crosses one-row page boundary");
+        assert_eq!(after_first_page.source_provider_ids, Vec::<[u8; 32]>::new());
+        assert_eq!(
+            after_first_page
+                .assignment
+                .as_ref()
+                .map(|row| row.replication_order.order_id),
+            Some(ReplicationOrderId::new([0x22; 32]))
+        );
+        for (provider_id, missing_order_id) in [
+            (PROVIDER_A, ReplicationOrderId::new([0x23; 32])),
+            (PROVIDER_EMPTY, order_id),
+            (ProviderId::new([0x44; 32]), order_id),
+        ] {
+            let absent = archive
+                .read_provider_assignment(&first.key, provider_id, missing_order_id)
+                .expect("authenticated absent assignment");
+            assert_eq!(absent.provider_state_root, page.provider_state_root);
+            assert!(absent.assignment.is_none());
+            assert!(absent.source_provider_ids.is_empty());
+        }
+        let mut fork = first.key;
+        fork.block_hash = [0xF7; 32];
+        assert!(matches!(
+            archive.read_provider_assignment(&fork, PROVIDER_A, order_id),
+            Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork { .. })
+        ));
+        assert!(matches!(
+            archive.read_provider_assignment(&key(6), PROVIDER_A, order_id),
+            Err(ProviderIngestFinalizedArchiveErrorV1::BelowActivationFloor { .. })
+        ));
+        assert!(matches!(
+            archive.read_provider_assignment(
+                &first.key,
+                PROVIDER_A,
+                ReplicationOrderId::new([0; 32])
+            ),
+            Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection { .. })
+        ));
+    }
+    #[test]
+    fn exact_assignment_lookup_uses_new_revision_and_canonical_source_rotation() {
+        let directory = physical_tempdir().expect("archive tempdir");
+        let archive =
+            ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds())
+                .expect("open archive");
+        let first = projection(7);
+        archive
+            .insert(first.clone())
+            .expect("insert first projection");
+        let order_id = ReplicationOrderId::new([0x21; 32]);
+        let old = archive
+            .read_provider_assignment(&first.key, PROVIDER_A, order_id)
+            .expect("old assignment");
+        assert_eq!(old.source_provider_ids, vec![*PROVIDER_B.as_bytes()]);
+        let mut next = advance_projection(&first, 8);
+        let provider_a = next
+            .providers
+            .iter_mut()
+            .find(|provider| provider.provider_id == PROVIDER_A)
+            .expect("provider A");
+        let shared = provider_a.orders.first_mut().expect("shared order");
+        let mut canonical = validated_replication_order_from_record(
+            &shared.replication_order.order_id,
+            &shared.replication_order,
+        )
+        .expect("canonical old order");
+        canonical.assignments[1].provider_id = *PROVIDER_EMPTY.as_bytes();
+        canonical.validate().expect("canonical rotated order");
+        shared.replication_order.canonical_order =
+            norito::to_bytes(&canonical).expect("encode rotated order");
+        shared.replication_order.assignment_revision = 2;
+        let revised = shared.clone();
+        next.providers
+            .iter_mut()
+            .find(|provider| provider.provider_id == PROVIDER_B)
+            .expect("provider B")
+            .orders
+            .clear();
+        next.providers
+            .iter_mut()
+            .find(|provider| provider.provider_id == PROVIDER_EMPTY)
+            .expect("replacement provider")
+            .orders
+            .push(revised);
+        archive
+            .insert(next.clone())
+            .expect("insert rotated assignment");
+        let current = archive
+            .read_provider_assignment(&next.key, PROVIDER_A, order_id)
+            .expect("current assignment");
+        assert_eq!(
+            current.source_provider_ids,
+            vec![*PROVIDER_EMPTY.as_bytes()]
+        );
+        assert_eq!(
+            current
+                .assignment
+                .as_ref()
+                .map(|row| row.expected_assignment_revision),
+            Some(2)
+        );
+        assert_eq!(
+            archive
+                .read_provider_assignment(&next.key, PROVIDER_B, order_id)
+                .expect("removed provider")
+                .assignment,
+            None
+        );
+        assert_eq!(
+            archive
+                .read_provider_assignment(&first.key, PROVIDER_A, order_id)
+                .expect("historical assignment"),
+            old
+        );
+    }
+    #[test]
+    fn exact_assignment_lookup_reaches_beyond_thousand_row_page_limit() {
+        let directory = physical_tempdir().expect("archive tempdir");
+        let large_bounds = ProviderIngestFinalizedArchiveBoundsV1::try_new(
+            8 * 1024 * 1024,
+            2,
+            16 * 1024 * 1024,
+            1,
+            1_001,
+            1_001,
+            1_000,
+        )
+        .expect("large provider/order bounds");
+        let archive =
+            ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), large_bounds)
+                .expect("open archive");
+        let base = archived_order(0x21, &[PROVIDER_A]);
+        let canonical = validated_replication_order_from_record(
+            &base.replication_order.order_id,
+            &base.replication_order,
+        )
+        .expect("base canonical order");
+        let mut orders = Vec::new();
+        orders.try_reserve(1_001).expect("reserve bounded fixture");
+        for index in 0..1_001u16 {
+            let mut order = base.clone();
+            let mut id = [0; 32];
+            id[..2].copy_from_slice(&index.to_be_bytes());
+            id[2] = 1;
+            let mut encoded_order = canonical.clone();
+            encoded_order.order_id = id;
+            encoded_order.validate().expect("ordered fixture order");
+            order.replication_order.order_id = ReplicationOrderId::new(id);
+            order.replication_order.canonical_order =
+                norito::to_bytes(&encoded_order).expect("encode fixture order");
+            orders.push(order);
+        }
+        let key = key(7);
+        archive
+            .insert(ProviderIngestFinalizedProjectionV1 {
+                key,
+                providers: vec![ProviderIngestFinalizedProviderProjectionV1 {
+                    provider_id: PROVIDER_A,
+                    expected_owner: Some(account(0x11)),
+                    expected_signer_policy: Some(policy(0xA1, 1)),
+                    orders,
+                }],
+            })
+            .expect("insert 1,001 canonical orders");
+        let first_page = archive
+            .read_provider_page(&key, PROVIDER_A, None, 1_000)
+            .expect("read maximum page");
+        assert_eq!(first_page.rows.len(), 1_000);
+        assert!(first_page.next_cursor.is_some());
+        let mut final_id = [0; 32];
+        final_id[..2].copy_from_slice(&1_000u16.to_be_bytes());
+        final_id[2] = 1;
+        let direct = archive
+            .read_provider_assignment(&key, PROVIDER_A, ReplicationOrderId::new(final_id))
+            .expect("read beyond maximum page directly");
+        assert_eq!(direct.provider_state_root, first_page.provider_state_root);
+        assert_eq!(
+            direct
+                .assignment
+                .as_ref()
+                .map(|row| row.replication_order.order_id),
+            Some(ReplicationOrderId::new(final_id))
+        );
+        assert!(direct.source_provider_ids.is_empty());
+    }
     include!("provider_ingest_finalized/musubi_archive_binding_tests.rs");
     #[test]
     fn complete_namespace_empty_check_rejects_any_record() {
@@ -8928,10 +9252,16 @@ mod tests {
         let middle = bytes.len() / 2;
         bytes[middle] ^= 0x80;
         fs::write(&path, bytes).expect("corrupt record");
-        assert!(
-            archive
-                .read_provider_page(&first.key, PROVIDER_A, None, 1)
-                .is_err()
+        let page_error = archive
+            .read_provider_page(&first.key, PROVIDER_A, None, 1)
+            .expect_err("corrupt page record");
+        let direct_error = archive
+            .read_provider_assignment(&first.key, PROVIDER_A, ReplicationOrderId::new([0x21; 32]))
+            .expect_err("corrupt direct-lookup record");
+        assert_eq!(
+            std::mem::discriminant(&page_error),
+            std::mem::discriminant(&direct_error),
+            "direct lookup must retain the page reader's typed corruption error"
         );
         assert!(archive.activation_floor(&first.key.network_id).is_err());
         drop(archive);

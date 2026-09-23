@@ -44,6 +44,7 @@ pub use hardware_transaction_journal::{
 mod mint_fold_private_inputs;
 mod mint_inbox;
 mod mint_inbox_operations;
+mod one_use_key_ratchet;
 mod outgoing_operation_index;
 #[cfg(unix)]
 mod private_journal;
@@ -81,6 +82,7 @@ pub use mint_inbox::*;
 pub use mint_inbox_operations::{
     KagemushaPendingCreditWatermarkV1, MintCreditStageOutcomeV1, PendingCreditFoldV1,
 };
+pub use one_use_key_ratchet::{KagemushaOneUseKeyRatchetHeadV1, KagemushaOneUseKeyRatchetLinkV1};
 pub use outgoing_operation_index::{
     KAGEMUSHA_OUTGOING_OPERATION_PAGE_MAX_V1, KAGEMUSHA_OUTGOING_PUBLIC_INPUTS_DOMAIN_V1,
     KagemushaOutgoingOperationContextV1, KagemushaOutgoingOperationIndexErrorV1,
@@ -663,6 +665,9 @@ pub struct KagemushaStateV1 {
     pub hardware_epoch: HardwareEpochV1,
     /// Current hardware-key and policy binding.
     pub device_policy_binding: DevicePolicyBindingV1,
+    /// Reference to the prepared KeyMint one-use key authorized for the next hop.
+    /// Zero selects a qualified counter profile instead of the one-use-key ratchet.
+    pub next_one_use_key_reference: DigestV1,
     /// Hiding commitment to fresh private nonce material unique to this state successor.
     pub state_nonce_commitment: DigestV1,
     /// Root of the exact sparse-Merkle consumed-credit dictionary.
@@ -700,6 +705,32 @@ impl KagemushaStateV1 {
         state_nonce_commitment: DigestV1,
         consumed_credit_root: KagemushaPastaStateCommitmentV1,
     ) -> Result<Self, KagemushaStateErrorV1> {
+        Self::build_with_next_one_use_key_reference(
+            context,
+            liability_pool_id,
+            lane,
+            balance,
+            logical_sequence,
+            hardware_epoch,
+            device_policy_binding,
+            [0; 32],
+            state_nonce_commitment,
+            consumed_credit_root,
+        )
+    }
+
+    fn build_with_next_one_use_key_reference(
+        context: KagemushaStateContextV1,
+        liability_pool_id: DigestV1,
+        lane: KagemushaLaneIdV1,
+        balance: u128,
+        logical_sequence: u128,
+        hardware_epoch: HardwareEpochV1,
+        device_policy_binding: DevicePolicyBindingV1,
+        next_one_use_key_reference: DigestV1,
+        state_nonce_commitment: DigestV1,
+        consumed_credit_root: KagemushaPastaStateCommitmentV1,
+    ) -> Result<Self, KagemushaStateErrorV1> {
         lane.validate()?;
         context.validate()?;
         if liability_pool_id != derive_liability_pool_id(&lane, context.asset_incarnation)? {
@@ -725,6 +756,7 @@ impl KagemushaStateV1 {
             logical_sequence,
             hardware_epoch,
             device_policy_binding,
+            next_one_use_key_reference,
             state_nonce_commitment,
             consumed_credit_root,
             state_commitment_components: KagemushaPastaStateCommitmentV1::ZERO,
@@ -794,7 +826,7 @@ impl KagemushaStateV1 {
         let replay_root =
             decode_pasta::<F>(replay_root).ok_or(KagemushaStateErrorV1::StateCommitmentMismatch)?;
         let asset_id = self.lane.normalized_asset_id()?;
-        let mut inputs = Vec::with_capacity(34);
+        let mut inputs = Vec::with_capacity(36);
         inputs.push(F::from(u64::from(self.version)));
         inputs.push(F::from(u64::from(self.protocol_version)));
         inputs.extend(digest_limbs::<F>(self.suite_id));
@@ -818,6 +850,7 @@ impl KagemushaStateV1 {
         inputs.extend(digest_limbs::<F>(
             self.device_policy_binding.hardware_policy_id,
         ));
+        inputs.extend(digest_limbs::<F>(self.next_one_use_key_reference));
         inputs.extend(digest_limbs::<F>(self.state_nonce_commitment));
         inputs.push(replay_root);
         Ok(pasta_hash(KAGEMUSHA_STATE_DOMAIN_V1, &inputs))
@@ -1531,6 +1564,8 @@ pub struct BootstrapStatementV1 {
     pub hardware_epoch: HardwareEpochV1,
     /// Initial device key and governed hardware-policy binding.
     pub device_policy_binding: DevicePolicyBindingV1,
+    /// Prepared one-use key committed before the first transition; zero for a counter profile.
+    pub next_one_use_key_reference: DigestV1,
     /// Hiding commitment to fresh private nonce material of the initial zero state.
     pub state_nonce_commitment: DigestV1,
     /// Unique zero-state commitment.
@@ -2053,12 +2088,17 @@ where
     H: KagemushaAuthenticatedHistoryStoreV1,
 {
     /// Preview the unique zero-balance bootstrap state and exact authorization statement.
+    ///
+    /// A nonzero initial next-key reference is a candidate KeyMint ratchet head.
+    /// Staging it remains fail-closed until its attestation is folded into the
+    /// governed paired bootstrap proof.
     pub fn preview_bootstrap(
         proof_release: KagemushaStateProofReleaseV1,
         state_context: KagemushaStateContextV1,
         lane: KagemushaLaneIdV1,
         hardware_epoch: HardwareEpochV1,
         device_policy_binding: DevicePolicyBindingV1,
+        initial_next_one_use_key_reference: DigestV1,
         state_nonce_commitment: DigestV1,
         trusted_commit_time_ms: u64,
     ) -> Result<BootstrapPreviewV1, KagemushaStateErrorV1> {
@@ -2075,7 +2115,7 @@ where
         }
         let consumed_credits = ExactConsumedCreditIndex::empty();
         let liability_pool_id = derive_liability_pool_id(&lane, state_context.asset_incarnation)?;
-        let state = KagemushaStateV1::build(
+        let state = KagemushaStateV1::build_with_next_one_use_key_reference(
             state_context,
             liability_pool_id,
             lane.clone(),
@@ -2083,6 +2123,7 @@ where
             0,
             hardware_epoch,
             device_policy_binding,
+            initial_next_one_use_key_reference,
             state_nonce_commitment,
             consumed_credits.root(),
         )?;
@@ -2099,6 +2140,7 @@ where
             lane,
             hardware_epoch,
             device_policy_binding,
+            next_one_use_key_reference: initial_next_one_use_key_reference,
             state_nonce_commitment,
             state_commitment: state.state_commitment,
         };
@@ -2121,6 +2163,7 @@ where
 
     /// Stage a new wallet from opaque verified retail enrollment and exact proof/hardware authority.
     /// The enrollment instant must equal the bootstrap's hardware-bound trusted commit time.
+    /// A nonzero one-use-key ratchet head is rejected until paired bootstrap qualification.
     #[cfg(unix)]
     pub fn stage_bootstrap(
         proof_release: KagemushaStateProofReleaseV1,
@@ -2128,6 +2171,7 @@ where
         lane: KagemushaLaneIdV1,
         hardware_epoch: HardwareEpochV1,
         device_policy_binding: DevicePolicyBindingV1,
+        initial_next_one_use_key_reference: DigestV1,
         state_nonce_commitment: DigestV1,
         trusted_commit_time_ms: u64,
         durable_capacity: KagemushaDurableCapacityV1,
@@ -2153,6 +2197,7 @@ where
             lane,
             hardware_epoch,
             device_policy_binding,
+            initial_next_one_use_key_reference,
             state_nonce_commitment,
             trusted_commit_time_ms,
             durable_capacity,
@@ -2174,6 +2219,7 @@ where
         lane: KagemushaLaneIdV1,
         hardware_epoch: HardwareEpochV1,
         device_policy_binding: DevicePolicyBindingV1,
+        initial_next_one_use_key_reference: DigestV1,
         state_nonce_commitment: DigestV1,
         trusted_commit_time_ms: u64,
         durable_capacity: KagemushaDurableCapacityV1,
@@ -2190,6 +2236,7 @@ where
             lane,
             hardware_epoch,
             device_policy_binding,
+            initial_next_one_use_key_reference,
             state_nonce_commitment,
             trusted_commit_time_ms,
             durable_capacity,
@@ -2211,6 +2258,7 @@ where
         lane: KagemushaLaneIdV1,
         hardware_epoch: HardwareEpochV1,
         device_policy_binding: DevicePolicyBindingV1,
+        initial_next_one_use_key_reference: DigestV1,
         state_nonce_commitment: DigestV1,
         trusted_commit_time_ms: u64,
         durable_capacity: KagemushaDurableCapacityV1,
@@ -2221,6 +2269,12 @@ where
         recursive_verifier: R,
         guard_verifier: G,
     ) -> Result<KagemushaBootstrapJournalStageV1<R, G, H>, KagemushaStateErrorV1> {
+        if initial_next_one_use_key_reference != [0; 32] {
+            return Err(KagemushaStateErrorV1::ProofRejected(
+                "one-use KeyMint bootstrap key attestation is not bound by both Pasta folds"
+                    .to_owned(),
+            ));
+        }
         durable_capacity.validate()?;
         let authenticated_history = KagemushaStateAuthenticatedHistoryV1::open(history_store)
             .map_err(map_authenticated_history_error)?;
@@ -2233,6 +2287,7 @@ where
             lane,
             hardware_epoch,
             device_policy_binding,
+            initial_next_one_use_key_reference,
             state_nonce_commitment,
             trusted_commit_time_ms,
         )?;
@@ -4405,6 +4460,7 @@ where
         if artifacts.release_id != successor.release_id {
             return Err(KagemushaStateErrorV1::InvalidReleaseOrLiabilityPool);
         }
+        one_use_key_ratchet::validate_next_key_transition(&self.state, &successor)?;
         if (kind == KagemushaTransitionKindV1::MintFold)
             != (mint_finality_semantic_digest != [0; 32])
             || (kind == KagemushaTransitionKindV1::MintFold)

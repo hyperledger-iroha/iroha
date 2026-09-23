@@ -3,14 +3,39 @@ fn open_height_lane_relay_drain_services_exactly_one_occurrence_per_turn() {
     let (_adapter, keys, mut queue_plan, _) =
         super::super::v2_lane_work::tests::queue_plan_owner_fixture(2);
     let sender = PeerId::new(keys[1].public_key().clone());
-    let (lane_relay_tx, lane_relay_rx) = std::sync::mpsc::sync_channel(2);
+    let (handle, _ingress, lane_relay_rx) = super::super::test_sumeragi_handle(2);
+    handle
+        .ingress_ready
+        .store(true, std::sync::atomic::Ordering::Release);
+    let retired = iroha_data_model::merge::MergeCommitteeSignature {
+        version: iroha_data_model::merge::MERGE_COMMITTEE_SIGNATURE_VERSION_V2,
+        epoch_id: 7,
+        view: 9,
+        signer: 0,
+        message_digest: Hash::new(b"retired runner ingress"),
+        bls_sig: vec![0xA5],
+        leader_candidate_body: None,
+    };
+    let super::super::SumeragiIngressDisposition::Rejected(LaneRelayMessage::MergeSignature(
+        returned,
+    )) = handle.try_incoming_lane_relay_owned(LaneRelayMessage::MergeSignature(retired))
+    else {
+        panic!("retired relay must retain its exact caller before runner dequeue");
+    };
+    assert_eq!(returned.view, 9);
+    assert_eq!(returned.bls_sig, vec![0xA5]);
+    assert!(
+        !drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0)
+            .expect("rejected relay cannot enter the runner queue")
+    );
     for certificate in [vec![0_u8], vec![1_u8]] {
-        lane_relay_tx
-            .try_send(LaneRelayMessage::QueuePlanAdmissionCertificate {
+        assert!(matches!(
+            handle.try_incoming_lane_relay_owned(LaneRelayMessage::QueuePlanAdmissionCertificate {
                 sender: sender.clone(),
                 certificate: Arc::new(certificate),
-            })
-            .expect("queue one authenticated relay occurrence");
+            }),
+            super::super::SumeragiIngressDisposition::Accepted
+        ));
     }
 
     assert!(

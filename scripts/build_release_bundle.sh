@@ -223,9 +223,7 @@ if [[ "$os_tag" == "win" ]]; then
   cli_bin="${cli_bin}.exe"
   utility_bin="${utility_bin}.exe"
   sanitizer_bin="${sanitizer_bin}.exe"
-  signer_support="unsupported-windows"
-else
-  signer_support="software-key-qualified"
+  signer_support="absent"
 fi
 
 artifacts_dir="$(
@@ -364,6 +362,7 @@ else
   stage_release_file "$binary_root/$signer_bin" "$signer_relative" 0755 1
   stage_release_file "$binary_root/$signer_bin" "$broker_relative" 0755 1
   cmp "$stage_root/$signer_relative" "$stage_root/$broker_relative"
+  signer_support="packaged"
 
   asset_prefix="share/iroha/sorafs"
   common_assets=(
@@ -552,14 +551,13 @@ manifest = {
     "features": features,
     "prebuilt_provenance_sha256": prebuilt_provenance_sha256 or None,
     "external_software_signer": {
-        "backend": "software" if signer_support == "software-key-qualified" else None,
+        "packaged": signer_support == "packaged",
         "broker_alias": "libexec/iroha-runtime-provider-broker-v1"
-        if signer_support == "software-key-qualified"
+        if signer_support == "packaged"
         else None,
         "binary": "bin/sorafs_external_software_signer"
-        if signer_support == "software-key-qualified"
+        if signer_support == "packaged"
         else None,
-        "qualification": signer_support,
         "windows_supported": False,
     },
     "compressor": {

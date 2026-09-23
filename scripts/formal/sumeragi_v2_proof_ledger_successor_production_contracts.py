@@ -854,6 +854,61 @@ LifecycleCompletionCapacityProbeV1::Apply {
 
 
 _RECOVERED_SUCCESSOR_STATUS_OWNER_RELATIONS = (
+    # CompleteTip physical-frame retirement is available to exact signed genesis
+    # as well as later rotating heights. Missing-frame genesis remains empty-only;
+    # both policies retain the original Kura receipt, physical store and full census.
+    ("frame_genesis_context", "crates/iroha_core/src/sumeragi/v2_recovery.rs", "RecoveredCompleteTipActivationAuthority", "authenticates_genesis_lifecycle_context", (), (
+        ") -> bool { let verified = self.verified_predecessor.context(); self.artifact.height == 1 && self.artifact.height_context == *verified && verified.height == 1 && verified.parent_commit_qc.is_none() && verified.snapshot_bootstrap.is_none() && matches!(&self.predecessor_signature_policy, BlockSignaturePolicy::GenesisAuthority(_)) && context.height() == 1 && context.id().as_bytes() == self.artifact.context_id().0.as_ref() }",
+    )),
+    ("frame_policy_receipt", "crates/iroha_core/src/sumeragi/v2_recovery.rs", "RecoveredCompleteTipActivationAuthority", "authorizes_retired_lifecycle", (), (
+        ") -> bool { let verified = self.verified_predecessor.context(); let policy_matches_height = match &self.predecessor_signature_policy { BlockSignaturePolicy::GenesisAuthority(_) => { self.authenticates_genesis_lifecycle_context(context) } BlockSignaturePolicy::RotatingLeader => self.artifact.height > 1, }; policy_matches_height && self.artifact.height_context == *verified && verified.height == self.artifact.height && DurableV2PredecessorIdentity::authenticate(&self.artifact, &self.receipt).is_ok_and(|predecessor| predecessor == self.activation.predecessor()) && context.height() == self.artifact.height && context.id().as_bytes() == self.artifact.context_id().0.as_ref() }",
+    )),
+    ("frame_mint", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs", "LifecycleLedgerStoreV1", "authenticate_present_frame", (), (
+        "let (opened, present) = self.load_with_frame_presence()?; if opened != *expected { return Err(LifecycleLedgerError::InvalidLedger(",
+        "if !present { return Ok(None); } let frame = encode_frame(&opened, self.max_frame_bytes)?;",
+        "Ok(Some(AuthenticatedPresentLifecycleFrameV1 { store_path: self.path.clone(), #[cfg(all(unix, not(target_os = \"espidf\")))] store_directory_identity: self.directory.identity, context: self.context, max_records: self.max_records, max_frame_bytes: self.max_frame_bytes, ledger_frame_hash: LifecycleDigest::new(Hash::new(frame).into()), }))",
+    )),
+    ("frame_digest", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs", "AuthenticatedPresentLifecycleFrameV1", "binds_ledger", (), (
+        ") -> bool { ledger.context() == self.context && encode_frame(ledger, self.max_frame_bytes).ok().is_some_and(|frame| { LifecycleDigest::new(Hash::new(frame).into()) == self.ledger_frame_hash }) }",
+    )),
+    ("frame_target", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs", "AuthenticatedPresentLifecycleFrameV1", "authorizes_canonical_retired_predecessor", (), (
+        ") -> bool { self.store_path.parent().is_some_and(|root| { complete_tip.authorizes_predecessor_lifecycle_root(root) && self.store_path == root.join(LEDGER_FILE) && self.directory_identity_still_exact(root) }) && self.binds_ledger(ledger) && complete_tip.authorizes_retired_lifecycle(ledger.context()) }",
+    )),
+    ("frame_directory", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs", "AuthenticatedPresentLifecycleFrameV1", "directory_identity_still_exact", (), (
+        "#[cfg(all(unix, not(target_os = \"espidf\")))] { bind_lifecycle_directory_path(root, false)",
+        "directory.metadata().map_err(|error|",
+        ".is_ok_and(|metadata| { LifecycleStorageIdentity::from_metadata(&metadata) == self.store_directory_identity })",
+        "#[cfg(not(all(unix, not(target_os = \"espidf\"))))] { let _ = root; false }",
+    )),
+    ("frame_rejoin", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs", "AuthenticatedPresentLifecycleFrameV1", "exactly_matches", (), (
+        ") -> bool { let mut exact_target = self.store_path == store.path; #[cfg(all(unix, not(target_os = \"espidf\")))] { exact_target &= self.store_directory_identity == store.directory.identity; } if !exact_target || self.context != store.context || self.max_records != store.max_records || self.max_frame_bytes != store.max_frame_bytes || !self.binds_ledger(ledger) { return false; } store.load_with_frame_presence().is_ok_and(|(opened, present)| present && opened == *ledger) }",
+    )),
+    ("frame_stage", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs", "LifecycleLedgerV1", "stage_complete_tip_terminal_apply_recovery", (), (
+        "if self.high_water() == 0 && self.records.is_empty() && self.producer_debts.is_empty() && complete_tip.authenticates_genesis_lifecycle_context(self.context()) { return Ok(( self.clone(), false, CompleteTipPredecessorLifecycleEvidenceV1::EmptyGenesis, )); }",
+        "if let Ok(apply_ordinal) = self.authenticate_complete_tip_terminal_apply(complete_tip) { return Ok(( self.clone(), false, CompleteTipPredecessorLifecycleEvidenceV1::TerminalApply(apply_ordinal), )); }",
+        "self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?; if self.context().height() != complete_tip.predecessor().height() { return Err(",
+        "(record.work_class() == Some(LifecycleWorkClass::Apply) && record.stage().is_some_and(|stage| { stage.kind() == LifecycleStageKind::ApplyDecision && stage.predecessor_scope() == PredecessorScope::Independent }) && record.terminal() == Some(None) && record.continuation() == Some(DurableContinuation::None) && complete_tip.authorizes_terminal_apply_replay(&record.replay_authority)).then_some(index)",
+        "let Some(apply_index) = candidates.next() else { if let Some(present_frame) = present_frame && present_frame.authorizes_canonical_retired_predecessor(self, complete_tip) { return Ok(( self.clone(), false, CompleteTipPredecessorLifecycleEvidenceV1::CanonicalFrame(present_frame), )); } return Err(LifecycleLedgerError::InvalidLedger(",
+        "if candidates.next().is_some() { return Err(",
+        "let mut staged = self.clone(); staged.records[apply_index].terminal = Some(PersistedTerminalV1::from_schema(TerminalOutcome::Advanced)); staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?; let apply_ordinal = staged.authenticate_complete_tip_terminal_apply(complete_tip)?;",
+    )),
+    ("frame_evidence", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs", "CompleteTipPredecessorLifecycleEvidenceV1", "exactly_matches", (), (
+        ") -> bool { match self { Self::TerminalApply(apply_ordinal) => ledger.authenticate_complete_tip_terminal_apply(complete_tip).is_ok_and(|ordinal| ordinal == *apply_ordinal), Self::EmptyGenesis => { ledger.high_water() == 0 && ledger.records().is_empty() && ledger.producer_debts.is_empty() && complete_tip.authenticates_genesis_lifecycle_context(ledger.context()) } Self::CanonicalFrame(present) => { present.authorizes_canonical_retired_predecessor(ledger, complete_tip) && present.exactly_matches(store, ledger) } } }",
+    )),
+    ("frame_retirement_census", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs", "CompleteTipPredecessorLifecycleEvidenceV1", "authorizes_staged_retirement", (), (
+        ") -> bool { if !self.exactly_matches(store, current, complete_tip) || current.context() != retired.context() || current.high_water() != retired.high_water() || current.records().len() != retired.records().len() || !retired.producer_debts.is_empty() || retired.records().iter().any(|record| record.terminal() == Some(None)) { return false; } match self { Self::TerminalApply(apply_ordinal) => retired.authenticate_complete_tip_terminal_apply(complete_tip).is_ok_and(|retired_ordinal| retired_ordinal == *apply_ordinal), Self::EmptyGenesis => current == retired, Self::CanonicalFrame(_) => true, } }",
+    )),
+    ("frame_retirement_publish", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs", "AuthenticatedCompleteTipPredecessorStorageV1", "retire", (), (
+        "if !self.is_exact()? { return Err(",
+        "payload_store.retire_authenticated_cut(serve_payloads, &retained_serve_payloads)?;",
+        "let serve_reconciliation = super::open::reconcile_complete_tip_serve_retirement( &terminal.ledger, refreshed_serve_payloads, )?;",
+        "let staged = terminal.ledger.stage_finalized_height_all_row_retirement(serve_reconciliation)?;",
+        "let retained_predecessor_is_exact = terminal.predecessor_evidence.authorizes_staged_retirement( &terminal.ledger_store, &terminal.ledger, &retired, &terminal.complete_tip, ); if !retained_predecessor_is_exact { return Err(",
+        "terminal.ledger_store.persist_exact_successor(&terminal.ledger, &retired)?; if terminal.ledger_store.load()? != retired { return Err(",
+        "successor.open_initialized_or_descendant(retired.high_water())?;",
+        "predecessor_frame_identity: retired.frame_identity(), successor_frame_identity: successor_ledger.frame_identity(), retained_high_water: retired.high_water(), predecessor_store: terminal.ledger_store, predecessor_ledger: retired, successor_store, successor_ledger,",
+    )),
+
     ("ordinary_frontier", "crates/iroha_core/src/sumeragi/status.rs", "", "validate_v2_successor_snapshot", (), (
         "validate_v2_successor_snapshot_commit_frontier( finalized_height, finalized_height, expected_successor_context_id, successor, )",
     )),

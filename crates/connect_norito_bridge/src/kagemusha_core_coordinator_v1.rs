@@ -11,6 +11,8 @@
 
 pub(crate) mod archive_boundary;
 mod archives;
+mod exclusive_backend;
+pub use exclusive_backend::KagemushaExclusiveCoordinatorBackendV1;
 // These lifecycle kernels have only structural test owners. Production sessions are owned
 // by the qualified backend installed through KagemushaCoreCoordinatorBackendV1.
 #[cfg(test)]
@@ -77,8 +79,8 @@ const KAGEMUSHA_CORE_COORDINATOR_SEND_SPLIT_V1: u32 = 0;
 const KAGEMUSHA_CORE_COORDINATOR_REDEEM_SPLIT_V1: u32 = 1;
 const KAGEMUSHA_CORE_COORDINATOR_QUALIFICATION_FIELDS_V1: usize = 5;
 
-/// Exact native coordinator contract returned as ten `u32` words.
-pub const KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1: [u32; 10] = [
+/// Exact native coordinator contract returned as eleven `u32` words.
+pub const KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1: [u32; 11] = [
     KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1 as u32,
     CONNECT_NORITO_BRIDGE_ABI_VERSION,
     CONNECT_NORITO_KAGEMUSHA_IPM1_MESSAGE_KIND_TAGS_V1.len() as u32,
@@ -89,6 +91,7 @@ pub const KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1: [u32; 10] = [
     KagemushaDeviceLifecycleOperationV1::ALL.len() as u32,
     KAGEMUSHA_NATIVE_HARDWARE_CAPABILITY_BITS_V1.len() as u32,
     KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1 as u32,
+    1, // Required native close/revocation lifecycle.
 ];
 
 /// Closed coordinator method inventory.
@@ -207,6 +210,10 @@ pub trait KagemushaCoreCoordinatorBackendV1: Send + Sync + 'static {
         method: KagemushaCoreCoordinatorMethodV1,
         request_frame: &[u8],
     ) -> Result<Vec<u8>, KagemushaCoreCoordinatorBackendErrorV1>;
+
+    /// Tear down the selected hardware session after the bridge revokes its handle.
+    /// This is not an operation to commit, abort or erase uncertain monetary state.
+    fn close(&self, handle: u64) -> Result<(), KagemushaCoreCoordinatorBackendErrorV1>;
 }
 
 static KAGEMUSHA_CORE_COORDINATOR_BACKEND_V1: OnceLock<Arc<dyn KagemushaCoreCoordinatorBackendV1>> =
@@ -214,13 +221,17 @@ static KAGEMUSHA_CORE_COORDINATOR_BACKEND_V1: OnceLock<Arc<dyn KagemushaCoreCoor
 
 /// Install the qualified coordinator backend exactly once for this process.
 ///
-/// Stock builds never call this function. There is intentionally no uninstall,
+/// The installed backend is always wrapped in a process-exclusive owner: one
+/// attempted open and serialized invocations on its original handle. Stock
+/// builds never call this function. There is intentionally no uninstall,
 /// overwrite, software implementation, or C/JNI installer.
 pub fn install_kagemusha_core_coordinator_backend_v1(
     backend: Arc<dyn KagemushaCoreCoordinatorBackendV1>,
 ) -> Result<(), KagemushaCoreCoordinatorInstallErrorV1> {
+    let exclusive: Arc<dyn KagemushaCoreCoordinatorBackendV1> =
+        Arc::new(KagemushaExclusiveCoordinatorBackendV1::new(backend));
     KAGEMUSHA_CORE_COORDINATOR_BACKEND_V1
-        .set(backend)
+        .set(exclusive)
         .map_err(|_| KagemushaCoreCoordinatorInstallErrorV1::AlreadyInstalled)
 }
 
@@ -681,7 +692,10 @@ fn require_equal_fields(
     }
 }
 
-/// Validate a durable-store path without opening or creating any storage.
+/// Validate a lexical absolute durable-store path without opening or creating storage.
+///
+/// The backend must still anchor every component to an app-private directory descriptor,
+/// reject symlinks and hard-link aliases, and authenticate the opened durable store.
 pub fn kagemusha_core_coordinator_validate_storage_path_v1(
     path: &[u8],
 ) -> Result<&str, KagemushaCoreCoordinatorFrameErrorV1> {
@@ -693,7 +707,15 @@ pub fn kagemusha_core_coordinator_validate_storage_path_v1(
     }
     let path =
         core::str::from_utf8(path).map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?;
-    if path.trim().is_empty() {
+    if !path.starts_with('/')
+        || path.len() == 1
+        || path
+            .bytes()
+            .any(|byte| byte < 0x20 || byte == 0x7f || byte == b'\\')
+        || path[1..]
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+    {
         return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
     }
     Ok(path)
@@ -1047,12 +1069,19 @@ mod tests {
 
     struct TestBackend {
         invokes: AtomicUsize,
+        closes: AtomicUsize,
+        caller_path_pointer: AtomicUsize,
+        caller_request_pointer: AtomicUsize,
         response: Mutex<TestResponse>,
     }
 
     impl KagemushaCoreCoordinatorBackendV1 for TestBackend {
         fn open(&self, storage_path: &str) -> Result<u64, KagemushaCoreCoordinatorBackendErrorV1> {
             assert_eq!(storage_path, "/durable/kagemusha.db");
+            let caller_pointer = self.caller_path_pointer.swap(0, Ordering::SeqCst);
+            if caller_pointer != 0 {
+                assert_ne!(storage_path.as_ptr() as usize, caller_pointer);
+            }
             Ok(7)
         }
 
@@ -1063,6 +1092,10 @@ mod tests {
             request_frame: &[u8],
         ) -> Result<Vec<u8>, KagemushaCoreCoordinatorBackendErrorV1> {
             assert_eq!(handle, 7);
+            let caller_pointer = self.caller_request_pointer.swap(0, Ordering::SeqCst);
+            if caller_pointer != 0 {
+                assert_ne!(request_frame.as_ptr() as usize, caller_pointer);
+            }
             self.invokes.fetch_add(1, Ordering::SeqCst);
             match *self.response.lock().expect("response mode") {
                 TestResponse::ReserveValid => {
@@ -1122,13 +1155,19 @@ mod tests {
                 ]),
             }
         }
+
+        fn close(&self, handle: u64) -> Result<(), KagemushaCoreCoordinatorBackendErrorV1> {
+            assert_eq!(handle, 7);
+            self.closes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
     }
 
     #[test]
     fn coordinator_contract_and_methods_are_exact() {
         assert_eq!(
             KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1,
-            [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff]
+            [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1]
         );
         assert_eq!(
             KagemushaCoreCoordinatorMethodV1::ALL.map(KagemushaCoreCoordinatorMethodV1::code),
@@ -1661,12 +1700,30 @@ mod tests {
     }
 
     #[test]
-    fn storage_path_validation_is_bounded_utf8_and_nul_free() {
+    fn storage_path_validation_requires_one_lexical_absolute_name() {
         assert_eq!(
             kagemusha_core_coordinator_validate_storage_path_v1(b"/durable/kagemusha.db"),
             Ok("/durable/kagemusha.db")
         );
-        for invalid in [&b""[..], &b" \t"[..], &b"bad\0path"[..], &[0xff][..]] {
+        assert_eq!(
+            kagemusha_core_coordinator_validate_storage_path_v1("/durable/🔒".as_bytes()),
+            Ok("/durable/🔒")
+        );
+        for invalid in [
+            &b""[..],
+            &b" \t"[..],
+            &b"bad\0path"[..],
+            &[0xff][..],
+            &b"relative/store"[..],
+            &b"/"[..],
+            &b"/durable/"[..],
+            &b"/durable//store"[..],
+            &b"/durable/./store"[..],
+            &b"/durable/../store"[..],
+            &b"/durable/sto\\re"[..],
+            &b"/durable/sto\nre"[..],
+            &b"/durable/sto\x7fre"[..],
+        ] {
             assert!(kagemusha_core_coordinator_validate_storage_path_v1(invalid).is_err());
         }
         assert!(
@@ -1797,17 +1854,26 @@ mod tests {
 
         let backend = Arc::new(TestBackend {
             invokes: AtomicUsize::new(0),
+            closes: AtomicUsize::new(0),
+            caller_path_pointer: AtomicUsize::new(0),
+            caller_request_pointer: AtomicUsize::new(0),
             response: Mutex::new(TestResponse::ReserveValid),
         });
         install_kagemusha_core_coordinator_backend_v1(backend.clone()).expect("first install");
         assert_eq!(
             install_kagemusha_core_coordinator_backend_v1(Arc::new(TestBackend {
                 invokes: AtomicUsize::new(0),
+                closes: AtomicUsize::new(0),
+                caller_path_pointer: AtomicUsize::new(0),
+                caller_request_pointer: AtomicUsize::new(0),
                 response: Mutex::new(TestResponse::ReserveValid),
             })),
             Err(KagemushaCoreCoordinatorInstallErrorV1::AlreadyInstalled)
         );
 
+        backend
+            .caller_path_pointer
+            .store(storage_path.as_ptr() as usize, Ordering::SeqCst);
         assert_eq!(
             unsafe {
                 crate::connect_norito_kagemusha_core_coordinator_open_v1(
@@ -1828,6 +1894,9 @@ mod tests {
         .expect("canonical request");
         let mut output_ptr = core::ptr::null_mut();
         let mut output_len = 0_usize;
+        backend
+            .caller_request_pointer
+            .store(request.as_ptr() as usize, Ordering::SeqCst);
         assert_eq!(
             unsafe {
                 crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
@@ -1962,6 +2031,49 @@ mod tests {
             assert!(output_ptr.is_null());
             assert_eq!(output_len, 0);
         }
+
+        let invokes_before_revocation = backend.invokes.load(Ordering::SeqCst);
+        assert_eq!(
+            crate::connect_norito_kagemusha_core_coordinator_close_v1(handle),
+            0
+        );
+        assert_eq!(backend.closes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            crate::connect_norito_kagemusha_core_coordinator_close_v1(handle),
+            crate::ERR_KAGEMUSHA_V1
+        );
+        let mut second_handle = u64::MAX;
+        assert_eq!(
+            unsafe {
+                crate::connect_norito_kagemusha_core_coordinator_open_v1(
+                    storage_path.as_ptr(),
+                    storage_path.len(),
+                    &mut second_handle,
+                )
+            },
+            crate::ERR_KAGEMUSHA_V1
+        );
+        assert_eq!(second_handle, 0);
+        assert_eq!(
+            unsafe {
+                crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
+                    handle,
+                    KagemushaCoreCoordinatorMethodV1::ReserveOperationId.code(),
+                    request.as_ptr(),
+                    request.len(),
+                    &mut output_ptr,
+                    &mut output_len,
+                )
+            },
+            crate::ERR_KAGEMUSHA_V1
+        );
+        assert!(output_ptr.is_null());
+        assert_eq!(output_len, 0);
+        assert_eq!(
+            backend.invokes.load(Ordering::SeqCst),
+            invokes_before_revocation
+        );
+        assert_eq!(backend.closes.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1981,6 +2093,7 @@ mod tests {
             "connect_norito_kagemusha_core_coordinator_contract_v1(",
             "connect_norito_kagemusha_core_coordinator_open_v1(",
             "connect_norito_kagemusha_core_coordinator_invoke_v1(",
+            "connect_norito_kagemusha_core_coordinator_close_v1(",
         ] {
             assert!(header.contains(symbol));
         }
@@ -1989,6 +2102,7 @@ mod tests {
             "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
             "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
             "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
+            "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeCloseV1",
         ] {
             let declaration = format!("pub extern \"system\" fn {symbol}(");
             assert_eq!(source.matches(&declaration).count(), 1);

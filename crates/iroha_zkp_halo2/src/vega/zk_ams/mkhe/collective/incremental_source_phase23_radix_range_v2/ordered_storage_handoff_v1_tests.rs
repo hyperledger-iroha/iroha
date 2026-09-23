@@ -335,7 +335,7 @@ fn materialized_storage_context_view_keeps_existing_encoder_order_and_kat() {
 }
 
 #[test]
-fn u15_stored_source_gate_rejects_unqualified_real_pair_and_closes_files() {
+fn full_cursor_without_authenticated_source_cannot_finish_stored_pair() {
     use crate::generalized_bulletproof::secret_u15_msm_v1::test_controls_v1 as controls;
     let directory = DirectoryV1::new_v1();
     let mut budget = OrderedStorageSessionBudgetV1::new_v1();
@@ -344,15 +344,13 @@ fn u15_stored_source_gate_rejects_unqualified_real_pair_and_closes_files() {
     // This fixture has no authenticated source Evidence. Setting a cursor is
     // deliberately insufficient to create kernel or native40 source authority.
     replay.live.as_mut().unwrap().next_slot = SLOTS_V1;
-    let original = replay.finish_v1().unwrap();
-    assert_eq!(budget.test_usage_words_v1()[0], FILE_BYTES);
+    // Even a privately forged full cursor cannot mint the local stored owner
+    // without the original authenticated source and its matching pair context.
     controls::reset_v1();
-    let refusal = match original.prepare_q_mask_kernel_v1() {
-        Ok(_) => panic!("unqualified fixture cannot prepare kernel"),
-        Err(error) => error,
-    };
-    assert_eq!(refusal.reason_v1(), RnsNativeU15MsmErrorV1::Source);
-    assert!(refusal.original.is_none());
+    assert!(matches!(
+        replay.finish_v1(),
+        Err(MaterializedStorageErrorV1::Source)
+    ));
     assert_eq!(controls::allocations_v1(), 0);
     assert_eq!(budget.test_usage_words_v1()[0], 0);
     assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 0);

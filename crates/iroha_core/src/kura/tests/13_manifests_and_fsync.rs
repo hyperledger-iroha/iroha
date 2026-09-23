@@ -2039,6 +2039,7 @@ fn v2_finality_retry_resync_rejects_replaced_verified_file_and_changed_bytes() {
 fn commit_manifest_binds_checkpoint_only_after_every_directory_barrier() {
     for target_index in 0..4 {
         let kura = Kura::blank_kura_for_testing();
+        establish_configured_lane_markers_for_test(&kura, &RuntimeLaneConfig::default());
         let block = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&block)).unwrap();
         let artifact = v2_finality_artifact_for_block(&block);

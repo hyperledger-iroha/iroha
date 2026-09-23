@@ -85,6 +85,8 @@ pub struct SignerFinalPromotionServiceV1 {
 }
 /// Immutable native account transactions bound to executed receipt and account Checks.
 pub mod account_transaction;
+/// Finalized role-14 Current Check handoff to one custody and audit observation.
+pub mod current_observation;
 /// Exact observer Check signing with retained native challenges and independent fee approval.
 pub mod observer_transaction;
 mod receipt_core;

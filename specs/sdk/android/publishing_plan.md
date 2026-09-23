@@ -97,12 +97,13 @@ identity token from `ANDROID_PUBLISH_SIGSTORE_TOKEN_ENV` (defaults to
 artefacts so governance reviewers can verify without re-fetching from Maven.
 They are provenance only: include the Android artifacts in the canonical
 aggregate release manifest and authenticate that manifest with the external
-Ed25519 `authenticated_external_signer` provider with exact `software` backend.
+Ed25519 `authenticated_external_signer` provider. Software and optional hardware
+custody use the same reviewed public-key contract.
 Production promotion must pass
 `scripts/release_manifest_signing.py verify` with the independently reviewed
 raw-key fingerprint and pinned native-verifier digest; no OIDC token, embedded
 key, or generic OpenSSL/RSA signature can replace that boundary. Successful
-output is `software-key-qualified`.
+verification makes no claim about key origin or exportability.
 
 ## Dependency Manifest Format
 

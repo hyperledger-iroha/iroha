@@ -603,6 +603,17 @@ impl OrderedPlaneSpoolSnapshotV1 {
         self.validate_live_v1()?;
         Ok(self.digest)
     }
+    /// Match the sealed pair to the context derived from its retained source.
+    pub(in crate::vega::zk_ams::mkhe) fn require_context_v1(
+        &self,
+        context: [u8; 32],
+    ) -> Result<(), OrderedSnapshotErrorV1> {
+        self.validate_live_v1()?;
+        if self.plan.plane_context != context {
+            return Err(OrderedSnapshotErrorV1::Context);
+        }
+        Ok(())
+    }
     /// Authenticate and validate a global slot while retaining one logical owner.
     pub(in crate::vega::zk_ams::mkhe) fn read_slot_v1(
         &mut self,

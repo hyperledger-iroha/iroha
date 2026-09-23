@@ -428,10 +428,9 @@ def test_bundle_replay_is_byte_identical_and_metadata_normalized(
     assert manifest["compressor"]["sha256"] == digest
     assert manifest["artifacts"][0]["file"] == outputs["archive"].name
     assert manifest["external_software_signer"] == {
-        "backend": "software",
+        "packaged": True,
         "binary": "bin/sorafs_external_software_signer",
         "broker_alias": "libexec/iroha-runtime-provider-broker-v1",
-        "qualification": "software-key-qualified",
         "windows_supported": False,
     }
 
@@ -497,7 +496,7 @@ def test_bundle_windows_excludes_signer_and_never_smokes_it(tmp_path: Path) -> N
     assert not any("sorafs_external_software_signer" in name for name in names)
     assert not any("runtime-provider-broker-v1" in name for name in names)
     manifest = json.loads(outputs["manifest"].read_text(encoding="utf-8"))
-    assert manifest["external_software_signer"]["qualification"] == "unsupported-windows"
+    assert manifest["external_software_signer"]["packaged"] is False
     assert manifest["external_software_signer"]["binary"] is None
 
 

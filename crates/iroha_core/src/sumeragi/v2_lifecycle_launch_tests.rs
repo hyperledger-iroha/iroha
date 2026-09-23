@@ -1409,7 +1409,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "drain_decided_lane_recovery_ingress(",
             "drain_finalized_lane_relay_prefix(",
             "if drained_terminal_ingress || drained_terminal_relay",
-            "ensure_closed_drained_cut()",
+            "ensure_closed_global_drained_cut()",
             "finalize_lifecycle_height(",
         ],
     );
@@ -2227,7 +2227,7 @@ fn live_terminal_height_authenticates_after_closed_drain_without_a_successor() {
             "close_runner_ingress_for_finalized_drain",
             "DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix",
             "drain_finalized_lane_relay_prefix(",
-            "ensure_closed_drained_cut()",
+            "ensure_closed_global_drained_cut()",
             "if context.height == u64::MAX",
         ],
     );

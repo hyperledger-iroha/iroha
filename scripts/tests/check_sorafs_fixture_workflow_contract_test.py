@@ -1029,15 +1029,36 @@ def test_child_source_controls_follow_locked_npm_before_native_build(mutation):
 
 
 @pytest.mark.parametrize("mutation", ("original", "remove", "comment", "outside_batch", "duplicate"))
-def test_child_abi_controls_are_in_the_installed_pytest_batch(mutation):
+@pytest.mark.parametrize("test", (
+    "scripts/tests/sorafs_javascript_child_abi_contract_test.py",
+    "scripts/tests/sorafs_javascript_input_files_test.py",
+    "scripts/tests/sorafs_javascript_parent_input_test.py",
+    "scripts/tests/sorafs_javascript_runtime_inputs_test.py",
+    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images",
+    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field",
+))
+def test_child_abi_controls_are_in_the_installed_pytest_batch(mutation, test):
     """The Python-only source guard uses the existing scripts requirement owner."""
     from scripts import check_sorafs_release_automation as automation
     source = read("ci/check_sorafs_cli_release.sh")
-    line = "  " + automation.SORAFS_JAVASCRIPT_CHILD_ABI_TEST + " \\\n"
+    line = "  " + test + " \\\n"
     assert source.count(line) == 1
     changed = source
     if mutation == "remove": changed = source.replace(line, "")
     elif mutation == "comment": changed = source.replace(line, "") + "\n# " + line.lstrip()
     elif mutation == "outside_batch": changed = source.replace(line, "") + "\n" + line
     elif mutation == "duplicate": changed = source.replace(line, line * 2)
-    assert bool(automation._javascript_child_abi_controls_errors(changed)) == (mutation != "original")
+    assert bool(automation._javascript_child_python_controls_errors(changed)) == (mutation != "original")
+
+
+@pytest.mark.parametrize("selector", (
+    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images",
+    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field",
+))
+def test_runtime_parser_registration_cannot_expand_to_framework_execution(selector):
+    """The exact pure selectors cannot become the unrelated native module run."""
+    from scripts import check_sorafs_release_automation as automation
+    source = read("ci/check_sorafs_cli_release.sh")
+    assert source.count(selector) == 1
+    changed = source.replace(selector, selector.split("::", 1)[0])
+    assert automation._javascript_child_python_controls_errors(changed)

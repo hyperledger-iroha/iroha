@@ -105,7 +105,7 @@ fn stage_marker_and_membership(block: &mut StateBlock<'_>) {
         tx.apply();
     }
     block
-        .stage_canonical_carrier_membership(core::iter::empty(), nonzero!(1_usize))
+        .stage_canonical_carrier_membership(Vec::new(), nonzero!(1_usize))
         .unwrap();
     let block_hash = block._curr_block.hash();
     block.block_hashes.push(block_hash);

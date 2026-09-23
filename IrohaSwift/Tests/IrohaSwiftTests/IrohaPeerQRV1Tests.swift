@@ -213,14 +213,17 @@ final class IrohaPeerQRV1Tests: XCTestCase {
     }
 
     func testMaximumStreamFrameCountsAndRepeatedHeaderText() throws {
-        let message = try makeMessage(count: 24_528, seed: 6)
+        let message = try makeMessage(
+            count: KagemushaWireV1.maximumPaymentBytes - 48,
+            seed: 6
+        )
         let texts = try IrohaPeerQRCodecV1.animatedFrameTexts(for: message)
         let frames = try texts.map { try IrohaPeerQRCodecV1.decodeFrame($0) }
 
-        XCTAssertEqual(texts.count, 157)
-        XCTAssertEqual(frames.filter { $0.frameKind == .header }.count, 13)
-        XCTAssertEqual(frames.filter { $0.frameKind == .data }.count, 96)
-        XCTAssertEqual(frames.filter { $0.frameKind == .parity }.count, 48)
+        XCTAssertEqual(texts.count, 49)
+        XCTAssertEqual(frames.filter { $0.frameKind == .header }.count, 4)
+        XCTAssertEqual(frames.filter { $0.frameKind == .data }.count, 30)
+        XCTAssertEqual(frames.filter { $0.frameKind == .parity }.count, 15)
         let headerTexts = zip(texts, frames).compactMap { text, frame in
             frame.frameKind == .header ? text : nil
         }

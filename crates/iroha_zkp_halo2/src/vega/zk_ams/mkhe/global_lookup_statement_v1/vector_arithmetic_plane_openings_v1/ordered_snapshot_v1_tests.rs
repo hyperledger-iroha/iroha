@@ -280,6 +280,15 @@ fn tiny_pair_authenticates_global_reads_and_never_exposes_a_half() {
     let directory = DirectoryV1::new_v1();
     let mut snapshot = tiny_snapshot_v1(&directory.0);
     assert_ne!(snapshot.snapshot_digest_v1().unwrap(), [0; 32]);
+    assert_eq!(snapshot.require_context_v1([0x11; 32]), Ok(()));
+    assert_eq!(
+        snapshot.require_context_v1([0x12; 32]),
+        Err(OrderedSnapshotErrorV1::Context)
+    );
+    assert_eq!(
+        snapshot.require_context_v1([0; 32]),
+        Err(OrderedSnapshotErrorV1::Context)
+    );
     for slot in [0, 31, 32, 33, 64, 65, 33, 0] {
         assert_eq!(
             snapshot.read_slot_v1(slot).unwrap().as_slice_v1(),

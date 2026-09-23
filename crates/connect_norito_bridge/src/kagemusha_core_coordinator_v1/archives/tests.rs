@@ -204,11 +204,48 @@ fn coordinator_archive_fixture_material_is_canonical() {
             norito::encode_canonical(&receipt).unwrap(),
         ),
     ];
+    let expected = norito::json!({
+        "schema": "iroha.kagemusha.core.v1.archive-fixtures",
+        "version": 1,
+        "preparation": {
+            "norito_hex": (hex::encode(&vectors[0].1)),
+            "byte_len": (vectors[0].1.len()),
+        },
+        "candidate": {
+            "norito_hex": (hex::encode(&vectors[1].1)),
+            "byte_len": (vectors[1].1.len()),
+        },
+        "recovery": {
+            "norito_hex": (hex::encode(&vectors[2].1)),
+            "byte_len": (vectors[2].1.len()),
+        },
+        "redemption_terminal_receipt": {
+            "norito_hex": (hex::encode(&vectors[3].1)),
+            "byte_len": (vectors[3].1.len()),
+        },
+    });
+    if let Some(destination) = std::env::var_os("PRINT_KAGEMUSHA_CORE_COORDINATOR_ARCHIVES_V1") {
+        let destination = std::path::PathBuf::from(destination);
+        let destination = if destination.is_absolute() {
+            destination
+        } else {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(destination)
+        };
+        let rendered = format!(
+            "{}\n",
+            norito::json::to_string_pretty(&expected).expect("render canonical archive fixture")
+        );
+        std::fs::write(destination, rendered).expect("write canonical archive fixture");
+        return;
+    }
     let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../fixtures/offline/kagemusha_core_coordinator_archives_v1.json"
     )))
     .expect("shared canonical archive fixture");
+    assert_eq!(fixture, expected);
     assert_eq!(
         fixture["schema"].as_str(),
         Some("iroha.kagemusha.core.v1.archive-fixtures")

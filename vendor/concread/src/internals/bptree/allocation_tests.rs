@@ -26,12 +26,26 @@ thread_local! {
     static PANIC_COMPARE: Cell<bool> = const { Cell::new(false) };
     static PANIC_DROP: Cell<bool> = const { Cell::new(false) };
     static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+    static REFUSE_NEXT: Cell<Option<Layout>> = const { Cell::new(None) };
 }
 
 struct ObservedAllocator;
 
 unsafe impl GlobalAlloc for ObservedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if REFUSE_NEXT
+            .try_with(|next| {
+                if next.get() == Some(layout) {
+                    next.set(None);
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false)
+        {
+            return std::ptr::null_mut();
+        }
         let pointer = unsafe { System.alloc(layout) };
         let _ = ALLOCATIONS.try_with(|allocations| {
             if let Some(count) = allocations.get() {
@@ -242,6 +256,27 @@ pub(crate) fn without_allocations<T>(action: impl FnOnce() -> T) -> T {
     let allocations = ALLOCATIONS.with(|allocations| allocations.get().unwrap());
     drop(restore);
     assert_eq!(allocations, 0);
+    result
+}
+
+/// Refuse exactly one matching allocation using the existing test allocator.
+/// Unrelated allocations and other test threads retain their original behavior.
+pub(crate) fn refusing_allocation<T>(layout: Layout, action: impl FnOnce() -> T) -> T {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            REFUSE_NEXT.with(|next| next.set(None));
+        }
+    }
+    REFUSE_NEXT.with(|next| {
+        assert!(next.get().is_none(), "nested allocation refusal");
+        next.set(Some(layout));
+    });
+    let restore = Restore;
+    let result = action();
+    let refused = REFUSE_NEXT.with(|next| next.get().is_none());
+    drop(restore);
+    assert!(refused, "the exact allocation did not reach the allocator");
     result
 }
 

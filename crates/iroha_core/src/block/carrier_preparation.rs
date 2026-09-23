@@ -1,13 +1,23 @@
 // Consuming handoff from exact candidate validation to carrier preparation.
 
 /// Exact output of one successful candidate validation and its frozen context.
-/// Only the validator below can construct this input; preparation accepts no
-/// independently supplied block, State overlay, witness, or context.
+/// Only the validators below can construct this input. Live preparation and
+/// historical replay consume the same source-owned execution; neither accepts
+/// an independently supplied State overlay, witness, or context.
 pub(crate) struct ValidatedCarrierPreparationInput<'state> {
     valid: ValidBlock,
     state: Box<StateBlock<'state>>,
     context: Arc<iroha_data_model::block::consensus_v2::HeightContext>,
     native: Option<crate::state::NativeExecutionCustody>,
+}
+
+/// Historical execution retains its original Native sources until the isolated
+/// State has passed finality, wire and checkpoint checks. Field order releases
+/// all State writers before Native custody on every rejected replay.
+pub(crate) struct ValidatedReplayExecution<'state> {
+    pub(crate) valid: ValidBlock,
+    pub(crate) state: Box<StateBlock<'state>>,
+    pub(crate) native: Option<crate::state::NativeExecutionCustody>,
 }
 
 impl<'state> ValidatedCarrierPreparationInput<'state> {
@@ -21,6 +31,70 @@ impl<'state> ValidatedCarrierPreparationInput<'state> {
         Option<crate::state::NativeExecutionCustody>,
     ) {
         (self.valid, self.state, self.context, self.native)
+    }
+}
+
+fn classify_carrier_preparation_error(
+    reason: crate::state::MergeLedgerCommitError,
+) -> BlockValidationError {
+    match reason {
+        crate::state::MergeLedgerCommitError::StateStorageAdmission(error) => {
+            BlockValidationError::StateStorageAdmission(error)
+        }
+        crate::state::MergeLedgerCommitError::BlockHashAdmission(error) => {
+            BlockValidationError::BlockHashAdmission(error)
+        }
+        crate::state::MergeLedgerCommitError::MembershipAdmission(error) => {
+            BlockValidationError::MembershipAdmission(error)
+        }
+        error => BlockValidationError::LocalStorageRecoveryRequired {
+            reason: format!("carrier preparation: {error}"),
+        },
+    }
+}
+
+#[cfg(test)]
+mod carrier_preparation_admission_tests {
+    use super::*;
+
+    #[test]
+    fn original_admission_waits_keep_their_typed_carrier_boundary() {
+        let release = concread::release::ReleaseNotification::default();
+        let wait = release.observe();
+        let hash = crate::state::BlockHashAdmissionError::Busy(wait.clone());
+        assert_eq!(
+            classify_carrier_preparation_error(
+                crate::state::MergeLedgerCommitError::BlockHashAdmission(hash.clone())
+            ),
+            BlockValidationError::BlockHashAdmission(hash)
+        );
+        let membership = crate::state::MembershipAdmissionError::Busy(wait.clone());
+        assert_eq!(
+            classify_carrier_preparation_error(
+                crate::state::MergeLedgerCommitError::MembershipAdmission(membership.clone())
+            ),
+            BlockValidationError::MembershipAdmission(membership)
+        );
+        let storage = crate::state::StateStorageAdmissionError::World(
+            mv::storage::AdmittedStorageError::Busy {
+                role: mv::storage::StorageRole::Current,
+                release: wait,
+            },
+        );
+        assert_eq!(
+            classify_carrier_preparation_error(
+                crate::state::MergeLedgerCommitError::StateStorageAdmission(storage.clone())
+            ),
+            BlockValidationError::StateStorageAdmission(storage)
+        );
+        assert!(matches!(
+            classify_carrier_preparation_error(
+                crate::state::MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "local preparation failure".to_owned(),
+                )
+            ),
+            BlockValidationError::LocalStorageRecoveryRequired { .. }
+        ));
     }
 }
 
@@ -82,19 +156,7 @@ impl ValidBlock {
             context,
             native: None,
         })
-        .map_err(|(block, reason)| {
-            (
-                block,
-                Box::new(match reason {
-                    crate::state::MergeLedgerCommitError::StateStorageAdmission(error) => {
-                        BlockValidationError::StateStorageAdmission(error)
-                    }
-                    error => BlockValidationError::LocalStorageRecoveryRequired {
-                        reason: format!("carrier preparation: {error}"),
-                    },
-                }),
-            )
-        })
+        .map_err(|(block, reason)| (block, Box::new(classify_carrier_preparation_error(reason))))
     }
 }
 
@@ -130,6 +192,25 @@ impl ValidBlock {
         block_cadence: Duration,
     ) -> Result<Option<crate::state::PreparedCarrier<'state>>, NativeCandidatePreparationError>
     {
+        let Some(execution) = Self::validate_and_record_native_candidate(
+            source, context, genesis_account, time_source, block_cadence,
+        )? else {
+            return Ok(None);
+        };
+        crate::state::PreparedCarrier::prepare(execution)
+            .map(Some)
+            .map_err(|(_, reason)| NativeCandidatePreparationError::Preparation(reason))
+    }
+
+    /// Sole Native global preflight and recorded execution, shared by live
+    /// preparation and authenticated historical replay before either metadata tail.
+    fn validate_and_record_native_candidate<'state>(
+        source: crate::state::PreparedNativeLaneBatchSourceV1<'state>,
+        context: crate::sumeragi::v2::VerifiedHeightContext,
+        genesis_account: &AccountId,
+        time_source: &TimeSource,
+        block_cadence: Duration,
+    ) -> Result<Option<ValidatedCarrierPreparationInput<'state>>, NativeCandidatePreparationError> {
         use crate::state::MergeLedgerCommitError;
         crate::sumeragi::witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
@@ -152,6 +233,7 @@ impl ValidBlock {
                     .parent_commit_qc
                     .as_ref()
                     .map(|qc| qc.subject.block_hash)
+                    .or_else(|| frozen.snapshot_bootstrap.map(|anchor| anchor.snapshot_block_hash))
                     != body.header().prev_block_hash()
             {
                 return Err(Self::execution_context_error(
@@ -226,13 +308,11 @@ impl ValidBlock {
             )
         })?;
         let context = Arc::new(native.context().context().clone());
-        crate::state::PreparedCarrier::prepare(ValidatedCarrierPreparationInput {
+        Ok(Some(ValidatedCarrierPreparationInput {
             valid: Self::new_signatures_verified(block),
             state,
             context,
             native: Some(native),
-        })
-        .map(Some)
-        .map_err(|(_, reason)| NativeCandidatePreparationError::Preparation(reason))
+        }))
     }
 }

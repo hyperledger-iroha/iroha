@@ -252,6 +252,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'kura/tests/16_resource_file_admission_tests.rs',
         'kura/tests/17_read_only_evidence_tests.rs',
         'kura/tests/18_snapshot_hash_streaming.rs',
+        'kura/tests/19_transaction_history_budget.rs',
     ),
     'crates/iroha_core/src/kura/autonomous_application_evidence.rs': (
         'passive_diagnostic_reads.rs',

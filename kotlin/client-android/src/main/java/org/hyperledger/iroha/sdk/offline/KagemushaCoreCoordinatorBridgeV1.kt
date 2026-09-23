@@ -8,6 +8,7 @@ internal interface KagemushaCoreCoordinatorEndpointV1 {
     fun contract(): IntArray?
     fun open(storagePath: String): Long
     fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>?
+    fun close(handle: Long): Int
 }
 
 /**
@@ -15,15 +16,16 @@ internal interface KagemushaCoreCoordinatorEndpointV1 {
  *
  * Contract matching proves ABI compatibility only. A generic bridge refuses [open] until its
  * qualified Rust backend is installed. Returned Norito archives stay opaque at this layer.
- * The native ABI owns handles for the process lifetime and exposes no close/reset operation.
+ * Explicit close revokes the handle. The native ABI never reopens in the same process.
  */
 class KagemushaCoreCoordinatorBridgeV1 private constructor(
     private val endpoint: KagemushaCoreCoordinatorEndpointV1,
-    private val handle: Long,
-) {
+    private var handle: Long,
+) : AutoCloseable {
     /** Invoke one method only after strict framing; reject substituted response identities. */
     @Synchronized
     fun invoke(method: KagemushaCoreCoordinatorMethodV1, fields: List<ByteArray>): List<ByteArray> {
+        check(handle != 0L) { "KAGEMUSHA native coordinator handle is closed" }
         val request = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields)
         val nativeFields = KagemushaCoreCoordinatorFrameV1.decodeRequest(method, request).toTypedArray()
         val response = try {
@@ -36,8 +38,22 @@ class KagemushaCoreCoordinatorBridgeV1 private constructor(
         return KagemushaCoreCoordinatorFrameV1.decodeResponse(method, request, responseFrame)
     }
 
+    /** Revoke this handle before native teardown; reopening requires a fresh process. */
+    @Synchronized
+    override fun close() {
+        val closing = handle
+        if (closing == 0L) return
+        handle = 0L
+        val status = try {
+            endpoint.close(closing)
+        } catch (error: LinkageError) {
+            throw IllegalStateException("KAGEMUSHA native coordinator close is unavailable", error)
+        }
+        check(status == 0) { "KAGEMUSHA native coordinator close failed: $status" }
+    }
+
     companion object {
-        private val expectedContract = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff)
+        private val expectedContract = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1)
 
         /** Open the exact native ABI. Missing JNI/backend or a mismatched contract fails closed. */
         @JvmStatic
@@ -87,8 +103,10 @@ internal object KagemushaCoreCoordinatorJniV1 : KagemushaCoreCoordinatorEndpoint
     override fun open(storagePath: String): Long = nativeOpenV1(storagePath)
     override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>? =
         nativeInvokeV1(handle, method, fields)
+    override fun close(handle: Long): Int = nativeCloseV1(handle)
 
     @JvmStatic private external fun nativeContractV1(): IntArray?
     @JvmStatic private external fun nativeOpenV1(storagePath: String): Long
     @JvmStatic private external fun nativeInvokeV1(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>?
+    @JvmStatic private external fun nativeCloseV1(handle: Long): Int
 }

@@ -299,10 +299,10 @@ test("hashInstructionBatch binds a settlement batch to its source marker", () =>
     }),
     transfer,
   ];
-  const first = hashInstructionBatch(batchFor("a".repeat(64)), {
+  const first = hashInstructionBatch(batchFor("a".repeat(64)), 753, {
     encoding: "buffer",
   });
-  const second = hashInstructionBatch(batchFor("b".repeat(64)), {
+  const second = hashInstructionBatch(batchFor("b".repeat(64)), 753, {
     encoding: "buffer",
   });
 
@@ -1389,6 +1389,7 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
           client,
           {
             networkId: NETWORK_ID,
+            networkPrefix: 753,
             authority: AUTHORITY_ID_INPUT,
             privateKey: PRIVATE_KEY,
             vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
@@ -2005,6 +2006,7 @@ test("submitIvmProvedContractCall proof-binds, quotes, rebuilds, and signs", asy
     client,
     {
       networkId: NETWORK_ID,
+      networkPrefix: 753,
       authority: AUTHORITY_ID_INPUT,
       privateKey: PRIVATE_KEY,
       vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
@@ -2111,6 +2113,7 @@ test("submitIvmProvedContractCall keeps a 4 MiB proof request below Torii's defa
     () =>
       transaction.submitIvmProvedContractCall(client, {
         networkId: NETWORK_ID,
+        networkPrefix: 753,
         authority: AUTHORITY_ID_INPUT,
         privateKey: PRIVATE_KEY,
         vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
@@ -2177,6 +2180,7 @@ test("submitIvmProvedContractCall preserves generic non-policy overlay assertion
     () =>
       submitIvmProvedContractCall(client, {
         networkId: NETWORK_ID,
+        networkPrefix: 753,
         authority: AUTHORITY_ID_INPUT,
         privateKey: PRIVATE_KEY,
         vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
@@ -2228,6 +2232,7 @@ test("submitIvmProvedContractCall rejects caller validation-fee metadata", async
     () =>
       submitIvmProvedContractCall(client, {
         networkId: NETWORK_ID,
+        networkPrefix: 753,
         authority: AUTHORITY_ID_INPUT,
         privateKey: PRIVATE_KEY,
         vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
@@ -2246,6 +2251,7 @@ test("submitIvmProvedContractCall rejects caller validation-fee metadata", async
     () =>
       submitIvmProvedContractCall(client, {
         networkId: NETWORK_ID,
+        networkPrefix: 753,
         authority: AUTHORITY_ID_INPUT,
         privateKey: PRIVATE_KEY,
         vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
@@ -2298,6 +2304,7 @@ test("submitIvmProvedContractCall rejects conventional non-ZK deployed bytecode"
     () =>
       submitIvmProvedContractCall(client, {
         networkId: NETWORK_ID,
+        networkPrefix: 753,
         authority: AUTHORITY_ID_INPUT,
         privateKey: PRIVATE_KEY,
         vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
@@ -2361,6 +2368,7 @@ test("submitIvmProvedContractCall rejects a prover payload that differs from der
     () =>
       submitIvmProvedContractCall(client, {
         networkId: NETWORK_ID,
+        networkPrefix: 753,
         authority: AUTHORITY_ID_INPUT,
         privateKey: PRIVATE_KEY,
         vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
@@ -3676,7 +3684,7 @@ test("supported confidential transaction builders wrap expected instruction payl
       feePayment: AUTHORITY_FEE_PAYMENT,
       finalization: {
         electionId: "election-1",
-        tally: [1n],
+        tally: [1n, 0n],
         tallyProof: proof,
       },
       privateKey: PRIVATE_KEY,

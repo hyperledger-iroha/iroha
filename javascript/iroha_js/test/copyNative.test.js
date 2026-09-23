@@ -87,7 +87,7 @@ function fixtureBuildProvenance(
   sourceOverrides = {},
 ) {
   return {
-    version: 3,
+    version: 4,
     build_execution_policy: "trusted-local-cargo-v1",
     cargo_profile: cargoProfile,
     native_sha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
@@ -131,7 +131,7 @@ await publishNativeBinding({
   cargoProfile: "debug",
   readBuildProvenance(source) {
     return {
-      version: 3,
+      version: 4,
       build_execution_policy: "trusted-local-cargo-v1",
       cargo_profile: "debug",
       native_sha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
@@ -324,7 +324,7 @@ test("native publication replaces an existing pair repeatably without rename-ove
     JSON.parse(readFileSync(layout.manifestPath, "utf8")).entries[PLATFORM_KEY],
     {
       sha256: firstResult.sha256,
-      build_provenance_version: 3,
+      build_provenance_version: 4,
       build_execution_policy: "trusted-local-cargo-v1",
       cargo_profile: "debug",
       source_git_revision: SOURCE_REVISION,

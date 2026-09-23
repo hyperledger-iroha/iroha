@@ -99,7 +99,7 @@ use super::{
     v2_worker::{
         ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner, ProductionV2Services,
         QueuePlanBatchSources, V2CleanupSupervisor, V2CompletionRuntimeCutDecisionV1,
-        durable_exact_output_handoff_owner_pair,
+        durable_exact_output_service_owner,
     },
 };
 use crate::{
@@ -1398,7 +1398,6 @@ fn schedule_local_proposal(
     candidate_limits: CandidateLimits,
     context: &wire::HeightContext,
     local_validator: Option<wire::ValidatorIndex>,
-    key_pair: &KeyPair,
     output_guard: &ConsensusOutputGuard,
     state: &State,
     queue: &Arc<Queue>,
@@ -2930,7 +2929,14 @@ fn candidate_attachments(
         )
         .derive_npos_consensus_effects(round_header)
         .map_err(|error| {
-            if let Some(refusal) = error.downcast_ref::<crate::state::StateStorageAdmissionError>()
+            if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
+                V2RunnerError::CandidateBuild(
+                    super::v2_candidate::CandidateError::LocalStateAdmission(
+                        crate::state::StateBlockStartError::from(refusal.clone()),
+                    ),
+                )
+            } else if let Some(refusal) =
+                error.downcast_ref::<crate::state::StateStorageAdmissionError>()
             {
                 V2RunnerError::CandidateBuild(
                     super::v2_candidate::CandidateError::LocalStateAdmission(

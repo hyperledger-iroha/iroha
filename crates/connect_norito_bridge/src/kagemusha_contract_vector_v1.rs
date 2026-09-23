@@ -287,7 +287,7 @@ pub struct KagemushaNativeContractVectorBodyV1 {
     pub helpers: Vec<KagemushaNativeContractInventoryEntryV1>,
     /// Exact number of mandatory non-forking hardware capabilities.
     pub hardware_capability_count: u16,
-    /// Required capability mask; every lower V1 bit is mandatory.
+    /// Exact lower-sixteen-bit OEM checkpoint mask; app masks are class-specific.
     pub required_hardware_capability_mask: u16,
     /// Individual named mandatory capability bits in ascending order.
     pub hardware_capabilities: Vec<KagemushaNativeContractInventoryEntryV1>,
@@ -344,7 +344,7 @@ impl KagemushaNativeContractVectorBodyV1 {
                 })
                 .to_vec(),
             hardware_capability_count: KAGEMUSHA_NATIVE_HARDWARE_CAPABILITY_BITS_V1.len() as u16,
-            required_hardware_capability_mask: KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+            required_hardware_capability_mask: KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1 as u16,
             hardware_capabilities: KAGEMUSHA_NATIVE_HARDWARE_CAPABILITY_BITS_V1
                 .into_iter()
                 .zip(HARDWARE_CAPABILITY_NAMES_V1)
@@ -591,7 +591,7 @@ mod tests {
             body.hardware_capabilities
                 .iter()
                 .fold(0_u16, |mask, entry| mask | entry.code),
-            KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1
+            KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1 as u16
         );
         assert_eq!(body.required_hardware_capability_mask, 0xffff);
         assert_eq!(body.device_operation_count, 22);

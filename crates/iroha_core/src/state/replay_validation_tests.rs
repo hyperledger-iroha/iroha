@@ -370,7 +370,8 @@ fn replay_skips_hash_only_blocks_only_when_restored_state_hash_matches() {
         )
     };
     let kura = Kura::blank_kura_for_testing();
-    // Establish the authenticated primary while storage is still empty.
+    // Authenticate the configured primary before the audited hash-only prefix
+    // becomes durable; later State construction must verify that same anchor.
     let mut restored_state = make_state(Arc::clone(&kura));
     let snapshot_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7A; Hash::LENGTH]));

@@ -24,7 +24,7 @@ pub(crate) struct DetachedTransactionsPublicationSlot<'storage, Installation> {
     released: bool,
     installation: Option<Installation>,
     preflight_release: Option<DeferredRelease>,
-    writer_release: Option<DeferredRelease>,
+    writer_release: Option<MembershipRelease>,
 }
 
 impl DetachedTransactionsBlock {
@@ -81,8 +81,8 @@ impl<'storage, Installation> DetachedTransactionsPublicationSlot<'storage, Insta
         let Some(guard) = target.write_lock.try_lock() else {
             return self.refuse(PublicationPreparationError::after_failed_acquisition(wait));
         };
-        self.writer = Some(MembershipWriter::new(target.released.guard(guard)));
-        let current = Arc::ptr_eq(
+        self.writer = Some(MembershipWriter::new(target.released.guard(guard), None));
+        let current = Identity::ptr_eq(
             self.writer
                 .as_ref()
                 .expect("original observation writer")
@@ -95,7 +95,7 @@ impl<'storage, Installation> DetachedTransactionsPublicationSlot<'storage, Insta
             self.writer
                 .take()
                 .expect("original observation writer")
-                .into_release(),
+                .into_writer_release(),
         );
         if !current {
             return self.refuse(PublicationPreparationError::Changed);
@@ -110,8 +110,8 @@ impl<'storage, Installation> DetachedTransactionsPublicationSlot<'storage, Insta
             return self.refuse(PublicationPreparationError::after_failed_acquisition(wait));
         };
         // Install the actual final acquisition before checking its predecessor.
-        self.writer = Some(MembershipWriter::new(target.released.guard(guard)));
-        if !Arc::ptr_eq(
+        self.writer = Some(MembershipWriter::new(target.released.guard(guard), None));
+        if !Identity::ptr_eq(
             self.writer
                 .as_ref()
                 .expect("original publication writer")
@@ -128,15 +128,27 @@ impl<'storage, Installation> DetachedTransactionsPublicationSlot<'storage, Insta
         let DetachedTransactionsBlock {
             predecessor_identity: _,
             predecessor: _,
+            history,
             current,
             revert,
             publication,
             next_identity,
         } = original;
+        let baseline = target
+            .blocks
+            .read_predecessor(history.baseline.as_ref().expect("original history cut"))
+            .expect("checked original history family");
+        self.writer
+            .as_mut()
+            .expect("original membership writer")
+            .history = Some(history_slot::Slot::new(target, history));
         self.phase = Some(Phase::Prepared(PreparedTransactionsBlock::new(
             TransactionsBlock {
                 latest_block_ref: &target.latest_block,
+                budget_ref: &target.budget,
                 blocks_ref: &target.blocks,
+                baseline,
+                publication_sequence: &target.publication_sequence,
                 _guard: self
                     .writer
                     .take()
@@ -147,6 +159,29 @@ impl<'storage, Installation> DetachedTransactionsPublicationSlot<'storage, Insta
             publication,
             next_identity,
         )));
+        // The complete original block is back in the caller-owned phase before
+        // the native tree acquires any physical publication lock.
+        let Some(Phase::Prepared(prepared)) = self.phase.as_mut() else {
+            unreachable!()
+        };
+        if !matches!(&prepared.publication, MembershipPublication::Repeated) {
+            if let Err(error) = prepared
+                .block
+                ._guard
+                .history
+                .as_mut()
+                .expect("original history")
+                .prepare()
+            {
+                let refusal = match error {
+                    MembershipAdmissionError::Busy(wait) => PublicationPreparationError::Busy(wait),
+                    MembershipAdmissionError::Changed(_) => PublicationPreparationError::Changed,
+                    MembershipAdmissionError::Poisoned => PublicationPreparationError::Poisoned,
+                    _ => unreachable!("native reattachment performs no allocation admission"),
+                };
+                return self.refuse(refusal);
+            }
+        }
         self.complete = true;
         self.retryable = true;
         Ok(())

@@ -307,6 +307,7 @@ fn snapshot_hardware_profile(
     hasher.update(suite_id);
     let allowed_suite_commitment = hasher.finalize().into();
     KagemushaHardwareProfileV1 {
+        app_attestation_authority_policy_digest: [0xA5; 32],
         version: KAGEMUSHA_WIRE_VERSION_V1,
         protocol_version: KAGEMUSHA_WIRE_VERSION_V1,
         hardware_profile_id: [0; 32],
@@ -339,6 +340,7 @@ fn snapshot_hardware_credential(
 ) -> KagemushaHardwareCredentialV1 {
     let device_public_key = snapshot_device_public_key(device_key);
     let mut credential = KagemushaHardwareCredentialV1 {
+        app_policy_binding_digest: [0xA6; 32],
         version: KAGEMUSHA_WIRE_VERSION_V1,
         credential_id: [0; 32],
         network_id,

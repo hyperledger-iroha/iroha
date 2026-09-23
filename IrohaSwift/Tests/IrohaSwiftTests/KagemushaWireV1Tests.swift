@@ -167,6 +167,17 @@ final class KagemushaWireV1Tests: XCTestCase {
     }
   }
 
+  func testPaymentRequestTextBoundTracksCanonicalByteBound() throws {
+    let request = Data(repeating: 0xa5, count: KagemushaWireV1.maximumPaymentRequestBytes)
+    let text = try KagemushaWireV1.encodeText(request, kind: .paymentRequest)
+    XCTAssertEqual(request.count, 1_024)
+    XCTAssertEqual(text.utf8.count, KagemushaWireV1.maximumPaymentRequestTextBytes)
+    XCTAssertEqual(text.utf8.count, 1_371)
+    XCTAssertEqual(try KagemushaWireV1.decodeText(text, kind: .paymentRequest), request)
+    XCTAssertThrowsError(
+      try KagemushaWireV1.encodeText(request + Data([0]), kind: .paymentRequest))
+  }
+
   func testParityNativeStateCommitmentRequiresBothComponents() throws {
     let value = try KagemushaPastaStateCommitmentV1(
       eq: Data(repeating: 0x11, count: 32), ep: Data(repeating: 0x22, count: 32))

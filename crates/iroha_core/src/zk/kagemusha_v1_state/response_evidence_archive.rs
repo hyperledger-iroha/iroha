@@ -425,6 +425,7 @@ mod tests {
         )
         .unwrap();
         let credential = KagemushaHardwareCredentialV1 {
+            app_policy_binding_digest: [0xA6; 32],
             version: 1,
             credential_id: [0; 32],
             network_id: lane.network_id,

@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   chmodSync,
@@ -293,6 +293,7 @@ function verifyNativeBindingInternal(
   const expectedSourceTreeSha256 = expectedEntry?.source_tree_sha256;
   const expectedBuildExecutionPolicy = expectedEntry?.build_execution_policy;
   const expectedBuildProvenanceVersion = expectedEntry?.build_provenance_version;
+  const expectedMacosBuild = expectedEntry?.macos_build;
   if (!validChecksumEntry(expectedEntry, platform)) {
     return {
       ok: false,
@@ -415,6 +416,7 @@ function verifyNativeBindingInternal(
           sourceGitRevision: expectedSourceGitRevision,
           sourceTreeClean: expectedSourceTreeClean,
           sourceTreeSha256: expectedSourceTreeSha256,
+          ...(expectedMacosBuild === undefined ? {} : { macosBuild: expectedMacosBuild }),
         }),
   };
   if (retainBytes) {
@@ -624,6 +626,8 @@ function validChecksumEntry(entry, platform) {
     "source_tree_clean",
     "source_tree_sha256",
   ]);
+  const macos = platform.startsWith("darwin-");
+  if (macos) allowed.add("macos_build");
   const hasMachO = Object.hasOwn(entry, "mach_o_signing_independent_sha256");
   const hasPeHash = Object.hasOwn(entry, "pe_signing_independent_sha256");
   const hasPeSize = Object.hasOwn(entry, "pe_unsigned_size");
@@ -657,7 +661,8 @@ function validChecksumEntry(entry, platform) {
     !hasSourceClean ||
     !hasSourceTreeSha256 ||
     entry.build_execution_policy !== "trusted-local-cargo-v1" ||
-    entry.build_provenance_version !== 3 ||
+    entry.build_provenance_version !== 4 ||
+    (macos && !validMacosBuildIdentity(entry.macos_build)) ||
     typeof entry.source_git_revision !== "string" ||
     !/^[0-9a-f]{40}$/u.test(entry.source_git_revision) ||
     typeof entry.source_tree_clean !== "boolean" ||
@@ -689,6 +694,29 @@ function validChecksumEntry(entry, platform) {
     return false;
   }
   return true;
+}
+
+function validMacosBuildIdentity(identity) {
+  if (!isPlainObject(identity)) return false;
+  const keys = [
+    "sdk_root", "sdk_version", "sdk_settings_sha256",
+    "deployment_target", "clang_path", "clang_version",
+    "linker_path", "linker_version",
+  ];
+  if (Object.keys(identity).length !== keys.length ||
+      keys.some((key) => !Object.hasOwn(identity, key))) return false;
+  const version = /^\d+(?:\.\d+){1,2}$/u;
+  return [identity.sdk_root, identity.clang_path, identity.linker_path].every(
+    (value) => typeof value === "string" && posix.isAbsolute(value) &&
+      posix.normalize(value) === value,
+  ) &&
+    version.test(identity.sdk_version) &&
+    SHA256_PATTERN.test(identity.sdk_settings_sha256) &&
+    version.test(identity.deployment_target) &&
+    typeof identity.clang_version === "string" &&
+    identity.clang_version.startsWith("Apple clang version ") &&
+    typeof identity.linker_version === "string" &&
+    identity.linker_version.startsWith("@(#)PROGRAM:ld PROJECT:ld-");
 }
 
 function isPlainObject(value) {

@@ -7,8 +7,9 @@
 //! publisher, authenticate restart reconstruction, and reclaim unreachable history
 //! before enabling this store in the production Validate-to-Apply path.
 
-use std::{alloc::Layout, io, num::NonZeroU64, sync::Arc};
+use std::{alloc::Layout, io, num::NonZeroU64};
 
+use concread::shared::Shared;
 use iroha_crypto::{
     Hash, MerkleMapNode, MerkleMapNodeRef, MerkleMapNodeStore, MerkleMapUpdateWorkspace,
     MerkleMapValueRef,
@@ -16,8 +17,9 @@ use iroha_crypto::{
 use mv::allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
 
 use super::{
-    CommittedMembershipRoot, Key, MembershipReadError, MembershipRootError, MembershipStore,
-    PreparedMembershipRoot, PreparedTransactionsBlock, Value, canonical_height_digest,
+    CommittedMembershipRoot, Identity, Key, MembershipReadError, MembershipRootError,
+    MembershipStore, PreparedMembershipRoot, PreparedTransactionsBlock, Value,
+    canonical_height_digest,
     record::{
         FRAME_BYTES, MembershipLocation, MembershipRecord, MembershipRecordCodec, RecordError,
     },
@@ -314,7 +316,7 @@ impl<I: AppendIo> MembershipStore for ReplayStore<I> {
 }
 
 struct AppendInner<I> {
-    preparation: Arc<()>,
+    preparation: Identity,
     baseline: CommittedMembershipRoot<MembershipLocation>,
     workspace: Workspace,
     store: ReplayStore<I>,
@@ -327,8 +329,8 @@ impl<I: AppendIo> AppendInner<I> {
         prepared: &PreparedTransactionsBlock<'_>,
     ) -> Result<(), MembershipAppendError> {
         prepared.assert_unpublished();
-        if !Arc::ptr_eq(&self.preparation, &prepared.next_identity)
-            || !Arc::ptr_eq(&self.baseline.identity, prepared.block._guard.identity())
+        if !Shared::ptr_eq(&self.preparation, &prepared.next_identity)
+            || !Shared::ptr_eq(&self.baseline.identity, prepared.block._guard.identity())
         {
             return Err(MembershipAppendError::PreparationChanged);
         }
@@ -364,7 +366,7 @@ impl<'kura> PreparedMembershipAppend<'kura> {
         baseline: &CommittedMembershipRoot<MembershipLocation>,
     ) -> Result<u64, MembershipAppendError> {
         prepared.assert_unpublished();
-        if !Arc::ptr_eq(&baseline.identity, prepared.block._guard.identity()) {
+        if !Shared::ptr_eq(&baseline.identity, prepared.block._guard.identity()) {
             return Err(MembershipAppendError::PreparationChanged);
         }
         let transition = prepared
@@ -436,7 +438,7 @@ impl<'kura> PreparedMembershipAppend<'kura> {
         }
         let start = range.start_offset();
         let inner = AppendInner {
-            preparation: Arc::clone(&prepared.next_identity),
+            preparation: prepared.next_identity.clone(),
             baseline: baseline.clone(),
             workspace: Workspace::new(),
             store: ReplayStore {

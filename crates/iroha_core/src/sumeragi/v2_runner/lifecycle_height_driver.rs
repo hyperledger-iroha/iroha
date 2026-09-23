@@ -591,9 +591,8 @@ const fn blocked_runtime_drain_disposition(
 /// ingress winner is already dequeued and must enter the shared opaque
 /// post-dequeue consumer. Special certified-fence and timeout-vote episodes
 /// remain separate runner modes because they deliberately bypass the ordinary
-/// fair-turn census. The ingress `limit` bounds this batch; the separate
-/// `lane_output_limit` carries the control queue capacity for first dispatch
-/// immediately after each authenticated lane ingress consumer.
+/// fair-turn census. The ingress `limit` bounds this batch. Native lane output
+/// is admitted through the Native process's own bounded transport.
 // PendingKura intentionally uses a narrower no-clock decided-lane driver;
 // every ordinary height enters this owner-preserving batch here.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -609,7 +608,6 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
     npos_beacon: &mut V2GlobalBeaconLifecycle,
     limit: usize,
-    lane_output_limit: usize,
     terminal_finalization_cut: Option<&LifecycleTerminalFinalizationCutV1>,
 ) -> Result<LifecycleV2IngressDrainDispositionV1, V2RunnerError> {
     let mut producer_claim = activated.producer_claim_projection()?;

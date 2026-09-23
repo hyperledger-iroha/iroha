@@ -274,6 +274,25 @@ public enum KagemushaHardwarePlatformClassV1: UInt32, CaseIterable, Sendable {
   case appleOEMService = 1
   case dedicatedSecureElement = 2
   case otherQualified = 3
+  case appleAppAttest = 4
+  case androidKeyMint = 5
+
+  /// The complete capability set admitted for this exact platform class.
+  public var requiredCapabilityMask: UInt32 {
+    switch self {
+    case .androidOEMService, .appleOEMService, .dedicatedSecureElement, .otherQualified:
+      KagemushaWireV1.requiredHardwareCapabilityMask
+    case .appleAppAttest:
+      KagemushaWireV1.appleAppAttestCapabilityMask
+    case .androidKeyMint:
+      KagemushaWireV1.androidKeyMintCapabilityMask
+    }
+  }
+
+  /// Ordinary-app profiles require a separately verified recursive proof fold.
+  public var isOrdinaryApp: Bool {
+    self == .appleAppAttest || self == .androidKeyMint
+  }
 }
 
 /// Governed non-forking hardware-service profile.
@@ -290,10 +309,11 @@ public struct KagemushaHardwareProfileV1: Equatable, Sendable {
   public let allowedSuiteCommitment: Data
   public let policyEpoch: UInt64
   public let governanceCredentialPublicKey: KagemushaDevicePublicKeyV1
-  public let capabilityMask: UInt16
+  public let capabilityMask: UInt32
   public let qualificationReportDigest: Data
   public let validFromMS: UInt64
   public let expiresAtMS: UInt64
+  public let appAttestationAuthorityPolicyDigest: Data
 
   public init(
     version: UInt16 = 1, protocolVersion: UInt16 = 1, hardwareProfileID: Data,
@@ -301,11 +321,12 @@ public struct KagemushaHardwareProfileV1: Equatable, Sendable {
     productClassDigest: Data, firmwarePolicyDigest: Data,
     enrollmentAttestationVerifierDigest: Data, attestationTrustRootsDigest: Data,
     allowedSuiteCommitment: Data, policyEpoch: UInt64,
-    governanceCredentialPublicKey: KagemushaDevicePublicKeyV1, capabilityMask: UInt16,
-    qualificationReportDigest: Data, validFromMS: UInt64, expiresAtMS: UInt64
+    governanceCredentialPublicKey: KagemushaDevicePublicKeyV1, capabilityMask: UInt32,
+    qualificationReportDigest: Data, validFromMS: UInt64, expiresAtMS: UInt64,
+    appAttestationAuthorityPolicyDigest: Data
   ) throws {
     guard version == 1, protocolVersion == 1,
-      capabilityMask == KagemushaWireV1.requiredHardwareCapabilityMask,
+      capabilityMask == platformClass.requiredCapabilityMask,
       policyEpoch > 0, expiresAtMS > validFromMS
     else { throw kagemushaInvalid("hardwareProfile") }
     self.version = version
@@ -329,6 +350,8 @@ public struct KagemushaHardwareProfileV1: Equatable, Sendable {
       qualificationReportDigest, "qualificationReportDigest")
     self.validFromMS = validFromMS
     self.expiresAtMS = expiresAtMS
+    self.appAttestationAuthorityPolicyDigest = try kagemushaDigest(
+      appAttestationAuthorityPolicyDigest, "appAttestationAuthorityPolicyDigest")
   }
 }
 
@@ -348,6 +371,7 @@ public struct KagemushaHardwareCredentialV1: Equatable, Sendable {
   public let deviceKeyReference: Data
   public let issuedAtMS: UInt64
   public let expiresAtMS: UInt64
+  public let appPolicyBindingDigest: Data
   public let governanceSignature: KagemushaDeviceSignatureV1
 
   public init(
@@ -355,7 +379,8 @@ public struct KagemushaHardwareCredentialV1: Equatable, Sendable {
     suiteID: Data, firmwarePolicyDigest: Data, policyEpoch: UInt64, laneCommitment: Data,
     hardwareEpochID: Data, hardwareEpochGeneration: UInt64,
     devicePublicKey: KagemushaDevicePublicKeyV1, deviceKeyReference: Data,
-    issuedAtMS: UInt64, expiresAtMS: UInt64, governanceSignature: KagemushaDeviceSignatureV1
+    issuedAtMS: UInt64, expiresAtMS: UInt64, appPolicyBindingDigest: Data,
+    governanceSignature: KagemushaDeviceSignatureV1
   ) throws {
     guard version == 1, networkID.count == 32, networkID.contains(where: { $0 != 0 }),
       policyEpoch > 0, hardwareEpochGeneration > 0, expiresAtMS > issuedAtMS
@@ -375,6 +400,8 @@ public struct KagemushaHardwareCredentialV1: Equatable, Sendable {
     self.deviceKeyReference = try kagemushaDigest(deviceKeyReference, "deviceKeyReference")
     self.issuedAtMS = issuedAtMS
     self.expiresAtMS = expiresAtMS
+    self.appPolicyBindingDigest = try kagemushaDigest(
+      appPolicyBindingDigest, "appPolicyBindingDigest")
     self.governanceSignature = governanceSignature
   }
 }

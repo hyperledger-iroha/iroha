@@ -19,6 +19,34 @@ pass 18 FASTPQ regressions and 140 Core source/reservation tests on separate
 unchanged source captures, without compiler diagnostics. The production proof
 ceiling, runtime admission and complete qualification remain open.
 
+The [2026-09-23 integrated packet checkpoint](../docs/history/2026-09-23/integrated-packet-validation.md)
+records 13 passing MKHE source and nine pretranscript tests after the original
+coordinator receipt was joined to final-read identity checks. The consuming
+production composite remains inaccessible: live source/publication
+correspondence is not established, and the current qPCS initial tree alone
+exceeds the fixed tracked-work ceiling. These scoped passes do not qualify
+native40 or change any proof/resource limit.
+The ordered materialization terminal now rechecks the retained source records
+and sealed pair context before minting its local verified owner; forged full
+cursors fail. Ten focused handoff/context/ticket tests pass, with the
+ticket/rho positive using synthetic upstream source. Live source-to-pair,
+qPCS redesign and composite production admission remain open.
+The subsequent read-only qPCS review rejects the proposed one-Fp4-word-per-
+position grouping: its separate aggregate commitment can pass Merkle/FRI
+checks without equaling any of the 400 authenticated native rows, and direct
+cross-characteristic residue lifts do not preserve low degree. A source-bound
+opening relation, soundness/privacy argument and complete resource accounting
+remain prerequisites; the size-only geometry does not authorize production.
+The FASTPQ compact review likewise computes a 1,050,000-byte raw opening
+minimum for the current 375-query, 342-column segment before authentication,
+already above both its 512-KiB target and AXT's 1-MiB inner envelope. Its
+opening protocol, not merely its codec, still needs redesign.
+The September 23 geometry screen rejects a hypothetical 474,213-byte
+64-query/narrow-column segment: its current conditional soundness bound is
+below the required security target and its raw LDE alone reaches 2 GiB.
+The screened batched-opening route has no proved binding or witness-privacy
+construction. Neither changes production admission or the fixed ceilings.
+
 The [2026-09-09 validation checkpoint](../docs/history/2026-09-09/privacy-validation-checkpoint.md)
 records the retained native23 four-validator failure, completed SDK20 Apple
 build, failed whole Swift suite and integrated corrections awaiting execution.
@@ -105,6 +133,23 @@ retain its parameter, artifact, key and ciphertext checks, but confer no product
 qualification. Audited execution still rejects
 `MissingRegisteredHeOrgLatticeNoiseAndQromEvidence`; synthetic signed review
 fixtures cannot satisfy that requirement.
+The September 23 current-source correction encodes the complete 32-byte BFV
+statement hash injectively in eight little-endian `u32` Goldilocks limbs across
+38-column trace rows. The former four-`u64` modulo-field encoding aliased
+different hashes. A collision regression, governed-trace test, conformance
+negative and two byte-identical fixture regenerations pass; the canonical
+two-slot material is 890,808 bytes. Core's dependent native-STARK fixture
+test now passes. The artifact-aware Core native verifier also replays governed
+material and rejects a self-consistent proof with an unselected blind-rotation
+coefficient drift; the focused Soracloud test passes. Neither result supplies
+hidden-trace low-degree soundness, a full relation, eight-party behavior or the
+audited parameter/noise/qROM evidence; production qualification stays closed.
+The [BFV source-bound target-limb check](../docs/history/2026-09-23/bfv-rns-source-bound-before-target-limbs.md)
+now rejects out-of-bound caller-supplied product residues before exact scale-round
+or narrowing into target RNS limbs. Positive, negative, right-hand, and
+cancelling aliases passed the focused regression, alongside the existing
+positive scalar-boundary control. This closes only the source-bound admission
+gap; it does not prove those residues came from the claimed BFV operands.
 
 The compiled-profile owner is
 [`privacy_profiles.rs`](../crates/iroha_core/src/privacy_profiles.rs). Engine
@@ -118,7 +163,8 @@ implementation markers must not be substituted for the qualification record in
 | Generic native STARK | Current Binding and Explicit paths reconstruct the complete public trace/composition roots and enforce a zero terminal value. A future hidden-trace AIR still needs a verified initial degree/proximity argument; binary fold consistency alone is insufficient. Standalone public-padding verification remains unavailable, and BFV/Soracloud callers must complete explicit material replay. |
 | FASTPQ | The sole offline compact V1 owner now compiles with six-lane commitments, complete typed context and fixed field tapes; accepted compact SHAKE/prototype selectors are removed. Complete actual full-domain proofs and fresh artifacts, replace the production replay representation, and finish the bounded-opening AIR/FRI and witness-privacy arguments within unchanged production proof limits. Complete protocol-specific qROM analysis and independent permutation/construction reproduction. |
 | AXT | Both Core execution pipelines now commit exact ordered canonical transaction wires; missing block-owned commitments cannot be synthesized from transcript identities. Anchor-bound proof verification checks ordered wire membership, exact public roots and context, and mandatory expiry. Consensus witness roots and transfer-batch trees still commit subsets, which cannot substitute for full persisted WSV roots. Complete successful-execution/transfer binding, rooted state witnesses, immutable anchor resolution and durable spend nonces. |
-| BFV/Soracloud and MKHE | Full BFV-RNS and one atomic 40-limb source/materialization/packing/cross-field/padding verifier, full-size/eight-party KAT, resource measurements and governed noise/qROM evidence. Unavailable stages cannot issue receipts. |
+| BFV/Soracloud | Complete the full BFV-RNS relation, full-size/eight-party KAT, resource measurements and governed parameter/lattice/noise/qROM evidence. The artifact-aware native wrapper is a replay check, not production qualification. |
+| MKHE | Complete the separate atomic 40-limb source/materialization/packing/cross-field/padding verifier and production composite within the unchanged qPCS resource limits. Unavailable stages cannot issue receipts. |
 | Confidential assets and private settlement | Regenerated canonical proofs/keys, authority/amount/conservation adversaries, complete SDK routes and deployment evidence described by the owning settlement/asset specifications. |
 | SoraFS | Complete the V1 closure ledger, live four-voter/multi-provider/dual-gateway L1, resilience/load/24-hour soak, all 17 summaries and ordered L2 promotion evidence. |
 | Kaigi | Final 31-row authorization and 25-row usage proofs; retained original-account participation, exact keys/schema, suite-tagged HPKE, bounded accounting and authenticated relay recovery. |

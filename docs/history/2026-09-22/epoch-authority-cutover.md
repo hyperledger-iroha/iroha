@@ -825,3 +825,173 @@ to genuine Native retained publication and immutable captured State. The dormant
 Apply chain itself remains compiled and unretired: its remaining fixture and
 formal migrations are open, so no removal or current-source proof is claimed.
 Core60 now captures the fixture, directory-durability and checkpoint-test changes.
+
+
+Core60 compiles unchanged and its captured runtime reports 529 of 530 tests
+passing, including all three corrected clock controls, four migrated checkpoint
+controls and all four finality ancestor-sync cuts. The sole failure is fixture
+setup: the new standalone manifest test invokes strict startup planning on blank
+Kura without first admitting its physical geometry. Generation222 prepares the
+existing authenticated initial-geometry helper before the block append and fault
+injection; it preserves all strict planning and durability assertions.
+
+During that runtime, another writer completed the merge to HEAD
+`ddaa8ede8818912b864aaad73566c6f4cc3a87f0` and changed CLI public reset, Core
+beacon/readiness, Kagami localnet and two Torii test sources. Our run's final
+source/Git join therefore fails even though its retained executable is unchanged.
+The 529 passes qualify that captured executable only. No other task was contacted
+or interrupted, and no concurrent edit was reverted. Daemon61/harness62 are
+allowed to finish naturally; fresh source/artifact joins are required afterward.
+The earlier active-merge blocker is now historical, not the current Git state.
+
+
+### Current source join and signed-genesis lifecycle retirement
+
+Core63 compiles and all 530 selected runtime controls pass. Its final receipt
+joins the emitted and retained binary to unchanged Rust/config/fixture inputs,
+branch, HEAD and index. This includes every original 58 review control, all
+manifest/finality ancestor-barrier cuts, corrected Native clocks, physical
+publication, source-request retirement and the migrated checkpoint controls.
+Formatting and all five retired-codec guards pass. Daemon64 and harness65 also
+compile on that same unchanged capture. Daemon61/harness62 completed naturally
+but remain unqualified because their inputs changed during the earlier merge.
+
+The matching local four-validator `native-silent64-local1` diagnostic again
+successfully executes its only transaction on the three survivors and verifies
+the later-view Native quorum. The restarted author now passes strict complete
+Kura replay at genesis, proving that the missing-manifest failure is cleared.
+The test then fails at the next lifecycle boundary: `CompleteTip finality has
+neither an exact Apply lineage nor a canonical physical predecessor frame`.
+Its 107.58-second receipt reports zero passed, one failed, and unchanged source,
+Git metadata and executables. All test-owned processes have stopped; captured
+stores remain untouched. This is still a failed outage/restart qualification.
+
+The rejected height-one log is physically present and nonempty. Recovery wrongly
+assumed signed genesis always has an empty lifecycle log; its physical-frame
+branch required post-genesis rotating-leader policy. Generation224 now separates
+authenticated genesis context from ledger emptiness. Existing physical frames
+can retire under their exact signed-genesis or post-genesis policy, followed by
+the same artifact/receipt/activation identity, Kura root, directory/frame binding,
+complete ownership census and Serve authentication. Missing-frame EmptyGenesis
+still requires zero high-water, no records and no debt. Tests require the actual
+physical capability, reject wrong policy and missing capability, and observe
+persisted cancellation with the original ordinal floor for both policies.
+Core66, daemon67 and harness68 capture this correction; its runtime and fresh
+network results remain pending. No L1–L6 or release gate is closed.
+
+
+### Native restart qualification and historical replay closure
+
+Core66 and its final runtime/source/binary/Git join pass all 574 selected controls,
+including the original 58 review regressions and 44 CompleteTip physical-frame
+and genesis recovery controls. Matching daemon67/harness68 pass
+`native_silent_initial_author_finalizes_one_finite_input` in 115.448576 seconds.
+The actual first Native author is stopped before the sole finite input. Three
+survivors execute it under an authenticated later-view three-share NativeQC;
+the stopped validator restarts from genesis, catches up, and all four peers
+agree on account State and the exact result-bearing block wire.
+
+The separate seven-validator `authoritative_v2_finalizes_through_two_validator_restarts`
+diagnostic fails on unchanged source and artifacts after successful Native
+economic execution. Restart rejects committed block 3 with
+`ExecutionContextInvalid("native lane economic carrier is not active")` during
+atomic replay prevalidation. The failure is the generic historical validator's
+retired Native gate. Its captured stores remain unchanged. The next correction
+shares the existing source-owned Native preflight and recorded execution before
+live preparation captures its witness, retaining Native custody through the
+existing finality, exact-wire, checkpoint and isolated-State replay tail.
+
+These are local development observations, not signed release qualification.
+The four-validator result does not close the seven-validator restart failure or
+the remaining loss, reordering, backpressure and final-transaction matrix.
+All six liveness goals remain open.
+
+
+The historical replay correction now shares
+`ValidBlock::validate_and_record_native_candidate` with live preparation. Both
+consume the same source authentication, global preflight, recorded execution
+and original Native custody. Replay authenticates the exact historical proposal
+first, reconstructs successor authority from the durable parent receipt or the
+exact State-authenticated snapshot record, and retains that custody through
+witness, CommitQC, exact wire, metadata and checkpoint checks. Both shared parent
+checks accept the authenticated snapshot anchor. The entire range still runs in
+an isolated State before one final installation. Generic execution remains
+closed to unowned Native inputs.
+
+Core69 compiles and passes all 574 existing selected controls with an unchanged
+final source/binary/Git join. This establishes regression preservation, not
+execution of the new historical Native branch. Generation228 adds four genuine
+retained-publication to replay controls covering independent and atomic Native
+inputs plus late correlated checkpoint rejection without any State or Kura
+mutation. Core70 exposes a missing test-only `StorageReadOnly` import; its failed
+receipt is retained. The replay tail also requires custody presence to match
+Native input presence; dropping an optional owner cannot silently skip its checks.
+
+Core71 compiles but its six new runtime controls produce one pass and five
+failures before exercising the intended branches: the four publication fixtures
+lack the genesis domain authority required by historical replay, and the positive
+snapshot fixture has a one-member State roster instead of its signed four-member
+global context. Those fixtures now establish the genesis account and domain, and
+the exact global roster and BLS proofs, before genesis and all signed admissions.
+No State authentication or production validation requirement is relaxed.
+
+Core72 compiles on unchanged source. All four actual Native publication/replay
+controls pass, including independent and atomic late checkpoint rejection with
+unchanged State and Kura. The wrong-snapshot-State control also passes. The positive
+snapshot fixture correctly rejects its locally available parent body; it now uses
+the existing hash-only snapshot fixture conversion before authentication. Core75
+compiles and all six targeted controls pass with the final unchanged
+source/binary/Git join. Its complete 580-control selection and matching development
+daemon73/harness74 network qualification remain pending. These partial results do
+not close the seven-validator restart or broader liveness goals.
+
+
+Generation229 moves the original Native preparation contract to the shared
+execution kernel and binds the live/replay consumers, exact historical authority,
+source custody and full replay tail. Three actual source consumers pass on an
+immutable complete source mirror. The initial 37-control run passes 36 and exposes
+a lexical collision: a later staged-merge-entry lookup masks substitution of the
+manifest argument. That failed receipt is preserved. The final refinement binds
+the complete Native-presence predicate and exact manifest, witness, commitment
+and original-wire arguments; all ten uncached positive/substitution controls pass
+on its unchanged mirror. The reviewed three-file checker/ledger/test refinement
+is applied with exact file hashes and an unchanged Git index and HEAD. These are
+source-binding checks, not a proof of runtime progress. Final canonical consumers
+and the ongoing existing publication controls retain separate receipts.
+
+Matching daemon73 and harness74 now compile successfully with unchanged captured
+Rust inputs, branch, HEAD and index. The seven-validator two-restart diagnostic
+runs on these exact binaries; its result is pending. The complete Core75 selection
+also remains in progress. No release or broader fault-matrix conclusion follows
+from compilation or the six targeted runtime passes.
+
+
+Core75 subsequently passes the complete 580-control selection with its final
+unchanged source/binary/Git join. Generation229 also completes all 84 existing
+publication/durability controls on its immutable mirror. Its final canonical
+consumers pass four uncached checks, including the original staged-entry mutation,
+and join exactly to all three applied refinement hashes.
+
+The matching seven-validator daemon73/harness74 diagnostic fails in 87.886357
+seconds with all captured inputs and binaries unchanged. It advances past genesis
+but exits before the restart stage: `pleasant_antelope` fails its height-2/3
+handoff with `finalized ingress cut retained physical ownership`. Native transport
+has a process lifetime and its terminal selector deliberately excludes those
+messages; the independent poll handles at most one physical Native occurrence per
+turn. Both global rollover callers nevertheless require whole-process queue
+emptiness. This conflicts with the existing exact Native retention/rebinding
+path. The strict full-drain condition must remain available for full closure.
+
+Generation232 introduces a separate authenticated closed-global cut in the
+existing lifecycle ingress-position owner. It reuses release-mode structural
+validation of all counters, indices, original byte allocations and occurrence
+positions; rejects every remaining global/live leader owner; then authenticates
+the immutable retained Native evidence, message, origin and routes outside the
+State mutex while retaining service/publication fences. It mutates no queue or
+process retry owner. Both global callers use that cut; the strict full-process
+cut is unchanged. Added controls preserve multiple original/coalesced messages,
+reject thirteen Native accounting/custody corruptions, retain the original
+allocation across roster replacement, and reject all nine stale global lane
+accounts under both cuts. Core76 and matching network qualification are pending.
+The failure receipt and actual peer stores remain retained; no network pass or
+L1–L6 completion is claimed.

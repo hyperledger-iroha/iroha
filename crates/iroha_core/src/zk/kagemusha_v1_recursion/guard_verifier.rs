@@ -8,6 +8,8 @@
 //! loading artifacts or running the separate diagnostics cannot authorize monetary operations.
 //! Independent mint reservation/staging, peer staging and recovery anchors also require their own
 //! qualified hardware transaction evidence. Physical profile qualification remains a release gate.
+//! Ordinary-app profiles remain closed to authenticated monetary verification until the paired
+//! fold proves their signed selection, app identity, and counter or one-use-key chain.
 
 use std::sync::Arc;
 
@@ -16,6 +18,7 @@ use halo2_proofs::{
     halo2curves::pasta::{EpAffine, EqAffine, Fp, Fq},
     poly::ipa::commitment::ParamsIPA,
 };
+use iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1;
 use norito::{
     DecodeLimits,
     codec::{Decode, Encode},
@@ -71,6 +74,27 @@ pub enum KagemushaGuardVerificationErrorV1 {
     /// This monetary proof relation cannot certify the named hardware transaction.
     #[error("qualified hardware transaction verifier is unavailable for {0}")]
     HardwareTransactionUnavailable(&'static str),
+    /// An ordinary-app hardware assertion has not entered both recursive proof parities.
+    #[error("ordinary-app hardware assertion is not bound by both monetary proof parities")]
+    HardwareAssertionFoldUnavailable,
+}
+
+fn require_hardware_assertion_fold_v1(
+    platform_class: KagemushaHardwarePlatformClassV1,
+) -> Result<()> {
+    match platform_class {
+        // TODO: Admit these classes only after their exact P-256/SHA assertion,
+        // governed app identity, counter or one-use-key chain, and Core subject
+        // are recursively constrained in both Eq and Ep monetary folds.
+        KagemushaHardwarePlatformClassV1::AppleAppAttest
+        | KagemushaHardwarePlatformClassV1::AndroidKeyMint => {
+            Err(KagemushaGuardVerificationErrorV1::HardwareAssertionFoldUnavailable)
+        }
+        KagemushaHardwarePlatformClassV1::AndroidOemService
+        | KagemushaHardwarePlatformClassV1::AppleOemService
+        | KagemushaHardwarePlatformClassV1::DedicatedSecureElement
+        | KagemushaHardwarePlatformClassV1::OtherQualified => Ok(()),
+    }
 }
 
 #[derive(norito::NoritoSchema)]
@@ -215,6 +239,7 @@ impl KagemushaAuthenticatedGuardBundleVerifierV1 {
         {
             return Err(KagemushaGuardVerificationErrorV1::Binding);
         }
+        require_hardware_assertion_fold_v1(profile.hardware_profile.platform_class)?;
         Ok(proofs)
     }
 }
@@ -743,6 +768,26 @@ mod tests {
 
     const EMPTY: DigestV1 = [0x75; 32];
 
+    #[test]
+    fn ordinary_app_profiles_require_a_bound_hardware_assertion_fold() {
+        use KagemushaHardwarePlatformClassV1 as Class;
+
+        for class in [Class::AppleAppAttest, Class::AndroidKeyMint] {
+            assert_eq!(
+                require_hardware_assertion_fold_v1(class),
+                Err(KagemushaGuardVerificationErrorV1::HardwareAssertionFoldUnavailable)
+            );
+        }
+        for class in [
+            Class::AndroidOemService,
+            Class::AppleOemService,
+            Class::DedicatedSecureElement,
+            Class::OtherQualified,
+        ] {
+            assert_eq!(require_hardware_assertion_fold_v1(class), Ok(()));
+        }
+    }
+
     // These synthetic transcripts test shape and exact statement bindings only. Actual proof
     // acceptance must be exercised by the authenticated real-proof qualification corridor.
     fn fixture() -> (
@@ -766,6 +811,7 @@ mod tests {
             lane: state.lane,
             hardware_epoch: state.hardware_epoch,
             device_policy_binding: state.device_policy_binding,
+            next_one_use_key_reference: state.next_one_use_key_reference,
             state_nonce_commitment: state.state_nonce_commitment,
             state_commitment: state.state_commitment,
         };

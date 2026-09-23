@@ -143,7 +143,7 @@ test("repository ignores every native publication artifact", () => {
   }
 });
 
-test("native build provenance V3 binds the exact binary, source, and execution policy", () => {
+test("native build provenance V4 binds the exact binary, source, and execution policy", () => {
   withNativeFixture(({ nativePath }) => {
     const state = sourceState();
     const provenance = createNativeBuildProvenance({
@@ -152,7 +152,7 @@ test("native build provenance V3 binds the exact binary, source, and execution p
       sourceBefore: state,
       sourceAfter: state,
     });
-    assert.equal(provenance.version, 3);
+    assert.equal(provenance.version, 4);
     assert.equal(provenance.build_execution_policy, "trusted-local-cargo-v1");
     assert.equal(provenance.cargo_profile, "deploy");
     assert.match(provenance.native_sha256, /^[0-9a-f]{64}$/u);
@@ -731,6 +731,7 @@ test("native build provenance rejects stale binaries and malformed V1/V2/V3 fiel
     for (const malformed of [
       { ...provenance, unexpected: true },
       { ...provenance, version: 2 },
+      { ...provenance, version: 3 },
       { ...provenance, version: 1 },
       { ...provenance, build_execution_policy: "hermetic-build-v1" },
       { ...provenance, build_execution_policy: undefined },

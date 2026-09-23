@@ -54,6 +54,8 @@ const BEGIN_PUBLIC_DIGEST_HASH_BYTES_V2: u64 = RNS_NATIVE_PRETRANSCRIPT_PUBLIC_D
     - RECORDS_V2 as u64 * NONCE_BINDING_HASH_BYTES_PER_RECORD_V2;
 const PREPARATION_AND_BEGIN_PUBLIC_DIGEST_HASH_BYTES_V2: u64 =
     RNS_NATIVE_PRETRANSCRIPT_PUBLIC_DIGEST_HASH_BYTES_V1 + BEGIN_PUBLIC_DIGEST_HASH_BYTES_V2;
+const SOURCE_IDENTITY_RECEIPT_BYTES_V2: usize =
+    core::mem::size_of::<ZkAmsMkheRnsNativeSourceReceiptV1>();
 const KNOWN_NEW_PEAK_BYTES_V2: usize = INLINE_FACTS_BYTES_CURRENT_TARGET_V2
     + RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ARTIFACT_DIGEST_BYTES_V1
     + RNS_NATIVE_PRETRANSCRIPT_PUBLIC_ALIAS_BYTES_V1
@@ -85,7 +87,13 @@ pub(super) const RNS_NATIVE_PRETRANSCRIPT_RELEASE_AUTHORIZED_V2: bool = false;
 /// the ledger pins only reads, validated coefficients, and absorbed bytes.
 /// Preparation hashes all 43 nonces. Begin revalidates the retained public key,
 /// record, and bundle facts but has no nonce bytes to rehash, so it omits the
-/// exact `43 * 370` nonce-binding absorption.
+/// exact `43 * 370` nonce-binding absorption. Source identity checks borrow
+/// this coordinator's original receipt. Their temporary 128-byte live receipt
+/// is created only before registry/chunk allocation or after both are dropped;
+/// it does not increase the existing named peak. Reference/control headers and
+/// receipt/layout revalidation and backend identity-query implementation work
+/// remain outside the public-digest absorption and coefficient counters. These
+/// boundary checks do not establish authenticated repeatability.
 pub(super) struct RnsNativePreTranscriptResourceLedgerV2 {
     pub(super) authenticated_source_reads: u64,
     pub(super) source_plaintext_bytes: u64,
@@ -153,6 +161,11 @@ const _: () = {
     assert!(
         RNS_NATIVE_PRETRANSCRIPT_RESOURCE_LEDGER_V2.preparation_and_begin_public_digest_hash_bytes
             == 292_406
+    );
+    assert!(SOURCE_IDENTITY_RECEIPT_BYTES_V2 == 128);
+    assert!(
+        SOURCE_IDENTITY_RECEIPT_BYTES_V2
+            <= ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_PLAINTEXT_BYTES_V1 as usize
     );
     assert!(RNS_NATIVE_PRETRANSCRIPT_RESOURCE_LEDGER_V2.known_new_peak_bytes == 301_673);
     assert!(RNS_NATIVE_PRETRANSCRIPT_PUBLIC_STATEMENT_SOURCE_SETTLED_V2);
@@ -376,6 +389,7 @@ where
         derive_rns_native_pre_transcript_record_facts_v1(
             &mut source,
             layout,
+            &receipt,
             epoch,
             governed_roster_digest,
             &public_a,
@@ -604,6 +618,7 @@ where
         derive_rns_native_pre_transcript_record_facts_v1(
             &mut source,
             layout,
+            &receipt,
             epoch,
             governed_roster_digest,
             &public_a,

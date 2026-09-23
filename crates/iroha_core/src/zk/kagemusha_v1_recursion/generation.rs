@@ -1841,11 +1841,11 @@ pub struct KagemushaMintAuthorizationGenerationWitnessV1<'a> {
     pub eq_credential_protocol_digest: [u8; 32],
     /// Eq compiled platform-credential protocol.
     pub eq_credential_protocol: &'a PlonkProtocol<EqAffine>,
-    /// Exact Eq platform-credential public column (`1 x 40`).
+    /// Exact Eq platform-credential public column (`1 x 42`).
     pub eq_credential_instances: &'a [Vec<Fp>],
     /// Eq platform-credential proof.
     pub eq_credential_proof: &'a [u8],
-    /// Eq complete hash-claim history carried at credential public rows `6..40`.
+    /// Eq complete hash-claim history carried at credential public rows `8..42`.
     pub eq_credential_claim_history: &'a KagemushaEqAccumulatorV1,
     /// Eq proof folding the current credential opening with its carried claim history.
     pub eq_credential_history_fold_proof: &'a KagemushaEqFoldProofV1,
@@ -1867,11 +1867,11 @@ pub struct KagemushaMintAuthorizationGenerationWitnessV1<'a> {
     pub ep_credential_protocol_digest: [u8; 32],
     /// Ep compiled platform-credential protocol.
     pub ep_credential_protocol: &'a PlonkProtocol<EpAffine>,
-    /// Exact Ep platform-credential public column (`1 x 40`).
+    /// Exact Ep platform-credential public column (`1 x 42`).
     pub ep_credential_instances: &'a [Vec<Fq>],
     /// Ep platform-credential proof.
     pub ep_credential_proof: &'a [u8],
-    /// Ep complete hash-claim history carried at credential public rows `6..40`.
+    /// Ep complete hash-claim history carried at credential public rows `8..42`.
     pub ep_credential_claim_history: &'a KagemushaEpAccumulatorV1,
     /// Ep proof folding the current credential opening with its carried claim history.
     pub ep_credential_history_fold_proof: &'a KagemushaEpFoldProofV1,

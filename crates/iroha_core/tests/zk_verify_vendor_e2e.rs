@@ -200,12 +200,12 @@ seiyaku VendorBridgeGate {
     stx.world.elections_mut().insert(
         "election1".to_owned(),
         iroha_core::state::ElectionState {
-            options: 1,
+            options: 2,
             eligible_root: root_bytes,
             start_ts: 0,
             end_ts: 0,
             finalized: false,
-            tally: vec![0],
+            tally: vec![0, 0],
             ballot_nullifiers: std::collections::BTreeSet::new(),
             ciphertexts: Vec::new(),
             vk_ballot: Some(vk_id.clone()),

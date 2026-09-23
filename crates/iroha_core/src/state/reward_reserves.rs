@@ -189,7 +189,7 @@ mod tests {
         (world, asset)
     }
 
-    fn restore(value: json::Value) -> Result<Box<State>, deserialize::SnapshotRestoreError> {
+    fn restore(value: json::Value) -> Result<Box<State>, deserialize::StateRestoreError> {
         deserialize::KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: Arc::new(LaneManifestRegistry::empty()),

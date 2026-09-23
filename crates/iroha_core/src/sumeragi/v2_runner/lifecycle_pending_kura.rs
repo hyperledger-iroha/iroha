@@ -5,6 +5,7 @@ use crate::sumeragi::v2_lifecycle_coordinator::{
     PendingKuraActivatedProductionLifecycleV1, PendingKuraProductionLifecycleV1,
     ProductionLifecycleLaunchInputsV1, ProductionPendingKuraApplyRecoveryProgressV1,
 };
+use crate::sumeragi::v2_worker::durable_exact_output_service_owner;
 
 const PENDING_TIP_RECOVERY_DEADLINE_ROUNDS: u32 = 3;
 
@@ -439,7 +440,6 @@ fn reconcile_pending_lane_startup(
 fn reconcile_pending_kura_terminal_lane_output_handoffs(
     activated: &mut PendingKuraActivatedProductionLifecycleV1,
     active_runner: &mut ProductionLifecycleActiveRunnerBorrowV1,
-    control_queue_capacity: usize,
 ) -> Result<bool, V2RunnerError> {
     activated.with_runner_runtime(active_runner, |_executor, services| {
         services
@@ -471,7 +471,6 @@ fn run_pending_active_height(
     block_sync_server: &mut V2BlockSyncServer,
     genesis_account: &AccountId,
     control_queue_capacity: usize,
-    round_timeout: Duration,
     retransmit_interval: Duration,
 ) -> Result<HeightRunOutcome<PreparedPendingKuraSuccessorV1>, V2RunnerError> {
     let mut next_recovered_decision_fetch_retransmit =
@@ -514,7 +513,9 @@ fn run_pending_active_height(
         }
         activated.with_runner_runtime(
             &mut active_runner,
-            |executor, services| -> Result<_, V2RunnerError> {
+            |executor, _services| -> Result<_, V2RunnerError> {
+                // Relay ingress only updates QueuePlan. The next runtime turn
+                // dispatches its effects under the configured queue capacity.
                 drain_lane_relay_ingress(lane_relay_rx, queue_plan, executor.current_tag().view())
                     .map_err(V2RunnerError::LaneWork)
             },
@@ -522,7 +523,6 @@ fn run_pending_active_height(
         let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
             &mut activated,
             &mut active_runner,
-            control_queue_capacity,
         )?;
         // Activation proves local Apply is complete. Retained network output
         // must not block the recovery/preflight that authenticates its durable
@@ -566,7 +566,9 @@ fn run_pending_active_height(
                     .service_kura_replica_advert_refresh_turn(Instant::now())
                     .map_err(V2RunnerError::Service)?;
                 services.drain_completions(executor)?;
-                let directive = reconcile_executor_locked_body(executor, services)?;
+                // Pending Kura has no local proposal owner to update; this
+                // still settles retained Decision cleanup and locked-body work.
+                reconcile_executor_locked_body(executor, services)?;
                 drain_decided_lane_recovery_ingress(
                     receiver,
                     executor,
@@ -622,7 +624,6 @@ fn run_pending_active_height(
             let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
                 &mut activated,
                 &mut active_runner,
-                control_queue_capacity,
             )?;
             rollover_ready
         } else {
@@ -680,7 +681,6 @@ fn run_pending_active_height(
             let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
                 &mut activated,
                 &mut active_runner,
-                control_queue_capacity,
             )?;
             // Rollover authenticates and hands off this exact retained output.
             // Waiting for every remote recipient here would deadlock the local
@@ -694,7 +694,7 @@ fn run_pending_active_height(
             }
         }
         receiver
-            .ensure_closed_drained_cut()
+            .ensure_closed_global_drained_cut()
             .map_err(V2RunnerError::Service)?;
         if context.height == u64::MAX {
             activated.with_runner_runtime(&mut active_runner, |executor, _services| {
@@ -1042,8 +1042,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         factory,
         body_store,
     )?;
-    let (exact_output_service_owner, exact_output_transport_owner) =
-        durable_exact_output_handoff_owner_pair();
+    let exact_output_service_owner = durable_exact_output_service_owner();
     let launch_inputs = ProductionLifecycleLaunchInputsV1::new(
         Instant::now(),
         round_timeout,
@@ -1212,7 +1211,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
             .expect("pending Kura historical Serve server initialized above"),
         &genesis_account,
         control_queue_capacity,
-        round_timeout,
         retransmit_interval,
     )?;
     let successor = match completed {

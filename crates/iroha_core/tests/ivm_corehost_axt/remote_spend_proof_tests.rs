@@ -592,7 +592,7 @@ fn core_host_rejects_signed_origin_outside_bound_descriptor() {
 }
 
 #[test]
-fn core_host_resolves_hidden_amount_from_verified_dataspace_proof_requires_finalized_anchor() {
+fn core_host_rejects_redacted_amount_even_with_verified_dataspace_proof() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(73);
     let manifest_root = [0x73; 32];
@@ -659,6 +659,8 @@ fn core_host_resolves_hidden_amount_from_verified_dataspace_proof_requires_final
         },
     };
     let effective_amount = Quantity::from(5_u64);
+    let mut clear_intent = intent.clone();
+    clear_intent.op.amount = Some(effective_amount.clone());
     let proof = proof_blob_for_remote_spends_with_committed_amount(
         dsid,
         manifest_root,
@@ -672,14 +674,14 @@ fn core_host_resolves_hidden_amount_from_verified_dataspace_proof_requires_final
         manifest_root,
         vec![0x73],
         handle.expiry_slot - 1,
-        &[(&handle, &intent, &effective_amount)],
+        &[(&handle, &clear_intent, &effective_amount)],
         Some(5),
     );
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &short_proof);
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
-    let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
+    let clear_intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &clear_intent);
     vm.set_register(10, handle_ptr);
-    vm.set_register(11, intent_ptr);
+    vm.set_register(11, clear_intent_ptr);
     vm.set_register(12, proof_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
@@ -690,11 +692,23 @@ fn core_host_resolves_hidden_amount_from_verified_dataspace_proof_requires_final
     assert_eq!(reject.reason, AxtRejectReason::Expiry);
 
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
+    let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, proof_ptr);
     let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
-    assert_unanchored_spend_rejection(&mut host, result);
+    assert_eq!(
+        result,
+        Err(VMError::NoritoInvalid),
+        "a public proof scalar does not authorize a redacted spend amount"
+    );
+    let reject = host.take_axt_reject_for_tests().expect("reject context");
+    assert_eq!(reject.reason, AxtRejectReason::Budget);
+    assert!(
+        reject
+            .detail
+            .contains("redacted remote spend amount has no qualified private proof relation")
+    );
 }
 #[test]
 fn core_host_rejects_standalone_replacement_of_handle_bound_proof_requires_finalized_anchor() {

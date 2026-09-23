@@ -19,7 +19,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         )
         XCTAssertEqual(
             IrohaPeerWireKindV1.allCases.map(\.maximumKagemushaCanonicalBytes),
-            [928, 7_552, 256]
+            [1_024, 7_552, 256]
         )
     }
 
@@ -90,7 +90,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         XCTAssertEqual(readUInt32BE(encoded, 16), UInt32(canonical.count))
 
         var canonicalPreimage = Data("IROHA-PEER-PAYLOAD-V1\0".utf8)
-        canonicalPreimage.append(contentsOf: [0, 1, 4, 0, 1])
+        canonicalPreimage.append(contentsOf: [0, 1, 2, 0, 1])
         canonicalPreimage.append(canonical)
         let canonicalHash = Blake2b.hash256(canonicalPreimage)
         XCTAssertEqual(Data(encoded[20..<52]), canonicalHash)
@@ -227,7 +227,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         XCTAssertEqual(IrohaPeerWireLimitsV1.peerV1.maximumKagemushaEncodedBytes, 7_552)
         let boundaryCanonical = irohaPeerKagemushaStructuralArchiveV1(
             kind: .payment,
-            payload: Data(repeating: 0xA5, count: 7_512)
+            payload: Data(repeating: 0xA5, count: 7_504)
         )
         XCTAssertEqual(boundaryCanonical.count, 7_552)
         let boundary = try IrohaPeerWireMessageV1(
@@ -244,7 +244,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
             schemaVersion: 1,
             canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: .payment,
-                payload: Data(repeating: 0xA5, count: 7_513)
+                payload: Data(repeating: 0xA5, count: 7_505)
             )
         )) { error in
             XCTAssertEqual(
@@ -263,7 +263,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
             schemaVersion: 1,
             canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: .payment,
-                payload: Data(repeating: 1, count: 661)
+                payload: Data(repeating: 1, count: 653)
             ),
             limits: tight
         )) { error in
@@ -278,7 +278,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
             schemaVersion: 1,
             canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: .payment,
-                payload: Data(repeating: 1, count: 660)
+                payload: Data(repeating: 1, count: 652)
             ),
             limits: tight
         ))
@@ -288,7 +288,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
             schemaVersion: 1,
             canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: .payment,
-                payload: Data(repeating: 1, count: 985)
+                payload: Data(repeating: 1, count: 977)
             ),
             limits: tight
         )) { error in
@@ -520,7 +520,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         var result = encoded
         result.replaceSubrange(84..<result.count, with: canonical)
         var canonicalPreimage = Data("IROHA-PEER-PAYLOAD-V1\0".utf8)
-        canonicalPreimage.append(contentsOf: [0, 2, 1, 1, 2])
+        canonicalPreimage.append(contentsOf: [0, 1, 1, 0, 1])
         canonicalPreimage.append(canonical)
         result.replaceSubrange(20..<52, with: Blake2b.hash256(canonicalPreimage))
         refreshWireHash(&result)

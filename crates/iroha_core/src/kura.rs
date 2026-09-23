@@ -642,6 +642,8 @@ pub(crate) use publication_lease::{
 pub struct Kura {
     /// One finite pool shared by every State hash generation using this store.
     block_hash_history_budget: mv::allocation::AllocationBudget,
+    /// One finite pool shared by every State transaction-membership generation using this store.
+    transaction_history_budget: mv::allocation::AllocationBudget,
     membership_storage: membership_storage::MembershipStorage,
     /// Exact owner-published resident and physical resources; never consensus authority.
     resource_inventory: Arc<resource_inventory::Inventory>,
@@ -1680,6 +1682,10 @@ impl Kura {
     pub(crate) fn block_hash_history_budget(&self) -> mv::allocation::AllocationBudget {
         self.block_hash_history_budget.clone()
     }
+    /// Retain the original configured pool through membership restore, replay, and edits.
+    pub(crate) fn transaction_history_budget(&self) -> mv::allocation::AllocationBudget {
+        self.transaction_history_budget.clone()
+    }
     fn notify_block_writer_sender(
         sender: &mpsc::SyncSender<BlockNotify>,
         notification: BlockNotify,
@@ -2613,6 +2619,18 @@ impl Kura {
                     configured_store_dir.clone(),
                 )
             })?;
+        let transaction_history_bytes = usize::try_from(config.transaction_history_bytes.get())
+            .ok()
+            .filter(|bytes| *bytes != 0)
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "kura.transaction_history_bytes must be nonzero and representable as usize",
+                    ),
+                    configured_store_dir.clone(),
+                )
+            })?;
         let membership_storage = membership_storage::MembershipStorage::new(
             config.membership_storage,
         )
@@ -3044,6 +3062,9 @@ impl Kura {
         let (sidecar_lock, sidecar_read_permit) = PublicationMutex::with_read_permit();
         let kura = Arc::new(Self {
             block_hash_history_budget: mv::allocation::AllocationBudget::new(history_bytes),
+            transaction_history_budget: mv::allocation::AllocationBudget::new(
+                transaction_history_bytes,
+            ),
             membership_storage,
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
@@ -3463,6 +3484,12 @@ impl Kura {
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES.get(),
                 )
                 .expect("default history budget fits supported platforms"),
+            ),
+            transaction_history_budget: mv::allocation::AllocationBudget::new(
+                usize::try_from(
+                    iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES.get(),
+                )
+                .expect("default transaction history budget fits supported platforms"),
             ),
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
@@ -47546,4 +47573,5 @@ pub(crate) mod tests {
     #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
     include!("kura/tests/17_read_only_evidence_tests.rs");
     include!("kura/tests/18_snapshot_hash_streaming.rs");
+    include!("kura/tests/19_transaction_history_budget.rs");
 }

@@ -195,6 +195,26 @@ impl V2ApplyService {
                 &BlockValidationError::StateStorageAdmission(error),
             ),
             NativeCandidatePreparationError::Execution(
+                MergeLedgerCommitError::BlockHashAdmission(error),
+            )
+            | NativeCandidatePreparationError::Preparation(
+                MergeLedgerCommitError::BlockHashAdmission(error),
+            ) => self.classify_validation_failure(
+                None,
+                body,
+                &BlockValidationError::BlockHashAdmission(error),
+            ),
+            NativeCandidatePreparationError::Execution(
+                MergeLedgerCommitError::MembershipAdmission(error),
+            )
+            | NativeCandidatePreparationError::Preparation(
+                MergeLedgerCommitError::MembershipAdmission(error),
+            ) => self.classify_validation_failure(
+                None,
+                body,
+                &BlockValidationError::MembershipAdmission(error),
+            ),
+            NativeCandidatePreparationError::Execution(
                 error @ MergeLedgerCommitError::ExecutionBatchFull { .. },
             ) => V2ApplyError::Validation(error.to_string()),
             // Only the global preflight and explicit governed batch limit above

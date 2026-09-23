@@ -3,6 +3,8 @@
 mod completion_finality;
 mod control;
 #[cfg(unix)]
+mod credential_provider;
+#[cfg(unix)]
 mod final_promotion;
 mod recovery;
 #[cfg(unix)]

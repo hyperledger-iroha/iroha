@@ -65,8 +65,8 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
         tx.world.elections_mut().insert(
             id.to_owned(),
             ElectionState {
-                options: 1,
-                tally: vec![0],
+                options: 2,
+                tally: vec![0, 0],
                 domain_tag: "gov:ballot:v1".to_owned(),
                 ..Default::default()
             },
@@ -106,6 +106,6 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
         let election = tx.world.elections().get(&id.to_owned()).unwrap();
         assert!(election.ballot_nullifiers.is_empty());
         assert!(election.ciphertexts.is_empty());
-        assert_eq!(election.tally, [0]);
+        assert_eq!(election.tally, [0, 0]);
     }
 }

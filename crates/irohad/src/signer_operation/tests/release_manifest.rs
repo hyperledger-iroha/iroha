@@ -118,7 +118,7 @@ fn exact_opaque_signatures_are_durable_before_commit_and_recover_without_key_use
 }
 
 #[test]
-fn wrong_reviewed_bytes_and_wrong_purpose_never_invoke_hardware() {
+fn wrong_reviewed_bytes_and_wrong_purpose_never_invoke_key_provider() {
     let directory = private_directory();
     let canonical = directory.path().canonicalize().unwrap();
     let (service, _, provider) = ceremony(&canonical);
@@ -138,6 +138,138 @@ fn wrong_reviewed_bytes_and_wrong_purpose_never_invoke_hardware() {
         .is_err()
     );
     assert_eq!(fixture.provider.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn wrong_reviewed_predecessor_refuses_signing_before_reservation_or_key_use() {
+    let directory = private_directory();
+    let canonical = directory.path().canonicalize().unwrap();
+    let fixture = fixture_for(
+        SignerRoleV1::ReleaseManifest,
+        SignerPurposeBindingV1::ReleaseManifest {
+            deployment_id: "production-primary".into(),
+        },
+    );
+    let source = Arc::clone(&fixture.source);
+    let provider = Arc::clone(&fixture.provider);
+    let mut unreviewed_head = intent(SignerOperationActionV1::Sign).previous_audit;
+    unreviewed_head.digest[0] ^= 1;
+    let service = SignerReleaseManifestServiceV1::new(
+        fixture.coordinator,
+        expected(),
+        unreviewed_head,
+        SignerReceiptJournalV1::open(&canonical, SignerReceiptPurposeV1::ReleaseManifest).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        service.sign(manifest()),
+        Err(SignerReleaseManifestErrorV1::Operation(
+            SignerOperationErrorV1::ReservationConflict
+        ))
+    ));
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    let state = source.state.lock().unwrap();
+    assert_eq!(state.signing_reads, 1);
+    assert!(state.used_ids.is_empty());
+    assert!(state.reservation.is_none());
+    assert_eq!(fs::read_dir(&canonical).unwrap().count(), 0);
+}
+
+#[test]
+fn audit_predecessor_drift_after_construction_fails_before_reservation_or_key_use() {
+    let directory = private_directory();
+    let canonical = directory.path().canonicalize().unwrap();
+    let (service, source, provider) = ceremony(&canonical);
+    source.state.lock().unwrap().audit.digest[0] ^= 1;
+    assert!(matches!(
+        service.sign(manifest()),
+        Err(SignerReleaseManifestErrorV1::Operation(
+            SignerOperationErrorV1::ReservationConflict
+        ))
+    ));
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    let state = source.state.lock().unwrap();
+    assert_eq!(state.signing_reads, 1);
+    assert!(state.used_ids.is_empty());
+    assert!(state.reservation.is_none());
+    assert_eq!(fs::read_dir(&canonical).unwrap().count(), 0);
+}
+
+#[test]
+fn audit_head_advance_after_snapshot_is_refused_by_reservation_cas() {
+    let directory = private_directory();
+    let canonical = directory.path().canonicalize().unwrap();
+    let (service, source, provider) = ceremony(&canonical);
+    source
+        .state
+        .lock()
+        .unwrap()
+        .advance_audit_after_signing_snapshot = true;
+    assert!(matches!(
+        service.sign(manifest()),
+        Err(SignerReleaseManifestErrorV1::Operation(
+            SignerOperationErrorV1::ReservationConflict
+        ))
+    ));
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    let state = source.state.lock().unwrap();
+    assert_eq!(state.signing_reads, 1);
+    assert!(state.used_ids.is_empty());
+    assert!(state.reservation.is_none());
+    assert_eq!(fs::read_dir(&canonical).unwrap().count(), 0);
+}
+
+#[test]
+fn committed_receipt_recovers_after_journal_reopen_with_original_predecessor() {
+    let directory = private_directory();
+    let canonical = directory.path().canonicalize().unwrap();
+    let fixture = fixture_for(
+        SignerRoleV1::ReleaseManifest,
+        SignerPurposeBindingV1::ReleaseManifest {
+            deployment_id: "production-primary".into(),
+        },
+    );
+    fixture.source.state.lock().unwrap().expected_journal = Some(canonical.clone());
+    let source = Arc::clone(&fixture.source);
+    let provider = Arc::clone(&fixture.provider);
+    let binding = fixture.coordinator.binding.clone();
+    let record = fixture.coordinator.record.clone();
+    let trust = fixture.coordinator.trust.clone();
+    let original_head = intent(SignerOperationActionV1::Sign).previous_audit;
+    let service = SignerReleaseManifestServiceV1::new(
+        fixture.coordinator,
+        expected(),
+        original_head,
+        SignerReceiptJournalV1::open(&canonical, SignerReceiptPurposeV1::ReleaseManifest).unwrap(),
+    )
+    .unwrap();
+    let receipt = service.sign(manifest()).unwrap();
+    assert_ne!(source.state.lock().unwrap().audit, original_head);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
+    drop(service);
+
+    let restarted =
+        SignerOperationCoordinatorV1::new(binding, record, trust, provider.clone(), source.clone())
+            .unwrap();
+    let recovered_service = SignerReleaseManifestServiceV1::new(
+        restarted,
+        expected(),
+        original_head,
+        SignerReceiptJournalV1::open(&canonical, SignerReceiptPurposeV1::ReleaseManifest).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(recovered_service.recover(manifest()).unwrap(), receipt);
+    assert_eq!(source.state.lock().unwrap().signing_reads, 1);
+    assert_eq!(source.state.lock().unwrap().commits, 1);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
+    assert!(matches!(
+        recovered_service.sign(manifest()),
+        Err(SignerReleaseManifestErrorV1::Operation(
+            SignerOperationErrorV1::ReservationConflict
+        ))
+    ));
+    assert_eq!(source.state.lock().unwrap().signing_reads, 2);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
 }
 
 #[test]

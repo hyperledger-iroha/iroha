@@ -18,6 +18,9 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1: KagemushaNativeCoreC
     try KagemushaNativeCoreCoordinatorAdapterV1(bridge: .open(storagePath: storagePath))
   }
 
+  /// Revoke this wallet's native handle on logout or account switch.
+  public func close() throws { try bridge.close() }
+
   public func reserveOperationID(operation: UInt8, operationID: Data, publicBinding: Data) throws -> Data {
     try bridge.invoke(.reserveOperationID, fields: [u32(UInt32(operation)), operationID, publicBinding])[0]
   }
@@ -154,7 +157,7 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1: KagemushaNativeCoreC
     try [u32(UInt32(value.profile.protocolVersion)), value.releaseID,
       KagemushaNoritoV1.encodeHardwareProfileShape(value.profile),
       KagemushaNoritoV1.encodeHardwareCredentialShape(value.credential),
-      u32(UInt32(value.profile.capabilityMask))]
+      u32(value.profile.capabilityMask)]
   }
 
   private func inputFields(_ value: KagemushaDeviceSenderPublicInputsV1) throws -> [Data] {

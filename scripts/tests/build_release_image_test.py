@@ -335,7 +335,7 @@ def test_image_replay_is_byte_identical_and_oci_archive_is_normalized(
     assert manifest["source_context"]["kind"] == "closed-prebuilt"
     assert manifest["source_context"]["file_count"] > 0
     assert manifest["external_software_signer"] == {
-        "backend": "software",
+        "packaged": True,
         "binary": "/usr/local/bin/sorafs_external_software_signer",
         "broker_alias": "/usr/local/libexec/iroha-runtime-provider-broker-v1",
         "smoke": "native-build-stage",

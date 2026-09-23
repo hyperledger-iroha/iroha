@@ -119,5 +119,9 @@
                 ),
                 "closed drained cut accepted stale lane account `{label}`"
             );
+            assert!(
+                ingress.ensure_closed_global_drained_cut().is_err(),
+                "global drained cut accepted stale global lane account `{label}`"
+            );
         }
     }

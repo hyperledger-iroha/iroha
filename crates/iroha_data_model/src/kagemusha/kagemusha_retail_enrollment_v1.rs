@@ -9,7 +9,7 @@
 
 use super::{
     KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaAuthenticatedReleaseV1,
-    KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1,
+    KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1, KagemushaVerifiedAppEnrollmentV1,
 };
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -161,6 +161,9 @@ pub struct KagemushaRetailEnrollmentSubjectV1 {
     /// Issuer's commitment to its one-use account/device enrollment ceremony.
     /// This module checks the signed commitment, not that ceremony or live possession.
     pub challenge_evidence_digest: [u8; 32],
+    /// Digest of an independently verified, nonce-bound app-to-device assertion.
+    /// The issuer must have authenticated its verifier signature before signing this subject.
+    pub app_attestation_digest: [u8; 32],
     /// Inclusive certificate activation/issuance time in trusted Unix milliseconds.
     pub issued_at_ms: u64,
     /// Exclusive current-admission deadline in trusted Unix milliseconds.
@@ -395,6 +398,7 @@ impl KagemushaRetailEnrollmentSubjectV1 {
             || !nonzero(&self.issuance.hardware_policy_digest)
             || !nonzero(&self.issuance.core_authorization_key_reference)
             || !nonzero(&self.challenge_evidence_digest)
+            || !nonzero(&self.app_attestation_digest)
             || credential.network_id != self.owner.runtime.network_id
             || credential.lane_commitment != self.owner.lane_id
             || credential.validate_shape().is_err()
@@ -486,7 +490,8 @@ impl KagemushaRetailEnrollmentCertificateV1 {
     /// The release must be a real opaque threshold-authenticated catalog. `policy` must be
     /// independently trusted native configuration, and `trusted_time_ms` must come from the
     /// authoritative service/hardware clock. Host time, host revisions and persisted Booleans
-    /// are not substitutes. This verifies no device-possession challenge or epoch transition.
+    /// are not substitutes. The app assertion must already be verified against a separate,
+    /// independently pinned app-attestation authority. This verifies no epoch transition.
     ///
     /// # Errors
     /// Rejects any encoding, identity, scope, issuer, catalog, credential or validity mismatch.
@@ -496,10 +501,32 @@ impl KagemushaRetailEnrollmentCertificateV1 {
         release: &KagemushaAuthenticatedReleaseV1,
         expected: &KagemushaRetailEnrollmentSelectionV1,
         trusted_time_ms: u64,
+        verified_app: &KagemushaVerifiedAppEnrollmentV1,
     ) -> Result<KagemushaVerifiedRetailEnrollmentCertificateV1> {
+        let selected_app = verified_app.selection();
+        let issuance = &self.subject.issuance;
+        if self.subject.app_attestation_digest != verified_app.digest()
+            || selected_app.release_id != issuance.release_id
+            || selected_app.hardware_profile_id != issuance.credential.hardware_profile_id
+            || selected_app.device_key_reference != issuance.credential.device_key_reference
+            || selected_app.lane_id != self.subject.owner.lane_id
+        {
+            return Err(KagemushaRetailEnrollmentErrorV1::SelectionMismatch);
+        }
         let profile = release
             .enabled_profile(self.subject.issuance.credential.hardware_profile_id)
             .ok_or(KagemushaRetailEnrollmentErrorV1::CatalogMismatch)?;
+        issuance
+            .credential
+            .validate_app_policy_binding_for_release(
+                &profile.hardware_profile,
+                release.release_id(),
+                verified_app.authority_policy(),
+            )
+            .map_err(|_| KagemushaRetailEnrollmentErrorV1::CatalogMismatch)?;
+        if verified_app.static_binding_digest() != issuance.credential.app_policy_binding_digest {
+            return Err(KagemushaRetailEnrollmentErrorV1::SelectionMismatch);
+        }
         self.authenticate_bound(
             policy,
             CatalogBinding {
@@ -587,8 +614,10 @@ pub(super) mod test_fixture {
     //! Shared signed issuer, hardware and account fixtures for enrollment kernels.
     use super::*;
     use crate::kagemusha::{
-        KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaDevicePublicKeyV1,
-        KagemushaDeviceSignatureV1, KagemushaHardwarePlatformClassV1,
+        KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaAppAttestationAuthorityPolicyV1,
+        KagemushaAppDevicePolicyBindingV1, KagemushaAppEnrollmentAssertionV1,
+        KagemushaAppEnrollmentCertificateV1, KagemushaAppEnrollmentSelectionV1,
+        KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaHardwarePlatformClassV1,
         kagemusha_device_key_reference_v1, kagemusha_suite_commitment_v1,
     };
     use iroha_crypto::{Hash, HashOf, KeyPair};
@@ -596,6 +625,7 @@ pub(super) mod test_fixture {
 
     pub(in crate::kagemusha) struct Fixture {
         pub(in crate::kagemusha) issuer: KeyPair,
+        pub(in crate::kagemusha) app_policy: KagemushaAppAttestationAuthorityPolicyV1,
         pub(in crate::kagemusha) profile: KagemushaHardwareProfileV1,
         pub(in crate::kagemusha) policy: KagemushaRetailEnrollmentIssuerPolicyV1,
         pub(in crate::kagemusha) certificate: KagemushaRetailEnrollmentCertificateV1,
@@ -624,10 +654,19 @@ pub(super) mod test_fixture {
     impl Fixture {
         pub(in crate::kagemusha) fn new(generation: u8) -> Self {
             let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+            let app_authority = KeyPair::from_seed(vec![73; 32], Algorithm::Ed25519);
+            let app_policy = KagemushaAppAttestationAuthorityPolicyV1 {
+                authority_key: app_authority.public_key().clone(),
+                platform_class: KagemushaHardwarePlatformClassV1::OtherQualified,
+                app_signing_identity_digest: [74; 32],
+                app_release_digest: [75; 32],
+                maximum_lifetime_ms: 1_000,
+            };
             let governance = p256_key(2);
             let device = public(&p256_key(generation + 2));
             let suite = [31; 32];
-            let profile = hardware_profile(&governance, suite);
+            let profile =
+                hardware_profile(&governance, suite, app_policy.canonical_digest().unwrap());
             let runtime = KagemushaRetailEnrollmentRuntimeV1 {
                 fi_id: "mibank".parse().expect("FI name"),
                 ledger_dataspace_id: DataSpaceId::new(10),
@@ -651,10 +690,28 @@ pub(super) mod test_fixture {
                 runtime: runtime.clone(),
                 lane_id: [32; 32],
             };
-            let credential =
-                signed_credential(generation, &governance, device, suite, &profile, &owner);
+            let release_id = [40 + generation; 32];
+            let app_binding = KagemushaAppDevicePolicyBindingV1 {
+                app_signing_identity_digest: app_policy.app_signing_identity_digest,
+                app_release_digest: app_policy.app_release_digest,
+                release_id,
+                hardware_profile_id: profile.hardware_profile_id,
+                device_key_reference: kagemusha_device_key_reference_v1(&device),
+                lane_id: owner.lane_id,
+            }
+            .canonical_digest()
+            .unwrap();
+            let credential = signed_credential(
+                generation,
+                &governance,
+                device,
+                suite,
+                &profile,
+                &owner,
+                app_binding,
+            );
             let issuance = KagemushaRetailEnrollmentIssuanceV1 {
-                release_id: [40 + generation; 32],
+                release_id,
                 hardware_policy_digest: [50 + generation; 32],
                 core_authorization_key_reference: [60 + generation; 32],
                 credential,
@@ -679,6 +736,7 @@ pub(super) mod test_fixture {
                 owner,
                 issuance: issuance.clone(),
                 challenge_evidence_digest: [72; 32],
+                app_attestation_digest: [73; 32],
                 issued_at_ms: 1_000,
                 expires_at_ms: 3_000,
             };
@@ -698,16 +756,58 @@ pub(super) mod test_fixture {
             };
             Self {
                 issuer,
+                app_policy,
                 profile,
                 policy,
                 certificate,
                 selection,
             }
         }
+
+        pub(in crate::kagemusha) fn verified_app(
+            &self,
+            client_nonce: [u8; 32],
+            server_nonce: [u8; 32],
+        ) -> KagemushaVerifiedAppEnrollmentV1 {
+            let selected = KagemushaAppEnrollmentSelectionV1::for_credential(
+                client_nonce,
+                server_nonce,
+                self.selection.issuance.release_id,
+                &self.selection.issuance.credential,
+            );
+            let assertion = KagemushaAppEnrollmentAssertionV1 {
+                version: 1,
+                domain: "iroha:kagemusha:v1:app-device-enrollment".to_owned(),
+                client_nonce,
+                server_nonce,
+                app_signing_identity_digest: self.app_policy.app_signing_identity_digest,
+                app_release_digest: self.app_policy.app_release_digest,
+                platform_evidence_digest: [76; 32],
+                release_id: selected.release_id,
+                hardware_profile_id: selected.hardware_profile_id,
+                device_key_reference: selected.device_key_reference,
+                lane_id: selected.lane_id,
+                issued_at_ms: 900,
+                expires_at_ms: 1_900,
+            };
+            let signer = KeyPair::from_seed(vec![73; 32], Algorithm::Ed25519);
+            let certificate = KagemushaAppEnrollmentCertificateV1 {
+                signature: SignatureOf::try_new(signer.private_key(), &assertion).unwrap(),
+                assertion,
+            };
+            certificate
+                .authenticate(&self.app_policy, selected, 1_000)
+                .unwrap()
+        }
     }
 
-    fn hardware_profile(governance: &SigningKey, suite: [u8; 32]) -> KagemushaHardwareProfileV1 {
+    fn hardware_profile(
+        governance: &SigningKey,
+        suite: [u8; 32],
+        app_policy_digest: [u8; 32],
+    ) -> KagemushaHardwareProfileV1 {
         KagemushaHardwareProfileV1 {
+            app_attestation_authority_policy_digest: app_policy_digest,
             version: 1,
             protocol_version: 1,
             hardware_profile_id: [0; 32],
@@ -736,8 +836,10 @@ pub(super) mod test_fixture {
         suite: [u8; 32],
         profile: &KagemushaHardwareProfileV1,
         owner: &KagemushaRetailEnrollmentOwnerV1,
+        app_policy_binding_digest: [u8; 32],
     ) -> KagemushaHardwareCredentialV1 {
         let mut credential = KagemushaHardwareCredentialV1 {
+            app_policy_binding_digest,
             version: 1,
             credential_id: [0; 32],
             network_id: owner.runtime.network_id,
@@ -878,6 +980,12 @@ mod tests {
         );
         let mut fixture = Fixture::new(1);
         fixture.certificate.subject.challenge_evidence_digest = [99; 32];
+        assert_eq!(
+            fixture.verify(1_500),
+            Err(KagemushaRetailEnrollmentErrorV1::InvalidSignature)
+        );
+        let mut fixture = Fixture::new(1);
+        fixture.certificate.subject.app_attestation_digest = [99; 32];
         assert_eq!(
             fixture.verify(1_500),
             Err(KagemushaRetailEnrollmentErrorV1::InvalidSignature)
@@ -1113,7 +1221,7 @@ mod tests {
                 Err(KagemushaRetailEnrollmentErrorV1::InvalidPolicy)
             );
         }
-        for change in 0..5 {
+        for change in 0..6 {
             let mut fixture = Fixture::new(1);
             match change {
                 0 => fixture.certificate.subject.enrollment_id = [0; 32],
@@ -1127,6 +1235,7 @@ mod tests {
                         .core_authorization_key_reference = [0; 32]
                 }
                 4 => fixture.certificate.subject.issued_at_ms = 0,
+                5 => fixture.certificate.subject.app_attestation_digest = [0; 32],
                 _ => unreachable!(),
             }
             assert!(fixture.certificate.canonical_bytes().is_err());
@@ -1162,6 +1271,12 @@ mod tests {
             fixture.certificate.subject.approval_payload().unwrap(),
             KagemushaRetailEnrollmentApprovalV1
         );
+        let mut missing = norito::json::to_value(&fixture.certificate.subject).unwrap();
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("app_attestation_digest");
+        assert!(norito::json::from_value::<KagemushaRetailEnrollmentSubjectV1>(missing).is_err());
     }
 
     #[test]

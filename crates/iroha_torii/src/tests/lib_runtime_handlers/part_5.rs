@@ -2115,21 +2115,64 @@ fn append_canonical_outcome_test_block(
     anchor: CanonicalTransactionAnchor,
     rebind_transaction: bool,
 ) {
-    let block = make_empty_signed_block(2, Some(anchor.block_hash), 10);
+    let keypair = checked_torii_test_ed25519_keypair(0x27, "sign Torii successor fixture");
+    let transaction = if rebind_transaction {
+        app.kura
+            .get_block(anchor.height)
+            .expect("canonical predecessor block")
+            .external_transactions()
+            .next()
+            .expect("canonical predecessor transaction")
+            .clone()
+    } else {
+        checked_torii_test_transaction(
+            TransactionBuilder::new(
+                signed_query_test_network_id(),
+                AccountId::new(keypair.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ),
+            &keypair,
+            "sign unrelated Torii successor transaction",
+        )
+    };
+    let entrypoint_hash = transaction.hash_as_entrypoint();
+    if rebind_transaction {
+        assert_eq!(entrypoint_hash, anchor.entrypoint_hash);
+    } else {
+        assert_ne!(entrypoint_hash, anchor.entrypoint_hash);
+    }
+    let header = BlockHeader::new(
+        NonZeroU64::new(2).expect("second height is nonzero"),
+        Some(anchor.block_hash),
+        None,
+        10,
+        0,
+    );
+    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header.clone());
+    builder.push_transaction(transaction);
+    let mut block = builder.build_with_signature(0, keypair.private_key());
+    crate::test_utils::attach_fixture_execution_outputs(
+        &mut block,
+        vec![
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
+                    completions: vec![],
+                },
+            ),
+        ],
+    );
     let header = block.header();
     let block_hash = store_finalized_history_fixture(app, block);
-    record_committed_block_hash_for_test(app, header.clone(), block_hash);
-    let mut state_block = app.state.block(header);
-    let membership = if rebind_transaction {
-        [anchor.entrypoint_hash].into_iter().collect()
-    } else {
-        HashSet::new()
-    };
+    let mut state_block = app.state.block(header.clone());
+    state_block.block_hashes.push_for_tests(block_hash);
     state_block.transactions.insert_block(
-        membership,
+        [entrypoint_hash].into_iter().collect(),
         NonZeroUsize::new(2).expect("second height is nonzero"),
     );
     state_block.commit().expect("publish second fixture block");
+    app.state.update_latest_block_header_cache_for_tests(header);
 }
 #[tokio::test]
 async fn canonical_outcome_releases_state_snapshot_before_kura_authentication() {
@@ -2399,14 +2442,15 @@ async fn pipeline_status_handler_returns_applied_from_state() {
     let tx_hash = tx.hash();
     let tx_entry_hash = tx.hash_as_entrypoint();
     let block_hash = store_finalized_history_fixture(&app, block);
-    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
-    let mut state_block = app.state.block(header);
+    let mut state_block = app.state.block(header.clone());
+    state_block.block_hashes.push_for_tests(block_hash);
     let tx_hashes: HashSet<_> = [tx_entry_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
+    app.state.update_latest_block_header_cache_for_tests(header);
     let resp = pipeline_status_response(app.clone(), tx_hash.to_string(), None, "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let payload = torii_json_body(resp).await;
@@ -2431,7 +2475,6 @@ async fn pipeline_status_handler_rejects_inconsistent_committed_membership() {
     let (block, _) = make_signed_block(1, None);
     let header = block.header();
     let block_hash = store_finalized_history_fixture(&app, block);
-    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let bogus_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
         [0x76; Hash::LENGTH],
     ));
@@ -2439,11 +2482,13 @@ async fn pipeline_status_handler_rejects_inconsistent_committed_membership() {
         usize::try_from(header.height().get()).expect("committed height fits usize"),
     )
     .expect("committed height is non-zero");
-    let mut state_block = app.state.block(header);
+    let mut state_block = app.state.block(header.clone());
+    state_block.block_hashes.push_for_tests(block_hash);
     state_block
         .transactions
         .insert_block([bogus_hash].into_iter().collect(), height);
     state_block.commit().expect("commit inconsistent fixture");
+    app.state.update_latest_block_header_cache_for_tests(header);
     let result = super::handler_pipeline_transaction_status(
         State(app),
         HeaderMap::new(),
@@ -2480,11 +2525,12 @@ async fn public_pipeline_status_never_hydrates_trigger_completion_details() {
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
     let block_hash = store_finalized_history_fixture(&app, sample.block);
-    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
-    let mut state_block = app.state.block(header);
+    let mut state_block = app.state.block(header.clone());
+    state_block.block_hashes.push_for_tests(block_hash);
     let tx_hashes: HashSet<_> = [sample.entrypoint_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
+    app.state.update_latest_block_header_cache_for_tests(header);
     let resp = pipeline_status_response(app.clone(), sample.tx_hash.to_string(), None, "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let payload = torii_json_body(resp).await;
@@ -2532,14 +2578,15 @@ fn store_and_index_transaction_details_block(
     )
     .expect("transaction-details height is nonzero");
     let block_hash = store_finalized_history_fixture(app, block);
-    record_committed_block_hash_for_test(app, header.clone(), block_hash);
-    let mut state_block = app.state.block(header);
+    let mut state_block = app.state.block(header.clone());
+    state_block.block_hashes.push_for_tests(block_hash);
     state_block
         .transactions
         .insert_block([entrypoint_hash].into_iter().collect(), height);
     state_block
         .commit()
         .expect("commit transaction-details membership index");
+    app.state.update_latest_block_header_cache_for_tests(header);
     signed_hash
 }
 fn signed_transaction_details_query(
@@ -3102,11 +3149,11 @@ async fn pipeline_status_handler_resolves_sealed_reveal_carrier_and_signed_alias
         iroha_core::tx::external_entrypoint_hash_from_signed_hash(signed_hash.clone());
     let header = block.header();
     let block_hash = store_finalized_history_fixture(&app, block);
-    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
-    let mut state_block = app.state.block(header);
+    let mut state_block = app.state.block(header.clone());
+    state_block.block_hashes.push_for_tests(block_hash);
     let entrypoint_hashes: HashSet<_> = [reveal_entry_hash, signed_entrypoint_alias]
         .into_iter()
         .collect();
@@ -3114,6 +3161,7 @@ async fn pipeline_status_handler_resolves_sealed_reveal_carrier_and_signed_alias
         .transactions
         .insert_block(entrypoint_hashes, height_nz);
     state_block.commit().expect("commit");
+    app.state.update_latest_block_header_cache_for_tests(header);
     assert_eq!(
         canonical_carrier_hash_for_indexed_transaction_identity(
             app.as_ref(),
@@ -3166,7 +3214,6 @@ async fn pipeline_status_handler_prefers_state_over_stale_queued_cache() {
     let tx_hash = tx.hash();
     let tx_entry_hash = tx.hash_as_entrypoint();
     let block_hash = store_finalized_history_fixture(&app, block);
-    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     app.pipeline_status_cache.record_entry(
         tx_hash,
         PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
@@ -3174,10 +3221,12 @@ async fn pipeline_status_handler_prefers_state_over_stale_queued_cache() {
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
-    let mut state_block = app.state.block(header);
+    let mut state_block = app.state.block(header.clone());
+    state_block.block_hashes.push_for_tests(block_hash);
     let tx_hashes: HashSet<_> = [tx_entry_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
+    app.state.update_latest_block_header_cache_for_tests(header);
     let resp = pipeline_status_response(app.clone(), tx_hash.to_string(), None, "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let payload = torii_json_body(resp).await;
@@ -3204,7 +3253,6 @@ async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
     let tx_hash = tx.hash();
     let tx_entry_hash = tx.hash_as_entrypoint();
     let block_hash = store_finalized_history_fixture(&app, block);
-    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
     app.pipeline_status_cache.record_entry(
         tx_hash,
@@ -3217,10 +3265,12 @@ async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
-    let mut state_block = app.state.block(header);
+    let mut state_block = app.state.block(header.clone());
+    state_block.block_hashes.push_for_tests(block_hash);
     let tx_hashes: HashSet<_> = [tx_entry_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
+    app.state.update_latest_block_header_cache_for_tests(header);
     let resp = pipeline_status_response(app.clone(), tx_hash.to_string(), None, "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let payload = torii_json_body(resp).await;

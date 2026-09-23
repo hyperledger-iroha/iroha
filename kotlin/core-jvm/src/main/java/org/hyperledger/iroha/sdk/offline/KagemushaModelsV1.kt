@@ -344,15 +344,29 @@ class KagemushaPairedProofV1(
     fun epHistory(): ByteArray = epHistoryValue.copyOf()
 }
 
-/** Governed qualified hardware service class. */
+/** Governed OEM, secure-element, or attested ordinary-app key-service class. */
 enum class KagemushaHardwarePlatformClassV1 {
     ANDROID_OEM_SERVICE,
     APPLE_OEM_SERVICE,
     DEDICATED_SECURE_ELEMENT,
     OTHER_QUALIFIED,
+    APPLE_APP_ATTEST,
+    ANDROID_KEYMINT;
+
+    /** Exact governed guarantee bits for this service class. */
+    val requiredCapabilityMask: Int
+        get() = when (this) {
+            APPLE_APP_ATTEST -> 0x0007_0000
+            ANDROID_KEYMINT -> 0x000b_0000
+            else -> 0x0000_ffff
+        }
+
+    /** An ordinary app key service has no OEM hardware journal claim. */
+    val isOrdinaryApp: Boolean
+        get() = this == APPLE_APP_ATTEST || this == ANDROID_KEYMINT
 }
 
-/** Governed non-forking hardware-service profile. */
+/** Governed hardware or ordinary-app profile with its exact class-specific guarantee mask. */
 class KagemushaHardwareProfileV1(
     @JvmField val version: Int,
     @JvmField val protocolVersion: Int,
@@ -370,6 +384,7 @@ class KagemushaHardwareProfileV1(
     qualificationReportDigest: ByteArray,
     @JvmField val validFromMs: Long,
     @JvmField val expiresAtMs: Long,
+    appAttestationAuthorityPolicyDigest: ByteArray,
 ) {
     private val hardwareProfileIdValue = fixed32(hardwareProfileId, "hardwareProfileId")
     private val providerIdValue = fixed32(providerId, "providerId")
@@ -380,10 +395,15 @@ class KagemushaHardwareProfileV1(
     private val attestationTrustRootsDigestValue = fixed32(attestationTrustRootsDigest, "attestationTrustRootsDigest")
     private val allowedSuiteCommitmentValue = fixed32(allowedSuiteCommitment, "allowedSuiteCommitment")
     private val qualificationReportDigestValue = fixed32(qualificationReportDigest, "qualificationReportDigest")
+    private val appAttestationAuthorityPolicyDigestValue =
+        fixed32(appAttestationAuthorityPolicyDigest, "appAttestationAuthorityPolicyDigest")
 
     init {
         require(version == 1 && protocolVersion == 1 && policyEpoch != 0L)
-        require(capabilityMask == 0xffff) { "the complete KAGEMUSHA V1 hardware capability mask is required" }
+        require(capabilityMask == platformClass.requiredCapabilityMask) {
+            "the exact KAGEMUSHA V1 platform capability mask is required"
+        }
+        require(appAttestationAuthorityPolicyDigestValue.any { it != 0.toByte() })
         require(java.lang.Long.compareUnsigned(validFromMs, expiresAtMs) < 0)
     }
 
@@ -395,6 +415,8 @@ class KagemushaHardwareProfileV1(
     fun attestationTrustRootsDigest(): ByteArray = attestationTrustRootsDigestValue.copyOf()
     fun allowedSuiteCommitment(): ByteArray = allowedSuiteCommitmentValue.copyOf()
     fun qualificationReportDigest(): ByteArray = qualificationReportDigestValue.copyOf()
+    fun appAttestationAuthorityPolicyDigest(): ByteArray =
+        appAttestationAuthorityPolicyDigestValue.copyOf()
 }
 
 /** Compact governed device credential consumed by recursive hardware guards. */
@@ -413,6 +435,7 @@ class KagemushaHardwareCredentialV1(
     deviceKeyReference: ByteArray,
     @JvmField val issuedAtMs: Long,
     @JvmField val expiresAtMs: Long,
+    appPolicyBindingDigest: ByteArray,
     @JvmField val governanceSignature: KagemushaDeviceSignatureV1,
 ) {
     private val credentialIdValue = fixed32(credentialId, "credentialId")
@@ -422,10 +445,12 @@ class KagemushaHardwareCredentialV1(
     private val laneCommitmentValue = fixed32(laneCommitment, "laneCommitment")
     private val hardwareEpochIdValue = fixed32(hardwareEpochId, "hardwareEpochId")
     private val deviceKeyReferenceValue = fixed32(deviceKeyReference, "deviceKeyReference")
+    private val appPolicyBindingDigestValue = fixed32(appPolicyBindingDigest, "appPolicyBindingDigest")
 
     init {
         require(version == 1 && networkId.bytes().any { it != 0.toByte() })
         require(policyEpoch != 0L)
+        require(appPolicyBindingDigestValue.any { it != 0.toByte() })
         require(java.lang.Long.compareUnsigned(issuedAtMs, expiresAtMs) < 0)
     }
 
@@ -436,6 +461,7 @@ class KagemushaHardwareCredentialV1(
     fun laneCommitment(): ByteArray = laneCommitmentValue.copyOf()
     fun hardwareEpochId(): ByteArray = hardwareEpochIdValue.copyOf()
     fun deviceKeyReference(): ByteArray = deviceKeyReferenceValue.copyOf()
+    fun appPolicyBindingDigest(): ByteArray = appPolicyBindingDigestValue.copyOf()
 }
 
 /** Exact pre-ID peer-transfer context authenticated by encrypted-credit AAD. */

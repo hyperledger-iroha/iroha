@@ -793,7 +793,6 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
         &mut block_sync_request,
         &mut npos_beacon,
         1,
-        64,
         None,
     )
     .expect("dispatch the first active CompleteTip recovered Sign");
@@ -825,7 +824,6 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
             &mut block_sync_request,
             &mut npos_beacon,
             1,
-            64,
             None,
         )
         .expect("settle the active CompleteTip recovered Sign");
@@ -2924,7 +2922,6 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 &mut block_sync_request,
                 &mut npos_beacon,
                 1,
-                16,
                 None,
             )
             .expect("observe the settled Apply fence in the ordinary batch");

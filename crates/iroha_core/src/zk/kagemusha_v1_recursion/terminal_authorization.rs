@@ -3206,6 +3206,7 @@ struct TerminalSenderCredentialContextV1<F: KagemushaPoseidonFieldV1> {
     policy_epoch: AssignedValue<F>,
     generation: AssignedValue<F>,
     issuance: [[PastaSha256ByteV1<F>; 32]; 2],
+    app_bindings: [[PastaSha256ByteV1<F>; 32]; 2],
     device_keys: [Vec<PastaSha256ByteV1<F>>; 2],
 }
 
@@ -3291,6 +3292,9 @@ fn constrain_terminal_sender_credential_v1<F: KagemushaPoseidonFieldV1>(
             return Err("terminal sender credential device key width changed".to_owned());
         }
         constrain_transcript_bytes_if_v1(ctx, range, enabled, c(9), key);
+    }
+    for binding in &sender.app_bindings {
+        constrain_transcript_bytes_if_v1(ctx, range, enabled, c(13), binding);
     }
     let suite_commitment = hash_terminal_transcript_v1(
         ctx,
@@ -4085,6 +4089,7 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
         policy_epoch: guard.policy_epoch,
         generation: guard.predecessor_generation,
         issuance: guard.credential_issuance_digests,
+        app_bindings: guard.credential_app_policy_binding_digests,
         device_keys: guard.credential_device_public_keys.clone(),
     };
     let sender_windows = constrain_terminal_sender_credential_v1(

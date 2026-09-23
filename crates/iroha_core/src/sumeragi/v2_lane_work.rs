@@ -18335,9 +18335,25 @@ impl V2LaneWorkAdapter {
     ) -> Result<MergeCandidateValidation, MergeCandidateValidationError> {
         match validation {
             Ok(()) => Ok(MergeCandidateValidation::Ready),
-            Err(crate::state::MergeLedgerCommitError::StateStorageAdmission(error)) => {
+            Err(
+                error @ (crate::state::MergeLedgerCommitError::StateStorageAdmission(_)
+                | crate::state::MergeLedgerCommitError::BlockHashAdmission(_)
+                | crate::state::MergeLedgerCommitError::MembershipAdmission(_)),
+            ) => {
                 self.validated_merge_execution_candidate = None;
-                let Some(wait) = error.release_wait() else {
+                let wait = match &error {
+                    crate::state::MergeLedgerCommitError::StateStorageAdmission(error) => {
+                        error.release_wait()
+                    }
+                    crate::state::MergeLedgerCommitError::BlockHashAdmission(error) => {
+                        error.release_wait()
+                    }
+                    crate::state::MergeLedgerCommitError::MembershipAdmission(error) => {
+                        error.release_wait()
+                    }
+                    _ => None,
+                };
+                let Some(wait) = wait else {
                     return Err(MergeCandidateValidationError::Frontier(error.to_string()));
                 };
                 let wake = self
@@ -18355,7 +18371,13 @@ impl V2LaneWorkAdapter {
                 ));
                 Ok(MergeCandidateValidation::Deferred)
             }
-            Err(error @ crate::state::MergeLedgerCommitError::NativeResourceAdmission(_)) => {
+            Err(
+                error @ (crate::state::MergeLedgerCommitError::NativeResourceAdmission(_)
+                | crate::state::MergeLedgerCommitError::LocalDrainObservation(_)
+                | crate::state::MergeLedgerCommitError::ExecutionObservationChanged
+                | crate::state::MergeLedgerCommitError::ExecutionRecorderConflict(_)
+                | crate::state::MergeLedgerCommitError::Persistence(_)),
+            ) => {
                 self.validated_merge_execution_candidate = None;
                 Err(MergeCandidateValidationError::Frontier(error.to_string()))
             }
@@ -21224,6 +21246,8 @@ pub(super) mod tests {
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+            transaction_history_bytes:
+                iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
             membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
@@ -22254,8 +22278,8 @@ pub(super) mod tests {
             .install_lane_drain_queue(Arc::clone(&queue))
             .unwrap();
         let notification = concread::release::ReleaseNotification::default();
-        let error = crate::state::MergeLedgerCommitError::StateStorageAdmission(
-            crate::state::StateStorageAdmissionError::Busy(notification.observe()),
+        let error = crate::state::MergeLedgerCommitError::BlockHashAdmission(
+            crate::state::BlockHashAdmissionError::Busy(notification.observe()),
         );
         assert_eq!(
             adapter
@@ -22271,8 +22295,74 @@ pub(super) mod tests {
         assert!(matches!(
             adapter.classify_merge_state_validation(
                 3,
-                Err(crate::state::MergeLedgerCommitError::StateStorageAdmission(
-                    crate::state::StateStorageAdmissionError::ReadOnly
+                Err(crate::state::MergeLedgerCommitError::BlockHashAdmission(
+                    crate::state::BlockHashAdmissionError::ReadOnly
+                ))
+            ),
+            Err(MergeCandidateValidationError::Frontier(_))
+        ));
+        for error in [
+            crate::state::MergeLedgerCommitError::ExecutionObservationChanged,
+            crate::state::MergeLedgerCommitError::ExecutionRecorderConflict(
+                "recorder belongs to another State owner".to_owned(),
+            ),
+            crate::state::MergeLedgerCommitError::LocalDrainObservation(Box::new(
+                crate::state::MergeLedgerCommitError::ExecutionObservationChanged,
+            )),
+            crate::state::MergeLedgerCommitError::Persistence(
+                crate::kura::Error::MergeCarrierConflict("history is unavailable".to_owned()),
+            ),
+        ] {
+            assert!(matches!(
+                adapter.classify_merge_state_validation(3, Err(error)),
+                Err(MergeCandidateValidationError::Frontier(_))
+            ));
+            assert!(adapter.validated_merge_execution_candidate.is_none());
+        }
+        let world_storage = concread::release::ReleaseNotification::default();
+        assert_eq!(
+            adapter
+                .classify_merge_state_validation(
+                    5,
+                    Err(crate::state::MergeLedgerCommitError::StateStorageAdmission(
+                        crate::state::StateStorageAdmissionError::World(
+                            mv::storage::AdmittedStorageError::Busy {
+                                role: mv::storage::StorageRole::Current,
+                                release: world_storage.observe(),
+                            },
+                        )
+                    ))
+                )
+                .unwrap(),
+            MergeCandidateValidation::Deferred
+        );
+        let (view, wait) = adapter.merge_history_wait.as_mut().unwrap();
+        assert_eq!(*view, 5);
+        assert!(!wait.is_ready(&queue.sumeragi_waker()));
+        drop(world_storage.guard(()));
+        assert!(wait.is_ready(&queue.sumeragi_waker()));
+        let membership = concread::release::ReleaseNotification::default();
+        assert_eq!(
+            adapter
+                .classify_merge_state_validation(
+                    4,
+                    Err(crate::state::MergeLedgerCommitError::MembershipAdmission(
+                        crate::state::MembershipAdmissionError::Busy(membership.observe())
+                    ))
+                )
+                .unwrap(),
+            MergeCandidateValidation::Deferred
+        );
+        let (view, wait) = adapter.merge_history_wait.as_mut().unwrap();
+        assert_eq!(*view, 4);
+        assert!(!wait.is_ready(&queue.sumeragi_waker()));
+        drop(membership.guard(()));
+        assert!(wait.is_ready(&queue.sumeragi_waker()));
+        assert!(matches!(
+            adapter.classify_merge_state_validation(
+                4,
+                Err(crate::state::MergeLedgerCommitError::MembershipAdmission(
+                    crate::state::MembershipAdmissionError::Poisoned
                 ))
             ),
             Err(MergeCandidateValidationError::Frontier(_))

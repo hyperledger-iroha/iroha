@@ -1,13 +1,15 @@
 //! Provider-issued hardware credentials and normalized GuardBundle relations.
 //!
-//! A static platform credential proves, once per hardware epoch, that an approved provider
-//! authorized a device-owned proof key, the transport P-256 key, the exact lane, and all sixteen
-//! non-forking lifecycle capabilities.  The provider secret never reaches the device: the device
+//! A static platform credential proves, once per authority epoch, that an approved provider
+//! authorized a device-owned proof key, the transport P-256 key, the exact lane, and a
+//! class-specific guarantee set. OEM checkpoint profiles retain all sixteen hardware lifecycle
+//! capabilities; ordinary-app profiles have narrower attested-key guarantees. The provider secret
+//! never reaches the device: the device
 //! stores the resulting paired credential proof and later proves knowledge of its own proof key
 //! in each GuardBundle. Consequently neither a host-side platform signature nor knowledge of a
 //! provider secret by wallet software can authorize money.
 //!
-//! GuardBundle consumes each credential's complete 40-field public column. It recursively folds
+//! GuardBundle consumes each credential's complete 42-field public column. It recursively folds
 //! the credential opening claim with its transported SHA history before merging predecessor and
 //! successor histories. The reciprocal Guard audits bind all four credential columns, including
 //! their shared audits and parity-specific histories; the retired two-field credential shape is
@@ -31,9 +33,11 @@ use halo2_proofs::{
     poly::ipa::commitment::ParamsIPA,
 };
 use iroha_data_model::kagemusha::{
+    KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1, KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1,
     KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_HALO2_K_V1,
     KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_WIRE_VERSION_V1,
     KagemushaDevicePublicKeyV1, kagemusha_device_key_reference_v1,
+    kagemusha_required_guarantees_for_platform_tag_v1,
 };
 use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use sha2::{Digest as _, Sha256};
@@ -211,7 +215,7 @@ const fn operation_tag(operation: super::KagemushaOperationV1) -> u8 {
     }
 }
 
-/// Provider-authorized fixed statement for one hardware epoch.
+/// Provider-authorized fixed statement for one authority epoch.
 ///
 /// The provider creates the paired proof for this statement during qualification/provisioning.
 /// The per-device proof-authority secret is not present here and remains sealed in hardware.
@@ -255,12 +259,14 @@ pub struct KagemushaPlatformCredentialStatementV1 {
     pub policy_epoch: u64,
     /// Provider-neutral platform-class tag.
     pub platform_class: u8,
-    /// Exact sixteen secure-device capability bits.
-    pub capability_mask: u16,
+    /// Exact class-specific guarantee bits (OEM checkpoint or ordinary app).
+    pub capability_mask: u32,
     /// Commitment to the provider proof-authority secret registered by policy.
     pub provider_authority_commitment: DigestV1,
     /// Digest of the complete platform attestation evidence.
     pub platform_attestation_digest: DigestV1,
+    /// Stable app/device policy digest approved for this exact credential.
+    pub app_policy_binding_digest: DigestV1,
     /// Canonical compact hardware credential ID, authenticated by the provider issuance proof.
     /// Terminal and mint relations open this exact ID to the credential's fields and lifetime.
     pub credential_issuance_digest: DigestV1,
@@ -287,8 +293,8 @@ impl KagemushaPlatformCredentialStatementV1 {
             || self.policy_epoch == 0
             || self.asset_scale > KAGEMUSHA_ASSET_SCALE_MAX_V1
             || self.hardware_epoch_generation == 0
-            || self.platform_class > 3
-            || self.capability_mask != KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1
+            || kagemusha_required_guarantees_for_platform_tag_v1(self.platform_class)
+                != Some(self.capability_mask)
             || [
                 self.release_id,
                 self.suite_id,
@@ -303,6 +309,7 @@ impl KagemushaPlatformCredentialStatementV1 {
                 self.hardware_profile_id,
                 self.provider_authority_commitment,
                 self.platform_attestation_digest,
+                self.app_policy_binding_digest,
                 self.credential_issuance_digest,
                 self.canonical_empty_effect_digest,
             ]
@@ -539,9 +546,10 @@ fn validate_successor_credential_binding(
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod platform_credential_public_instance {
     pub(crate) const CREDENTIAL_LO: usize = 0;
-    pub(crate) const EQ_AUDIT_LO: usize = 2;
-    pub(crate) const EP_AUDIT_LO: usize = 4;
-    pub(crate) const HISTORY_START: usize = 6;
+    pub(crate) const APP_BINDING_LO: usize = 2;
+    pub(crate) const EQ_AUDIT_LO: usize = 4;
+    pub(crate) const EP_AUDIT_LO: usize = 6;
+    pub(crate) const HISTORY_START: usize = 8;
 }
 
 /// Exact PlatformCredential public width for one parity.
@@ -701,8 +709,43 @@ impl_platform_credential_circuit!(Fq, EqAffine, Ep, "Kagemusha Ep PlatformCreden
 
 struct KagemushaAssignedPlatformCredentialV1<F: KagemushaPoseidonFieldV1> {
     credential_digest: [PastaSha256ByteV1<F>; 32],
+    app_policy_binding_digest: [PastaSha256ByteV1<F>; 32],
     release_id: [AssignedValue<F>; 2],
     policy_root: [AssignedValue<F>; 2],
+}
+
+/// Bind the exact guarantee set to the provider-profile class inside either
+/// Pasta circuit. An app profile never inherits the OEM checkpoint claims.
+pub(super) fn constrain_platform_guarantees_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    platform_class: AssignedValue<F>,
+    guarantees: AssignedValue<F>,
+) {
+    let gate = range.gate();
+    let oem = range.is_less_than_safe(ctx, platform_class, 4);
+    let apple_tag = ctx.load_constant(F::from(4));
+    let android_tag = ctx.load_constant(F::from(5));
+    let apple = gate.is_equal(ctx, platform_class, apple_tag);
+    let android = gate.is_equal(ctx, platform_class, android_tag);
+    let valid = gate.add(ctx, oem, apple);
+    let valid = gate.add(ctx, valid, android);
+    gate.assert_is_const(ctx, &valid, &F::ONE);
+
+    let oem_mask = ctx.load_constant(F::from(u64::from(
+        KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+    )));
+    let apple_mask =
+        ctx.load_constant(F::from(u64::from(KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1)));
+    let android_mask =
+        ctx.load_constant(F::from(u64::from(KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1)));
+    let expected_oem = gate.mul(ctx, oem, oem_mask);
+    let expected_apple = gate.mul(ctx, apple, apple_mask);
+    let expected_android = gate.mul(ctx, android, android_mask);
+    let expected = gate.add(ctx, expected_oem, expected_apple);
+    let expected = gate.add(ctx, expected, expected_android);
+    let difference = gate.sub(ctx, guarantees, expected);
+    gate.assert_is_const(ctx, &difference, &F::ZERO);
 }
 
 fn credential_builder<F>(
@@ -766,16 +809,11 @@ where
     let profile = assign_digest(ctx, &range, statement.hardware_profile_id);
     let policy_epoch = assign_uint_le(ctx, &range, u128::from(statement.policy_epoch), 64);
     let platform_class = assign_uint_le(ctx, &range, u128::from(statement.platform_class), 8);
-    let platform_class_ok = range.is_less_than_safe(ctx, platform_class.value, 4);
-    gate.assert_is_const(ctx, &platform_class_ok, &F::ONE);
-    let capabilities = assign_uint_le(ctx, &range, u128::from(statement.capability_mask), 16);
-    gate.assert_is_const(
-        ctx,
-        &capabilities.value,
-        &F::from(u64::from(KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1)),
-    );
+    let capabilities = assign_uint_le(ctx, &range, u128::from(statement.capability_mask), 32);
+    constrain_platform_guarantees_v1(ctx, &range, platform_class.value, capabilities.value);
     let provider_authority = assign_digest(ctx, &range, statement.provider_authority_commitment);
     let attestation = assign_digest(ctx, &range, statement.platform_attestation_digest);
+    let app_binding = assign_digest(ctx, &range, statement.app_policy_binding_digest);
     let issuance = assign_digest(ctx, &range, statement.credential_issuance_digest);
     let empty_effect = assign_digest(ctx, &range, statement.canonical_empty_effect_digest);
     let profile_index = assign_uint_le(
@@ -800,6 +838,7 @@ where
         &profile,
         &provider_authority,
         &attestation,
+        &app_binding,
         &issuance,
         &empty_effect,
     ] {
@@ -912,6 +951,7 @@ where
             capabilities.bytes.to_vec(),
             provider_authority.to_vec(),
             attestation.to_vec(),
+            app_binding.to_vec(),
             issuance.to_vec(),
             empty_effect.to_vec(),
             profile_index.bytes.to_vec(),
@@ -925,6 +965,7 @@ where
         jobs,
         KagemushaAssignedPlatformCredentialV1 {
             credential_digest,
+            app_policy_binding_digest: app_binding,
             release_id,
             policy_root,
         },
@@ -1004,7 +1045,7 @@ impl KagemushaPlatformCredentialAuditDiscoveryV1 {
 const PLATFORM_CREDENTIAL_HASH_CLAIM_EQUATION_TAG_V1: u32 = 13;
 #[cfg(feature = "zk-halo2-ipa")]
 const PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1: usize =
-    2 + 2 + 8 + 2 * accumulator_limb_count();
+    2 + 2 + 2 + 8 + 2 * accumulator_limb_count();
 #[cfg(feature = "zk-halo2-ipa")]
 const PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1: usize =
     PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1
@@ -1232,6 +1273,7 @@ where
     }
     let range = builder.range_chip();
     let credential_digest = digest_limbs_assigned(builder.main(0), &assigned.credential_digest);
+    let app_binding = digest_limbs_assigned(builder.main(0), &assigned.app_policy_binding_digest);
     let eq_claim_protocol =
         constant_platform_credential_digest_v1(builder.main(0), eq_claim_protocol_digest);
     let ep_claim_protocol =
@@ -1255,6 +1297,7 @@ where
     builder.assigned_instances = vec![
         credential_digest
             .into_iter()
+            .chain(app_binding)
             .chain(eq_audit)
             .chain(ep_audit)
             .chain(own_history.iter().copied())
@@ -1267,6 +1310,7 @@ where
 
     let mut pair_binding = credential_digest
         .into_iter()
+        .chain(app_binding)
         .chain(assigned.release_id)
         .chain(eq_claim_protocol)
         .chain(ep_claim_protocol)
@@ -1680,6 +1724,8 @@ pub(super) struct KagemushaAssignedGuardBundleV1<F: KagemushaPoseidonFieldV1> {
     pub(super) credential_digests: [[PastaSha256ByteV1<F>; 32]; 2],
     /// Compact credential IDs inside those authenticated statements.
     pub(super) credential_issuance_digests: [[PastaSha256ByteV1<F>; 32]; 2],
+    /// App policy bindings opened by the two authenticated credential statements.
+    pub(super) credential_app_policy_binding_digests: [[PastaSha256ByteV1<F>; 32]; 2],
     pub(super) credential_device_public_keys: [Vec<PastaSha256ByteV1<F>>; 2],
     pub(super) protocol_version: AssignedValue<F>,
     pub(super) predecessor_suite_id: [AssignedValue<F>; 2],
@@ -1750,6 +1796,7 @@ pub(super) struct AssignedCredentialV1<F: KagemushaPoseidonFieldV1> {
     pub(super) policy_epoch: AssignedUint<F>,
     pub(super) device_authority_commitment: [PastaSha256ByteV1<F>; 32],
     pub(super) credential_issuance_digest: [PastaSha256ByteV1<F>; 32],
+    pub(super) app_policy_binding_digest: [PastaSha256ByteV1<F>; 32],
     pub(super) empty_effect: [PastaSha256ByteV1<F>; 32],
     pub(super) digest: [PastaSha256ByteV1<F>; 32],
 }
@@ -2260,6 +2307,10 @@ where
             predecessor_credential.credential_issuance_digest,
             successor_credential.credential_issuance_digest,
         ],
+        credential_app_policy_binding_digests: [
+            predecessor_credential.app_policy_binding_digest,
+            successor_credential.app_policy_binding_digest,
+        ],
         credential_device_public_keys: [
             predecessor_credential.device_public_key,
             successor_credential.device_public_key,
@@ -2349,9 +2400,12 @@ pub(super) fn assign_credential_statement_v1<F: KagemushaPoseidonFieldV1>(
     let profile = assign_digest(ctx, range, statement.hardware_profile_id);
     let policy_epoch = assign_uint_le(ctx, range, u128::from(statement.policy_epoch), 64);
     let platform_class = assign_uint_le(ctx, range, u128::from(statement.platform_class), 8);
-    let capabilities = assign_uint_le(ctx, range, u128::from(statement.capability_mask), 16);
+    let capabilities = assign_uint_le(ctx, range, u128::from(statement.capability_mask), 32);
+    constrain_platform_guarantees_v1(ctx, range, platform_class.value, capabilities.value);
     let provider_authority = assign_digest(ctx, range, statement.provider_authority_commitment);
     let attestation = assign_digest(ctx, range, statement.platform_attestation_digest);
+    let app_binding = assign_digest(ctx, range, statement.app_policy_binding_digest);
+    assert_digest_nonzero(ctx, range, &app_binding);
     let issuance = assign_digest(ctx, range, statement.credential_issuance_digest);
     let empty_effect = assign_digest(ctx, range, statement.canonical_empty_effect_digest);
     let profile_index =
@@ -2384,6 +2438,7 @@ pub(super) fn assign_credential_statement_v1<F: KagemushaPoseidonFieldV1>(
             capabilities.bytes,
             provider_authority.to_vec(),
             attestation.to_vec(),
+            app_binding.to_vec(),
             issuance.to_vec(),
             empty_effect.to_vec(),
             profile_index.bytes,
@@ -2410,6 +2465,7 @@ pub(super) fn assign_credential_statement_v1<F: KagemushaPoseidonFieldV1>(
         policy_epoch,
         device_authority_commitment,
         credential_issuance_digest: issuance,
+        app_policy_binding_digest: app_binding,
         empty_effect,
         digest,
     })
@@ -2485,6 +2541,7 @@ type GuardCredentialColumnsV1 =
 fn guard_credential_column_v1<F: KagemushaPoseidonFieldV1>(
     column: &[F],
     expected_statement: DigestV1,
+    expected_app_binding: DigestV1,
     history: &[u8],
 ) -> Result<[u128; KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1], String> {
     if column.len() != KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1
@@ -2494,6 +2551,12 @@ fn guard_credential_column_v1<F: KagemushaPoseidonFieldV1>(
     }
     if column[..2] != crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(expected_statement) {
         return Err("Kagemusha GuardBundle credential statement was substituted".to_owned());
+    }
+    if column[platform_credential_public_instance::APP_BINDING_LO
+        ..platform_credential_public_instance::EQ_AUDIT_LO]
+        != crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(expected_app_binding)
+    {
+        return Err("Kagemusha GuardBundle credential app binding was substituted".to_owned());
     }
     let mut values = [0; KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1];
     for (value, target) in column.iter().zip(&mut values) {
@@ -2518,6 +2581,7 @@ fn guard_credential_column_v1<F: KagemushaPoseidonFieldV1>(
 #[cfg(feature = "zk-halo2-ipa")]
 fn guard_credential_columns_v1(
     digests: [DigestV1; 2],
+    app_bindings: [DigestV1; 2],
     eq_instances: [&[Fp]; 2],
     ep_instances: [&[Fq]; 2],
     eq_histories: [&[u8]; 2],
@@ -2525,10 +2589,18 @@ fn guard_credential_columns_v1(
 ) -> Result<GuardCredentialColumnsV1, String> {
     let mut columns = [[[0; KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1]; 2]; 2];
     for (index, digest) in digests.into_iter().enumerate() {
-        columns[0][index] =
-            guard_credential_column_v1(eq_instances[index], digest, eq_histories[index])?;
-        columns[1][index] =
-            guard_credential_column_v1(ep_instances[index], digest, ep_histories[index])?;
+        columns[0][index] = guard_credential_column_v1(
+            eq_instances[index],
+            digest,
+            app_bindings[index],
+            eq_histories[index],
+        )?;
+        columns[1][index] = guard_credential_column_v1(
+            ep_instances[index],
+            digest,
+            app_bindings[index],
+            ep_histories[index],
+        )?;
         if columns[0][index][platform_credential_public_instance::EQ_AUDIT_LO
             ..platform_credential_public_instance::HISTORY_START]
             != columns[1][index][platform_credential_public_instance::EQ_AUDIT_LO
@@ -2714,6 +2786,16 @@ pub(crate) fn build_kagemusha_guard_bundle_pair_v1(
             witness.relation.predecessor_credential.canonical_digest(),
             witness.relation.successor_credential.canonical_digest(),
         ],
+        [
+            witness
+                .relation
+                .predecessor_credential
+                .app_policy_binding_digest,
+            witness
+                .relation
+                .successor_credential
+                .app_policy_binding_digest,
+        ],
         witness.eq_credential_instances,
         witness.ep_credential_instances,
         witness
@@ -2840,7 +2922,7 @@ pub(crate) fn build_kagemusha_guard_bundle_pair_v1(
 fn assign_guard_credential_columns_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     credential_columns: &GuardCredentialColumnsV1,
-    credential_instances: &[[AssignedValue<F>; 2]; 2],
+    credential_instances: &[[AssignedValue<F>; 4]; 2],
 ) -> Vec<AssignedValue<F>> {
     // Both parities bind the complete same credential pair into their reciprocal audit.
     // This includes the shared credential audits and both transported SHA histories;
@@ -2859,7 +2941,7 @@ fn assign_guard_credential_columns_v1<F: KagemushaPoseidonFieldV1>(
     let width = KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1;
     for (slot, expected) in credential_instances.iter().enumerate() {
         for parity_offset in [0, 2 * width] {
-            for (actual, expected) in pair_binding[parity_offset + slot * width..][..2]
+            for (actual, expected) in pair_binding[parity_offset + slot * width..][..4]
                 .iter()
                 .zip(expected)
             {
@@ -2948,9 +3030,17 @@ where
     let eq_audit_instances = digest_limbs_assigned(builder.main(0), &eq_audit_assigned);
     let ep_audit_assigned = assign_digest(builder.main(0), &range, ep_audit);
     let ep_audit_instances = digest_limbs_assigned(builder.main(0), &ep_audit_assigned);
-    let credential_instances = assigned
+    let credential_digest_instances = assigned
         .credential_digests
         .map(|digest| digest_limbs_assigned(builder.main(0), &digest));
+    let credential_instances = core::array::from_fn(|index| {
+        let digest = credential_digest_instances[index];
+        let app = digest_limbs_assigned(
+            builder.main(0),
+            &assigned.credential_app_policy_binding_digests[index],
+        );
+        [digest[0], digest[1], app[0], app[1]]
+    });
     let pair_binding =
         assign_guard_credential_columns_v1(&mut builder, credential_columns, &credential_instances);
     let width = KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1;
@@ -2975,7 +3065,7 @@ where
             .into_iter()
             .chain(eq_audit_instances)
             .chain(ep_audit_instances)
-            .chain(credential_instances.into_iter().flatten())
+            .chain(credential_digest_instances.into_iter().flatten())
             .chain(credential_history_instances.iter().copied())
             .collect(),
     ];
@@ -3377,7 +3467,7 @@ fn policy_node(left: DigestV1, right: DigestV1) -> DigestV1 {
 }
 
 fn credential_statement_preimage(statement: &KagemushaPlatformCredentialStatementV1) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(640);
+    let mut bytes = Vec::with_capacity(697);
     bytes.extend_from_slice(CREDENTIAL_STATEMENT_DOMAIN);
     bytes.push(0);
     bytes.extend_from_slice(&statement.version.to_le_bytes());
@@ -3402,6 +3492,7 @@ fn credential_statement_preimage(statement: &KagemushaPlatformCredentialStatemen
     bytes.extend_from_slice(&statement.capability_mask.to_le_bytes());
     bytes.extend_from_slice(&statement.provider_authority_commitment);
     bytes.extend_from_slice(&statement.platform_attestation_digest);
+    bytes.extend_from_slice(&statement.app_policy_binding_digest);
     bytes.extend_from_slice(&statement.credential_issuance_digest);
     bytes.extend_from_slice(&statement.canonical_empty_effect_digest);
     bytes.extend_from_slice(&statement.provider_profile_index.to_le_bytes());
@@ -3441,6 +3532,7 @@ fn blank_credential_statement() -> KagemushaPlatformCredentialStatementV1 {
         capability_mask: 0,
         provider_authority_commitment: [0; 32],
         platform_attestation_digest: [0; 32],
+        app_policy_binding_digest: [0; 32],
         credential_issuance_digest: [0; 32],
         canonical_empty_effect_digest: [0; 32],
         provider_profile_index: 0,
@@ -3483,7 +3575,7 @@ mod tests {
         let leaf = policy_leaf(&statement);
         assert_eq!(
             hex::encode(leaf),
-            "35df3dd336e6aac2be2d50cf157e67952ebebe08f2e6bed68bf2155a2d143253"
+            "5e3566d5bec88b590a89c514072dc3d3dabce76ad9b168c123f90b813c728abf"
         );
         let mut root = leaf;
         let mut empty: DigestV1 =
@@ -3494,7 +3586,7 @@ mod tests {
         }
         assert_eq!(
             hex::encode(root),
-            "2e4f631362d6fcfa2f9fc4647605bc4a5091a06d6529972d2593e585a64ba50e"
+            "f122253b210996ffc2eec9b1e4311770f7bd105ae552d8841f9383fc99f9eaa0"
         );
         let original_credential = statement.canonical_digest();
         statement.canonical_empty_effect_digest = [0x33; 32];
@@ -3602,6 +3694,7 @@ mod tests {
                 provider_authority_secret,
             ),
             platform_attestation_digest: [9; 32],
+            app_policy_binding_digest: [12; 32],
             credential_issuance_digest: [10; 32],
             canonical_empty_effect_digest: [11; 32],
             provider_profile_index: 0xa531,
@@ -3698,11 +3791,84 @@ mod tests {
 
         for bit in 0..16 {
             let mut missing_capability = witness.clone();
-            missing_capability.statement.capability_mask &= !(1_u16 << bit);
+            missing_capability.statement.capability_mask &= !(1_u32 << bit);
             assert!(
                 missing_capability.validate().is_err(),
                 "credential omitted capability bit {bit}"
             );
+        }
+    }
+
+    #[test]
+    fn platform_class_requires_its_exact_oem_or_app_guarantee_set() {
+        for (class, guarantees) in [
+            (0, KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1),
+            (3, KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1),
+            (4, KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1),
+            (5, KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1),
+        ] {
+            let mut witness = credential_witness();
+            witness.statement.platform_class = class;
+            witness.statement.capability_mask = guarantees;
+            witness.statement.hardware_policy_id = witness.policy_root();
+            witness.validate().expect("exact class guarantee set");
+            for other in [
+                KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+                KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1,
+                KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1,
+            ] {
+                if other != guarantees {
+                    witness.statement.capability_mask = other;
+                    witness.statement.hardware_policy_id = witness.policy_root();
+                    assert!(witness.validate().is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn both_pasta_fields_constrain_platform_guarantee_pairs() {
+        fn check<F: KagemushaPoseidonFieldV1>(class: u8, guarantees: u32) -> bool {
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(13)
+                .use_lookup_bits(8)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let ctx = builder.main(0);
+            let assigned_class = assign_uint_le(ctx, &range, u128::from(class), 8);
+            let assigned_guarantees = assign_uint_le(ctx, &range, u128::from(guarantees), 32);
+            constrain_platform_guarantees_v1(
+                ctx,
+                &range,
+                assigned_class.value,
+                assigned_guarantees.value,
+            );
+            builder.assigned_instances =
+                vec![vec![assigned_class.value, assigned_guarantees.value]];
+            builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+            MockProver::run(
+                13,
+                &builder,
+                vec![vec![
+                    F::from(u64::from(class)),
+                    F::from(u64::from(guarantees)),
+                ]],
+            )
+            .expect("platform guarantee constraint synthesis")
+            .verify()
+            .is_ok()
+        }
+        for (class, guarantees, expected) in [
+            (0, KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, true),
+            (3, KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, true),
+            (4, KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1, true),
+            (5, KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1, true),
+            (4, KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, false),
+            (5, KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1, false),
+            (6, KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1, false),
+        ] {
+            assert_eq!(check::<Fp>(class, guarantees), expected);
+            assert_eq!(check::<Fq>(class, guarantees), expected);
         }
     }
 
@@ -3720,17 +3886,38 @@ mod tests {
 
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
+    fn app_policy_binding_changes_both_parity_statement_hash_claims() {
+        let witness = credential_witness();
+        let mut changed = witness.clone();
+        changed.statement.app_policy_binding_digest[0] ^= 1;
+        assert!(changed.validate().is_ok());
+        assert_ne!(
+            changed.statement.canonical_digest(),
+            witness.statement.canonical_digest()
+        );
+        let original_eq = platform_credential_sha_messages_v1::<Fp>(&witness).unwrap();
+        let changed_eq = platform_credential_sha_messages_v1::<Fp>(&changed).unwrap();
+        let original_ep = platform_credential_sha_messages_v1::<Fq>(&witness).unwrap();
+        let changed_ep = platform_credential_sha_messages_v1::<Fq>(&changed).unwrap();
+        assert_eq!(original_eq, original_ep);
+        assert_eq!(changed_eq, changed_ep);
+        assert_eq!(original_eq.len(), changed_eq.len());
+        assert_ne!(original_eq.last(), changed_eq.last());
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
     fn platform_credential_sha_queue_has_exact_job_and_block_profile() {
         let witness = credential_witness();
         let eq = platform_credential_sha_messages_v1::<Fp>(&witness).expect("Eq SHA queue");
         let ep = platform_credential_sha_messages_v1::<Fq>(&witness).expect("Ep SHA queue");
-        let expected_lengths = [105, 76, 107]
+        let expected_lengths = [105, 76, 109]
             .into_iter()
             .chain(core::iter::repeat_n(
                 104,
                 KAGEMUSHA_HARDWARE_POLICY_TREE_DEPTH_V1,
             ))
-            .chain([663])
+            .chain([697])
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -3781,24 +3968,24 @@ mod tests {
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn platform_credential_pair_audit_binding_covers_the_claim_carrier_tail() {
-        let credential_and_release_digests = 2 + 2;
+        let credential_app_and_release_digests = 2 + 2 + 2;
         let four_hash_protocol_digests = 4 * 2;
         let paired_histories = 2 * accumulator_limb_count();
         assert_eq!(
             PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1,
-            credential_and_release_digests + four_hash_protocol_digests + paired_histories
+            credential_app_and_release_digests + four_hash_protocol_digests + paired_histories
         );
         let claim_carrier_binding_tail =
             super::super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1
                 - super::super::mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1;
         assert_eq!(claim_carrier_binding_tail, 14);
-        assert_eq!(PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1, 80);
-        assert_eq!(PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1, 94);
+        assert_eq!(PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1, 82);
+        assert_eq!(PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1, 96);
         assert_eq!(
             PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1,
             PLATFORM_CREDENTIAL_BASE_BOUND_U128_COUNT_V1 + claim_carrier_binding_tail
         );
-        assert_eq!(PLATFORM_CREDENTIAL_EQ_BOUND_U128_COUNT_V1, 96);
+        assert_eq!(PLATFORM_CREDENTIAL_EQ_BOUND_U128_COUNT_V1, 98);
         assert_eq!(
             PLATFORM_CREDENTIAL_EQ_BOUND_U128_COUNT_V1,
             PLATFORM_CREDENTIAL_PAIR_BOUND_U128_COUNT_V1 + 2
@@ -3819,19 +4006,22 @@ mod tests {
             );
         }
         assert_eq!(platform_credential_public_instance::CREDENTIAL_LO, 0);
-        assert_eq!(platform_credential_public_instance::EQ_AUDIT_LO, 2);
-        assert_eq!(platform_credential_public_instance::EP_AUDIT_LO, 4);
-        assert_eq!(platform_credential_public_instance::HISTORY_START, 6);
-        assert_eq!(KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1, 40);
+        assert_eq!(platform_credential_public_instance::APP_BINDING_LO, 2);
+        assert_eq!(platform_credential_public_instance::EQ_AUDIT_LO, 4);
+        assert_eq!(platform_credential_public_instance::EP_AUDIT_LO, 6);
+        assert_eq!(platform_credential_public_instance::HISTORY_START, 8);
+        assert_eq!(KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1, 42);
     }
 
     #[cfg(feature = "zk-halo2-ipa")]
     fn guard_credential_test_column<F: KagemushaPoseidonFieldV1>(
         statement: DigestV1,
+        app_binding: DigestV1,
         history: &[u8],
     ) -> Vec<F> {
         digest_limbs::<F>(statement)
             .into_iter()
+            .chain(digest_limbs::<F>(app_binding))
             .chain([1_u64, 2, 3, 4].map(F::from))
             .chain(history.chunks_exact(16).map(|bytes| {
                 F::from_u128(u128::from_le_bytes(
@@ -3846,28 +4036,44 @@ mod tests {
     fn guard_credential_columns_reject_statement_history_and_width_substitution() {
         fn check<F: KagemushaPoseidonFieldV1>() {
             let digest = [0x61; 32];
+            let app_binding = [0x62; 32];
             let history = [0x27; super::super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
-            let column = guard_credential_test_column::<F>(digest, &history);
-            assert!(guard_credential_column_v1(&column, digest, &history).is_ok());
-            assert!(guard_credential_column_v1(&column[..2], digest, &history).is_err());
-            assert!(guard_credential_column_v1(&column[..39], digest, &history).is_err());
+            let column = guard_credential_test_column::<F>(digest, app_binding, &history);
+            assert!(guard_credential_column_v1(&column, digest, app_binding, &history).is_ok());
             assert!(
-                guard_credential_column_v1(&column, digest, &history[..history.len() - 1]).is_err()
+                guard_credential_column_v1(&column[..2], digest, app_binding, &history).is_err()
             );
-            assert!(guard_credential_column_v1(&column, [0x62; 32], &history).is_err());
+            assert!(
+                guard_credential_column_v1(&column[..41], digest, app_binding, &history).is_err()
+            );
+            assert!(
+                guard_credential_column_v1(
+                    &column,
+                    digest,
+                    app_binding,
+                    &history[..history.len() - 1]
+                )
+                .is_err()
+            );
+            assert!(
+                guard_credential_column_v1(&column, [0x63; 32], app_binding, &history).is_err()
+            );
+            assert!(guard_credential_column_v1(&column, digest, [0x64; 32], &history).is_err());
             let mut extra = column.clone();
             extra.push(F::ZERO);
-            assert!(guard_credential_column_v1(&extra, digest, &history).is_err());
+            assert!(guard_credential_column_v1(&extra, digest, app_binding, &history).is_err());
             let mut changed = column.clone();
             changed[platform_credential_public_instance::HISTORY_START] += F::ONE;
-            assert!(guard_credential_column_v1(&changed, digest, &history).is_err());
+            assert!(guard_credential_column_v1(&changed, digest, app_binding, &history).is_err());
             let mut changed_history = history;
             changed_history[16] ^= 1;
-            assert!(guard_credential_column_v1(&column, digest, &changed_history).is_err());
+            assert!(
+                guard_credential_column_v1(&column, digest, app_binding, &changed_history).is_err()
+            );
             let mut wide = column;
             wide[platform_credential_public_instance::EQ_AUDIT_LO] =
                 F::from_u128(u128::MAX) + F::ONE;
-            assert!(guard_credential_column_v1(&wide, digest, &history).is_err());
+            assert!(guard_credential_column_v1(&wide, digest, app_binding, &history).is_err());
         }
         check::<Fp>();
         check::<Fq>();
@@ -3877,13 +4083,19 @@ mod tests {
     #[cfg(feature = "zk-halo2-ipa")]
     fn guard_credential_pair_requires_both_exact_statements_and_shared_audits() {
         let digests = [[0x41; 32], [0x42; 32]];
+        let app_bindings = [[0x51; 32], [0x52; 32]];
         let eq_history = [0x25; super::super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
         let ep_history = [0x26; super::super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
-        let eq = digests.map(|digest| guard_credential_test_column::<Fp>(digest, &eq_history));
-        let ep = digests.map(|digest| guard_credential_test_column::<Fq>(digest, &ep_history));
+        let eq = core::array::from_fn(|index| {
+            guard_credential_test_column::<Fp>(digests[index], app_bindings[index], &eq_history)
+        });
+        let ep = core::array::from_fn(|index| {
+            guard_credential_test_column::<Fq>(digests[index], app_bindings[index], &ep_history)
+        });
         let validate = |eq: &[Vec<Fp>; 2], ep: &[Vec<Fq>; 2]| {
             guard_credential_columns_v1(
                 digests,
+                app_bindings,
                 [&eq[0], &eq[1]],
                 [&ep[0], &ep[1]],
                 [&eq_history, &eq_history],
@@ -3891,7 +4103,14 @@ mod tests {
             )
         };
         let columns = validate(&eq, &ep).expect("exact paired credential projection");
-        assert_eq!(columns.iter().flatten().flatten().count(), 160);
+        assert_eq!(columns.iter().flatten().flatten().count(), 168);
+        let mut changed_app = ep.clone();
+        changed_app[1][platform_credential_public_instance::APP_BINDING_LO] += Fq::ONE;
+        assert!(
+            validate(&eq, &changed_app)
+                .expect_err("changed app binding")
+                .contains("app binding")
+        );
         let mut changed = ep.clone();
         changed[1][platform_credential_public_instance::EP_AUDIT_LO] += Fq::ONE;
         assert!(
@@ -3911,10 +4130,10 @@ mod tests {
                 .use_k(10)
                 .use_lookup_bits(8)
                 .use_instance_columns(1);
-            let expected = [[11_u128, 12], [21, 22]]
+            let expected = [[11_u128, 12, 13, 14], [21, 22, 23, 24]]
                 .map(|limbs| limbs.map(|value| builder.main(0).load_constant(F::from_u128(value))));
             let binding = assign_guard_credential_columns_v1(&mut builder, &columns, &expected);
-            assert_eq!(binding.len(), 160);
+            assert_eq!(binding.len(), 168);
             builder.assigned_instances = vec![Vec::new()];
             builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
             MockProver::run(10, &builder, vec![Vec::new()])
@@ -3925,11 +4144,13 @@ mod tests {
         let mut columns =
             [[[0_u128; KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1]; 2]; 2];
         for parity in &mut columns {
-            parity[0][..2].copy_from_slice(&[11, 12]);
-            parity[1][..2].copy_from_slice(&[21, 22]);
+            parity[0][..4].copy_from_slice(&[11, 12, 13, 14]);
+            parity[1][..4].copy_from_slice(&[21, 22, 23, 24]);
             for column in parity {
-                column[2..6].copy_from_slice(&[31, 32, 33, 34]);
-                column[6..].fill(u128::MAX);
+                column[platform_credential_public_instance::EQ_AUDIT_LO
+                    ..platform_credential_public_instance::HISTORY_START]
+                    .copy_from_slice(&[31, 32, 33, 34]);
+                column[platform_credential_public_instance::HISTORY_START..].fill(u128::MAX);
             }
         }
         assert!(verify::<Fp>(columns));
@@ -3937,6 +4158,10 @@ mod tests {
         let mut substituted = columns;
         substituted[0][0][0] += 1;
         assert!(!verify::<Fp>(substituted));
+        let mut substituted_app = columns;
+        substituted_app[1][1][platform_credential_public_instance::APP_BINDING_LO] += 1;
+        assert!(!verify::<Fp>(substituted_app));
+        assert!(!verify::<Fq>(substituted_app));
         let mut mismatched = columns;
         mismatched[1][1][platform_credential_public_instance::EQ_AUDIT_LO] += 1;
         assert!(!verify::<Fq>(mismatched));

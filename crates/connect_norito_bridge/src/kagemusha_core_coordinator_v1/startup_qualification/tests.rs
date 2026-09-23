@@ -37,6 +37,7 @@ pub(in crate::kagemusha_core_coordinator_v1) fn qualification(
     generation: u64,
 ) -> QualificationProjectionV1 {
     let profile = KagemushaHardwareProfileV1 {
+        app_attestation_authority_policy_digest: [0xA5; 32],
         version: 1,
         protocol_version: 1,
         hardware_profile_id: [0; 32],
@@ -58,6 +59,7 @@ pub(in crate::kagemusha_core_coordinator_v1) fn qualification(
     .unwrap();
     let device_public_key = public(&key(10 + generation as u8));
     let mut credential = KagemushaHardwareCredentialV1 {
+        app_policy_binding_digest: [0xA6; 32],
         version: 1,
         credential_id: [0; 32],
         network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(

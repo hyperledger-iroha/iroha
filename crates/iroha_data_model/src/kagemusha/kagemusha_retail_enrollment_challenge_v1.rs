@@ -11,7 +11,8 @@ use super::{
     KagemushaHardwareProfileV1, KagemushaRetailEnrollmentCertificateV1,
     KagemushaRetailEnrollmentIssuanceV1, KagemushaRetailEnrollmentIssuerPolicyV1,
     KagemushaRetailEnrollmentOwnerV1, KagemushaRetailEnrollmentSelectionV1,
-    KagemushaRetailEnrollmentSubjectV1, kagemusha_verify_device_response_v1,
+    KagemushaRetailEnrollmentSubjectV1, KagemushaVerifiedAppEnrollmentV1,
+    kagemusha_verify_device_response_v1,
 };
 use iroha_model_base::name::Name;
 
@@ -68,6 +69,8 @@ pub struct KagemushaRetailEnrollmentChallengeV1 {
     pub owner: KagemushaRetailEnrollmentOwnerV1,
     /// Exact governed credential and release selected at challenge creation.
     pub issuance: KagemushaRetailEnrollmentIssuanceV1,
+    /// Digest of the authority-verified app-to-device assertion for these exact nonces.
+    pub app_attestation_digest: [u8; 32],
     /// Inclusive activation in authoritative service Unix milliseconds.
     pub issued_at_ms: u64,
     /// Exclusive bounded one-use challenge deadline.
@@ -240,6 +243,7 @@ impl KagemushaRetailEnrollmentChallengeV1 {
         if self.client_nonce == [0; 32]
             || self.server_nonce == [0; 32]
             || self.client_nonce == self.server_nonce
+            || self.app_attestation_digest == [0; 32]
             || self.expires_at_ms <= self.issued_at_ms
             || self.expires_at_ms - self.issued_at_ms
                 > KAGEMUSHA_RETAIL_ENROLLMENT_CHALLENGE_LIFETIME_MS_V1
@@ -256,6 +260,7 @@ impl KagemushaRetailEnrollmentChallengeV1 {
             owner: self.owner.clone(),
             issuance: self.issuance.clone(),
             challenge_evidence_digest: self.server_nonce,
+            app_attestation_digest: self.app_attestation_digest,
             issued_at_ms: self.issued_at_ms,
             expires_at_ms: self.expires_at_ms,
         }
@@ -391,6 +396,7 @@ impl KagemushaRetailEnrollmentPossessionProofV1 {
         release: &KagemushaAuthenticatedReleaseV1,
         expected: &KagemushaRetailEnrollmentSelectionV1,
         expected_client_nonce: [u8; 32],
+        verified_app: &KagemushaVerifiedAppEnrollmentV1,
     ) -> Result<KagemushaVerifiedRetailEnrollmentIssuerEvidenceV1> {
         let profile = release
             .enabled_profile(expected.issuance.credential.hardware_profile_id)
@@ -405,6 +411,7 @@ impl KagemushaRetailEnrollmentPossessionProofV1 {
             },
             expected,
             expected_client_nonce,
+            verified_app,
         )
     }
 
@@ -415,10 +422,38 @@ impl KagemushaRetailEnrollmentPossessionProofV1 {
         catalog: CatalogBinding<'_>,
         expected: &KagemushaRetailEnrollmentSelectionV1,
         expected_client_nonce: [u8; 32],
+        verified_app: &KagemushaVerifiedAppEnrollmentV1,
     ) -> Result<KagemushaVerifiedRetailEnrollmentIssuerEvidenceV1> {
         use KagemushaRetailEnrollmentChallengeErrorV1::{Binding, IssuerEvidence};
         self.canonical_bytes()?;
         if expected_client_nonce == [0; 32] || self.challenge.client_nonce != expected_client_nonce
+        {
+            return Err(Binding);
+        }
+        let selected_app = verified_app.selection();
+        if verified_app.digest() != self.challenge.app_attestation_digest
+            || selected_app.client_nonce != self.challenge.client_nonce
+            || selected_app.server_nonce != self.challenge.server_nonce
+            || selected_app.release_id != self.challenge.issuance.release_id
+            || selected_app.hardware_profile_id
+                != self.challenge.issuance.credential.hardware_profile_id
+            || selected_app.device_key_reference
+                != self.challenge.issuance.credential.device_key_reference
+            || selected_app.lane_id != self.challenge.owner.lane_id
+        {
+            return Err(Binding);
+        }
+        self.challenge
+            .issuance
+            .credential
+            .validate_app_policy_binding_for_release(
+                catalog.profile,
+                catalog.release_id,
+                verified_app.authority_policy(),
+            )
+            .map_err(|_| Binding)?;
+        if verified_app.static_binding_digest()
+            != self.challenge.issuance.credential.app_policy_binding_digest
         {
             return Err(Binding);
         }
@@ -431,6 +466,7 @@ impl KagemushaRetailEnrollmentPossessionProofV1 {
             || subject.issuer_policy_id != self.challenge.issuer_policy_id
             || subject.issuer_audience != self.challenge.issuer_audience
             || subject.challenge_evidence_digest != self.canonical_evidence_digest()?
+            || subject.app_attestation_digest != verified_app.digest()
         {
             return Err(IssuerEvidence);
         }
@@ -564,14 +600,17 @@ mod tests {
     use p256::ecdsa::signature::Signer as _;
 
     fn challenge(f: &Fixture) -> KagemushaRetailEnrollmentChallengeV1 {
+        let client_nonce = [92; 32];
+        let server_nonce = [93; 32];
         KagemushaRetailEnrollmentChallengeV1 {
             version: 1,
-            client_nonce: [92; 32],
-            server_nonce: [93; 32],
+            client_nonce,
+            server_nonce,
             issuer_policy_id: f.policy.issuer_policy_id,
             issuer_audience: f.policy.issuer_audience.clone(),
             owner: f.certificate.subject.owner.clone(),
             issuance: f.selection.issuance.clone(),
+            app_attestation_digest: f.verified_app(client_nonce, server_nonce).digest(),
             issued_at_ms: 1000,
             expires_at_ms: 2000,
         }
@@ -695,10 +734,12 @@ mod tests {
         let f = Fixture::new(1);
         let c = challenge(&f);
         let p = proof(&f, &c);
+        let app = f.verified_app(c.client_nonce, c.server_nonce);
         let seal = |proof: &KagemushaRetailEnrollmentPossessionProofV1, time| {
             let mut certificate = f.certificate.clone();
             certificate.subject.challenge_evidence_digest =
                 proof.canonical_evidence_digest().unwrap();
+            certificate.subject.app_attestation_digest = proof.challenge.app_attestation_digest;
             certificate.subject.issued_at_ms = time;
             certificate.signature = SignatureOf::try_new(
                 f.issuer.private_key(),
@@ -707,28 +748,31 @@ mod tests {
             .unwrap();
             certificate
         };
-        let verify_issuer = |proof: &KagemushaRetailEnrollmentPossessionProofV1,
-                             certificate: &KagemushaRetailEnrollmentCertificateV1,
-                             nonce| {
-            proof.authenticate_issuer_evidence_bound(
-                certificate,
-                &f.policy,
-                CatalogBinding {
-                    release_id: f.selection.issuance.release_id,
-                    hardware_policy_digest: f.selection.issuance.hardware_policy_digest,
-                    profile: &f.profile,
-                },
-                &f.selection,
-                nonce,
-            )
-        };
+        let verify_issuer =
+            |proof: &KagemushaRetailEnrollmentPossessionProofV1,
+             certificate: &KagemushaRetailEnrollmentCertificateV1,
+             nonce,
+             verified_app: &KagemushaVerifiedAppEnrollmentV1| {
+                proof.authenticate_issuer_evidence_bound(
+                    certificate,
+                    &f.policy,
+                    CatalogBinding {
+                        release_id: f.selection.issuance.release_id,
+                        hardware_policy_digest: f.selection.issuance.hardware_policy_digest,
+                        profile: &f.profile,
+                    },
+                    &f.selection,
+                    nonce,
+                    verified_app,
+                )
+            };
         let certificate = seal(&p, 1000);
-        let evidence = verify_issuer(&p, &certificate, c.client_nonce).unwrap();
+        let evidence = verify_issuer(&p, &certificate, c.client_nonce, &app).unwrap();
         assert_eq!(evidence.certificate(), &certificate);
         assert_eq!(evidence.client_nonce(), c.client_nonce);
         for nonce in [[0; 32], [91; 32], c.server_nonce] {
             assert_eq!(
-                verify_issuer(&p, &certificate, nonce).unwrap_err(),
+                verify_issuer(&p, &certificate, nonce, &app).unwrap_err(),
                 KagemushaRetailEnrollmentChallengeErrorV1::Binding
             );
         }
@@ -739,16 +783,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            verify_issuer(&p, &wrong_certificate, c.client_nonce).unwrap_err(),
+            verify_issuer(&p, &wrong_certificate, c.client_nonce, &app).unwrap_err(),
             KagemushaRetailEnrollmentChallengeErrorV1::IssuerEvidence
         );
         assert!(
-            verify_issuer(&p, &f.certificate, c.client_nonce).is_err(),
+            verify_issuer(&p, &f.certificate, c.client_nonce, &app).is_err(),
             "An unrelated signed certificate cannot authenticate this proof"
         );
         for time in [999, 2000] {
             assert_eq!(
-                verify_issuer(&p, &seal(&p, time), c.client_nonce).unwrap_err(),
+                verify_issuer(&p, &seal(&p, time), c.client_nonce, &app).unwrap_err(),
                 KagemushaRetailEnrollmentChallengeErrorV1::Validity
             );
         }
@@ -759,7 +803,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            verify_issuer(&wrong_account, &seal(&wrong_account, 1000), c.client_nonce).unwrap_err(),
+            verify_issuer(
+                &wrong_account,
+                &seal(&wrong_account, 1000),
+                c.client_nonce,
+                &app
+            )
+            .unwrap_err(),
             KagemushaRetailEnrollmentChallengeErrorV1::AccountProof
         );
         let mut wrong_device = p.clone();
@@ -768,14 +818,28 @@ mod tests {
         let hash = Sha256::digest(&wrong_device.device_response[signature_start..]);
         wrong_device.device_response[84..116].copy_from_slice(&hash);
         assert_eq!(
-            verify_issuer(&wrong_device, &seal(&wrong_device, 1000), c.client_nonce).unwrap_err(),
+            verify_issuer(
+                &wrong_device,
+                &seal(&wrong_device, 1000),
+                c.client_nonce,
+                &app
+            )
+            .unwrap_err(),
             KagemushaRetailEnrollmentChallengeErrorV1::DeviceProof
         );
         let mut fresh_challenge = c.clone();
         fresh_challenge.client_nonce = [91; 32];
+        let fresh_app = f.verified_app(fresh_challenge.client_nonce, fresh_challenge.server_nonce);
+        fresh_challenge.app_attestation_digest = fresh_app.digest();
         let fresh_proof = proof(&f, &fresh_challenge);
         assert_eq!(
-            verify_issuer(&fresh_proof, &certificate, fresh_challenge.client_nonce).unwrap_err(),
+            verify_issuer(
+                &fresh_proof,
+                &certificate,
+                fresh_challenge.client_nonce,
+                &fresh_app,
+            )
+            .unwrap_err(),
             KagemushaRetailEnrollmentChallengeErrorV1::IssuerEvidence
         );
     }
@@ -1034,7 +1098,7 @@ mod tests {
         let f = Fixture::new(1);
         let c = challenge(&f);
         let p = proof(&f, &c);
-        for missing in ["client_nonce", "server_nonce"] {
+        for missing in ["client_nonce", "server_nonce", "app_attestation_digest"] {
             let mut value = norito::json::to_value(&c).unwrap();
             value.as_object_mut().unwrap().remove(missing);
             assert!(

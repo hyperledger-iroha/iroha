@@ -35,6 +35,9 @@ use zeroize::Zeroizing;
 mod authority;
 /// Authoritative enrollment and terminal custody-control transitions.
 pub mod control;
+/// Owner-only supervisor-credential software key provider for opaque operations.
+#[cfg(unix)]
+pub mod credential_provider;
 /// Canonical final-promotion producer with immutable receipts and fresh audit predecessors.
 #[cfg(unix)]
 pub mod final_promotion;

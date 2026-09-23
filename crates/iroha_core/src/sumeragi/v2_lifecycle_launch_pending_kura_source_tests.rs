@@ -229,7 +229,7 @@ fn assert_pending_kura_actor_backpressure_contract(pending_runner_source: &str) 
             "if !drained_terminal_ingress",
             "!drained_terminal_relay",
             "break;",
-            "ensure_closed_drained_cut()",
+            "ensure_closed_global_drained_cut()",
         ],
     );
     assert!(
@@ -272,7 +272,7 @@ fn pending_kura_terminal_height_authenticates_after_closed_drain_without_a_succe
         &[
             "DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix",
             "drain_finalized_lane_relay_prefix(",
-            "ensure_closed_drained_cut()",
+            "ensure_closed_global_drained_cut()",
             "if context.height == u64::MAX",
         ],
     );

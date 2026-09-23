@@ -3,9 +3,11 @@
 //! These measurements are protocol fixtures, never evidence of physical qualification.
 use super::*;
 
-pub(super) fn authenticated_release() -> Arc<KagemushaAuthenticatedReleaseV1> {
+pub(super) fn authenticated_release(
+    app_policy_digest: [u8; 32],
+) -> Arc<KagemushaAuthenticatedReleaseV1> {
     let artifacts = artifacts();
-    let receipt = receipt(&artifacts);
+    let receipt = receipt(&artifacts, app_policy_digest);
     let manifest = manifest(artifacts, &receipt);
     let keys = authority_keys();
     let policy = authority_policy(&keys, 2);
@@ -139,8 +141,10 @@ fn hardware_profile(
     seed: u8,
     suite_id: [u8; 32],
     qualification_report_digest: [u8; 32],
+    app_policy_digest: [u8; 32],
 ) -> KagemushaHardwareProfileV1 {
     KagemushaHardwareProfileV1 {
+        app_attestation_authority_policy_digest: app_policy_digest,
         version: KAGEMUSHA_WIRE_VERSION_V1,
         protocol_version: KAGEMUSHA_WIRE_VERSION_V1,
         hardware_profile_id: [0; 32],
@@ -162,10 +166,19 @@ fn hardware_profile(
     .expect("hardware profile identity")
 }
 
-fn enabled_profile(seed: u8, vk_digest: [u8; 32]) -> KagemushaEnabledProfileV1 {
+fn enabled_profile(
+    seed: u8,
+    vk_digest: [u8; 32],
+    app_policy_digest: [u8; 32],
+) -> KagemushaEnabledProfileV1 {
     let suite_id = [seed.wrapping_add(0x10); 32];
     let qualification_report = evidence(seed.wrapping_add(0x20));
-    let hardware_profile = hardware_profile(seed, suite_id, qualification_report.sha256);
+    let hardware_profile = hardware_profile(
+        seed,
+        suite_id,
+        qualification_report.sha256,
+        app_policy_digest,
+    );
     KagemushaEnabledProfileV1 {
         hardware_profile,
         hardware_profile_id: hardware_profile.hardware_profile_id,
@@ -369,7 +382,10 @@ fn profile_qualification(
     .expect("profile qualification digest")
 }
 
-fn receipt(artifacts: &[KagemushaArtifactBindingV1]) -> KagemushaInternalValidationReceiptV1 {
+fn receipt(
+    artifacts: &[KagemushaArtifactBindingV1],
+    app_policy_digest: [u8; 32],
+) -> KagemushaInternalValidationReceiptV1 {
     let artifact_set_digest = kagemusha_artifact_set_digest_v1(artifacts).expect("artifact digest");
     let helper_protocols = helper_protocols();
     let vk_digest = kagemusha_vk_set_digest_v1(
@@ -381,13 +397,13 @@ fn receipt(artifacts: &[KagemushaArtifactBindingV1]) -> KagemushaInternalValidat
     .expect("VK-set digest");
     let mut profile_qualifications = vec![
         profile_qualification(
-            enabled_profile(0x41, vk_digest),
+            enabled_profile(0x41, vk_digest, app_policy_digest),
             artifacts,
             &helper_protocols,
             0x61,
         ),
         profile_qualification(
-            enabled_profile(0x42, vk_digest),
+            enabled_profile(0x42, vk_digest, app_policy_digest),
             artifacts,
             &helper_protocols,
             0xA1,
