@@ -834,7 +834,7 @@ mod consensus_manifest_tests {
         load_kagemusha_mint_finality_parameters(&path)
             .expect("canonical operator parameters must load");
 
-        parameters.epoch_roster.validators[0].eq_proof_public_key = [0xFF; 32];
+        parameters.authority_generation.validators[0].eq_proof_public_key = [0xFF; 32];
         std::fs::write(
             &path,
             norito::json::to_vec_pretty(&parameters).expect("serialize invalid parameters"),
