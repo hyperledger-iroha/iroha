@@ -13079,7 +13079,7 @@ pub(crate) mod valid {
             let topology = test_topology_with_keys(&validator_keys);
             let mut world = World::new();
             for (index, key) in validator_keys.iter().enumerate() {
-                insert_consensus_key(
+                let validator_id = insert_consensus_key(
                     &mut world,
                     &format!("autonomous-anchor-validator-{index}"),
                     key,
@@ -13087,6 +13087,26 @@ pub(crate) mod valid {
                     None,
                     ConsensusKeyStatus::Active,
                 );
+                if replay_lane.is_some() {
+                    let mut committee_record = world
+                        .consensus_keys
+                        .get(&validator_id)
+                        .expect("replay fixture has a registered validator key")
+                        .clone();
+                    let committee_id = crate::state::derive_committee_key_id(key.public_key());
+                    committee_record.id = committee_id.clone();
+                    world
+                        .consensus_keys
+                        .insert(committee_id.clone(), committee_record);
+                    let public_key = key.public_key().to_string();
+                    let mut by_public_key = world
+                        .consensus_keys_by_pk
+                        .get(&public_key)
+                        .cloned()
+                        .unwrap_or_default();
+                    by_public_key.push(committee_id);
+                    world.consensus_keys_by_pk.insert(public_key, by_public_key);
+                }
             }
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             install_test_lane_manifests_for_keypairs(&state, &validator_keys);

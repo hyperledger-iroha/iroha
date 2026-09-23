@@ -76747,7 +76747,17 @@
                 }
               }
             },
-            "description": "Exact canonical executed SignedBlockWire bytes."
+            "description": "Exact canonical executed SignedBlockWire bytes.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -76757,7 +76767,17 @@
                 }
               }
             },
-            "description": "Invalid block height supplied."
+            "description": "Invalid block height supplied.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -76767,7 +76787,17 @@
                 }
               }
             },
-            "description": "The height is not present in the finalized state journal."
+            "description": "The height is not present in the finalized state journal.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -76777,7 +76807,17 @@
                 }
               }
             },
-            "description": "The canonical wire exceeds the authenticated carrier limit."
+            "description": "The canonical wire exceeds the authenticated carrier limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "429": {
             "content": {
@@ -76787,7 +76827,17 @@
                 }
               }
             },
-            "description": "Source, output, or transcript work exceeds the configured query_max_fetch_size."
+            "description": "Source, output, or transcript work exceeds the configured query_max_fetch_size.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -76797,13 +76847,28 @@
                 }
               }
             },
-            "description": "The finalized body or its exact finality authority is unavailable, inconsistent, or invalid."
+            "description": "The finalized body or its exact finality authority is unavailable, inconsistent, or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
-          {},
           {
-            "IrohaApiToken": []
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
           }
         ],
         "summary": "Fetch the exact executed block wire at a finalized height.",
@@ -76811,8 +76876,8 @@
           "Ledger"
         ],
         "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "ledger.executed_block_wire"
         },
@@ -76860,7 +76925,17 @@
                 }
               }
             },
-            "description": "Network input inclusion and complete typed execution-output proofs for the requested outer entrypoint."
+            "description": "Network input inclusion and complete typed execution-output proofs for the requested outer entrypoint.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -76870,7 +76945,17 @@
                 }
               }
             },
-            "description": "Invalid block height or entry hash supplied."
+            "description": "Invalid block height or entry hash supplied.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -76880,7 +76965,17 @@
                 }
               }
             },
-            "description": "The height is not finalized or the requested outer Network entrypoint is absent."
+            "description": "The height is not finalized or the requested outer Network entrypoint is absent.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "413": {
             "content": {
@@ -76890,7 +76985,17 @@
                 }
               }
             },
-            "description": "The authenticated stored wire or complete Norito proof response exceeds its 32 MiB limit."
+            "description": "The authenticated stored wire or complete Norito proof response exceeds its 32 MiB limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "429": {
             "content": {
@@ -76900,7 +77005,17 @@
                 }
               }
             },
-            "description": "Source, output, or transcript work exceeds the configured query_max_fetch_size."
+            "description": "Source, output, or transcript work exceeds the configured query_max_fetch_size.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -76910,13 +77025,28 @@
                 }
               }
             },
-            "description": "The finalized body, finality authority, or complete source/output structure is unavailable, inconsistent, or invalid."
+            "description": "The finalized body, finality authority, or complete source/output structure is unavailable, inconsistent, or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
-          {},
           {
-            "IrohaApiToken": []
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
           }
         ],
         "summary": "Fetch Network input and execution-output Merkle proofs.",
@@ -76924,8 +77054,8 @@
           "Ledger"
         ],
         "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "ledger.block_proof"
         },
@@ -114166,13 +114296,29 @@
                 }
               }
             },
-            "description": "Successful response"
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
           {},
           {
-            "IrohaApiToken": []
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
           }
         ],
         "summary": "List transaction history entries.",
@@ -114180,8 +114326,8 @@
           "Transactions"
         ],
         "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.transactions_history_get"
         },

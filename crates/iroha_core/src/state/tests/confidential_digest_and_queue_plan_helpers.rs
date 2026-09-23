@@ -511,13 +511,18 @@ fn record_commit_ready_merge_candidate_with_lanes(
     let lane_count = u32::try_from(count).expect("lane count fits in u32");
     let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(state, &validator_keypairs);
+    if count > 1 {
+        seed_committee_consensus_keys_with_pops(state, &validator_keypairs);
+    }
     let_row! { lanes: Vec<LaneConfig> = (0..lane_count) .map(|idx| { if idx == 0 { LaneConfig::default() } else { LaneConfig { id: LaneId::new(idx), alias: format!("lane-{idx}"), dataspace_id: DataSpaceId::UNIVERSAL, ..LaneConfig::default() } } }) .collect() };
     let_row! { lane_catalog = LaneCatalog::new( core::num::NonZeroU32::new(lane_count).expect("non-zero"), lanes, ) .expect("lane catalog") };
     let_row! { nexus = iroha_config::parameters::actual::Nexus { lane_catalog, ..iroha_config::parameters::actual::Nexus::default() } };
     if state.nexus_snapshot().lane_catalog != nexus.lane_catalog {
         configure_pre_genesis_nexus_fixture(state, nexus);
     } else {
-        state.set_nexus(nexus).expect("apply unchanged Nexus lane catalog");
+        state
+            .set_nexus(nexus)
+            .expect("apply unchanged Nexus lane catalog");
     }
     let_row! { registry_entries: Vec<_> = (0..lane_count) .map(|idx| { ( LaneId::new(idx), DataSpaceId::UNIVERSAL, validator_ids.clone(), ) }) .collect() };
     install_lane_manifest_registry(state, &registry_entries);
@@ -620,7 +625,11 @@ fn merge_carrier_finality_artifact_with_genesis_layout(
         "merge-carrier finality fixtures must form a contiguous chain"
     );
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+            network_id,
+            u64::MAX,
+            &roster,
+        );
     let_row! { context = HeightContext { network_id, protocol_version: PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: u64::MAX, next_epoch_snapshot: None, mode: ConsensusMode::Permissioned, parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()), snapshot_bootstrap: None, quorum: DualQuorum::from_roster(&roster).expect("valid four-validator fixture quorum"), roster, kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority, nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"), execution_policy_hash, da_layout, leader_seed: [0xD3; 32], } };
     let executed_block_wire = block.encode_wire().expect("canonical executed block wire");
     let_row! { mut execution_commitment = ExecutionCommitment::new_without_merge_carrier( Hash::new(b"state merge finality parent state"), Hash::new(b"state merge finality post state"), Hash::new(b"state merge finality ordinary writes"), None, 0, 1, Hash::new(&executed_block_wire), ) .expect("canonical merge-carrier finality execution commitment") };
