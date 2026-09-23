@@ -2297,15 +2297,6 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
   'npos_consensus_effects,',
   'queue_plan_admissions,')),
     (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "fn",
-        "certified_merge_selection_for_npos",
-        (
-            "PendingCertifiedMergeSelection::ControlOnly",
-            "PendingCertifiedMergeSelection::Any",
-        ),
-    ),
-    (
         "crates/iroha_core/src/state.rs",
         "enum",
         "PendingCertifiedMergeSelection",

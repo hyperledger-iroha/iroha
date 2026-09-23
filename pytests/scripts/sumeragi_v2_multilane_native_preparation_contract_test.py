@@ -2944,9 +2944,9 @@ def test_current_membership_preparation_preserves_original_authority(fixture, pa
 
 
 @pytest.mark.parametrize("anchor,old,new", [
-    ("fn retain_captured_world_field", "field.take()", "foreign_field.take()"),
-    ("fn retain_captured_world_field", "slot.retain(name, target)", "slot.retain(name, foreign_target)"),
-    ("fn retain_captured_world_field", "slot.retain(name, target)", 'slot.retain("foreign", target)'),
+    ("fn retain_world_capture_field", "pending.take()", "foreign_pending.take()"),
+    ("fn retain_world_capture_field", "slot.retain(name, target)", "slot.retain(name, foreign_target)"),
+    ("fn retain_world_capture_field", "slot.retain(name, target)", 'slot.retain("foreign", target)'),
     ("macro_rules! retain_field", "&mut $pending.$field", "&mut foreign.$field"),
     ("macro_rules! retain_field", "stringify!($field)", '"foreign"'),
 ])
@@ -2963,8 +2963,8 @@ def test_world_materialization_requires_one_isolated_stack_frame(fixture):
     """Inlining the helper would recreate all-field stack accumulation."""
     root, helper, _, _ = fixture
     helper.replace_once(root / "crates/iroha_core/src/state/world_journals.rs",
-                        "#[inline(never)]\nfn retain_captured_world_field",
-                        "#[inline(always)]\nfn retain_captured_world_field")
+                        "#[inline(never)]\nfn retain_world_capture_field",
+                        "#[inline(always)]\nfn retain_world_capture_field")
     assert any("must retain its isolated stack frame" in error for error in validate(fixture))
 
 
@@ -2973,8 +2973,8 @@ def test_world_materialization_requires_helper_ledger_owner(fixture):
     _, _, checker, models = fixture
     model = next(m for m in models if m["module"] == checker.native_preparation_contract.MODEL)
     model["production_symbols"] = [row for row in model["production_symbols"]
-                                 if row["symbol"] != "retain_captured_world_field"]
-    assert any("ledger owner retain_captured_world_field" in error for error in validate(fixture))
+                                 if row["symbol"] != "retain_world_capture_field"]
+    assert any("ledger owner retain_world_capture_field" in error for error in validate(fixture))
 
 
 @pytest.mark.parametrize("old,new", [

@@ -794,7 +794,7 @@ impl FairIngressQueueCut<'_> {
         ) else {
             return false;
         };
-        let Some(context) = target_lifecycle_context(selected) else {
+        let Some(context) = target_lifecycle_context(selected, state.leader_wire_context) else {
             return false;
         };
         let Some(bound_context) = state.leader_wire_context else {
@@ -2352,7 +2352,8 @@ mod tests {
         let active_context = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
             b"active-certified-body-serve-context",
         )));
-        let peer = PeerId::from(KeyPair::random().public_key().clone());
+        let requester_key = KeyPair::random();
+        let peer = PeerId::from(requester_key.public_key().clone());
         let BlockMessage::V2(wire::ConsensusMessageV2 {
             payload: wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
             ..
@@ -2362,29 +2363,36 @@ mod tests {
         };
         let round = response.manifest.round;
         let subject = response.manifest.subject;
-        let request = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(wire::CertifiedBodyRequest {
+        let mut signed_request = wire::CertifiedBodyRequest {
+            round,
+            subject,
+            certificate: wire::QuorumCertificate {
                 round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Commit,
                 subject,
-                certificate: wire::QuorumCertificate {
-                    round,
-                    proposal_round: round,
-                    phase: wire::GlobalPhase::Commit,
-                    subject,
-                    execution_commitment:
-                        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                            Hash::new(b"historical-parent"),
-                            Hash::new(b"historical-post"),
-                            Hash::new(b"historical-writes"),
-                            1,
-                            Hash::new(b"historical-wire"),
-                        ),
-                    signers: vec![0],
-                    aggregate_signature: vec![0x5A],
-                },
-                requester: peer.clone(),
-                signature: vec![0x5A],
-            }),
+                execution_commitment:
+                    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                        Hash::new(b"historical-parent"),
+                        Hash::new(b"historical-post"),
+                        Hash::new(b"historical-writes"),
+                        1,
+                        Hash::new(b"historical-wire"),
+                    ),
+                signers: vec![0],
+                aggregate_signature: vec![0x5A],
+            },
+            requester: peer.clone(),
+            signature: Vec::new(),
+        };
+        signed_request.signature = iroha_crypto::Signature::new(
+            requester_key.private_key(),
+            &signed_request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let request = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(signed_request),
         ));
         let ingress = FairV2Ingress::new(16, 1024 * 1024, 512 * 1024, 0, 0);
         ingress
@@ -2392,13 +2400,14 @@ mod tests {
             .expect("current validator lane fits the historical body fixture");
         ingress.state.lock().leader_wire_context = Some((active_context, 3));
         ingress.open().expect("open current lifecycle ingress");
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
-                request.clone(),
-                peer,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
+        let admitted = ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            request.clone(),
+            peer,
         ));
+        assert!(
+            matches!(admitted, Ok(FairV2IngressPushDisposition::Enqueued)),
+            "historical body request admission: {admitted:?}"
+        );
         let active = lifecycle_context_from_wire((active_context, 3));
         let selected = ingress
             .capture_next_ingress_turn_cut(|candidate| candidate.context() == Some(active))
