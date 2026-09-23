@@ -1418,7 +1418,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         checkpoint: checkpoint.clone(),
         proofs: Rc::new(RefCell::new(BTreeMap::new())),
     };
-    let bootstrap_frame = guard_verifier.retain(bootstrap_guard);
+    let bootstrap_frame = guard_verifier.retain(Rc::clone(&bootstrap_guard));
     let verified_bootstrap = DiagnosticMachine::stage_bootstrap_for_test(
         diagnostic_release(&funded.material, artifacts),
         preview.state.context(),
