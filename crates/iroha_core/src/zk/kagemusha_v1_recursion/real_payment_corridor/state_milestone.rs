@@ -16,6 +16,7 @@ use crate::zk::{
         KagemushaStateProofVerificationRequestV1, VerifiedKagemushaMintFinalityHelperV1,
         deferred_parent::kagemusha_protocol_structure_digest_v1,
         mint_authorization::mint_authorization_public_instances_v1,
+        state_relation::PUBLIC_INSTANCE_COUNT,
         terminal_authorization::{
             KagemushaCommitEvidenceOpeningV1, canonical_commit_evidence_commitment_v1,
             canonical_predecessor_conflict_nullifier_v1,

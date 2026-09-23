@@ -21937,7 +21937,22 @@ pub(super) mod tests {
             .as_ref()
             .is_some_and(|lane| lane.id != LaneId::SINGLE)
         {
-            for key in lane_keys {
+            for (lane_index, key) in lane_keys.iter().enumerate() {
+                let validator_id = keys
+                    .iter()
+                    .position(|global| global.public_key() == key.public_key())
+                    .map(|global_index| {
+                        ConsensusKeyId::new(
+                            ConsensusKeyRole::Validator,
+                            format!("validator{global_index}"),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        ConsensusKeyId::new(
+                            ConsensusKeyRole::Validator,
+                            format!("lane-validator{lane_index}"),
+                        )
+                    });
                 let id = crate::state::derive_committee_key_id(key.public_key());
                 let record = ConsensusKeyRecord {
                     id: id.clone(),
@@ -21952,16 +21967,9 @@ pub(super) mod tests {
                     status: ConsensusKeyStatus::Active,
                 };
                 world.consensus_keys.insert(id.clone(), record.clone());
-                let public_key = record.public_key.to_string();
-                let mut by_public_key = world
+                world
                     .consensus_keys_by_pk
-                    .get(&public_key)
-                    .cloned()
-                    .unwrap_or_default();
-                if !by_public_key.contains(&id) {
-                    by_public_key.push(id);
-                    world.consensus_keys_by_pk.insert(public_key, by_public_key);
-                }
+                    .insert(record.public_key.to_string(), vec![validator_id, id]);
             }
         }
         world.peers = mv::cell::Cell::new(peers);
