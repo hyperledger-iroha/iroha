@@ -11,6 +11,42 @@ std::thread_local! {
     };
 }
 
+/// Snapshot syntax is distinct from a local refusal by the original State pool.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum StateRestoreError {
+    /// The snapshot does not satisfy the canonical typed schema.
+    #[error(transparent)]
+    Serialization(#[from] json::Error),
+    /// Local resources refused restore; this does not invalidate the snapshot.
+    #[error(transparent)]
+    Admission(#[from] StateAdmissionError),
+}
+impl From<storage_transactions::MembershipRestoreError> for StateRestoreError {
+    fn from(error: storage_transactions::MembershipRestoreError) -> Self {
+        match error {
+            storage_transactions::MembershipRestoreError::Json(error) => Self::Serialization(error),
+            storage_transactions::MembershipRestoreError::Admission(error) => {
+                Self::Admission(StateAdmissionError::Membership(error))
+            }
+        }
+    }
+}
+fn durable_state_restore_error(error: MergeLedgerCommitError) -> StateRestoreError {
+    match error {
+        MergeLedgerCommitError::BlockHashAdmission(error) => {
+            StateRestoreError::Admission(StateAdmissionError::History(error))
+        }
+        MergeLedgerCommitError::MembershipAdmission(error) => {
+            StateRestoreError::Admission(StateAdmissionError::Membership(error))
+        }
+        error => json::Error::InvalidField {
+            field: "state.durable_merge_ledger".to_owned(),
+            message: error.to_string(),
+        }
+        .into(),
+    }
+}
+
 enum SnapshotJsonField<'a> {
     Borrowed {
         raw: &'a str,
@@ -42,6 +78,39 @@ impl<'a> SnapshotJsonField<'a> {
         decoded.map_err(|error| json::Error::InvalidField {
             field: field.to_owned(),
             message: error.to_string(),
+        })
+    }
+    fn decode_transactions(
+        self,
+        budget: mv::allocation::AllocationBudget,
+    ) -> Result<TransactionsStorage, StateRestoreError> {
+        let decoded: Result<TransactionsStorage, StateRestoreError> = (|| match self {
+            Self::Borrowed { raw } => {
+                let value = TransactionsStorage::from_json_with_budget(raw, budget)?;
+                // As for other snapshot fields, the snapshot owner retains this
+                // comparison buffer. It is not a transaction-history allocation.
+                // TODO: Compare through a bounded Norito serialization sink.
+                if json::to_json(&value)?.as_bytes() != raw.as_bytes() {
+                    return Err(json::Error::Message(
+                        "snapshot field is not canonically encoded".to_owned(),
+                    )
+                    .into());
+                }
+                Ok(value)
+            }
+            #[cfg(test)]
+            Self::Owned(value) => {
+                TransactionsStorage::from_json_with_budget(&json::to_json(&value)?, budget)
+                    .map_err(StateRestoreError::from)
+            }
+        })();
+        decoded.map_err(|error| match error {
+            StateRestoreError::Serialization(error) => json::Error::InvalidField {
+                field: "transactions".to_owned(),
+                message: error.to_string(),
+            }
+            .into(),
+            admission @ StateRestoreError::Admission(_) => admission,
         })
     }
     fn into_object(self, field: &str) -> Result<SnapshotJsonMap<'a>, json::Error> {
@@ -234,7 +303,7 @@ pub struct KuraSeed {
 }
 impl KuraSeed {
     #[cfg(test)]
-    pub fn into_state_from_json(self, value: json::Value) -> Result<Box<State>, json::Error> {
+    pub fn into_state_from_json(self, value: json::Value) -> Result<Box<State>, StateRestoreError> {
         self.into_state_from_json_with_recovery_mode(value, true)
     }
     /// Decode a canonical snapshot directly from its authenticated JSON bytes.
@@ -244,7 +313,10 @@ impl KuraSeed {
     /// so restoration never constructs a recursive full-state JSON tree.
     /// The restored State stays on the heap through validation and handoff;
     /// nested restore calls must not reserve a full State in each stack frame.
-    pub(crate) fn into_state_from_json_str(self, input: &str) -> Result<Box<State>, json::Error> {
+    pub(crate) fn into_state_from_json_str(
+        self,
+        input: &str,
+    ) -> Result<Box<State>, StateRestoreError> {
         let map = SnapshotJsonMap::parse(input, "state")?;
         self.into_state_from_snapshot_map(map, true)
     }
@@ -262,7 +334,7 @@ impl KuraSeed {
         snapshot_height: usize,
         snapshot_tip: Option<HashOf<BlockHeader>>,
         sccp_policy_hash: [u8; 32],
-    ) -> Result<Box<State>, json::Error> {
+    ) -> Result<Box<State>, StateRestoreError> {
         let block_hashes =
             emergency_fast_block_hashes(self.kura.as_ref(), snapshot_height, snapshot_tip)?;
         let nexus = iroha_config::parameters::actual::Nexus::default();
@@ -290,7 +362,10 @@ impl KuraSeed {
                 lane_manifests: self.lane_manifests,
                 world: World::default(),
                 block_hashes,
-                transactions: TransactionsStorage::new(),
+                transactions: TransactionsStorage::try_new(self.kura.transaction_history_budget())
+                    .map_err(|error| {
+                        StateRestoreError::Admission(StateAdmissionError::Membership(error))
+                    })?,
                 commit_topology: Cell::new(Vec::new()),
                 prev_commit_topology: Cell::new(Vec::new()),
                 lane_consensus_contexts: Cell::new(LaneConsensusContextsV1::default()),
@@ -317,10 +392,7 @@ impl KuraSeed {
             false,
             true,
         )
-        .map_err(|error| json::Error::InvalidField {
-            field: "state.durable_merge_ledger".to_owned(),
-            message: error.to_string(),
-        })?;
+        .map_err(durable_state_restore_error)?;
         state.install_emergency_fast_sccp_policy_hash(sccp_policy_hash);
         Ok(state)
     }
@@ -334,7 +406,7 @@ impl KuraSeed {
     pub(crate) fn into_state_from_json_str_without_durable_recovery(
         self,
         input: &str,
-    ) -> Result<Box<State>, json::Error> {
+    ) -> Result<Box<State>, StateRestoreError> {
         let map = SnapshotJsonMap::parse(input, "state")?;
         self.into_state_from_snapshot_map(map, false)
     }
@@ -343,12 +415,13 @@ impl KuraSeed {
         self,
         value: json::Value,
         allow_durable_recovery: bool,
-    ) -> Result<Box<State>, json::Error> {
+    ) -> Result<Box<State>, StateRestoreError> {
         let json::Value::Object(map) = value else {
-            return Err(json::Error::InvalidField {
+            return Err((json::Error::InvalidField {
                 field: "state".into(),
                 message: "expected object".into(),
-            });
+            })
+            .into());
         };
         self.into_state_from_snapshot_map(SnapshotJsonMap::from_owned(map), allow_durable_recovery)
     }
@@ -356,7 +429,7 @@ impl KuraSeed {
         self,
         mut map: SnapshotJsonMap<'_>,
         allow_durable_recovery: bool,
-    ) -> Result<Box<State>, json::Error> {
+    ) -> Result<Box<State>, StateRestoreError> {
         const WITHOUT_BOOTSTRAP: &[&str] = &[
             "chain_id",
             "network_id",
@@ -429,9 +502,7 @@ impl KuraSeed {
             .ok_or_else(|| json::Error::missing_field("world"))?;
         let world_map = world_value.into_object("world")?;
         if !world_map.contains_key("contract_subject_bindings") {
-            return Err(json::Error::missing_field(
-                "world.contract_subject_bindings",
-            ));
+            return Err((json::Error::missing_field("world.contract_subject_bindings")).into());
         }
         let ivm_runtime = IVM::new(0);
         let ivm_seed = IvmSeed {
@@ -531,10 +602,11 @@ impl KuraSeed {
             catalog.baseline_manifests_hash
                 != Hash::prehashed(self.lane_manifests.baseline_consensus_policy_digest())
         }) {
-            return Err(json::Error::InvalidField {
+            return Err((json::Error::InvalidField {
                 field: "state.lane_manifests".to_owned(),
                 message: "manifest baseline differs from canonical World catalog".to_owned(),
-            });
+            })
+            .into());
         }
         let added_dataspaces: BTreeSet<_> = world_catalog
             .as_ref()
@@ -568,10 +640,11 @@ impl KuraSeed {
         if SnapshotNexusOwnerPolicy::from_nexus(&restored_nexus).dataspaces
             != retained_physical_policy
         {
-            return Err(json::Error::InvalidField {
+            return Err((json::Error::InvalidField {
                 field: "nexus_runtime.blocks.owner_policy".to_owned(),
                 message: "physical ownership differs from canonical World catalog".to_owned(),
-            });
+            })
+            .into());
         }
         let runtime_predecessor = canonical_runtime.predecessor_view();
         // Every real carrier appends its height-bound sample, even when no
@@ -579,10 +652,11 @@ impl KuraSeed {
         // be a no-op Cell publication: replacement requires its actual H-1
         // record, not a reconstruction from the current policy or sample tail.
         if committed_height > 0 && runtime_predecessor.get().is_none() {
-            return Err(json::Error::InvalidField {
+            return Err((json::Error::InvalidField {
                 field: "nexus_runtime.revert".to_owned(),
                 message: "committed runtime must retain its predecessor record".to_owned(),
-            });
+            })
+            .into());
         }
         let mut predecessor_context_policy = None;
         if let Some(previous) = runtime_predecessor.get() {
@@ -612,26 +686,31 @@ impl KuraSeed {
             if SnapshotNexusOwnerPolicy::from_nexus(&prior_nexus).dataspaces
                 != previous.owner_policy.dataspaces
             {
-                return Err(json::Error::InvalidField {
+                return Err((json::Error::InvalidField {
                     field: "nexus_runtime.revert.owner_policy".to_owned(),
                     message: "predecessor physical ownership differs from reverted World catalog"
                         .to_owned(),
-                });
+                })
+                .into());
             }
             predecessor_context_policy = Some((prior_nexus, prior_incarnations));
         }
         drop(runtime_predecessor);
         let nexus_runtime_restored_from_snapshot = true;
-        let transactions = take_required(&mut map, "transactions")?;
+        let transactions = map
+            .remove("transactions")
+            .ok_or_else(|| json::Error::missing_field("transactions"))?
+            .decode_transactions(self.kura.transaction_history_budget())?;
         let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
         let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
         let lane_consensus_contexts: Cell<LaneConsensusContextsV1> =
             take_required(&mut map, "lane_consensus_contexts")?;
         if committed_height == 0 && lane_consensus_contexts.predecessor_view().get().is_some() {
-            return Err(json::Error::InvalidField {
+            return Err((json::Error::InvalidField {
                 field: "lane_consensus_contexts.revert".to_owned(),
                 message: "height-zero contexts cannot retain predecessor undo".to_owned(),
-            });
+            })
+            .into());
         }
         if let Some(qualification) = world.privacy_exact12_qualification.view().get() {
             crate::privacy_state::validate_privacy_exact12_qualification_registration_v1(
@@ -708,9 +787,8 @@ impl KuraSeed {
                     block_hashes,
                     self.kura.block_hash_history_budget(),
                 )
-                .map_err(|error| json::Error::InvalidField {
-                    field: "state.block_hashes".into(),
-                    message: error.to_string(),
+                .map_err(|error| {
+                    StateRestoreError::Admission(StateAdmissionError::History(error))
                 })?,
                 transactions,
                 commit_topology,
@@ -731,10 +809,7 @@ impl KuraSeed {
             allow_durable_recovery,
             false,
         )
-        .map_err(|error| json::Error::InvalidField {
-            field: "state.durable_merge_ledger".to_owned(),
-            message: error.to_string(),
-        })?;
+        .map_err(durable_state_restore_error)?;
         super::validate_sccp_state_local_profile(&state).map_err(|message| {
             json::Error::InvalidField {
                 field: "state.world.sccp".to_owned(),
@@ -2246,3 +2321,6 @@ fn validate_musubi_resolver_checkpoint_anchors(
     }
     Ok(())
 }
+
+#[cfg(test)]
+include!("deserialize_transaction_history_tests.rs");

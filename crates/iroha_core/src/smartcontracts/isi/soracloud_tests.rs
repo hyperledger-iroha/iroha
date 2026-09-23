@@ -10232,6 +10232,24 @@ fn soracloud_fhe_full_bootstrap_execution_prover_emits_valid_native_air_proof() 
         )
         .expect("derive generated BFV proof public digest")
     );
+    let bootstrap_key = evaluation_keys
+        .bootstrap_key
+        .as_ref()
+        .expect("sample evaluation keys carry governed bootstrap material");
+    let native_limits = crate::zk_stark::StarkVerifierLimits::default();
+    assert!(
+        crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_envelope_for_artifacts_with_limits(
+            &open.envelope_bytes,
+            &native_limits,
+            &params,
+            &transcript.public_key,
+            bootstrap_key,
+            &artifacts,
+            &evaluation_keys.galois_keys,
+            &prover_input_material,
+        ),
+        "valid native BFV proof must match its governed arithmetic source"
+    );
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let rewrapped_under_alternate_ambient = {
@@ -10281,6 +10299,65 @@ fn soracloud_fhe_full_bootstrap_execution_prover_emits_valid_native_air_proof() 
         "artifact-bound prover input material digest failed validation",
     );
     assert_invalid_parameter_contains(err, "governed artifact trace");
+
+    let mut unselected_coefficient_witness = prover_input_material
+        .proof_input_material
+        .witness_material
+        .clone();
+    let selected_index = usize::from(
+        unselected_coefficient_witness
+            .trace
+            .raw_extracted_sample
+            .source_coefficient_index,
+    );
+    let other_index = (selected_index + 1) % usize::from(params.polynomial_degree);
+    let coefficient = &mut unselected_coefficient_witness
+        .trace
+        .blind_rotation_output
+        .c0[other_index];
+    *coefficient = (*coefficient + 1) % params.ciphertext_modulus;
+    iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_execution_witness_digest_material_v1(
+        &unselected_coefficient_witness,
+    )
+    .expect("selected-sample validation cannot authenticate another blind-rotation coefficient");
+    let unselected_coefficient_proof_input = bfv_full_bootstrap_execution_proof_input_material_v1(
+        &transcript.public_key,
+        &unselected_coefficient_witness,
+    )
+    .expect("build self-consistent unselected-coefficient proof input");
+    let unselected_coefficient_prover_input =
+        bfv_full_bootstrap_execution_prover_input_material_v1(
+            &unselected_coefficient_proof_input,
+            &prover_input_material.prover_key,
+            &prover_input_material.verifier_key,
+        )
+        .expect("build self-consistent unselected-coefficient prover input");
+    let unselected_coefficient_envelope =
+        crate::zk_stark::prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(
+            &unselected_coefficient_prover_input,
+        )
+        .expect("self-contained native BFV proof can be formed for drifted material");
+    assert!(
+        crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
+            &unselected_coefficient_envelope,
+            &native_limits,
+            &unselected_coefficient_prover_input,
+        ),
+        "self-contained native verification checks the drifted material it receives"
+    );
+    assert!(
+        !crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_envelope_for_artifacts_with_limits(
+            &unselected_coefficient_envelope,
+            &native_limits,
+            &params,
+            &transcript.public_key,
+            bootstrap_key,
+            &artifacts,
+            &evaluation_keys.galois_keys,
+            &unselected_coefficient_prover_input,
+        ),
+        "governed replay must reject an unselected blind-rotation coefficient drift"
+    );
 }
 #[cfg(feature = "zk-stark")]
 #[test]

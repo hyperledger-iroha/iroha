@@ -1,35 +1,51 @@
 //! Multi-version append-only storage for canonical carrier and replay identities.
 #![allow(clippy::disallowed_types)]
 use arc_swap::ArcSwapOption;
-use dashmap::DashMap;
 use iroha_crypto::HashOf;
 use iroha_data_model::prelude::TransactionEntrypoint;
 use mv::json::JsonKeyCodec;
-use norito::json::{
-    self, FastJsonWrite, JsonDeserialize as JsonDeserializeTrait,
-    JsonSerialize as JsonSerializeTrait,
-};
+#[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+use norito::json::JsonDeserialize as JsonDeserializeTrait;
+use norito::json::{self, FastJsonWrite, JsonSerialize as JsonSerializeTrait};
 use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
 use std::{
     borrow::Borrow,
     collections::{BTreeMap, HashSet},
     hash::Hash,
     num::NonZeroUsize,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 type Key = HashOf<TransactionEntrypoint>;
 type Value = NonZeroUsize;
-/// Multi-version append-only key value storage for transaction replay identities.
-/// This is analogue of [`mv::storage::Storage`] or `HashMap<Key, Value>`.
-/// Contains canonical carrier hashes plus distinct sealed-reveal signed-execution
-/// aliases mapped onto the block height where they are stored.
+#[path = "storage_transactions/history.rs"]
+mod history;
+#[path = "storage_transactions/history_slot.rs"]
+mod history_slot;
+pub use history::MembershipAdmissionError;
+pub(crate) use history::Pending as PreparedMembershipStart;
+use history::{Identity, Reader as HistoryReader};
+
+/// Preserve snapshot syntax separately from an original local resource refusal.
+#[derive(Debug, thiserror::Error)]
+pub enum MembershipRestoreError {
+    /// Canonical snapshot parsing or shape failure.
+    #[error(transparent)]
+    Json(#[from] json::Error),
+    /// Local finite-pool or physical-history failure; never empty-State fallback.
+    #[error(transparent)]
+    Admission(#[from] MembershipAdmissionError),
+}
+/// Multi-version membership for canonical carriers and sealed-reveal execution aliases.
+/// The original configured pool funds the immutable historical B+tree generations,
+/// their publication identities and the retained prior-tip preparation. A separate
+/// latest-block set preserves replacement and rollback semantics; old readers retain
+/// their exact historical generation and original latest tip.
 ///
-/// * Q: Why don't we use `HashMap`/`BTreeMap`?
-///   A: Because we need multi-version storage with transactional behaviour
-///   (`.view()`, `.block()`, `.block_and_revert()`, `.commit()`)
-/// * Q: Why don't we use [`mv::storage::Storage`]?
-///   A: Because transactions map consumes 80%+ RAM of iroha.
-///   This storage is memory-optimized and consumes ~3x less memory.
+/// TODO: admit the hot-tip HashSet and snapshot decoding/comparison scratch through
+/// their original owners before claiming complete membership memory admission.
 pub struct TransactionsStorage {
     /// Latest block. Stored separately because of reverts.
     /// `None` when there are no blocks yet, otherwise must be not `None`.
@@ -37,10 +53,13 @@ pub struct TransactionsStorage {
     /// Map with aggregated entrypoints of multiple blocks, EXCEPT for the latest block. Entries
     /// are retained only for finalised blocks (with heights strictly lower than the current latest
     /// block) so that stale transactions are discarded after rollbacks.
-    blocks: DashMap<Key, Value>,
+    blocks: history::Map,
     // The opaque identity covers both the hot tip and the historical map.
     // It rotates while the writer is held, never from a caller-provided scalar.
-    write_lock: Mutex<Arc<()>>,
+    write_lock: Mutex<Identity>,
+    pub(in crate::state) budget: mv::allocation::AllocationBudget,
+    pending: Mutex<Option<history::Pending>>,
+    publication_sequence: AtomicU64,
     released: concread::release::ReleaseNotification,
 }
 #[derive(Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
@@ -51,21 +70,65 @@ struct BlockInfo {
     height: NonZeroUsize,
 }
 impl TransactionsStorage {
-    /// Construct new [`Self`]
-    #[allow(clippy::new_without_default)]
+    /// Construct a finite-pool fixture; production supplies its original Kura pool.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn new() -> Self {
-        Self {
-            latest_block: ArcSwapOption::empty(),
-            blocks: DashMap::new(),
-            write_lock: Mutex::new(Arc::new(())),
-            released: concread::release::ReleaseNotification::default(),
+        Self::try_new(mv::allocation::AllocationBudget::new(256 * 1024 * 1024))
+            .expect("finite fixture membership pool")
+    }
+    #[cfg(test)]
+    pub(in crate::state) fn reader_release_wait_for_tests(&self) -> concread::release::ReleaseWait {
+        self.blocks.observe_reader_release()
+    }
+    #[cfg(test)]
+    pub(in crate::state) fn reader_test_writer_available(&self) -> bool {
+        self.write_lock
+            .try_lock()
+            .map(|guard| self.released.guard(guard))
+            .is_some()
+    }
+    /// Retain the actual reader-lock source outside an enclosing physical owner.
+    pub(crate) fn reader_release_batch(&self) -> concread::release::DeferredReleaseBatch {
+        self.blocks.reader_release_batch()
+    }
+    /// Pin a committed generation while retaining every actual reader unlock.
+    /// The original batch spans all retries; a foreign source is refused before locking.
+    pub(crate) fn view_retaining(
+        &self,
+        releases: &mut concread::release::DeferredReleaseBatch,
+    ) -> Result<TransactionsView<'_>, concread::bptree::OwnedWriteError> {
+        loop {
+            let before = self.publication_sequence.load(Ordering::Acquire);
+            if before & 1 != 0 {
+                std::thread::yield_now();
+                continue;
+            }
+            let latest_block = self.latest_block.load_full();
+            let blocks = self.blocks.read_retaining(releases)?;
+            if before == self.publication_sequence.load(Ordering::Acquire) {
+                return Ok(TransactionsView {
+                    latest_block,
+                    blocks,
+                });
+            }
         }
     }
-    /// Create persistent view of storage at certain point in time
+    /// Pin one exact committed generation, retrying only concurrent publication.
     pub fn view(&self) -> TransactionsView<'_> {
-        TransactionsView {
-            latest_block: self.latest_block.load_full(),
-            blocks: &self.blocks,
+        loop {
+            let before = self.publication_sequence.load(Ordering::Acquire);
+            if before & 1 != 0 {
+                std::thread::yield_now();
+                continue;
+            }
+            let latest_block = self.latest_block.load_full();
+            let blocks = self.blocks.read();
+            if before == self.publication_sequence.load(Ordering::Acquire) {
+                return TransactionsView {
+                    latest_block,
+                    blocks,
+                };
+            }
         }
     }
     /// Return the latest committed block height recorded by entrypoint storage.
@@ -83,102 +146,187 @@ impl TransactionsStorage {
         entrypoints: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
         height: NonZeroUsize,
     ) {
-        let mut guard = self.released.guard(self.write_lock.lock());
-        let next_identity = Arc::new(());
-        let entrypoints = entrypoints.into_iter().collect::<HashSet<_>>();
-        let latest = self.latest_block.load_full();
-        match latest.as_deref() {
-            Some(block) if block.height > height => {
-                for entrypoint in entrypoints {
-                    self.blocks.insert(entrypoint, height);
+        self.budget.with_deferred_refund_notifications(|_| {
+            let mut guard = self.released.guard(self.write_lock.lock());
+            let next_identity =
+                history::new_identity(&self.budget).expect("fixture identity admission");
+            let entrypoints = entrypoints.into_iter().collect::<HashSet<_>>();
+            let latest = self.latest_block.load_full();
+            let mut writer = self
+                .blocks
+                .try_write_admitted(|d| history::admit(&self.budget, d))
+                .expect("fixture history cursor");
+            let next_tip = match latest.as_deref() {
+                Some(block) if block.height > height => {
+                    for key in entrypoints {
+                        writer
+                            .try_insert_admitted(key, height, |d| history::admit(&self.budget, d))
+                            .expect("fixture history insert");
+                    }
+                    latest
                 }
-            }
-            Some(block) if block.height == height => {
-                let mut updated = block.clone();
-                updated.transactions.extend(entrypoints);
-                self.latest_block.store(Some(Arc::new(updated)));
-            }
-            Some(block) => {
-                for &entrypoint in &block.transactions {
-                    self.blocks.insert(entrypoint, block.height);
+                Some(block) if block.height == height => {
+                    let mut updated = block.clone();
+                    updated.transactions.extend(entrypoints);
+                    Some(Arc::new(updated))
                 }
-                self.latest_block.store(Some(Arc::new(BlockInfo {
+                Some(block) => {
+                    for key in &block.transactions {
+                        writer
+                            .try_insert_admitted(*key, block.height, |d| {
+                                history::admit(&self.budget, d)
+                            })
+                            .expect("fixture history promotion");
+                    }
+                    Some(Arc::new(BlockInfo {
+                        transactions: entrypoints,
+                        height,
+                    }))
+                }
+                None => Some(Arc::new(BlockInfo {
                     transactions: entrypoints,
                     height,
-                })));
-            }
-            None => self.latest_block.store(Some(Arc::new(BlockInfo {
-                transactions: entrypoints,
-                height,
-            }))),
-        }
-        **guard = next_identity;
+                })),
+            };
+            let sequence = self.publication_sequence.load(Ordering::Relaxed);
+            let next = sequence
+                .checked_add(2)
+                .expect("fixture publication sequence");
+            self.publication_sequence
+                .store(sequence + 1, Ordering::Release);
+            let retirement = writer.prepare_commit().publish().release();
+            let old_tip = self.latest_block.swap(next_tip);
+            let old_identity = std::mem::replace(&mut **guard, next_identity);
+            self.publication_sequence.store(next, Ordering::Release);
+            drop(guard);
+            drop((retirement, old_tip, old_identity));
+        });
     }
-    /// Deliberately replace existing membership for a malformed-State recovery fixture.
-    ///
-    /// Unlike historical seeding, this removes a newer hot-set copy too, so the
-    /// public reader observes the requested corruption. The canonical frontier
-    /// and all unrelated memberships remain fixed; production never calls this.
+    /// Deliberately corrupt an existing fixture membership without advancing its cut.
     #[cfg(test)]
     pub(crate) fn overwrite_committed_entrypoint_membership_for_tests(
         &self,
         entrypoint: Key,
         height: Value,
     ) {
-        let mut guard = self.released.guard(self.write_lock.lock());
-        let next_identity = Arc::new(());
-        assert!(
-            self.view().get(&entrypoint).is_some(),
-            "overwrite needs existing membership"
-        );
-        let latest = self
-            .latest_block
-            .load_full()
-            .expect("existing membership has a frontier");
-        assert!(
-            height <= latest.height,
-            "corruption must not advance the fixture frontier"
-        );
-        let mut updated = latest.as_ref().clone();
-        updated.transactions.remove(&entrypoint);
-        self.blocks.remove(&entrypoint);
-        if height == updated.height {
-            updated.transactions.insert(entrypoint);
-        } else {
-            self.blocks.insert(entrypoint, height);
-        }
-        self.latest_block.store(Some(Arc::new(updated)));
-        **guard = next_identity;
+        self.budget.with_deferred_refund_notifications(|_| {
+            let mut guard = self.released.guard(self.write_lock.lock());
+            let next_identity =
+                history::new_identity(&self.budget).expect("fixture identity admission");
+            assert!(
+                self.view().get(&entrypoint).is_some(),
+                "overwrite needs existing membership"
+            );
+            let latest = self
+                .latest_block
+                .load_full()
+                .expect("existing membership has a frontier");
+            assert!(
+                height <= latest.height,
+                "corruption must not advance the fixture frontier"
+            );
+            let mut updated = latest.as_ref().clone();
+            updated.transactions.remove(&entrypoint);
+            let mut writer = self
+                .blocks
+                .try_write_admitted(|d| history::admit(&self.budget, d))
+                .expect("fixture history cursor");
+            writer
+                .try_remove_admitted(&entrypoint, |d| history::admit(&self.budget, d))
+                .expect("fixture history removal");
+            if height == updated.height {
+                updated.transactions.insert(entrypoint);
+            } else {
+                writer
+                    .try_insert_admitted(entrypoint, height, |d| history::admit(&self.budget, d))
+                    .expect("fixture history corruption");
+            }
+            let sequence = self.publication_sequence.load(Ordering::Relaxed);
+            let next = sequence
+                .checked_add(2)
+                .expect("fixture publication sequence");
+            self.publication_sequence
+                .store(sequence + 1, Ordering::Release);
+            let retirement = writer.prepare_commit().publish().release();
+            let old_tip = self.latest_block.swap(Some(Arc::new(updated)));
+            let old_identity = std::mem::replace(&mut **guard, next_identity);
+            self.publication_sequence.store(next, Ordering::Release);
+            drop(guard);
+            drop((retirement, old_tip, old_identity));
+        });
     }
-    /// Create block to aggregate updates
+    /// Create a fixture block with the same finite original preparation owner.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn block(&self) -> TransactionsBlock<'_> {
         self.block_impl(false)
     }
-    /// Create block to aggregate updates and revert changes created in the latest block
+    /// Create a fixture replacement using the same original history authority.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn block_and_revert(&self) -> TransactionsBlock<'_> {
         self.block_impl(true)
     }
-    fn block_impl(&self, revert: bool) -> TransactionsBlock<'_> {
-        let guard = self.released.guard(self.write_lock.lock());
-        TransactionsBlock {
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+    fn block_impl(&self, replacement: bool) -> TransactionsBlock<'_> {
+        let mut pending = Some(
+            self.prepare_next_block(replacement)
+                .expect("fixture history admission"),
+        );
+        self.attach_prepared(&mut pending)
+            .expect("fixture original predecessor")
+    }
+    /// Attach only the retained original pre-World preparation. On refusal the
+    /// caller still owns it; no charged cursor is destroyed under other fences.
+    pub(crate) fn attach_prepared<'a>(
+        &'a self,
+        pending: &mut Option<history::Pending>,
+    ) -> Result<TransactionsBlock<'a>, MembershipAdmissionError> {
+        let original = pending
+            .as_mut()
+            .expect("original pre-World membership preparation");
+        let wait = self.released.observe();
+        // A foreign family cannot acquire this target's notification authority.
+        let baseline = self
+            .blocks
+            .read_predecessor(original.baseline.as_ref().expect("original history cut"))
+            .ok_or_else(|| MembershipAdmissionError::Changed(wait.clone()))?;
+        let guard = self
+            .write_lock
+            .try_lock()
+            .ok_or_else(|| MembershipAdmissionError::Busy(wait.clone()))?;
+        if !Identity::ptr_eq(&guard, &original.predecessor) {
+            let released = self
+                .released
+                .guard(guard)
+                .try_release_into(&mut original.attachment_releases, drop);
+            assert!(released.is_ok(), "original preparation release family");
+            return Err(MembershipAdmissionError::Changed(wait));
+        }
+        let original = pending.take().expect("checked original preparation");
+        let revert = original.replacement;
+        Ok(TransactionsBlock {
             latest_block_ref: &self.latest_block,
             blocks_ref: &self.blocks,
-            _guard: block::MembershipWriter::new(guard),
+            baseline,
+            publication_sequence: &self.publication_sequence,
+            _guard: block::MembershipWriter::new(
+                self.released.guard(guard),
+                Some(history_slot::Slot::new(self, original)),
+            ),
             revert,
             current_block: None,
-        }
+        })
     }
 }
 /// Read the logical committed cut, excluding the abandoned tip during replacement.
 fn membership_at_cut<Q>(
     latest: Option<&BlockInfo>,
-    history: &DashMap<Key, Value>,
+    history: &HistoryReader<'_>,
     undo_latest: bool,
     key: &Q,
 ) -> Option<Value>
 where
     Key: Borrow<Q>,
-    Q: Hash + Eq + ?Sized,
+    Q: Hash + Eq + Ord + ?Sized,
 {
     let latest = latest?;
     if !undo_latest && latest.transactions.contains(key) {
@@ -197,7 +345,7 @@ pub trait TransactionsReadOnly {
     fn get<Q>(&self, key: &Q) -> Option<Value>
     where
         Key: Borrow<Q>,
-        Q: Hash + Eq + ?Sized;
+        Q: Hash + Eq + Ord + ?Sized;
 }
 /// Module for [`TransactionsView`] and it's related impls
 mod view {
@@ -208,15 +356,15 @@ mod view {
         pub(super) latest_block: Option<Arc<BlockInfo>>,
         /// Some transactions may be added to the map after `Self` is created,
         /// but for us exists only transactions with `height < latest_block.height`
-        pub(super) blocks: &'storage DashMap<Key, Value>,
+        pub(super) blocks: HistoryReader<'storage>,
     }
     impl TransactionsReadOnly for TransactionsView<'_> {
         fn get<Q>(&self, key: &Q) -> Option<Value>
         where
             Key: Borrow<Q>,
-            Q: Hash + Eq + ?Sized,
+            Q: Hash + Eq + Ord + ?Sized,
         {
-            membership_at_cut(self.latest_block.as_deref(), self.blocks, false, key)
+            membership_at_cut(self.latest_block.as_deref(), &self.blocks, false, key)
         }
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -245,6 +393,8 @@ mod block {
     #[derive(thiserror::Error, Debug, displaydoc::Display)]
     #[ignore_extra_doc_attributes]
     pub enum TransactionsBlockError {
+        /// The original prepaid history could not acquire its publication locks.
+        MembershipAdmission(#[source] MembershipAdmissionError),
         /// `TransactionsBlock::insert_block()` was not called
         MissingInsertBlock,
         /// Block height `{actual_current_height}` does not match expected `{expected_current_height}`;
@@ -296,7 +446,9 @@ mod block {
     pub struct TransactionsBlock<'storage> {
         /// References to [`TransactionsStorage`] struct
         pub(super) latest_block_ref: &'storage ArcSwapOption<BlockInfo>,
-        pub(super) blocks_ref: &'storage DashMap<Key, Value>,
+        pub(super) blocks_ref: &'storage history::Map,
+        pub(super) baseline: HistoryReader<'storage>,
+        pub(super) publication_sequence: &'storage AtomicU64,
         pub(super) _guard: MembershipWriter<'storage>,
         /// Own fields
         pub(super) revert: bool,
@@ -310,7 +462,7 @@ mod block {
     pub(crate) struct PreparedTransactionsBlock<'storage> {
         block: TransactionsBlock<'storage>,
         publication: MembershipPublication,
-        next_identity: Arc<()>,
+        next_identity: Identity,
         // Fixed original-owner metadata. During publication the admitted action
         // stays in place, and every displaced allocation stays in this caller.
         retired_tip: Option<Arc<BlockInfo>>,
@@ -325,12 +477,13 @@ mod block {
     /// reacquire its exact predecessor; the aggregate State publisher must
     /// retain every prepared component before publishing any of them.
     pub(crate) struct DetachedTransactionsBlock {
-        predecessor_identity: Arc<()>,
+        predecessor_identity: Identity,
+        history: history::Pending,
         predecessor: Option<Arc<BlockInfo>>,
         current: Arc<BlockInfo>,
         revert: bool,
         publication: MembershipPublication,
-        next_identity: Arc<()>,
+        next_identity: Identity,
     }
 
     /// Exact admitted membership with its writer reacquired for publication.
@@ -343,21 +496,27 @@ mod block {
         preflight_release: Option<concread::release::DeferredRelease>,
     }
 
+    /// All original history retirement and physical release observations.
+    pub(crate) struct MembershipRelease {
+        _history: Option<history_slot::Cleanup>,
+        _writer: concread::release::DeferredRelease,
+    }
+
     /// Original membership payloads and notification after its physical unlock.
     /// The enclosing publisher retires this only after all its fences release.
     pub(crate) struct TransactionsPublicationRetirement {
         _tip: Option<Arc<BlockInfo>>,
         _staged: Option<Arc<BlockInfo>>,
-        _identity: Arc<()>,
+        _identity: Identity,
         _publication: MembershipPublication,
-        _release: concread::release::DeferredRelease,
+        _release: MembershipRelease,
     }
 
     /// Original abort or refusal cleanup retained with installation admission.
     pub(crate) struct AbortedTransactions<Installation> {
         _installation: Option<Installation>,
         _preflight_release: Option<concread::release::DeferredRelease>,
-        _release: Option<concread::release::DeferredRelease>,
+        _release: Option<MembershipRelease>,
     }
 
     /// Published membership cleanup retained with its installation admission.
@@ -412,12 +571,13 @@ mod block {
             current: Arc<BlockInfo>,
         },
         Advance {
-            previous: Option<Arc<BlockInfo>>,
+            // Keep the exact previous hot tip through publication-owner retirement.
+            _previous: Option<Arc<BlockInfo>>,
             current: Arc<BlockInfo>,
         },
     }
 
-    impl<'storage> TransactionsBlock<'storage> {
+    impl TransactionsBlock<'_> {
         /// Return whether a canonical block membership update was staged.
         pub(crate) fn has_staged_block(&self) -> bool {
             self._guard.identity();
@@ -472,19 +632,11 @@ mod block {
         /// height being committed does not match the expected height derived from the current
         /// storage state. These behaviours are illustrated in the release-mode tests.
         pub fn commit(self) -> Result<(), TransactionsBlockError> {
-            self.prepare_commit()?.publish();
-            Ok(())
-        }
-        /// Admit the exact staged transition and retain its exclusive writer.
-        ///
-        /// This performs all membership validation before publication. Failure
-        /// drops the staging scope without modifying committed membership.
-        pub(crate) fn prepare_commit(
-            self,
-        ) -> Result<PreparedTransactionsBlock<'storage>, TransactionsBlockError> {
             let mut capture = self.capture_slot();
             capture.try_prepare()?;
-            Ok(capture.into_prepared())
+            capture.try_prepare_physical()?;
+            capture.publish_prepared();
+            Ok(())
         }
         /// Validate that this block can be committed without mutating the storage.
         ///
@@ -525,17 +677,32 @@ mod block {
                 })
             } else {
                 Ok(MembershipPublication::Advance {
-                    previous: previous_block,
+                    _previous: previous_block,
                     current: Arc::clone(current_block),
                 })
             }
         }
     }
+    #[cfg(test)]
+    impl<'storage> TransactionsBlock<'storage> {
+        /// Admit the exact staged transition and retain its exclusive writer.
+        ///
+        /// This performs all membership validation before publication. Failure
+        /// drops the staging scope without modifying committed membership.
+        pub(crate) fn prepare_commit(
+            self,
+        ) -> Result<PreparedTransactionsBlock<'storage>, TransactionsBlockError> {
+            let mut capture = self.capture_slot();
+            capture.try_prepare()?;
+            Ok(capture.into_prepared())
+        }
+    }
+
     impl<'storage> PreparedTransactionsBlock<'storage> {
         fn new(
             block: TransactionsBlock<'storage>,
             publication: MembershipPublication,
-            next_identity: Arc<()>,
+            next_identity: Identity,
         ) -> Self {
             Self {
                 block,
@@ -563,12 +730,7 @@ mod block {
             self.detach_retaining().0
         }
 
-        fn detach_retaining(
-            self,
-        ) -> (
-            DetachedTransactionsBlock,
-            concread::release::DeferredRelease,
-        ) {
+        fn detach_retaining(self) -> (DetachedTransactionsBlock, MembershipRelease) {
             self.assert_unpublished();
             let Self {
                 block,
@@ -578,8 +740,16 @@ mod block {
                 publication_started: _,
                 published: _,
             } = self;
+            let mut block = block;
+            let history = block
+                ._guard
+                .history
+                .as_mut()
+                .expect("original history")
+                .recover_detached();
             let detached = DetachedTransactionsBlock {
-                predecessor_identity: Arc::clone(block._guard.identity()),
+                history,
+                predecessor_identity: block._guard.identity().clone(),
                 predecessor: block.latest_block_ref.load_full(),
                 current: Arc::clone(block.current_block.as_ref().expect("admitted membership")),
                 revert: block.revert,
@@ -606,11 +776,50 @@ mod block {
         ///
         /// All semantic refusal happened during preparation. The retained mutex
         /// prevents any other membership writer from changing the admitted cut.
+        /// The separate fallible physical phase must already own the native
+        /// writer/reader pair; the publication kernel never acquires a lock.
         /// The returned owner defers payload cleanup and retry callbacks until
         /// the caller has released every enclosing publication fence.
-        pub(crate) fn publish(mut self) -> TransactionsPublicationRetirement {
+        fn publish_prepared(mut self) -> TransactionsPublicationRetirement {
             self.publish_in_place();
             self.into_retirement()
+        }
+
+        /// Standalone fixture publication uses the same explicit physical phase.
+        #[cfg(test)]
+        pub(crate) fn publish(mut self) -> TransactionsPublicationRetirement {
+            self.try_prepare_physical()
+                .expect("fixture physical membership admission");
+            self.publish_prepared()
+        }
+
+        /// Retain the exact native writer/reader pair before the publication kernel.
+        /// Refusal leaves this original prepared owner available for local retry.
+        pub(in crate::state) fn try_prepare_physical(
+            &mut self,
+        ) -> Result<(), TransactionsBlockError> {
+            self.assert_unpublished();
+            if !matches!(&self.publication, MembershipPublication::Repeated) {
+                self.block
+                    ._guard
+                    .history
+                    .as_mut()
+                    .expect("original history")
+                    .prepare()
+                    .map_err(TransactionsBlockError::MembershipAdmission)?;
+            }
+            Ok(())
+        }
+
+        fn is_physically_prepared(&self) -> bool {
+            matches!(&self.publication, MembershipPublication::Repeated)
+                || self
+                    .block
+                    ._guard
+                    .history
+                    .as_ref()
+                    .expect("original history")
+                    .is_prepared()
         }
 
         // The caller retains this complete owner throughout every map operation.
@@ -618,24 +827,38 @@ mod block {
         // local that could notify or reclaim under a sibling on unwind.
         fn publish_in_place(&mut self) {
             self.assert_unpublished();
+            assert!(
+                self.is_physically_prepared(),
+                "original physical membership preparation must precede publication"
+            );
             self.block._guard.identity();
             self.publication_started = true;
-            match &self.publication {
-                MembershipPublication::Repeated => {}
-                MembershipPublication::Replace { current } => {
-                    self.block
-                        .blocks_ref
-                        .retain(|_, height| *height < current.height);
-                    self.retired_tip = self.block.latest_block_ref.swap(Some(Arc::clone(current)));
-                }
-                MembershipPublication::Advance { previous, current } => {
-                    if let Some(previous) = previous {
-                        for &transaction in &previous.transactions {
-                            self.block.blocks_ref.insert(transaction, previous.height);
-                        }
-                    }
-                    self.retired_tip = self.block.latest_block_ref.swap(Some(Arc::clone(current)));
-                }
+            if !matches!(&self.publication, MembershipPublication::Repeated) {
+                let next = self
+                    .block
+                    ._guard
+                    .history
+                    .as_ref()
+                    .expect("original history")
+                    .next_sequence();
+                self.block
+                    .publication_sequence
+                    .store(next - 1, Ordering::Release);
+                self.block
+                    ._guard
+                    .history
+                    .as_mut()
+                    .expect("original history")
+                    .publish();
+                let current = match &self.publication {
+                    MembershipPublication::Replace { current }
+                    | MembershipPublication::Advance { current, .. } => current,
+                    MembershipPublication::Repeated => unreachable!(),
+                };
+                self.retired_tip = self.block.latest_block_ref.swap(Some(Arc::clone(current)));
+                self.block
+                    .publication_sequence
+                    .store(next, Ordering::Release);
             }
             if !matches!(&self.publication, MembershipPublication::Repeated) {
                 // Install the exact pre-admitted identity and retain its exact
@@ -740,7 +963,7 @@ mod block {
                 return MembershipPredecessorStatus::Busy;
             };
             let guard = storage.released.guard(guard);
-            if Arc::ptr_eq(&guard, &self.predecessor_identity) {
+            if Identity::ptr_eq(&guard, &self.predecessor_identity) {
                 MembershipPredecessorStatus::Current
             } else {
                 MembershipPredecessorStatus::Changed
@@ -779,7 +1002,7 @@ mod block {
                 preflight_release,
             } = self;
             PublishedTransactions {
-                _retirement: prepared.publish(),
+                _retirement: prepared.publish_prepared(),
                 _installation: installation,
                 _preflight_release: preflight_release,
             }
@@ -789,7 +1012,7 @@ mod block {
         fn get<Q>(&self, key: &Q) -> Option<Value>
         where
             Key: Borrow<Q>,
-            Q: Hash + Eq + ?Sized,
+            Q: Hash + Eq + Ord + ?Sized,
         {
             self.block.get(key)
         }
@@ -798,7 +1021,7 @@ mod block {
         fn get<Q>(&self, key: &Q) -> Option<Value>
         where
             Key: Borrow<Q>,
-            Q: Hash + Eq + ?Sized,
+            Q: Hash + Eq + Ord + ?Sized,
         {
             self._guard.identity();
             if let Some(height) = self
@@ -809,7 +1032,7 @@ mod block {
                 return Some(height);
             }
             let latest = self.latest_block_ref.load();
-            membership_at_cut(latest.as_deref(), self.blocks_ref, self.revert, key)
+            membership_at_cut(latest.as_deref(), &self.baseline, self.revert, key)
         }
     }
 }
@@ -829,7 +1052,7 @@ pub use block::{TransactionsBlock, TransactionsBlockError, TransactionsBlockFiel
 /// replaced only by staging a different row. Pointer equality therefore binds
 /// the exact publication without copying or sorting its membership set.
 pub(in crate::state) struct TransactionsPublicationSurface {
-    predecessor: Arc<()>,
+    predecessor: Identity,
     current: Option<Arc<BlockInfo>>,
     revert: bool,
 }
@@ -846,7 +1069,7 @@ impl std::fmt::Debug for TransactionsPublicationSurface {
 
 impl PartialEq for TransactionsPublicationSurface {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.predecessor, &other.predecessor)
+        Identity::ptr_eq(&self.predecessor, &other.predecessor)
             && self.revert == other.revert
             && match (&self.current, &other.current) {
                 (None, None) => true,
@@ -877,7 +1100,7 @@ impl TransactionsBlock<'_> {
     /// Bind this owner's exact predecessor and immutable pending membership row.
     pub(in crate::state) fn publication_surface(&self) -> TransactionsPublicationSurface {
         TransactionsPublicationSurface {
-            predecessor: Arc::clone(self._guard.identity()),
+            predecessor: self._guard.identity().clone(),
             current: self.current_block.clone(),
             revert: self.revert,
         }
@@ -909,7 +1132,7 @@ mod membership_projection {
 
     struct Snapshot<'block> {
         latest: Option<Arc<BlockInfo>>,
-        history: &'block DashMap<Key, Value>,
+        history: &'block HistoryReader<'block>,
         revert: bool,
     }
 
@@ -918,7 +1141,7 @@ mod membership_projection {
             self._guard.identity();
             Snapshot {
                 latest: self.latest_block_ref.load_full(),
-                history: self.blocks_ref,
+                history: &self.baseline,
                 revert: self.revert,
             }
         }
@@ -1007,11 +1230,9 @@ mod membership_projection {
                     visit(key, latest.height)?;
                 }
             }
-            for entry in self.history.iter() {
-                if *entry.value() < latest.height
-                    && (undo_latest || !latest.transactions.contains(entry.key()))
-                {
-                    visit(entry.key(), *entry.value())?;
+            for (key, value) in self.history.iter() {
+                if *value < latest.height && (undo_latest || !latest.transactions.contains(key)) {
+                    visit(key, *value)?;
                 }
             }
             Ok(())
@@ -1064,12 +1285,12 @@ mod membership_projection {
                     }
                 }
             }
-            for entry in self.before.history.iter() {
-                if *entry.value() < self.current.height
-                    && !self.current.transactions.contains(entry.key())
-                    && !promoted.is_some_and(|previous| previous.transactions.contains(entry.key()))
+            for (key, value) in self.before.history.iter() {
+                if *value < self.current.height
+                    && !self.current.transactions.contains(key)
+                    && !promoted.is_some_and(|previous| previous.transactions.contains(key))
                 {
-                    visit(entry.key(), *entry.value())?;
+                    visit(key, *value)?;
                 }
             }
             Ok(())
@@ -1157,8 +1378,8 @@ mod serialization {
         out.push(':');
         let mut map = BTreeMap::new();
         #[allow(clippy::explicit_iter_loop)]
-        for entry in view.blocks.iter() {
-            map.insert(*entry.key(), *entry.value());
+        for (key, value) in view.blocks.iter() {
+            map.insert(*key, *value);
         }
         JsonSerializeTrait::json_serialize(&map, out);
         out.push('}');
@@ -1176,8 +1397,8 @@ mod serialization {
         out.push(':');
         let mut map = BTreeMap::new();
         #[allow(clippy::explicit_iter_loop)]
-        for entry in block.blocks_ref.iter() {
-            map.insert(*entry.key(), *entry.value());
+        for (key, value) in block.baseline.iter() {
+            map.insert(*key, *value);
         }
         if block.revert {
             if let Some(current) = block.current_block.as_ref() {
@@ -1220,55 +1441,81 @@ mod serialization {
             write_transactions_view_json(self, out)
         }
     }
-    impl JsonDeserializeTrait for TransactionsStorage {
-        fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
-            let json::Value::Object(mut map) = json::Value::json_deserialize(parser)? else {
+    impl TransactionsStorage {
+        /// Restore the canonical snapshot layout into the original configured pool.
+        /// The JSON parser's input/scratch belongs to the snapshot owner; every
+        /// historical node, native cursor and generation identity is prepaid here.
+        pub(crate) fn from_json_with_budget(
+            source: &str,
+            budget: mv::allocation::AllocationBudget,
+        ) -> Result<Self, MembershipRestoreError> {
+            let value = json::from_str::<json::Value>(source)?;
+            Self::from_value_with_budget(value, budget)
+        }
+        fn from_value_with_budget(
+            value: json::Value,
+            budget: mv::allocation::AllocationBudget,
+        ) -> Result<Self, MembershipRestoreError> {
+            let json::Value::Object(mut map) = value else {
                 return Err(json::Error::InvalidField {
                     field: "transactions_storage".into(),
                     message: "expected object".into(),
-                });
+                }
+                .into());
             };
-            let latest_block_value = map
+            let latest = map
                 .remove("latest_block")
                 .ok_or_else(|| json::Error::missing_field("latest_block"))?;
-            let blocks_value = map
+            let entries = map
                 .remove("blocks")
                 .ok_or_else(|| json::Error::missing_field("blocks"))?;
             if let Some(field) = map.keys().next() {
-                return Err(json::Error::unknown_field(field.as_str()));
+                return Err(json::Error::unknown_field(field.as_str()).into());
             }
-            let latest_block = match latest_block_value {
+            let latest = match latest {
                 json::Value::Null => None,
-                other => {
-                    let block: BlockInfo = json::value::from_value(other)?;
-                    Some(Arc::new(block))
-                }
+                other => Some(Arc::new(json::value::from_value::<BlockInfo>(other)?)),
             };
-            let dash = DashMap::new();
-            let json::Value::Object(entries) = blocks_value else {
+            let json::Value::Object(entries) = entries else {
                 return Err(json::Error::InvalidField {
                     field: "blocks".into(),
                     message: "expected object".into(),
-                });
+                }
+                .into());
             };
-            for (key_str, value_value) in entries {
-                let key = Key::decode_json_key(&key_str).map_err(|err| {
-                    json::Error::Message(format!("invalid transaction hash `{key_str}`: {err}"))
-                })?;
-                let value: Value = json::value::from_value(value_value)?;
-                dash.insert(key, value);
-            }
-            if let Some(block) = &latest_block {
-                let latest_height = block.height;
-                dash.retain(|_, height| *height < latest_height);
-            } else {
-                dash.clear();
-            }
-            Ok(TransactionsStorage {
-                latest_block: ArcSwapOption::from(latest_block),
-                blocks: dash,
-                write_lock: Mutex::new(Arc::new(())),
-                released: concread::release::ReleaseNotification::default(),
+            budget.with_deferred_refund_notifications(|_| {
+                let owner = Self::try_new(budget.clone())?;
+                let mut writer = owner
+                    .blocks
+                    .try_write_admitted(|d| history::admit(&budget, d))
+                    .map_err(|e| history::edit_error(e, owner.released.observe()))?;
+                for (key_str, value) in entries {
+                    let key = Key::decode_json_key(&key_str).map_err(|e| {
+                        json::Error::Message(format!("invalid transaction hash `{key_str}`: {e}"))
+                    })?;
+                    let value: Value = json::value::from_value(value)?;
+                    if latest.as_ref().is_some_and(|tip| value < tip.height) {
+                        writer
+                            .try_insert_admitted(key, value, |d| history::admit(&budget, d))
+                            .map_err(|(_, e)| history::edit_error(e, owner.released.observe()))?;
+                    }
+                }
+                drop(writer.prepare_commit().publish().release());
+                owner.latest_block.store(latest);
+                Ok(owner)
+            })
+        }
+    }
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+    impl JsonDeserializeTrait for TransactionsStorage {
+        fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+            Self::from_value_with_budget(
+                json::Value::json_deserialize(parser)?,
+                mv::allocation::AllocationBudget::new(256 * 1024 * 1024),
+            )
+            .map_err(|error| match error {
+                MembershipRestoreError::Json(error) => error,
+                MembershipRestoreError::Admission(error) => json::Error::Message(error.to_string()),
             })
         }
     }
@@ -1335,7 +1582,7 @@ mod tests {
         storage.overwrite_committed_entrypoint_membership_for_tests(corrupted, current);
         assert_eq!(storage.view().get(&corrupted), Some(current));
         assert_eq!(storage.view().get(&untouched), Some(current));
-        assert!(storage.blocks.get(&corrupted).is_none());
+        assert!(storage.blocks.read().get(&corrupted).is_none());
         assert_eq!(storage.latest_height(), current.get());
     }
     #[test]

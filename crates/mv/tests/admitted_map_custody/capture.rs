@@ -43,6 +43,87 @@ fn prepare<'scope, 'target>(
 }
 
 #[test]
+fn captured_prepaid_block_rolls_back_children_and_retries_full_pool_refusal() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let budget = AllocationBudget::new(8 << 20);
+    let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+
+    // This callback is the MV ownership seam for a larger World block: child
+    // transactions share the original writers, and only an accepted child may
+    // enter the detached successor that the enclosing aggregate later publishes.
+    let journal = storage
+        .try_capture_admitted_block(BlockMode::Ordinary, |block| {
+            let mut abandoned = block.try_transaction_admitted().unwrap();
+            assert!(transaction_put(&mut abandoned, &budget, 8, 0x18).is_none());
+            drop(abandoned);
+            assert!(block.get(&8).is_none());
+
+            let mut accepted = block.try_transaction_admitted().unwrap();
+            assert!(transaction_put(&mut accepted, &budget, 9, 0x29).is_none());
+            accepted.apply();
+
+            let mut retryable = block.try_transaction_admitted().unwrap();
+            marker(retryable.get(&9), 0x29);
+            let (key, mut value) = input(&budget, 10);
+            value.bytes.fill(0x3a);
+            let held = budget
+                .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+                .unwrap();
+            let ((key, value), error) = retryable
+                .try_insert_admitted(key, value)
+                .expect_err("the original pool is full");
+            assert!(matches!(
+                error,
+                AdmittedStorageError::Allocation(AllocationRefusal::Capacity { .. })
+            ));
+            assert!(retryable.get(&10).is_none());
+            marker(retryable.get(&9), 0x29);
+            drop(held);
+            assert!(retryable.try_insert_admitted(key, value).unwrap().is_none());
+            retryable.apply();
+            assert!(block.get(&8).is_none());
+            marker(block.get(&9), 0x29);
+            marker(block.get(&10), 0x3a);
+            Ok::<_, ()>(73)
+        })
+        .unwrap();
+
+    assert!(storage.view().is_empty(), "capture does not publish early");
+    let touched: Vec<_> = journal
+        .touched_entries()
+        .map(|entry| entry.key.order)
+        .collect();
+    assert_eq!(touched, [9, 10]);
+    let held = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let copies = (counters.keys.load(SeqCst), counters.values.load(SeqCst));
+    without_allocations(|| {
+        budget.with_deferred_refund_notifications(|scope| {
+            assert_eq!(
+                prepare(journal, scope, &storage).publish().into_admission(),
+                73
+            );
+        });
+    });
+    assert_eq!(
+        (counters.keys.load(SeqCst), counters.values.load(SeqCst)),
+        copies,
+        "publication must install the original funded payloads"
+    );
+    assert!(storage.view().get(&8).is_none());
+    marker(storage.view().get(&9), 0x29);
+    marker(storage.view().get(&10), 0x3a);
+    drop(held);
+    drop(storage);
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
 fn captured_prepaid_successors_detach_abort_and_publish_at_full_capacity_without_copy() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     reset();

@@ -137,9 +137,14 @@ impl SignerReleaseManifestServiceV1 {
         &self,
         manifest: &[u8],
     ) -> Result<SignerReleaseManifestReceiptV1, SignerReleaseManifestErrorV1> {
-        let custody = self
+        let signing = self
             .coordinator
-            .verify(&self.coordinator.source.observe(&self.coordinator.binding)?)?;
+            .source
+            .observe_signing_state(&self.coordinator.binding)?;
+        let custody = self.coordinator.verify(&signing.custody)?;
+        if signing.audit_head != self.previous_audit {
+            return Err(SignerOperationErrorV1::ReservationConflict.into());
+        }
         let request = SignerReleaseManifestRequestV1::new(&custody, &self.expected, manifest)?;
         let intent = SignerOperationIntentV1 {
             action: SignerOperationActionV1::Sign,

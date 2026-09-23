@@ -8,7 +8,7 @@
 //! under exact QC and durable Kura/Native authorization. Keep the existing
 //! execution commitment; complete ownership does not require a new wire root.
 
-use super::{EventBox, StateBlock};
+use super::{DataSpaceId, EventBox, Hash, LaneId, LaneLifecycleError, StateBlock};
 use crate::{
     block::{ValidBlock, valid::ValidatedCarrierPreparationInput},
     sumeragi::exec,
@@ -116,13 +116,29 @@ impl<'state> PreparedCarrier<'state> {
     }
 
     /// Borrow the immutable candidate whose exact wire was sealed by execution.
+    #[cfg(test)]
     pub(crate) fn block(&self) -> &SignedBlock {
         self.valid.as_ref()
     }
 
     /// Inspect staged admission inputs without allowing mutation or publication.
+    #[cfg(test)]
     pub(crate) fn state(&self) -> &StateBlock<'state> {
         &self.state
+    }
+
+    /// Observe the exact pending/prospective retirement without exposing mutable State.
+    /// Any actual reader releases remain in this original candidate's State owner.
+    pub(crate) fn autoscale_retirement_binding(
+        &mut self,
+    ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, LaneLifecycleError> {
+        let parts = self.parts_mut();
+        if let Some(binding) = parts.state.pending_autoscale_retirement_binding()? {
+            return Ok(Some(binding));
+        }
+        parts
+            .state
+            .prospective_autoscale_retirement_binding(parts.valid.as_ref())
     }
 
     /// Borrow the context retained from the actual candidate validator.

@@ -12,6 +12,25 @@ The [September 21 runtime checkpoint](../docs/history/2026-09-21/runtime-and-gov
 and [SDK response checkpoint](../docs/history/2026-09-21/js-governance-response-validation.md)
 record subsequent integrated checks. The [native40 migration record](../docs/history/2026-09-21/mkhe-native40-migration.md)
 separates completed evidence-identity hardening from unresolved production work.
+The [native40 source-gap audit](../docs/history/2026-09-23/mkhe-native40-source-gap-audit.md)
+pins the missing governed 40-limb producer and the current qPCS work bound;
+neither source migration nor production composite admission has completed.
+The [qPCS geometry review](../docs/history/2026-09-23/mkhe-native40-qpcs-geometry-review.md)
+reconciles the repeated-payload diagnostic with the larger full-tree charge and
+records a nonconforming research hypothesis, without work or soundness
+qualification under the fixed six-lane contract.
+The [X509 proof-geometry audit](../docs/history/2026-09-23/zk-x509-proof-geometry-audit.md)
+quantifies the complete maximum relation above the fixed 9 MiB ceiling;
+the proof redesign and soundness evidence remain open.
+The [BFV governed-replay validation](../docs/history/2026-09-23/bfv-governed-replay-native-verifier.md)
+records the unselected-coefficient adversary and native artifact-aware verifier;
+the production qualification and full relation evidence remain open.
+The [AXT redacted-amount validation](../docs/history/2026-09-23/axt-redacted-amount-validation.md)
+records a focused host/Core/state hard refusal while confidential proof and
+durable nonce admission remain open.
+The [standalone election semantic guards](../docs/history/2026-09-23/election-semantic-guard-validation.md)
+pass three focused negative controls while the anonymous dropout-resilient
+protocol and its production circuits remain unresolved.
 The [C# host record](../docs/history/2026-09-21/csharp-native-runtime.md) records
 native-backed tests and ordinary-stack admission without claiming release closure.
 The [Android consumer record](../docs/history/2026-09-21/android-managed-host-runtime.md)
@@ -60,6 +79,53 @@ integrates the same-session Node child and dependency-ordered CI controls;
 1,764 component/static checks pass. Actual native execution and parent/index
 authority remain open; the pending State cutover requires a reader-notification
 fence correction before integration.
+The [parent-input checkpoint](../docs/history/2026-09-22/javascript-parent-input-integration.md)
+adds original input/file/tree custody and CI registration with 1,705 integrated
+controls. Actual runtime, process, native and index authority remain open;
+transitive State merge/autoscale read lifetimes still gate the runtime cutover.
+The [runtime-input checkpoint](../docs/history/2026-09-23/javascript-runtime-input-integration.md)
+adds bounded Node 24 Mach-O input graphs and CI registration with 1,735 scoped
+passing controls. The actual 20-image runtime still rejects two shared `@rpath`
+loads; loader, process, native and candidate authority remain open.
+The [fixed child-process custody record](../docs/history/2026-09-23/sorafs-javascript-child-process.md)
+adds bounded fd3/pipe/exit ownership and release-script registration; its 14
+focused tests pass. Node image pinning, mapped-image verification, installed
+execution, and candidate authority remain open.
+
+The [history-admission checkpoint](../docs/history/2026-09-22/transaction-history-admission-integration.md)
+integrates original Kura membership capacity, typed restore and retained
+State/snapshot/replay read ownership. Core compilation and 897 configuration
+tests pass; integrated runtime tests and complete Native cutover remain open.
+The [atomic preparation slice](../docs/history/2026-09-23/transaction-history-atomic-preparation.md)
+funds the prior-tip batch, next identity and actual history cursor together before
+their construction; its focused Core suite passes 18/18, and F02 remains open.
+The [hot-tip and snapshot admission audit](../docs/history/2026-09-23/transaction-hot-tip-snapshot-admission-gap.md)
+identifies the charged-owner and local-retry cutover still required for those
+allocations; no encoded-size proxy qualifies as full resource admission.
+The [September 23 integrated packet checkpoint](../docs/history/2026-09-23/integrated-packet-validation.md)
+records scoped MV, MKHE, signer and Node input tests, plus the current Core
+history regression and its fixture corrections. None closes a production or
+release gate.
+The [same-day election, signer, provider and JavaScript checkpoint](../docs/history/2026-09-23/election-signer-provider-js-checkpoint.md)
+records later scoped source changes and the exact local test results, including
+the still-rejected standalone ZK election, SoraFS grant, BFV production and
+Node runtime paths. It is not a frozen candidate receipt.
+The [SoraFS signer package-metadata correction](../docs/history/2026-09-23/sorafs-signer-package-metadata.md)
+removes unsupported backend/qualification claims while retaining strict
+signed-operation and source-seal gates.
+The [final-promotion state-source audit](../docs/history/2026-09-23/final-promotion-operation-state-source-gap.md)
+pins the native Reserve/Complete and Check authorities and the missing daemon
+submission, observer, clock, floor and private-receipt joins. Software custody
+remains fail-closed until a production source supplies them.
+The [software signer and Current Check validation](../docs/history/2026-09-23/sorafs-software-signer-current-check-validation.md)
+records focused 5/5 provider, 10/10 Current Check, 3/3 credential and 4/4
+provider-assignment controls; those component passes do not authorize promotion.
+The [topology native-authority prerequisite](../docs/history/2026-09-23/sorafs-topology-native-authority-prerequisite.md)
+keeps promotion blocked after signed-envelope replay until a completed
+role-16 operation is verifiable from finalized state.
+The [provider-ingest G06 authority audit](../docs/history/2026-09-23/sorafs-provider-ingest-g06-authority-audit.md)
+separates finalized assignment lookup from the still-missing finalized
+admission, advert, revocation and governed grant source.
 
 The component ledgers remain the detailed acceptance authorities:
 [privacy](privacy_first_release_closure.md),
@@ -111,7 +177,7 @@ release goal.
 | F05 | Queued after F01 | SoraFS service backends — service owners | Finalized-ledger ingest/reputation, quarantine, PoP, moderation/viewer/appeal, PoTR, DAG and transparency; concrete supervised backends, bounded outboxes and crash/rotation recovery. |
 | F06 | Active | Native40/MKHE/Vega — proof owners | Authenticated source replay, sole commitment/opening inventory, complete delta producers, consuming composite admission, governed full-shape keys and qPCS redesign inside unchanged whole-proof limits. |
 | F07 | Open | FASTPQ/AXT/X509 — proof and Core owners | Bounded compact proof admission, complete successful-execution and authoritative-state binding, durable spend nonces, and full X509 coverage within existing ceilings. |
-| F08 | Open | BFV qualification — crypto and independent reviewers | Full relation/40-limb replay, full-size/eight-party adversaries and measured bounds; real governed parameter/lattice/noise/qROM evidence before production qualification can accept. |
+| F08 | Open | BFV qualification — crypto and independent reviewers | Full BFV-RNS relation, full-size/eight-party adversaries and measured bounds; real governed parameter/lattice/noise/qROM evidence before production qualification can accept. The separate 40-limb replay belongs to F06's MKHE composite. |
 | F09 | Open | Exact12 completion — engine owners | Complete engine-specific soundness/key/provenance work and every adversarial, maximum-shape, resource, native/SDK/hardware and deployment requirement in the privacy ledger. |
 | F10 | Open | Product privacy integration — product/Core owners | Confidential authority/conservation; Kaigi proof/relay/lifecycle; Parliament ballot/deadline/beacon/restart and independent protocol review. |
 | F11 | Active; private protocol unresolved | Standalone elections — protocol and product owners | Reviewed construction satisfying every fixed election requirement, then dedicated credential/ballot/tally circuits, confidential bond positions, exact closed-corpus state, SDKs and dropout/restart/resource qualification. Public conviction arithmetic and real bond conservation are prerequisites, not anonymous-election completion. |

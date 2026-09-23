@@ -55,13 +55,15 @@ scripts/release_sorafs_cli.sh \
 
 The external signer contract is deliberately small: it receives the manifest
 path and a new signature-output path and writes exactly 64 raw Ed25519 signature
-bytes. V1 requires the `authenticated_external_signer` provider with exact
-`software` backend. The wrapper copies the governed 32-byte raw public key,
-checks its reviewed SHA256 fingerprint, and verifies immutable snapshots with
-the exact `iroha` binary whose SHA256 was supplied. Successful output
-is `software-key-qualified`. Iroha exposes no HSM-specific adapter or future
-hardware-signing qualification mode; custody behind the authenticated external
-signer is deployment-owned.
+bytes. V1 requires the `authenticated_external_signer` provider; software and
+optional hardware custody use the same authorization contract. The wrapper
+copies the governed 32-byte raw public key, checks its reviewed SHA256
+fingerprint, and verifies immutable snapshots with
+the exact `iroha` binary whose SHA256 was supplied. Successful verification
+establishes the signature and reviewed key binding without claiming key origin
+or exportability. Iroha exposes no HSM-specific adapter or hardware-signing
+qualification mode; custody behind the authenticated external signer is
+deployment-owned.
 
 There are no fixture, key, fingerprint, or verifier defaults. Missing inputs,
 unsafe path aliases, malformed key/signature sizes, fingerprint drift, verifier

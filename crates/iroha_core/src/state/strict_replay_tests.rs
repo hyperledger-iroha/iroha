@@ -1035,6 +1035,8 @@ impl StrictReplayFixture {
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+            transaction_history_bytes:
+                iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
@@ -1193,12 +1195,20 @@ impl StrictReplayFixture {
     pub(super) fn exact_kura_copy(&self) -> Arc<Kura> {
         self.kura_with_block_and_artifact(self.block.clone(), self.artifact.clone())
     }
+    fn authenticated_empty_replay_kura(&self) -> Arc<Kura> {
+        let kura = Self::fresh_kura(self.options);
+        // A replay fork must first bind the same signed-genesis network and
+        // configured H0 geometry as its source. Once a block is durable, the
+        // production startup path correctly refuses to invent that anchor.
+        let _initial_state = self.replay_state(Arc::clone(&kura));
+        kura
+    }
     fn kura_with_block_and_artifact(
         &self,
         block: SignedBlock,
         artifact: wire::finality::V2FinalityArtifact,
     ) -> Arc<Kura> {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = self.authenticated_empty_replay_kura();
         kura.store_block(Arc::new(block.clone()))
             .expect("store forked canonical block");
         kura.store_wsv_checkpoint(HEIGHT, block.hash(), self.checkpoint_hash)
@@ -1289,7 +1299,7 @@ impl StrictReplayFixture {
         // Production finality publication intentionally rejects this tuple while preparing the
         // retained archive. Install the mutually correlated bytes through test-only corruption
         // hooks so strict replay, rather than the writer, remains the component under test.
-        let kura = Kura::blank_kura_for_testing();
+        let kura = self.authenticated_empty_replay_kura();
         kura.store_block(Arc::new(block.clone()))
             .expect("store malformed-SCCP canonical block");
         kura.store_wsv_checkpoint(HEIGHT, block.hash(), self.checkpoint_hash)
@@ -1806,3 +1816,6 @@ strict_replay_test!(
         );
     }
 );
+
+#[path = "strict_replay_retirement_tests.rs"]
+mod retirement_tests;

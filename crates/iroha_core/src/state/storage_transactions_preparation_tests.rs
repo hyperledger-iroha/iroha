@@ -327,7 +327,7 @@ fn restored_membership_mints_a_distinct_process_local_identity() {
     let encoded = norito::json::to_json(&storage).unwrap();
     let restored: TransactionsStorage = norito::json::from_str(&encoded).unwrap();
     assert_eq!(norito::json::to_json(&restored).unwrap(), encoded);
-    assert!(!Arc::ptr_eq(
+    assert!(!Identity::ptr_eq(
         &storage.write_lock.lock(),
         &restored.write_lock.lock(),
     ));

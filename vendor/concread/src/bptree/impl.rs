@@ -68,6 +68,19 @@ where
     inner: MapRead<'a, K, V, M>,
 }
 
+impl<K, V, M> Clone for BptreeMapReadTxn<'_, K, V, M>
+where
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
     Send for BptreeMapReadTxn<'_, K, V, M>
 where

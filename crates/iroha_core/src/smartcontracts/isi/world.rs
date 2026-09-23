@@ -1507,6 +1507,20 @@ pub mod isi {
     }
     const VOTING_BALLOT_CIRCUIT_ID: &str = crate::zk::GOVERNANCE_BALLOT_CIRCUIT_ID_V1;
     const VOTING_TALLY_CIRCUIT_ID: &str = crate::zk::GOVERNANCE_TALLY_CIRCUIT_ID_V1;
+    const STANDALONE_ZK_RELATION_UNQUALIFIED_V1: &str =
+        "standalone ZK ballot and tally relations are not qualified for production admission";
+    fn ensure_qualified_standalone_zk_relation_v1() -> Result<(), Error> {
+        // TODO: Replace this guard only after a reviewed ballot relation proves anonymous
+        // credential authorization, a confidential bond in frozen smallest asset units,
+        // immutable choice on conviction updates, and one sound, committee-free tally over the
+        // exact closed accepted corpus despite late dropouts and without secret reconstruction.
+        // The current commit/root ballot inputs and per-option tally inputs cannot establish
+        // those claims, even when a verifying key has the expected role.
+        Err(InstructionExecutionError::InvariantViolation(
+            STANDALONE_ZK_RELATION_UNQUALIFIED_V1.into(),
+        )
+        .into())
+    }
     fn voting_circuit_matches(backend: &str, record_circuit_id: &str, expected_id: &str) -> bool {
         if crate::zk::production_verify_backend_tag(backend) != Some(BackendTag::Halo2IpaPasta) {
             // The STARK/FRI Binding AIR proves only generic public-data
@@ -4502,6 +4516,9 @@ pub mod isi {
                 ));
                 return Err(err);
             }
+            // A role-shaped VK alone cannot authorize the current two-column ballot relation.
+            // Keep this before proof verification and before nullifier/lock/corpus mutation.
+            ensure_qualified_standalone_zk_relation_v1()?;
             if crate::zk::is_stark_fri_v1_backend(backend) && !state_transaction.zk.stark.enabled {
                 state_transaction.world.emit_events(Some(
                     iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -16693,6 +16710,8 @@ pub mod isi {
             }
             let (vk_id, vk_box, vk_rec) =
                 resolve_ballot_vk(&st, &self.ballot_proof, state_transaction)?;
+            // Role resolution is insufficient until the ballot proves credential and bond state.
+            ensure_qualified_standalone_zk_relation_v1()?;
             let backend = vk_id.backend.as_str();
             if crate::zk::is_stark_fri_v1_backend(backend) && !state_transaction.zk.stark.enabled {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -16766,7 +16785,8 @@ pub mod isi {
                 "election already finalized".into(),
             ));
         }
-        if tally.len() != election.tally.len() || tally.len() < 2 {
+        if tally.len() != election.tally.len() || tally.len() < zk::MIN_ELECTION_OPTIONS_V1 as usize
+        {
             return Err(InstructionExecutionError::InvariantViolation(
                 "finalized election tally has the wrong width".into(),
             ));
@@ -16865,6 +16885,8 @@ pub mod isi {
                 ));
             }
             let (vk_id, vk_box, vk_rec) = resolve_tally_vk(&st, att, state_transaction)?;
+            // The current per-option proof inputs do not bind the closed accepted corpus.
+            ensure_qualified_standalone_zk_relation_v1()?;
             let backend = vk_id.backend.as_str();
             if crate::zk::is_stark_fri_v1_backend(backend) && !state_transaction.zk.stark.enabled {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -31758,6 +31780,41 @@ seiyaku GovernanceLifecycle {
             let tally_error = resolve_tally_vk(&st, &tally_att, &stx)
                 .expect_err("retired Halo2 vote-tally circuit must not resolve");
             assert_contains!(tally_error .to_string(), "tally verifying key circuit mismatch", "unexpected retired tally circuit rejection: {tally_error}");
+        });
+        world_test!(standalone_zk_semantic_guard_stays_closed_independently_of_vote_roles {
+            blank_state_transaction!(state, block, state_block, stx);
+            let election_id = "unqualified-standalone-zk".to_owned();
+            stx.world.elections.insert(
+                election_id.clone(),
+                crate::state::ElectionState {
+                    options: 2,
+                    tally: vec![0, 0],
+                    ..Default::default()
+                },
+            );
+            stx.world.take_external_events();
+            let before = norito::to_bytes(stx.world.elections.get(&election_id).unwrap())
+                .expect("encode retained election before admission");
+            for role in [VOTING_BALLOT_CIRCUIT_ID, VOTING_TALLY_CIRCUIT_ID] {
+                assert!(
+                    !voting_circuit_matches("halo2/ipa", role, role),
+                    "the production registry must not admit a vote role without a reviewed relation"
+                );
+            }
+            let error = ensure_qualified_standalone_zk_relation_v1()
+                .expect_err("a future role-valid key must still face the semantic guard");
+            assert_contains!(
+                error.to_string(),
+                STANDALONE_ZK_RELATION_UNQUALIFIED_V1,
+                "unexpected standalone ZK admission result: {error}"
+            );
+            assert_eq!(
+                norito::to_bytes(stx.world.elections.get(&election_id).unwrap())
+                    .expect("encode retained election after rejection"),
+                before,
+            );
+            assert!(stx.world.governance_locks.get(&election_id).is_none());
+            assert!(stx.world.take_external_events().is_empty());
         });
         world_test!(resolve_ballot_and_tally_vk_reject_generic_stark_role_labels {
             blank_state_transaction!(state, block, state_block, stx);

@@ -137,7 +137,7 @@ baseTest("all governance instruction builders reject selector aliases", () => {
     () => buildCastPlainBallotInstruction({ referendumId: ".hidden" }),
     () => buildCreateElectionInstruction({ electionId: "a%2Fb" }),
     () => buildSubmitBallotInstruction({ electionId: "a".repeat(129) }),
-    () => buildFinalizeElectionInstruction({ electionId: "..", tally: [0] }),
+    () => buildFinalizeElectionInstruction({ electionId: "..", tally: [0, 0] }),
   ];
   for (const build of cases) {
     assert.throws(build, /must be 1-128 RFC 3986 unreserved ASCII/);
@@ -3723,7 +3723,7 @@ baseTest("direct governance Norito validation runs before native dispatch", () =
           abi_version: 1,
           limits: {},
         },
-    }),
+    }, 753),
     /unknown field limits/u,
   );
   assert.throws(
@@ -3733,7 +3733,7 @@ baseTest("direct governance Norito validation runs before native dispatch", () =
           proof_b64: "AQ==",
           public_inputs_json: '{"meta":{"privateKey":"secret"}}',
         },
-    }),
+    }, 753),
     /privateKey/u,
   );
   assert.equal(nativeCalls, 0);
@@ -4158,6 +4158,30 @@ test("buildCreateElectionInstruction normalizes verifying keys", () => {
   assert.equal(payload.options, 3);
 });
 
+test("buildCreateElectionInstruction enforces the 2–64 option boundary", () => {
+  const election = (options) => ({
+    electionId: "election-boundary",
+    options,
+    eligibleRoot: Buffer.alloc(32, 0x09),
+    startTs: 100,
+    endTs: 200,
+    ballotVerifyingKey: "halo2/ipa:vk_ballot",
+    tallyVerifyingKey: "halo2/ipa:vk_tally",
+    domainTag: "zk",
+  });
+  for (const options of [2, 64]) {
+    const payload = encodeAndDecode(buildCreateElectionInstruction(election(options))).zk.CreateElection;
+    assert.equal(payload.options, options);
+  }
+  for (const options of [1, 65]) {
+    assert.throws(
+      () => buildCreateElectionInstruction(election(options)),
+      (error) => error?.code === ValidationErrorCode.VALUE_OUT_OF_RANGE && /options/u.test(String(error?.message)),
+    );
+  }
+  assert.throws(() => buildCreateElectionInstruction(election(0)));
+});
+
 test("buildCreateElectionInstruction accepts byte-array eligibleRoot", () => {
   const instruction = buildCreateElectionInstruction({
     electionId: "election-2",
@@ -4204,7 +4228,7 @@ test("buildCreateElectionInstruction rejects unsafe timestamps", () => {
     () =>
       buildCreateElectionInstruction({
         electionId: "election-unsafe",
-        options: 1,
+        options: 2,
         eligibleRoot: Buffer.alloc(32, 0x09),
         startTs: tooLarge,
         endTs: 100,
@@ -4304,6 +4328,28 @@ test("buildSubmitBallotInstruction rejects empty ciphertext", () => {
   );
 });
 
+test("buildFinalizeElectionInstruction enforces the 2–64 tally boundary", () => {
+  const election = (tally) => ({
+    electionId: "election-boundary",
+    tally,
+    tallyProof: {
+      backend: "halo2/ipa",
+      proof: Buffer.from("proof"),
+      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_tally" },
+    },
+  });
+  for (const tally of [[1, 2], new Array(64).fill(0)]) {
+    const payload = encodeAndDecode(buildFinalizeElectionInstruction(election(tally))).zk.FinalizeElection;
+    assert.deepEqual(payload.tally, tally);
+  }
+  for (const tally of [[], [1], new Array(65).fill(0)]) {
+    assert.throws(
+      () => buildFinalizeElectionInstruction(election(tally)),
+      (error) => error?.code === ValidationErrorCode.VALUE_OUT_OF_RANGE && /tally/u.test(String(error?.message)),
+    );
+  }
+});
+
 test("buildFinalizeElectionInstruction serializes tally entries", () => {
   const instruction = buildFinalizeElectionInstruction({
     electionId: "ref-1",
@@ -4324,7 +4370,7 @@ baseTest("proof attachments support lane privacy merkle witnesses", () => {
   const sibling = Buffer.alloc(32, 2);
   const result = buildFinalizeElectionInstruction({
     electionId: "elec-1",
-    tally: [1],
+    tally: [1, 0],
     proof: {
       backend: "lane/privacy",
       proof: new Uint8Array([1, 2, 3]),
@@ -4357,7 +4403,7 @@ baseTest("proof attachments support lane privacy merkle witnesses", () => {
 baseTest("lane proof JSON uses exact native tuples and canonical hash literals", () => {
   const build = (commitmentId) => buildFinalizeElectionInstruction({
     electionId: "elec-1",
-    tally: [1],
+    tally: [1, 0],
     proof: {
       backend: "lane/privacy",
       proof: Buffer.of(1, 2, 3),
@@ -4420,7 +4466,7 @@ baseTest("proof attachments reject empty lane privacy merkle paths", () => {
     () =>
       buildFinalizeElectionInstruction({
         electionId: "elec-1",
-        tally: [1],
+        tally: [1, 0],
         proof: {
           backend: "lane/privacy",
           proof: new Uint8Array([1, 2, 3]),
@@ -4462,7 +4508,7 @@ baseTest("proof attachments reject malformed and impossible lane Merkle witnesse
       () =>
         buildFinalizeElectionInstruction({
           electionId: "elec-1",
-          tally: [1],
+          tally: [1, 0],
           proof: {
             backend: "lane/privacy",
             proof: new Uint8Array([1, 2, 3]),
@@ -4481,7 +4527,7 @@ baseTest("proof attachments reject malformed and impossible lane Merkle witnesse
 baseTest("native Norito adapter rejects non-canonical lane HashOf markers", () => {
   const instruction = buildFinalizeElectionInstruction({
     electionId: "elec-1",
-    tally: [1],
+    tally: [1, 0],
     proof: {
       backend: "lane/privacy",
       proof: new Uint8Array([1, 2, 3]),
@@ -4579,7 +4625,7 @@ baseTest("native ProofAttachment adapter rejects invalid ids and extra tails", (
   const proofBytes = Buffer.from([0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe]);
   const instruction = buildFinalizeElectionInstruction({
     electionId: "elec-1",
-    tally: [1],
+    tally: [1, 0],
     proof: {
       backend: "lane/privacy",
       proof: proofBytes,
@@ -4646,7 +4692,7 @@ baseTest("native ProofAttachment adapter rejects invalid ids and extra tails", (
   for (const options of [undefined, { parseJson: false }]) {
     const decodeWithNative = nativeInstructionDecoder(invalidNativeResult);
     assert.throws(
-      () => decodeWithNative(Buffer.of(1), options),
+      () => decodeWithNative(Buffer.of(1), 753, options),
       /must contain 1\.\.=255 siblings/,
     );
   }

@@ -1295,7 +1295,7 @@ pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUN
 const BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_MATERIAL_VERSION_V1: u16 = 1;
 const BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_MATERIAL_FIELD_COUNT_V1: u16 = 32;
 /// Number of Goldilocks field elements in each BFV full-bootstrap arithmetic trace row.
-pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1: u16 = 34;
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1: u16 = 38;
 /// Active arithmetic trace row marker for rows carrying BFV coefficient material.
 pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_KIND_ACTIVE_V1: u64 = 1;
 /// Padding arithmetic trace row marker for rows outside the active BFV degree.
@@ -1420,7 +1420,7 @@ const BFV_FULL_BOOTSTRAP_NATIVE_TRANSPARENT_PROVER_PAYLOAD_FIELD_COUNT_V1: u16 =
 /// Number of top-level fields in the canonical native STARK/FRI verifier payload.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_FIELD_COUNT_V1: u16 = 17;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_CIRCUIT_ID_MAX_BYTES: usize = 256;
-const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_STATEMENT_HASH_LIMB_COUNT_V1: u16 = 4;
+const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_STATEMENT_HASH_LIMB_COUNT_V1: u16 = 8;
 /// Maximum diagonal entries admitted in one BFV full-bootstrap linear transform.
 pub const BFV_FULL_BOOTSTRAP_LINEAR_TRANSFORM_MAX_DIAGONALS: usize = 1_024;
 const BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1: u16 = 2;
@@ -23872,6 +23872,9 @@ pub fn bfv_full_bootstrap_execution_witness_digest_material_v1(
 /// witness layout, governed full-bootstrap key/material digests, Galois-key-set digest, ciphertext
 /// shapes, public bound model, trace shape, and final trace-to-claim output binding before a
 /// prover/verifier hashes externally held witness material.
+/// The selected raw-sample equation does not authenticate unselected blind-rotation coefficients;
+/// callers requiring the governed computation must also replay concrete artifacts through
+/// [`validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifacts_v1`].
 ///
 /// # Errors
 /// Returns [`BfvError`] when witness metadata is stale, malformed, or internally inconsistent.
@@ -27939,15 +27942,15 @@ fn bfv_full_bootstrap_bound_mode_goldilocks_field_v1(
         BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise => 1,
     }
 }
-fn bfv_full_bootstrap_hash_goldilocks_limbs_v1(hash: Hash) -> [u64; 4] {
+fn bfv_full_bootstrap_hash_goldilocks_limbs_v1(hash: Hash) -> [u64; 8] {
     let bytes: [u8; Hash::LENGTH] = hash.into();
-    let mut limbs = [0_u64; 4];
-    for (index, chunk) in bytes.chunks_exact(8).enumerate() {
-        let mut word = [0_u8; 8];
+    let mut limbs = [0_u64; 8];
+    // Each 32-bit word fits Goldilocks without reduction. Reducing four u64
+    // words modulo the field aliases distinct 32-byte statement hashes.
+    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+        let mut word = [0_u8; 4];
         word.copy_from_slice(chunk);
-        let reduced = u128::from(u64::from_le_bytes(word))
-            % u128::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1);
-        limbs[index] = u64::try_from(reduced).expect("Goldilocks field limb fits u64");
+        limbs[index] = u64::from(u32::from_le_bytes(word));
     }
     limbs
 }
@@ -38703,6 +38706,78 @@ mod first_release_hard_cut_tests {
         Sha3_256, Shake256,
         digest::{ExtendableOutput as _, XofReader as _},
     };
+
+    #[test]
+    fn full_bootstrap_statement_hash_trace_limbs_are_injective() {
+        let modulus = BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1;
+        let mut first_bytes = [0xa5_u8; Hash::LENGTH];
+        first_bytes[8..16].fill(0);
+        let mut second_bytes = first_bytes;
+        second_bytes[8..16].copy_from_slice(&modulus.to_le_bytes());
+        let first = Hash::prehashed(first_bytes);
+        let second = Hash::prehashed(second_bytes);
+        assert_ne!(first, second);
+        // The retired four-u64-word reduction mapped both second words to zero.
+        assert_eq!(
+            u64::from_le_bytes(first_bytes[8..16].try_into().unwrap()) % modulus,
+            0
+        );
+        assert_eq!(
+            u64::from_le_bytes(second_bytes[8..16].try_into().unwrap()) % modulus,
+            0
+        );
+
+        let first_limbs = bfv_full_bootstrap_hash_goldilocks_limbs_v1(first);
+        let second_limbs = bfv_full_bootstrap_hash_goldilocks_limbs_v1(second);
+        assert_ne!(first_limbs, second_limbs);
+        for (hash, limbs) in [(first, first_limbs), (second, second_limbs)] {
+            assert!(limbs.iter().all(|&limb| limb < modulus));
+            let reconstructed = limbs
+                .iter()
+                .flat_map(|&limb| u32::try_from(limb).unwrap().to_le_bytes())
+                .collect::<Vec<_>>();
+            let bytes: [u8; Hash::LENGTH] = hash.into();
+            assert_eq!(reconstructed.as_slice(), bytes);
+        }
+
+        let opening_index = u32::from(BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1);
+        let row = bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+            opening_index,
+            first,
+            0,
+            BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+        )
+        .unwrap();
+        let next_row = bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+            opening_index + 1,
+            first,
+            0,
+            BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+        )
+        .unwrap();
+        assert_eq!(&row[5..13], first_limbs.as_slice());
+        validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
+            opening_index,
+            &row,
+            &next_row,
+            first,
+            0,
+            BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+        )
+        .expect("exact eight-limb statement opening validates");
+        assert!(
+            validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
+                opening_index,
+                &row,
+                &next_row,
+                second,
+                0,
+                BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+            )
+            .is_err(),
+            "an old mod-p hash alias must not replay a public opening",
+        );
+    }
 
     // Independent test reference for the pre-consolidation BFV parameter generator.
     const BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1: usize = 3;

@@ -122,8 +122,8 @@ fn membership_capture_retains_original_ordinary_and_replacement_journals_and_rel
         let second = seeded(4);
         let first_tip = first.latest_block.load_full().unwrap();
         let second_tip = second.latest_block.load_full().unwrap();
-        let first_identity = Arc::clone(&*first.write_lock.lock());
-        let second_identity = Arc::clone(&*second.write_lock.lock());
+        let first_identity = (*first.write_lock.lock()).clone();
+        let second_identity = (*second.write_lock.lock()).clone();
         let first_block = staged(&first, replace, 6);
         let second_block = staged(&second, replace, 8);
         let first_payload = Arc::downgrade(first_block.current_block.as_ref().unwrap());
@@ -143,13 +143,19 @@ fn membership_capture_retains_original_ordinary_and_replacement_journals_and_rel
                     (MembershipPublication::Replace { current }, true) => {
                         assert_eq!(Arc::as_ptr(current), first_payload.as_ptr());
                     }
-                    (MembershipPublication::Advance { previous, current }, false) => {
+                    (
+                        MembershipPublication::Advance {
+                            _previous: previous,
+                            current,
+                        },
+                        false,
+                    ) => {
                         assert!(Arc::ptr_eq(previous.as_ref().unwrap(), &first_tip));
                         assert_eq!(Arc::as_ptr(current), first_payload.as_ptr());
                     }
                     _ => panic!("exact original membership action"),
                 }
-                Arc::as_ptr(&prepared.next_identity)
+                std::ptr::from_ref(&*prepared.next_identity)
             }
             _ => panic!("original preparation remains in caller slot"),
         };
@@ -164,12 +170,15 @@ fn membership_capture_retains_original_ordinary_and_replacement_journals_and_rel
         assert_eq!(second_probe.calls.load(Ordering::SeqCst), 0);
         assert_eq!(first_journal.revert, replace);
         assert_eq!(second_journal.revert, replace);
-        assert_eq!(Arc::as_ptr(&first_journal.next_identity), first_next);
-        assert!(Arc::ptr_eq(
+        assert_eq!(
+            std::ptr::from_ref(&*first_journal.next_identity),
+            first_next
+        );
+        assert!(Identity::ptr_eq(
             &first_journal.predecessor_identity,
             &first_identity
         ));
-        assert!(Arc::ptr_eq(
+        assert!(Identity::ptr_eq(
             &second_journal.predecessor_identity,
             &second_identity
         ));
@@ -320,7 +329,7 @@ fn membership_terminal_release_rejects_read_mutation_preparation_and_publication
         &storage.latest_block.load_full().unwrap(),
         &tip
     ));
-    assert!(storage.blocks.is_empty());
+    assert!(storage.blocks.read().is_empty());
     let mut slot = staged(&storage, false, 10).capture_slot();
     slot.try_prepare().unwrap();
     slot.release();
@@ -379,7 +388,7 @@ fn membership_attached_publication_retains_original_actions_and_defers_both_wake
     for replace in [false, true] {
         let first = seeded(2);
         let second = seeded(4);
-        let first_original_identity = Arc::clone(&*first.write_lock.lock());
+        let first_original_identity = (*first.write_lock.lock()).clone();
         let original_tip = first.latest_block.load_full().unwrap();
         let first_block = staged(&first, replace, 6);
         let mut expected_json = String::new();
@@ -412,9 +421,11 @@ fn membership_attached_publication_retains_original_actions_and_defers_both_wake
         let mut first_wait = register(first.released.observe(), &first_probe);
         let mut second_wait = register(second.released.observe(), &second_probe);
         pair.first.try_prepare_publication().unwrap();
+        pair.first.try_prepare_physical().unwrap();
         pair.second.try_prepare_publication().unwrap();
+        pair.second.try_prepare_physical().unwrap();
         let next = match &pair.first.slot.phase {
-            MembershipCapturePhase::Prepared(prepared) => Arc::clone(&prepared.next_identity),
+            MembershipCapturePhase::Prepared(prepared) => (prepared.next_identity).clone(),
             _ => panic!("original admitted membership"),
         };
         pair.first.publish_prepared();
@@ -425,10 +436,10 @@ fn membership_attached_publication_retains_original_actions_and_defers_both_wake
             Arc::as_ptr(&first.latest_block.load_full().unwrap()),
             staged_pointer
         );
-        assert!(Arc::ptr_eq(&first.write_lock.lock(), &next));
+        assert!(Identity::ptr_eq(&first.write_lock.lock(), &next));
         match &pair.first.slot.phase {
             MembershipCapturePhase::Published(prepared) => {
-                assert!(Arc::ptr_eq(
+                assert!(Identity::ptr_eq(
                     &prepared.next_identity,
                     &first_original_identity
                 ));
@@ -482,6 +493,7 @@ fn membership_attached_refusal_and_panic_keep_original_sibling_until_joint_drop(
                 second: TransactionsBlockField::new(second_block),
             };
             pair.first.try_prepare_publication().unwrap();
+            pair.first.try_prepare_physical().unwrap();
             if failure == 2 {
                 // Real one-shot API refusal: the first action is published,
                 // then a later field rejects publication without preparation.
@@ -534,7 +546,7 @@ fn membership_attached_refusal_and_panic_keep_original_sibling_until_joint_drop(
 #[test]
 fn membership_attached_execution_transfer_and_repeated_commit_preserve_identity() {
     let storage = seeded(2);
-    let original_identity = Arc::clone(&*storage.write_lock.lock());
+    let original_identity = (*storage.write_lock.lock()).clone();
     let original_tip = storage.latest_block.load_full().unwrap();
     let mut block = TransactionsBlockField::new(storage.block());
     block.insert_block(HashSet::from([key(2)]), height(1));
@@ -548,7 +560,10 @@ fn membership_attached_execution_transfer_and_repeated_commit_preserve_identity(
     let mut capture = capture;
     capture.try_prepare().unwrap();
     capture.publish_prepared();
-    assert!(Arc::ptr_eq(&storage.write_lock.lock(), &original_identity));
+    assert!(Identity::ptr_eq(
+        &storage.write_lock.lock(),
+        &original_identity
+    ));
     assert!(Arc::ptr_eq(
         &storage.latest_block.load_full().unwrap(),
         &original_tip

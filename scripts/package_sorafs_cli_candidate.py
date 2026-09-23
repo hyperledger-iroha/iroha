@@ -410,18 +410,17 @@ def _validate_version_map(
 def _manifest_bytes(
     records: list[FileRecord], *, version: str, target: str
 ) -> bytes:
+    packaged_paths = {record.relative for record in records}
+    signer_packaged = {SIGNER_BINARY, BROKER_ALIAS} <= packaged_paths
     payload = {
         "schema": SCHEMA,
         "package": "sorafs-cli",
         "version": version,
         "target": target,
         "external_software_signer": {
-            "backend": "software" if not target.endswith("windows-msvc") else None,
-            "broker_alias": BROKER_ALIAS if not target.endswith("windows-msvc") else None,
-            "binary": SIGNER_BINARY if not target.endswith("windows-msvc") else None,
-            "qualification": "software-key-qualified"
-            if not target.endswith("windows-msvc")
-            else "unsupported-windows",
+            "packaged": signer_packaged,
+            "broker_alias": BROKER_ALIAS if signer_packaged else None,
+            "binary": SIGNER_BINARY if signer_packaged else None,
             "windows_supported": False,
         },
         "payload_file_count": len(records),

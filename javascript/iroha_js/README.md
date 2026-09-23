@@ -3518,9 +3518,9 @@ proof bytes. Lane Merkle inputs require a complete 1–255-level path; raw
 32-byte siblings are converted to canonical prehashed `HashOf` bytes before
 Norito encoding. Election
 builders (`buildCreateElectionTransaction`, `buildSubmitBallotTransaction`, and
-`buildFinalizeElectionTransaction`) share the same helpers so ballot ciphertexts
-and Halo2 proofs stay canonical across SDKs. See `index.d.ts` for the
-full set of confidential input shapes.
+`buildFinalizeElectionTransaction`) enforce the 2..=64 V1 election option
+bound. Ballot ciphertexts and Halo2 proofs use canonical helper paths across
+SDKs. See `index.d.ts` for the full set of confidential input shapes.
 
 ### Native-independent Exact12 fixture codec
 

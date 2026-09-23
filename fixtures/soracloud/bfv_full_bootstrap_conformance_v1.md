@@ -6,8 +6,8 @@ It contains deterministic arithmetic material for the Core full-bootstrap STARK
 roundtrip and adversarial relation tests. Each consumer performs canonical decoding,
 strict artifact/witness/trace validation, and exact re-encoding.
 
-- Size: 807,864 bytes.
-- SHA-256: `afc3049a757cdb7af8f8733ca69b6d72ee806a6626228badf0f29576135b1106`.
+- Size: 890,808 bytes.
+- SHA-256: `779b61f424f3d981f7096cc642745600b8695f60eb03883c8d0368b798e4bf2c`.
 - Generator: `crates/iroha_crypto/src/fhe_bfv/conformance.rs`, compiled only in the
   crypto unit-test crate. No production API or qualification switch is added.
 
@@ -27,8 +27,11 @@ IROHA_BFV_CONFORMANCE_OUTPUT=/absolute/temporary/materials-v1.norito \
 ```
 
 The generator validates both complete material statements and their canonical
-roundtrip before writing the bounded output. The 2026-09-06 regeneration passed
-both tests in 274.60 seconds with an unoptimized test profile.
+roundtrip before writing the bounded output. On 2026-09-23, two independent
+regenerations produced byte-identical files after the statement hash changed
+to eight injective little-endian `u32` Goldilocks limbs in 38-column trace rows.
+The earlier 2026-09-06 regeneration passed both tests in 274.60 seconds with an
+unoptimized test profile.
 
 The final Core native-STARK suite passes 63 tests, including all ten BFV-prefixed
 cases, in 849.78 seconds with command-local test opt-level 3 for `fastpq_isi`,

@@ -907,6 +907,30 @@ where
     V: Copy + Send + Sync + 'static,
     P: ClonePlanning<K, V>,
 {
+    /// Admit a no-edit fixed-size successor with its exact current-tree floor.
+    /// Both observations come from one original writer acquisition. The provider
+    /// still funds the complete new cursor/shell demand; this floor grants no
+    /// future edit or publication authority and excludes caller-owned allocations.
+    pub fn try_write_admitted_with_footprint<E>(
+        &self,
+        admit: impl FnOnce(AllocationDemand, AllocationDemand) -> Result<P, E>,
+    ) -> Result<BptreeMapWriteTxn<'_, K, V, Prepaid<P>>, MapAdmissionError<E>> {
+        let Some(acquired) = self.try_acquire_writer() else {
+            return Err(MapAdmissionError::Busy);
+        };
+        match acquired.write_with_source(|source, additional| {
+            let existing =
+                current_footprint::<K, V, P>(source).map_err(MapAdmissionError::Planning)?;
+            admit(existing, additional).map_err(MapAdmissionError::Refused)
+        }) {
+            Ok(writer) => Ok(writer),
+            Err((acquired, error)) => {
+                drop(acquired);
+                Err(error)
+            }
+        }
+    }
+
     /// Admit one fixed-size insertion with the original current tree's footprint.
     ///
     /// Both demands are observed under the same original writer lock. `existing`
@@ -1878,12 +1902,20 @@ where
         self,
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
     ) -> Result<BptreeMapWriteTxn<'a, K, V, Prepaid<P>>, (Self, MapAdmissionError<E>)> {
+        self.write_with_source(|_, demand| admit(demand).map_err(MapAdmissionError::Refused))
+    }
+
+    fn write_with_source<E>(
+        self,
+        admit: impl FnOnce(
+            &SuperBlock<K, V, Prepaid<P>>,
+            AllocationDemand,
+        ) -> Result<P, MapAdmissionError<E>>,
+    ) -> Result<BptreeMapWriteTxn<'a, K, V, Prepaid<P>>, (Self, MapAdmissionError<E>)> {
         let acquired = self.inner.try_write_charged(|source, shells| {
             let plan = plan_writer_start::<K, V, P>(source, shells)
                 .map_err(MapAdmissionError::Planning)?;
-            let mut provider = Prepaid(Some(
-                admit(plan.demand).map_err(MapAdmissionError::Refused)?,
-            ));
+            let mut provider = Prepaid(Some(admit(source, plan.demand)?));
             let first_charge = provider.take_node_charge(plan.tracking_layout);
             let first = FixedTrackingBuffer::try_new(0, first_charge)
                 .unwrap_or_else(|_| unreachable!("planned empty first buffer layout"));

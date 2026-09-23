@@ -77,7 +77,7 @@ pub(in crate::state) enum MembershipReadError<E> {
 /// must retain the original store generation backing both cuts.
 #[derive(Clone, Debug)]
 pub(in crate::state) struct CommittedMembershipRoot<N: Copy> {
-    identity: Arc<()>,
+    identity: Identity,
     height: u64,
     root: MerkleMapRoot<N>,
     predecessor: MerkleMapRoot<N>,
@@ -88,7 +88,7 @@ pub(in crate::state) struct CommittedMembershipRoot<N: Copy> {
 /// authorize another preparation even if its height and payload are equal.
 #[derive(Debug)]
 pub(in crate::state) struct PreparedMembershipRoot<N: Copy> {
-    preparation: Arc<()>,
+    preparation: Identity,
     after: CommittedMembershipRoot<N>,
 }
 
@@ -245,7 +245,7 @@ impl TransactionsBlock<'_> {
             insert_captured_member(&mut predecessor, key, value, store, workspace)
         })?;
         Ok(CommittedMembershipRoot {
-            identity: Arc::clone(identity),
+            identity: identity.clone(),
             height,
             root,
             predecessor,
@@ -264,7 +264,7 @@ impl PreparedTransactionsBlock<'_> {
         workspace: &mut MerkleMapUpdateWorkspace<S::NodeLocation, S::ValueLocation>,
     ) -> Result<PreparedMembershipRoot<S::NodeLocation>, MembershipRootError<S::Error>> {
         self.assert_unpublished();
-        if !Arc::ptr_eq(self.block._guard.identity(), &baseline.identity) {
+        if !Identity::ptr_eq(self.block._guard.identity(), &baseline.identity) {
             return Err(MembershipRootError::PredecessorChanged);
         }
         let transition = self.block.membership_transition()?;
@@ -288,12 +288,12 @@ impl PreparedTransactionsBlock<'_> {
             Ok::<_, MembershipRootError<S::Error>>(())
         })?;
         let identity = if matches!(self.publication, MembershipPublication::Repeated) {
-            Arc::clone(self.block._guard.identity())
+            self.block._guard.identity().clone()
         } else {
-            Arc::clone(&self.next_identity)
+            self.next_identity.clone()
         };
         Ok(PreparedMembershipRoot {
-            preparation: Arc::clone(&self.next_identity),
+            preparation: self.next_identity.clone(),
             after: CommittedMembershipRoot {
                 identity,
                 height,
@@ -310,7 +310,10 @@ impl PreparedTransactionsBlock<'_> {
     /// Consume exactly the preparation that issued this candidate root.
     /// The committed capability is exposed only after canonical membership
     /// publication completes. Cleanup remains in its original retirement owner.
-    /// A mismatched preparation returns both original owners without publishing.
+    /// A mismatched or physically unprepared owner returns both originals without
+    /// publishing. The separate fallible physical phase must complete first;
+    /// this kernel only consumes already-retained physical authority. The caller
+    /// retains refusal/retirement custody beyond every enclosing State fence.
     pub(in crate::state) fn publish_with_membership_root<N: Copy>(
         self,
         root: PreparedMembershipRoot<N>,
@@ -321,10 +324,12 @@ impl PreparedTransactionsBlock<'_> {
         ),
         (Self, PreparedMembershipRoot<N>),
     > {
-        if !Arc::ptr_eq(&self.next_identity, &root.preparation) {
+        if !Identity::ptr_eq(&self.next_identity, &root.preparation)
+            || !self.is_physically_prepared()
+        {
             return Err((self, root));
         }
-        let retirement = self.publish();
+        let retirement = self.publish_prepared();
         Ok((root.after, retirement))
     }
 }
@@ -342,7 +347,7 @@ impl<Installation> PreparedDetachedTransactionsBlock<'_, Installation> {
         ),
         (Self, PreparedMembershipRoot<N>),
     > {
-        if !Arc::ptr_eq(&self.prepared.next_identity, &root.preparation) {
+        if !Identity::ptr_eq(&self.prepared.next_identity, &root.preparation) {
             return Err((self, root));
         }
         let retirement = self.publish();

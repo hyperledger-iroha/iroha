@@ -8355,6 +8355,41 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     assert_error_matrix_row! { diagnostics; 111; (execution_witness_digest_from_material_for_artifacts_v1( &params, &bootstrap_key, &artifacts, &galois_keys, &stale_coefficient_to_slot_trace, )), (validate_execution_witness_digest_material_for_artifacts_v1( &params, &bootstrap_key, &artifacts, &galois_keys, &stale_coefficient_to_slot_trace, )) };
     let_row! { stale_coefficient_to_slot_trace_bytes = norito::to_bytes(&stale_coefficient_to_slot_trace) .expect("encode stale coefficient-to-slot witness material") };
     assert_error_matrix_row! { diagnostics; 113; (bfv_full_bootstrap_execution_witness_digest_from_material_bytes_for_artifacts_v1( &params, &bootstrap_key, &artifacts, &galois_keys, &stale_coefficient_to_slot_trace_bytes, )), (bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_bytes_for_artifacts_v1( &params, &bootstrap_key, &artifacts, &galois_keys, &stale_coefficient_to_slot_trace_bytes, )), (validate_bfv_full_bootstrap_execution_witness_digest_material_bytes_for_artifacts_v1( &params, &bootstrap_key, &artifacts, &galois_keys, &stale_coefficient_to_slot_trace_bytes, )) };
+    // A correct extracted sample says nothing about the other coefficients of
+    // its source ciphertext. The artifact-aware path must replay all of them.
+    let mut unselected_blind_rotation_drift = witness_material.clone();
+    let extracted_index = usize::from(
+        unselected_blind_rotation_drift
+            .trace
+            .raw_extracted_sample
+            .source_coefficient_index,
+    );
+    let other_index = (extracted_index + 1) % params.degree();
+    let other_coefficient = &mut unselected_blind_rotation_drift
+        .trace
+        .blind_rotation_output
+        .c0[other_index];
+    *other_coefficient = if *other_coefficient + 1 == params.ciphertext_modulus {
+        0
+    } else {
+        *other_coefficient + 1
+    };
+    validate_bfv_full_bootstrap_execution_witness_digest_material_v1(
+        &unselected_blind_rotation_drift,
+    )
+    .expect("selected-sample structural validation cannot authenticate an unselected coefficient");
+    let error = validate_execution_witness_digest_material_for_artifacts_v1(
+        &params,
+        &bootstrap_key,
+        &artifacts,
+        &galois_keys,
+        &unselected_blind_rotation_drift,
+    )
+    .expect_err("governed replay must reject an unselected blind-rotation coefficient drift");
+    assert!(
+        error.to_string().contains("blind-rotation output"),
+        "{error}"
+    );
     mutation_row! { stale_diagnostic_slot_to_coefficient_trace = witness_material.clone(); let_row! { stale_diagnostic_slot_to_coefficient_c0 = &mut stale_diagnostic_slot_to_coefficient_trace .trace .diagnostic_slot_to_coefficient_output .c0[0] }; *stale_diagnostic_slot_to_coefficient_c0 = (*stale_diagnostic_slot_to_coefficient_c0 + 1) % params.ciphertext_modulus; assert_ne_row! { execution_witness_digest_from_material_v1(&stale_diagnostic_slot_to_coefficient_trace,) .expect("shape-only witness digest accepts self-consistent diagnostic trace drift"), claim.execution_witness_digest, "shape-only witness digest must still bind diagnostic trace bytes" }; assert_local_diag! { diagnostics; 116 => validate_execution_witness_digest_material_for_artifacts_v1( &params, &bootstrap_key, &artifacts, &galois_keys, &stale_diagnostic_slot_to_coefficient_trace, ) }; };
     let mut stale_sample_switch_trace = witness_material.clone();
     let stale_sample_switch_c0 = &mut stale_sample_switch_trace.trace.sample_switch_output.c0[0];
@@ -8646,11 +8681,11 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
         .expect("row-major arithmetic trace material validates");
     let_row! { statement_limbs = bfv_full_bootstrap_hash_goldilocks_limbs_v1( trace_material.proof_input_material.statement_hash, ) };
     let first_row = &trace_material.rows[0];
-    assert_row! { (first_row.len()) == (usize::from(BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1)) && (first_row[0]) == (BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_KIND_ACTIVE_V1) && (first_row[1]) == (0) && (first_row[2]) == (0) && (first_row[3]) == (u64::from(witness_material.slot_index)) && (first_row[4]) == (0) && (&first_row[5..9]) == (statement_limbs.as_slice()) && (first_row[9]) == (witness_material.input_ciphertext.c0[0]) && (first_row[10]) == (witness_material.input_ciphertext.c1[0]) && (first_row[11]) == (witness_material.trace.coefficient_to_slot_output.c0[0]) && (first_row[12]) == (witness_material.trace.coefficient_to_slot_output.c1[0]) && (first_row[15]) == (u64::from( witness_material .trace .raw_extracted_sample .source_coefficient_index )) && (first_row[16]) == (witness_material.trace.raw_extracted_sample.constant_term) && (first_row[17]) == (witness_material .trace .raw_extracted_sample .secret_coefficients[0]) && (first_row[26]) == (u64::try_from(witness_material.input_bound) .expect("input bound fits trace row")) && (first_row[27]) == (u64::try_from(witness_material.output_bound) .expect("output bound fits trace row")) && (first_row[33]) == (u64::try_from(witness_material.trace_bounds.slot_to_coefficient) .expect("slot-to-coefficient bound fits trace row")), "{}", diagnostics.group_context(279, 17), };
+    assert_row! { (first_row.len()) == (usize::from(BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1)) && (first_row[0]) == (BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_KIND_ACTIVE_V1) && (first_row[1]) == (0) && (first_row[2]) == (0) && (first_row[3]) == (u64::from(witness_material.slot_index)) && (first_row[4]) == (0) && (&first_row[5..13]) == (statement_limbs.as_slice()) && (first_row[13]) == (witness_material.input_ciphertext.c0[0]) && (first_row[14]) == (witness_material.input_ciphertext.c1[0]) && (first_row[15]) == (witness_material.trace.coefficient_to_slot_output.c0[0]) && (first_row[16]) == (witness_material.trace.coefficient_to_slot_output.c1[0]) && (first_row[19]) == (u64::from( witness_material .trace .raw_extracted_sample .source_coefficient_index )) && (first_row[20]) == (witness_material.trace.raw_extracted_sample.constant_term) && (first_row[21]) == (witness_material .trace .raw_extracted_sample .secret_coefficients[0]) && (first_row[30]) == (u64::try_from(witness_material.input_bound) .expect("input bound fits trace row")) && (first_row[31]) == (u64::try_from(witness_material.output_bound) .expect("output bound fits trace row")) && (first_row[37]) == (u64::try_from(witness_material.trace_bounds.slot_to_coefficient) .expect("slot-to-coefficient bound fits trace row")), "{}", diagnostics.group_context(279, 17), };
     let first_padding_index = params.degree();
     let first_padding_row = &trace_material.rows[first_padding_index];
-    assert_row! { (first_padding_row[0]) == (BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_KIND_PADDING_V1) && (first_padding_row[1]) == (u64::try_from(first_padding_index).expect("padding row index fits u64")) && (first_padding_row[2]) == (0) && (first_padding_row[3]) == (u64::from(witness_material.slot_index)) && (first_padding_row[4]) == (0) && (&first_padding_row[5..9]) == (statement_limbs.as_slice()), "{}", diagnostics.group_context(296, 6), };
-    assert_row! { first_padding_row[9..].iter().all(|value| *value == 0), "padding rows must not carry coefficient material" };
+    assert_row! { (first_padding_row[0]) == (BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_KIND_PADDING_V1) && (first_padding_row[1]) == (u64::try_from(first_padding_index).expect("padding row index fits u64")) && (first_padding_row[2]) == (0) && (first_padding_row[3]) == (u64::from(witness_material.slot_index)) && (first_padding_row[4]) == (0) && (&first_padding_row[5..13]) == (statement_limbs.as_slice()), "{}", diagnostics.group_context(296, 6), };
+    assert_row! { first_padding_row[13..].iter().all(|value| *value == 0), "padding rows must not carry coefficient material" };
     let_row! { first_padding_index_u32 = u32::try_from(first_padding_index).expect("first padding row index fits u32") };
     assert_eq_row! { arithmetic_trace_public_padding_row_v1( first_padding_index_u32, trace_material.proof_input_material.statement_hash, witness_material.slot_index, witness_material.bound_mode, ) .expect("canonical public padding row"), *first_padding_row, "{}", diagnostics.static_context_at(302) };
     validate_arithmetic_trace_public_padding_opening_v1(
@@ -8893,10 +8928,10 @@ fn full_bootstrap_execution_witness_digest_binds_governed_trace() {
     assert_ne_row! { drifted_composition_values[0], 0, "single-row arithmetic trace drift must produce a non-zero composition value" };
     let_row! { drifted_difference = bfv_full_bootstrap_goldilocks_sub_v1(drifted_rows[0][9], trace_material.rows[0][9]) };
     let mut padding_drift_rows = trace_material.rows.clone();
-    padding_drift_rows[first_padding_index][9] = 1;
+    padding_drift_rows[first_padding_index][13] = 1;
     let_row! { padding_drift_composition_values = bfv_full_bootstrap_arithmetic_air_composition_values_for_rows_v1( &trace_material, &padding_drift_rows, ) .expect("evaluate padding-row drift arithmetic AIR composition values") };
     assert_ne_row! { padding_drift_composition_values[first_padding_index], 0, "public padding-row arithmetic trace drift must produce a non-zero composition value" };
-    let_row! { padding_drift_challenge = arithmetic_air_composition_challenge_v1( trace_material.proof_input_material.statement_hash, trace_material_digest, first_padding_index, 9, ) .expect("derive padding trace-bound AIR composition challenge") };
+    let_row! { padding_drift_challenge = arithmetic_air_composition_challenge_v1( trace_material.proof_input_material.statement_hash, trace_material_digest, first_padding_index, 13, ) .expect("derive padding trace-bound AIR composition challenge") };
     assert_eq_row! { padding_drift_composition_values[first_padding_index], padding_drift_challenge, "{}", diagnostics.static_context_at(428) };
     let mut low_digest_only = [0_u8; Hash::LENGTH];
     low_digest_only[0] = 7;

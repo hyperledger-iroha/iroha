@@ -124,6 +124,24 @@ def test_validate_release_automation_accepts_repository_contract() -> None:
     }
 
 
+@pytest.mark.parametrize("backend", ("software", "hsm"))
+@pytest.mark.parametrize("quote", ("'", '"'))
+def test_topology_trust_cannot_claim_signer_backend(
+    tmp_path: Path, backend: str, quote: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    marker = '              "schema": "sorafs.l1.deployment_qualification.trust.v1",\n'
+    assert source.count(marker) == 1
+    workflow.write_text(
+        source.replace(marker, marker + f'              {quote}signer_backend{quote}: "{backend}",\n'),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="topology trust must not claim a signing backend"):
+        automation.validate_release_automation(tmp_path)
+
+
 @pytest.mark.parametrize("mutation", ("remove", "duplicate", "conditional", "ignore_failure"))
 def test_release_gate_requires_mandatory_cosign_qualification(tmp_path, mutation):
     _copy_workflows(tmp_path)
@@ -2922,6 +2940,12 @@ def test_release_workflow_script_dependencies_are_exactly_pinned() -> None:
     "scripts/tests/release_output_transaction_cleanup_test.py",
     "scripts/tests/sorafs_javascript_qualification_source_test.py",
     "scripts/tests/sorafs_javascript_child_abi_contract_test.py",
+    "scripts/tests/sorafs_javascript_input_files_test.py",
+    "scripts/tests/sorafs_javascript_parent_input_test.py",
+    "scripts/tests/sorafs_javascript_runtime_inputs_test.py",
+    "scripts/tests/sorafs_javascript_child_process_test.py",
+    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images",
+    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field",
     "scripts/tests/sorafs_javascript_installed_test.py",
 ))
 def test_release_parent_cleanup_controls_have_an_executable_registration(test):
@@ -2931,4 +2955,4 @@ def test_release_parent_cleanup_controls_have_an_executable_registration(test):
     assert batch is not None
     assert batch.group(1).splitlines().count("  " + test + " \\") == 1
     workflow = (REPO_ROOT / ".github/workflows/sorafs-cli-release.yml").read_text()
-    assert automation._pull_request_path_entries(workflow).count(test) == 1
+    assert automation._pull_request_path_entries(workflow).count(test.split("::", 1)[0]) == 1

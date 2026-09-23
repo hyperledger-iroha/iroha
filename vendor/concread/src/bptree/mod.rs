@@ -368,6 +368,18 @@ where
         }
     }
 
+    /// Borrow an exact retained predecessor from this original map family.
+    /// Foreign families refuse; advancing this map never changes the returned
+    /// immutable cut. No physical lock, allocation or callback is involved.
+    pub fn read_predecessor(
+        &self,
+        predecessor: &BptreeMapRetainedPredecessor<K, V, M>,
+    ) -> Option<BptreeMapReadTxn<'_, K, V, M>> {
+        self.inner
+            .read_predecessor(&predecessor.inner)
+            .map(|inner| BptreeMapReadTxn { inner })
+    }
+
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
     pub fn read(&self) -> BptreeMapReadTxn<'_, K, V, M> {
@@ -386,6 +398,35 @@ where
     pub fn try_read(&self) -> Result<BptreeMapReadTxn<'_, K, V, M>, OwnedWriteError> {
         self.inner
             .try_read()
+            .map(|inner| BptreeMapReadTxn { inner })
+    }
+
+    /// Constant-space custody for this original map's actual reader-lock releases.
+    /// Drop only after all enclosing State/effect/publication fences are released.
+    pub fn reader_release_batch(&self) -> crate::release::DeferredReleaseBatch {
+        self.inner.reader_release_batch()
+    }
+
+    /// Pin the current original generation and defer the actual reader-lock release.
+    /// A foreign batch returns Changed before acquisition; a poisoned acquisition
+    /// returns Poisoned and retains its actual release/poison in the original batch.
+    pub fn read_retaining(
+        &self,
+        releases: &mut crate::release::DeferredReleaseBatch,
+    ) -> Result<BptreeMapReadTxn<'_, K, V, M>, OwnedWriteError> {
+        self.inner
+            .read_retaining(releases)
+            .map(|inner| BptreeMapReadTxn { inner })
+    }
+
+    /// Nonblocking current-reader acquisition with caller-retained actual release.
+    /// Busy acquires nothing and records no release; foreign batches refuse first.
+    pub fn try_read_retaining(
+        &self,
+        releases: &mut crate::release::DeferredReleaseBatch,
+    ) -> Result<BptreeMapReadTxn<'_, K, V, M>, OwnedWriteError> {
+        self.inner
+            .try_read_retaining(releases)
             .map(|inner| BptreeMapReadTxn { inner })
     }
 
@@ -417,6 +458,31 @@ where
         owned.inner.as_ref().assert_operable();
         self.inner
             .try_acquire_owned(owned.inner)
+            .map(|inner| BptreeMapOwnedAcquisition { inner })
+            .map_err(|(inner, error)| (BptreeMapOwned { inner }, error))
+    }
+
+    /// Reacquire the original private successor for retained publication custody.
+    /// Unrelated outer unwind can abandon unchanged roots; actual original
+    /// mutation still poisons them. This does not prepare or publish the cursor,
+    /// and every refusal preserves its exact ownership for caller cleanup.
+    /// The acquired physical guard remains on its original thread.
+    ///
+    /// ```compile_fail
+    /// use concread::bptree::BptreeMap;
+    /// let map: &'static BptreeMap<usize, usize> = Box::leak(Box::new(BptreeMap::new()));
+    /// let owned = map.write().detach();
+    /// let acquired = map.try_acquire_owned_retained(owned).unwrap_or_else(|_| panic!());
+    /// std::thread::spawn(move || drop(acquired));
+    /// ```
+    pub fn try_acquire_owned_retained(
+        &self,
+        owned: BptreeMapOwned<K, V, M>,
+    ) -> Result<BptreeMapOwnedAcquisition<'_, K, V, M>, (BptreeMapOwned<K, V, M>, OwnedWriteError)>
+    {
+        owned.inner.as_ref().assert_operable();
+        self.inner
+            .try_acquire_owned_retained(owned.inner)
             .map(|inner| BptreeMapOwnedAcquisition { inner })
             .map_err(|(inner, error)| (BptreeMapOwned { inner }, error))
     }
@@ -1636,3 +1702,6 @@ mod acquisition_tests;
 
 #[cfg(test)]
 mod abandonment_tests;
+
+#[cfg(all(test, not(feature = "dhat-heap"), not(miri)))]
+mod retained_reader_tests;

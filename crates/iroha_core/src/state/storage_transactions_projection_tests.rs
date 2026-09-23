@@ -230,10 +230,10 @@ fn repeated_identical_publication_preserves_history_for_later_replacement() {
             &storage.latest_block.load_full().unwrap()
         ));
         assert_eq!(
-            storage.blocks.get(&prior).map(|entry| *entry),
+            storage.blocks.read().get(&prior).map(|entry| *entry),
             Some(height(1))
         );
-        assert!(storage.blocks.get(&tip_only).is_none());
+        assert!(storage.blocks.read().get(&tip_only).is_none());
     }
     let mut replacement = storage.block_and_revert();
     let parent = predecessor(&replacement);

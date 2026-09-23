@@ -7,6 +7,7 @@ use super::https_source::{
     ProviderIngestHttpsGrantRequestV1, ProviderIngestHttpsGrantV1,
     ProviderIngestHttpsSourceConfigV1, validate_grant,
 };
+use crate::sorafs_provider_ingest_finalized_query::ArchivedProviderIngestFinalizedLedgerV1;
 use iroha_data_model::NetworkId;
 use iroha_torii::sorafs::{AdmissionRegistry, discovery::ProviderAdvertCache};
 use sorafs_manifest::{CapabilityType, EndpointKind, verify_advert_against_record};
@@ -81,6 +82,42 @@ impl fmt::Debug for ProviderIngestHttpsEvidenceV1<'_> {
             .field("authority_inputs", &"<runtime-only>")
             .finish()
     }
+}
+
+/// Check already-issued grant evidence against the live State/Kura-qualified assignment twice.
+///
+/// This is a non-authorizing local validation step. The admission registry, advert cache, pins,
+/// grant, and clock must still come from separately authenticated, revocation-fresh services;
+/// this check does not make those inputs final or issue a grant. A production resolver must
+/// authenticate the immutable admission cursor's historical ancestry and current revocation, then
+/// independently repeat its full currentness check before fetch, after fetch, and at reader EOF.
+/// The two assignment reads reject a finalized-head or revision change during this observation.
+///
+/// # Errors
+///
+/// Fails closed when the current assignment cannot be read, differs from the request or grant,
+/// changes during the observation, or the independently supplied evidence fails validation.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "awaits independently governed HTTPS grant resolver"
+    )
+)]
+pub(crate) fn validate_provider_ingest_current_https_evidence_v1(
+    finalized: &ArchivedProviderIngestFinalizedLedgerV1,
+    config: &ProviderIngestHttpsSourceConfigV1,
+    evidence: &ProviderIngestHttpsEvidenceV1<'_>,
+    grant: &ProviderIngestHttpsGrantV1,
+    now_unix_ms: u64,
+) -> Result<(), ProviderIngestSourceFetchErrorV1> {
+    finalized.validate_with_current_source_request(
+        config.network_id,
+        config.binding.provider_id,
+        evidence.source_request,
+        evidence.assignment_revision,
+        || validate_provider_ingest_https_evidence_v1(config, evidence, grant, now_unix_ms),
+    )
 }
 
 /// Validate native source/admission/advert/transport bindings before accepting an issued grant.

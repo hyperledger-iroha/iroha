@@ -117,11 +117,25 @@ impl CapturedStateSnapshot {
         state: &State,
         after_serialization: impl FnOnce(),
     ) -> Result<Self, SnapshotCaptureError> {
+        let mut releases = crate::state::StateViewReleases::new(state);
+        Self::capture_with_observer_and_releases(&mut releases, after_serialization)
+    }
+    /// Preserve original read notices in the caller's complete physical owner.
+    pub(crate) fn capture_with_releases(
+        releases: &mut crate::state::StateViewReleases<'_>,
+    ) -> Result<Self, SnapshotCaptureError> {
+        Self::capture_with_observer_and_releases(releases, || {})
+    }
+    fn capture_with_observer_and_releases(
+        releases: &mut crate::state::StateViewReleases<'_>,
+        after_serialization: impl FnOnce(),
+    ) -> Result<Self, SnapshotCaptureError> {
+        let state = releases.state();
         let generation = state.state_view_generation();
         if generation % 2 != 0 {
             return Err(SnapshotCaptureError::Busy);
         }
-        let view = state.try_view_once();
+        let view = releases.try_view_once();
         if state.state_view_generation() != generation {
             return Err(SnapshotCaptureError::Changed);
         }
@@ -208,7 +222,7 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     out.push(',');
     json::write_json_string("transactions", out);
     out.push(':');
-    state.transactions.json_serialize(out);
+    norito::json::FastJsonWrite::write_json(&view.transactions, out);
     out.push(',');
     json::write_json_string("public_lane_validators", out);
     out.push(':');
@@ -2745,7 +2759,7 @@ where
                 fast_manifest.tip_hash,
                 fast_manifest.sccp_policy_hash,
             )
-            .map_err(TryReadError::Serialization)?;
+            .map_err(TryReadError::from)?;
         initialize_state(&mut state)?;
         generation.verify_emergency_fast_selection_unchanged()?;
         iroha_logger::warn!(
@@ -2833,7 +2847,7 @@ where
             preview = %payload_preview,
             "snapshot state deserialization failed"
         );
-        TryReadError::Serialization(err)
+        TryReadError::from(err)
     })?;
     if &state.network_id != expected_network_id {
         return Err(TryReadError::NetworkIdMismatch {
@@ -4268,7 +4282,7 @@ fn validate_generated_snapshot_for_restart_with_policy(
     };
     let mut restored = seed
         .into_state_from_json_str_without_durable_recovery(input)
-        .map_err(TryReadError::Serialization)?;
+        .map_err(TryReadError::from)?;
     if restored.network_id_ref() != state.network_id_ref() {
         return Err(TryReadError::NetworkIdMismatch {
             expected: *state.network_id_ref(),
@@ -4320,22 +4334,29 @@ fn try_write_snapshot_with_limit_and_policy(
     resource_policy: SnapshotResourcePolicy,
     read_buffer_budget: &AllocationBudget,
 ) -> Result<CapturedSnapshotIdentity, TryWriteError> {
-    read_buffer_budget.with_deferred_refund_notifications(|_| {
-        let _publication_guard = SNAPSHOT_PUBLICATION_LOCK.lock();
-        // TODO: Add a `Write`-backed Norito JSON sink so production can emit this
-        // canonical payload directly into the authenticated staging descriptor.
-        let captured = CapturedStateSnapshot::capture(state).map_err(TryWriteError::Capture)?;
-        try_write_snapshot_payload_with_limit_locked(
-            state,
-            store_dir,
-            signing_key,
-            merkle_chunk_size,
-            max_payload_bytes,
-            resource_policy,
-            captured.json.into_bytes(),
-            captured.identity,
-            read_buffer_budget,
-        )
+    let (hash_budget, membership_budget) = state.history_allocation_budgets();
+    membership_budget.with_deferred_refund_notifications(|_| {
+        hash_budget.with_deferred_refund_notifications(|_| {
+            read_buffer_budget.with_deferred_refund_notifications(|_| {
+                let mut read_releases = crate::state::StateViewReleases::new(state);
+                let _publication_guard = SNAPSHOT_PUBLICATION_LOCK.lock();
+                // TODO: Add a `Write`-backed Norito JSON sink so production can emit this
+                // canonical payload directly into the authenticated staging descriptor.
+                let captured = CapturedStateSnapshot::capture_with_releases(&mut read_releases)
+                    .map_err(TryWriteError::Capture)?;
+                try_write_snapshot_payload_with_limit_locked(
+                    state,
+                    store_dir,
+                    signing_key,
+                    merkle_chunk_size,
+                    max_payload_bytes,
+                    resource_policy,
+                    captured.json.into_bytes(),
+                    captured.identity,
+                    read_buffer_budget,
+                )
+            })
+        })
     })
 }
 #[cfg(test)]
@@ -4928,6 +4949,12 @@ pub(crate) fn canonical_state_snapshot_bytes(state: &State) -> Vec<u8> {
 /// Canonical hash for the committed ledger WSV surface.
 pub(crate) fn canonical_state_snapshot_hash(state: &State) -> Result<Hash, SnapshotCaptureError> {
     CapturedStateSnapshot::capture(state)?.canonical_hash()
+}
+/// Retain the exact reader releases beyond all caller-owned State or snapshot fences.
+pub(crate) fn canonical_state_snapshot_hash_with_releases(
+    releases: &mut crate::state::StateViewReleases<'_>,
+) -> Result<Hash, SnapshotCaptureError> {
+    CapturedStateSnapshot::capture_with_releases(releases)?.canonical_hash()
 }
 /// Canonical bytes of the exact WSV surface that `state_block.commit()` would publish.
 ///

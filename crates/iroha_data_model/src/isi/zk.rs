@@ -145,6 +145,8 @@ impl CancelConfidentialPolicyTransition {
     }
 }
 // --- ZK Voting ---
+/// Minimum number of options admitted by the first-release election ABI.
+pub const MIN_ELECTION_OPTIONS_V1: u32 = 2;
 /// Maximum number of options admitted by the first-release election ABI.
 ///
 /// This matches the V1 bounded-list capacity used by Kotodama and the IVM ABI.
@@ -152,9 +154,9 @@ pub const MAX_ELECTION_OPTIONS_V1: u32 = 64;
 /// A malformed first-release election shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ElectionShapeV1Error {
-    /// An election declared no options.
+    /// An election declared fewer than two options.
     #[error("election options {actual} are below the minimum of {minimum}")]
-    NoOptions {
+    TooFewOptions {
         /// Minimum admitted option count.
         minimum: usize,
         /// Declared option count.
@@ -181,13 +183,13 @@ pub enum ElectionShapeV1Error {
 ///
 /// # Errors
 ///
-/// Returns [`ElectionShapeV1Error`] when the option count is zero or exceeds
-/// [`MAX_ELECTION_OPTIONS_V1`].
+/// Returns [`ElectionShapeV1Error`] when the option count is outside
+/// [`MIN_ELECTION_OPTIONS_V1`] through [`MAX_ELECTION_OPTIONS_V1`].
 pub fn validate_election_options_v1(options: u32) -> Result<usize, ElectionShapeV1Error> {
     let options = options as usize;
-    if options == 0 {
-        return Err(ElectionShapeV1Error::NoOptions {
-            minimum: 1,
+    if options < MIN_ELECTION_OPTIONS_V1 as usize {
+        return Err(ElectionShapeV1Error::TooFewOptions {
+            minimum: MIN_ELECTION_OPTIONS_V1 as usize,
             actual: options,
         });
     }
@@ -228,7 +230,7 @@ isi! {
         /// Admission accepts 1-128 RFC 3986 unreserved ASCII bytes and rejects
         /// a leading dot; see [`crate::governance::is_valid_governance_selector_v1`].
         pub election_id: String,
-        /// Number of options (K).
+        /// Number of options (K), from 2 through 64 in V1.
         pub options: u32,
         /// Merkle root of eligible voters.
         #[norito (json = "crate::json_helpers::fixed_bytes")]
@@ -372,12 +374,19 @@ mod tests {
     fn election_shape_v1_enforces_option_and_tally_boundaries() {
         assert_eq!(
             validate_election_options_v1(0),
-            Err(ElectionShapeV1Error::NoOptions {
-                minimum: 1,
+            Err(ElectionShapeV1Error::TooFewOptions {
+                minimum: MIN_ELECTION_OPTIONS_V1 as usize,
                 actual: 0,
             })
         );
-        assert_eq!(validate_election_options_v1(1), Ok(1));
+        assert_eq!(
+            validate_election_options_v1(1),
+            Err(ElectionShapeV1Error::TooFewOptions {
+                minimum: MIN_ELECTION_OPTIONS_V1 as usize,
+                actual: 1,
+            })
+        );
+        assert_eq!(validate_election_options_v1(MIN_ELECTION_OPTIONS_V1), Ok(2));
         assert_eq!(
             validate_election_options_v1(MAX_ELECTION_OPTIONS_V1),
             Ok(MAX_ELECTION_OPTIONS_V1 as usize)
@@ -389,7 +398,24 @@ mod tests {
                 actual: MAX_ELECTION_OPTIONS_V1 as usize + 1,
             })
         );
-        assert_eq!(validate_election_tally_v1(1, 1), Ok(1));
+        assert_eq!(
+            validate_election_tally_v1(1, 1),
+            Err(ElectionShapeV1Error::TooFewOptions {
+                minimum: MIN_ELECTION_OPTIONS_V1 as usize,
+                actual: 1,
+            })
+        );
+        assert_eq!(
+            validate_election_tally_v1(MIN_ELECTION_OPTIONS_V1, 2),
+            Ok(2)
+        );
+        assert_eq!(
+            validate_election_tally_v1(MIN_ELECTION_OPTIONS_V1, 1),
+            Err(ElectionShapeV1Error::TallyLengthMismatch {
+                expected: MIN_ELECTION_OPTIONS_V1 as usize,
+                actual: 1,
+            })
+        );
         assert_eq!(
             validate_election_tally_v1(MAX_ELECTION_OPTIONS_V1, 64),
             Ok(64)

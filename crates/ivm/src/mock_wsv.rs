@@ -4817,26 +4817,40 @@ mod tests_governance_elections {
             1
         ));
         assert!(wsv.elections.is_empty());
-        assert!(!wsv.create_election("inverted".to_owned(), 1, [0; 32], 2, 1));
+        assert!(!wsv.create_election("one".to_owned(), 1, [1; 32], 0, 1));
         assert!(wsv.elections.is_empty());
-        assert!(wsv.create_election("one".to_owned(), 1, [1; 32], 0, 1));
-        let one = wsv.elections.get("one").expect("one-option election");
-        assert_eq!(one.options, 1);
-        assert_eq!(one.tally, vec![0]);
         assert!(!wsv.create_election(
-            "one".to_owned(),
+            "inverted".to_owned(),
+            DMZk::MIN_ELECTION_OPTIONS_V1,
+            [0; 32],
+            2,
+            1
+        ));
+        assert!(wsv.elections.is_empty());
+        assert!(wsv.create_election(
+            "minimum".to_owned(),
+            DMZk::MIN_ELECTION_OPTIONS_V1,
+            [1; 32],
+            0,
+            1
+        ));
+        let minimum = wsv.elections.get("minimum").expect("minimum election");
+        assert_eq!(minimum.options, DMZk::MIN_ELECTION_OPTIONS_V1);
+        assert_eq!(minimum.tally, vec![0, 0]);
+        assert!(!wsv.create_election(
+            "minimum".to_owned(),
             DMZk::MAX_ELECTION_OPTIONS_V1,
             [2; 32],
             0,
             1
         ));
-        let one = wsv
+        let minimum = wsv
             .elections
-            .get("one")
+            .get("minimum")
             .expect("original election retained");
-        assert_eq!(one.options, 1);
-        assert_eq!(one.eligible_root, [1; 32]);
-        assert_eq!(one.tally, vec![0]);
+        assert_eq!(minimum.options, DMZk::MIN_ELECTION_OPTIONS_V1);
+        assert_eq!(minimum.eligible_root, [1; 32]);
+        assert_eq!(minimum.tally, vec![0, 0]);
         assert!(wsv.create_election(
             "max".to_owned(),
             DMZk::MAX_ELECTION_OPTIONS_V1,

@@ -58,9 +58,9 @@ It also requires the verifier contract:
 
 The external signer receives an owner-private snapshot of the final canonical
 `release_manifest.json` and a new signature-output path. The
-`authenticated_external_signer` provider must use its authenticated isolated
-service with exact `software` backend to write exactly 64 raw Ed25519 signature
-bytes. Private keys, bearer tokens, and provider configuration remain outside
+`authenticated_external_signer` provider uses its authenticated isolated
+service to write exactly 64 raw Ed25519 signature bytes. Private keys, bearer
+tokens, and provider configuration remain outside
 the repository and artifact tree. `scripts/release_manifest_signing.py` writes
 `release_manifest.json.sig` as exactly 64 raw signature bytes and
 `release_manifest.json.pub` as exactly 32 raw public-key bytes. It rejects
@@ -86,7 +86,7 @@ evidence.
 | Capability | Local source state | Evidence required for promotion |
 |------------|--------------------|---------------------------------|
 | Iroha 3 bundle/image build | Implemented by the two builders and pipeline | Hosted Linux build and smoke records |
-| Ed25519 signature validation | Implemented once for the final aggregate manifest with strict positive/negative tests | Independently administered external software-signing ceremony, reviewed fingerprint, rotation/revocation record |
+| Ed25519 signature validation | Implemented once for the final aggregate manifest with strict positive/negative tests | Independently administered external signing ceremony, reviewed fingerprint, rotation/revocation record |
 | Checksums and manifests | Deterministic aggregate generation, signing, and publish-plan binding are implemented locally | Independent replay and signed publication inventory |
 | SBOM and vulnerability scan | Not supplied by this generic local pipeline | Hosted SBOM plus zero critical/high scanner result |
 | Provenance | Not supplied by this generic local pipeline | OIDC/cosign attestation and verification receipt |

@@ -52,7 +52,7 @@ fn create_election_rejects_plain_conflict() {
         .expect("grant parliament permission");
     let create = CreateElection {
         election_id: "ref-conflict".to_string(),
-        options: 1,
+        options: 2,
         eligible_root: [0u8; 32],
         start_ts: 0,
         end_ts: 0,

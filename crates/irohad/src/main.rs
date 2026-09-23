@@ -6637,6 +6637,7 @@ fn snapshot_read_error_is_recoverable_for_bootstrap(
     match error {
         TryReadSnapshotError::IO(_, _)
         | TryReadSnapshotError::PayloadAllocation(_)
+        | TryReadSnapshotError::StateAdmission(_)
         | TryReadSnapshotError::PayloadAllocatorFailure { .. }
         | TryReadSnapshotError::NetworkIdMismatch { .. }
         | TryReadSnapshotError::ZkConfigInstall(_) => false,
@@ -6993,6 +6994,37 @@ mod snapshot_read_error_tests {
         }
     }
     #[test]
+    fn snapshot_state_admission_never_authorizes_empty_state_fallback() {
+        use iroha_core::state::{
+            BlockHashAdmissionError, MembershipAdmissionError, StateAdmissionError,
+        };
+        let budget = mv::allocation::AllocationBudget::new(1);
+        let _occupied = budget.try_reserve_bytes(1).unwrap();
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        for admission in [
+            StateAdmissionError::Membership(MembershipAdmissionError::Capacity(refusal.clone())),
+            StateAdmissionError::History(BlockHashAdmissionError::Capacity(refusal)),
+            StateAdmissionError::Membership(MembershipAdmissionError::Allocator {
+                requested_bytes: 1,
+            }),
+            StateAdmissionError::Membership(MembershipAdmissionError::Poisoned),
+        ] {
+            let error = TryReadSnapshotError::StateAdmission(admission);
+            for bootstrap in [false, true] {
+                assert!(!snapshot_read_error_is_recoverable_for_bootstrap(
+                    &error, bootstrap
+                ));
+                for emergency_fast in [false, true] {
+                    assert!(!snapshot_failure_allows_empty_state_fallback(
+                        &error,
+                        bootstrap,
+                        emergency_fast,
+                    ));
+                }
+            }
+        }
+    }
+    #[test]
     fn snapshot_integrity_errors_are_recoverable() {
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::ChecksumMismatch {
@@ -7122,12 +7154,23 @@ mod snapshot_read_error_tests {
         const FALLBACK_CONTEXT: &str = "cannot rebuild from an empty state because retained Kura \
             geometry no longer reaches the configured-primary replay floor";
         let kura = Kura::blank_kura_for_testing();
-        let error = preflight_empty_state_snapshot_fallback(
-            kura.as_ref(),
-            &NetworkId::from_genesis_hash(dummy_block_hash(0x33)),
-            &iroha_data_model::nexus::LaneCatalog::default(),
-        )
-        .expect_err("missing authenticated geometry baseline must reject empty-state fallback");
+        let network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x33));
+        let catalog = iroha_data_model::nexus::LaneCatalog::default();
+        // The real empty-store fixture now authenticates this baseline. Model
+        // its loss explicitly; the preflight must not repair it during refusal.
+        let journal = kura.store_root().join("lane_geometry_journal.norito");
+        let baseline = std::fs::read(&journal).expect("fresh authenticated baseline journal");
+        assert!(!baseline.is_empty());
+        preflight_empty_state_snapshot_fallback(kura.as_ref(), &network_id, &catalog)
+            .expect("the original configured-primary replay floor is retained");
+        assert_eq!(std::fs::read(&journal).unwrap(), baseline);
+        std::fs::remove_file(&journal).expect("remove only this fixture's baseline journal");
+        let error = preflight_empty_state_snapshot_fallback(kura.as_ref(), &network_id, &catalog)
+            .expect_err("missing authenticated geometry baseline must reject empty-state fallback");
+        assert!(
+            !journal.exists(),
+            "read-only preflight must not recreate the missing baseline"
+        );
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
             error.frames().any(|frame| {
@@ -7310,14 +7353,15 @@ mod snapshot_read_error_tests {
             ],
         )
         .expect("valid replayed lane catalog");
-        let mut state = State::new_for_testing(
+        // This selector test supplies an already reconstructed State catalog;
+        // it does not execute lifecycle consensus or startup replay. Construct
+        // that catalog through the authenticated fixture boundary instead of
+        // replacing an existing immutable configured baseline with set_nexus.
+        let state = State::new_with_pre_genesis_nexus_for_testing(
             World::new(),
-            Kura::blank_kura_for_testing(),
+            replayed,
             LiveQueryStore::start_test(),
         );
-        state
-            .set_nexus(replayed)
-            .expect("install replayed Nexus topology");
         let runtime = nexus_for_runtime_surfaces(&state);
         assert_ne!(runtime.lane_catalog, configured.lane_catalog);
         assert!(

@@ -2200,6 +2200,7 @@ export async function publishNativeBinding({
   const buildProvenance = validateNativeBuildProvenance(
     readBuildProvenance(sourcePath),
     sourcePath,
+    { platform },
   );
   if (buildProvenance.cargo_profile !== cargoProfile) {
     throw new Error("Native build provenance Cargo profile does not match publication.");
@@ -2312,6 +2313,8 @@ export async function publishNativeBinding({
       source_git_revision: buildProvenance.source_git_revision,
       source_tree_clean: buildProvenance.source_tree_clean,
       source_tree_sha256: buildProvenance.source_tree_sha256,
+      ...(platform === "darwin"
+        ? { macos_build: buildProvenance.macos_build } : {}),
       ...(machOSigningIndependentSha256 === null
         ? {}
         : { mach_o_signing_independent_sha256: machOSigningIndependentSha256 }),
@@ -2368,7 +2371,10 @@ export async function publishNativeBinding({
       previousVerification?.sourceTreeClean ===
         buildProvenance.source_tree_clean &&
       previousVerification?.sourceTreeSha256 ===
-        buildProvenance.source_tree_sha256;
+        buildProvenance.source_tree_sha256 &&
+      (platform !== "darwin" ||
+        JSON.stringify(previousVerification?.macosBuild) ===
+          JSON.stringify(buildProvenance.macos_build));
     if (
       transaction.previous !== null &&
       transaction.previous.nativeSha256 === transaction.next.nativeSha256 &&

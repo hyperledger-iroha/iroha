@@ -2912,10 +2912,10 @@ fn candidate_attachments(
         )
         .derive_npos_consensus_effects(round_header)
         .map_err(|error| {
-            if let Some(refusal) = error.downcast_ref::<crate::state::BlockHashAdmissionError>() {
+            if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
                 V2RunnerError::CandidateBuild(
                     super::v2_candidate::CandidateError::LocalStateAdmission(
-                        crate::state::StateBlockStartError::History(refusal.clone()),
+                        crate::state::StateBlockStartError::from(refusal.clone()),
                     ),
                 )
             } else {

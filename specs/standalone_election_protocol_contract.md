@@ -5,7 +5,10 @@ construction's required behavior, not an admitted circuit, protocol proof or key
 registry entry. The [release goals](first_release_completion_goals.md) and
 [audit matrix](zk_audit_matrix.md#election-statement-completion) remain authoritative.
 The [candidate review](../docs/history/2026-09-21/standalone-election-candidates.md)
-records why the constructions examined so far do not establish completion.
+records why the constructions examined so far do not establish completion. A
+[later rejection trace](../docs/history/2026-09-23/election-fresh-mask-correction-rejection.md)
+shows that publishing a fresh-mask correction for an accepted conviction update
+reveals its hidden choice even when the final aggregate is unchanged.
 
 ## Fault and disclosure boundary
 
@@ -39,7 +42,8 @@ messages, but must define their deadlines, authenticated transitions and abort
 behavior before final wire types or circuit identifiers are introduced.
 
 1. Freeze eligibility and policy. Bind network, election, eligibility root,
-   asset identity/incarnation, smallest-unit scale, option set, exact conviction
+   asset identity/incarnation, smallest-unit scale, an option set with 2..=64
+   choices, exact conviction
    rule, arithmetic bounds, phase deadlines and protocol parameters. Enrollment
    proves the anonymous credential relation; the relayer only carries messages
    and pays fees. Account-to-ballot or account-to-bond publication is insufficient.

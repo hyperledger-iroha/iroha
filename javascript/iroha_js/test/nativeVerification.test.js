@@ -20,10 +20,20 @@ const NATIVE_IMPLEMENTATIONS = [
 ];
 const SOURCE_PROVENANCE = Object.freeze({
   build_execution_policy: "trusted-local-cargo-v1",
-  build_provenance_version: 3,
+  build_provenance_version: 4,
   source_git_revision: "a".repeat(40),
   source_tree_clean: true,
   source_tree_sha256: "b".repeat(64),
+});
+const MACOS_BUILD_IDENTITY = Object.freeze({
+  sdk_root: "/opt/iroha/test/MacOSX26.5.sdk",
+  sdk_version: "26.5",
+  sdk_settings_sha256: "c".repeat(64),
+  deployment_target: "11.0",
+  clang_path: "/opt/iroha/test/bin/clang",
+  clang_version: "Apple clang version 21.0.0 (fixture)",
+  linker_path: "/opt/iroha/test/bin/ld",
+  linker_version: "@(#)PROGRAM:ld PROJECT:ld-27037.1",
 });
 
 function sha256(data) {
@@ -34,6 +44,10 @@ function checksumEntry(digest, extra = {}) {
   return {
     sha256: digest,
     ...SOURCE_PROVENANCE,
+    ...((process.platform === "darwin" &&
+      extra.pe_signing_independent_sha256 === undefined) ||
+      extra.mach_o_signing_independent_sha256 !== undefined
+      ? { macos_build: MACOS_BUILD_IDENTITY } : {}),
     ...extra,
   };
 }
@@ -139,6 +153,41 @@ variantTest("verifyNativeBinding succeeds when checksum matches manifest entry",
     assert.equal(result.status, "verified");
     assert.equal(result.sha256, digest);
     assert.equal(result.expectedSha256, digest);
+  });
+});
+
+variantTest("Darwin V4 rejects missing or stale SDK identity", async () => {
+  __resetNativeStateForTests();
+  await withTempDir(async (dir) => {
+    const bindingPath = path.join(dir, "iroha_js_host.node");
+    const contents = Buffer.from("darwin-native-stub");
+    await fs.writeFile(bindingPath, contents);
+    const base = checksumEntry(sha256(contents), {
+      macos_build: MACOS_BUILD_IDENTITY,
+    });
+    const valid = verifyNativeBinding(bindingPath, {
+      expectedChecksums: { "darwin-arm64": base },
+      platformKey: "darwin-arm64",
+    });
+    assert.equal(valid.ok, true);
+    assert.deepEqual(valid.macosBuild, MACOS_BUILD_IDENTITY);
+    const missing = { ...base };
+    delete missing.macos_build;
+    for (const invalid of [
+      missing,
+      { ...base, build_provenance_version: 3 },
+      { ...base, macos_build: {
+        ...MACOS_BUILD_IDENTITY,
+        sdk_settings_sha256: "0",
+      } },
+    ]) {
+      const rejected = verifyNativeBinding(bindingPath, {
+        expectedChecksums: { "darwin-arm64": invalid },
+        platformKey: "darwin-arm64",
+      });
+      assert.equal(rejected.ok, false);
+      assert.equal(rejected.status, "manifest_error");
+    }
   });
 });
 
@@ -295,7 +344,7 @@ for (const scenario of [
   });
 }
 
-variantTest("checksum-only entries are rejected without V3 source provenance", async () => {
+variantTest("checksum-only entries are rejected without V4 source provenance", async () => {
   __resetNativeStateForTests();
   await withTempDir(async (dir) => {
     const bindingPath = path.join(dir, "iroha_js_host.node");

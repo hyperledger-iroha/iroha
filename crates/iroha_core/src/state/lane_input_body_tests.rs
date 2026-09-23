@@ -3,14 +3,6 @@
 
 fn all_route_input_fixture(block_secondary: bool) -> LaneContextVerifiedFixture {
     let genesis = empty_global_block_after(None);
-    let kura = Kura::blank_kura_for_testing();
-    let mut state = State::new_with_chain_and_network_id_for_testing(
-        World::default(),
-        Arc::clone(&kura),
-        LiveQueryStore::start_test(),
-        (*DEFAULT_TEST_CHAIN_ID).clone(),
-        iroha_data_model::NetworkId::from_genesis_hash(genesis.hash()),
-    );
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.lane_catalog = LaneCatalog::new(
         nonzero!(2_u32),
@@ -24,7 +16,15 @@ fn all_route_input_fixture(block_secondary: bool) -> LaneContextVerifiedFixture 
         ],
     )
     .unwrap();
-    state.set_nexus(nexus).unwrap();
+    // The two-lane catalog is the immutable pre-genesis authority for both
+    // State and Kura; adding it after opening a default Kura must be refused.
+    let (state, kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+        World::default(),
+        nexus,
+        LiveQueryStore::start_test(),
+        (*DEFAULT_TEST_CHAIN_ID).clone(),
+        iroha_data_model::NetworkId::from_genesis_hash(genesis.hash()),
+    );
     let (ids, validators) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validators);
     install_lane_manifest_registry(

@@ -1464,13 +1464,16 @@ pub(super) fn validate_rns_native_pre_transcript_public_facts_v1(
 }
 
 /// Perform the one bounded source/hash pass that derives the exact 43 record
-/// facts and two aggregate digests.  The caller must keep the same snapshot
-/// and the complete artifact inventory by value; this narrow helper returns no
+/// facts and two aggregate digests. The scan borrows the caller-retained
+/// original receipt; it cannot recapture a new snapshot identity. The caller
+/// must keep the same snapshot and complete artifact inventory by value;
+/// this narrow helper returns no
 /// transcript constructor, public-context authority, or retained borrow.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn derive_rns_native_pre_transcript_record_facts_v1<S>(
     snapshot: &mut S,
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    source_receipt: &ZkAmsMkheRnsNativeSourceReceiptV1,
     epoch: u64,
     governed_roster_digest: [u8; DIGEST_BYTES_V1],
     public_a_limb_digests: &[[u8; DIGEST_BYTES_V1]],
@@ -1494,6 +1497,13 @@ where
     {
         return Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact);
     }
+
+    // Borrow the receipt already captured by the consuming coordinator. A
+    // fresh receipt here could silently rebind the scan after that capture.
+    source_receipt
+        .validate(layout)
+        .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidContext)?;
+    validate_source_snapshot_identity_v1(snapshot, layout, source_receipt)?;
 
     let public_key_digest = public_key_digest_v1(
         layout,
@@ -1620,6 +1630,10 @@ where
     )?;
     registry.insert_v1(public_bundle_digest)?;
     drop(registry);
+    // No source-derived facts escape under an identity that changed during
+    // the scan. This boundary check does not replace authenticated reads or
+    // establish repeatability of a backend that misreports its identities.
+    validate_source_snapshot_identity_v1(snapshot, layout, source_receipt)?;
     Ok((records, public_key_digest, public_bundle_digest))
 }
 
@@ -2153,6 +2167,32 @@ fn validate_signed_chunk_v1(
     Ok(())
 }
 
+/// Check the current advertised identity against the already-validated
+/// original layout and receipt. The guard adds no source-slot read, secret
+/// buffer, retry, or new authority. Backend identity-query implementation work
+/// remains backend-owned; this is not authenticated-repeatability evidence.
+fn validate_source_snapshot_identity_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
+    snapshot: &S,
+    layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    receipt: &ZkAmsMkheRnsNativeSourceReceiptV1,
+) -> Result<(), RnsNativeRlweSourceStatementErrorV1> {
+    if snapshot.layout() != layout
+        || snapshot.snapshot_digest(ZkAmsMkheRnsNativeSourceArenaV1::Main)
+            != receipt.main_snapshot_digest
+        || snapshot.snapshot_digest(ZkAmsMkheRnsNativeSourceArenaV1::Nonce)
+            != receipt.nonce_snapshot_digest
+    {
+        return Err(RnsNativeRlweSourceStatementErrorV1::InvalidContext);
+    }
+    let live_receipt = snapshot
+        .structural_receipt()
+        .map_err(|_| RnsNativeRlweSourceStatementErrorV1::SourceUnavailable)?;
+    if &live_receipt != receipt {
+        return Err(RnsNativeRlweSourceStatementErrorV1::InvalidContext);
+    }
+    Ok(())
+}
+
 fn validate_source_snapshot_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     snapshot: &mut S,
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
@@ -2166,12 +2206,7 @@ fn validate_source_snapshot_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     receipt
         .validate(layout)
         .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidContext)?;
-    let live_receipt = snapshot
-        .structural_receipt()
-        .map_err(|_| RnsNativeRlweSourceStatementErrorV1::SourceUnavailable)?;
-    if live_receipt != receipt {
-        return Err(RnsNativeRlweSourceStatementErrorV1::InvalidContext);
-    }
+    validate_source_snapshot_identity_v1(snapshot, layout, &receipt)?;
     for ordinal in 0..OPENING_COUNT_V1 {
         let position = record_position_v1(ordinal)
             .ok_or(RnsNativeRlweSourceStatementErrorV1::InvalidSourceOrder)?;
@@ -2241,7 +2276,9 @@ fn validate_source_snapshot_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
             return Err(RnsNativeRlweSourceStatementErrorV1::InvalidNonce);
         }
     }
-    Ok(())
+    // Recheck only after the final chunk has been dropped and before the
+    // consuming preflight can retain this source beside its qPCS schedule.
+    validate_source_snapshot_identity_v1(snapshot, layout, &receipt)
 }
 
 fn statement_anchor_digest_v1(

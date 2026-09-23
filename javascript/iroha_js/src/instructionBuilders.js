@@ -96,6 +96,8 @@ const TEXT_REGISTER_SMART_CONTRACT_BYTES = "registerSmartContractBytes.";
 const TEXT_ASSET_DEFINITION_ID = TEXT_ASSET_DEFINITION_ID_2;
 const TEXT_MUST_CONTAIN_EXACTLY = (TEXT_MUST_CONTAIN + "exactly ");
 const TEXT_CREATE_ELECTION = "createElection.";
+const MIN_ELECTION_OPTIONS_V1 = 2;
+const MAX_ELECTION_OPTIONS_V1 = 64;
 const TEXT_MUST_BE_GREATER_THAN_ZERO = (TEXT_MUST_BE + "greater than zero");
 const TEXT_MULTISIG_PROPOSE_2 = "multisigPropose";
 const TEXT_PROPOSE_SCCP_ROUTE_GOVERNANCE = "proposeSccpRouteGovernance";
@@ -5266,18 +5268,23 @@ export function buildCancelConfidentialPolicyTransitionInstruction(options) {
 }
 
 /**
- * Build a `zk::CreateElection` instruction payload.
+ * Build a `zk::CreateElection` instruction payload with 2–64 options.
  * @param {object} options
  * @returns {{zk: {CreateElection: object}}}
  */
 export function buildCreateElectionInstruction(options) {
   const source = assertPlainObject(options, "createElection");
+  const electionId = normalizeGovernanceSelectorV1(
+    source.electionId ?? source.election_id,
+    (TEXT_CREATE_ELECTION + "electionId"),
+  );
+  const optionCount = asPositiveInteger(source.options, (TEXT_CREATE_ELECTION + "options"));
+  if (optionCount < MIN_ELECTION_OPTIONS_V1 || optionCount > MAX_ELECTION_OPTIONS_V1) {
+    fail(V_CODE_VALUE_OUT_OF_RANGE, "createElection.options must be between 2 and 64", "createElection.options");
+  }
   const payload = {
-    election_id: normalizeGovernanceSelectorV1(
-      source.electionId ?? source.election_id,
-      (TEXT_CREATE_ELECTION + "electionId"),
-    ),
-    options: asPositiveInteger(source.options, (TEXT_CREATE_ELECTION + "options")),
+    election_id: electionId,
+    options: optionCount,
     eligible_root: normalizeFixedBytes(source.eligibleRoot ?? source.eligible_root, (TEXT_CREATE_ELECTION + "eligibleRoot"), 32),
     start_ts: asNonNegativeInteger(source.startTs ?? source.start_ts ?? source.startTimestampMs, (TEXT_CREATE_ELECTION + "startTs")),
     end_ts: asNonNegativeInteger(source.endTs ?? source.end_ts ?? source.endTimestampMs, (TEXT_CREATE_ELECTION + "endTs")),
@@ -5322,17 +5329,18 @@ export function buildSubmitBallotInstruction(options) {
 }
 
 /**
- * Build a `zk::FinalizeElection` instruction payload.
+ * Build a `zk::FinalizeElection` instruction payload with 2–64 tally counters.
  * @param {object} options
  * @returns {{zk: {FinalizeElection: object}}}
  */
 export function buildFinalizeElectionInstruction(options) {
   const source = assertPlainObject(options, "finalizeElection");
   const tallyInput = Array.isArray(source.tally) ? source.tally : [];
-  if (tallyInput.length === 0) {
+  if (tallyInput.length < MIN_ELECTION_OPTIONS_V1 || tallyInput.length > MAX_ELECTION_OPTIONS_V1) {
     fail(
-      V_CODE_INVALID_OBJECT,
-      ("finalizeElection.tally" + TEXT_MUST_CONTAIN + "at least one entry"),
+      V_CODE_VALUE_OUT_OF_RANGE,
+      "finalizeElection.tally must contain between 2 and 64 entries",
+      "finalizeElection.tally",
     );
   }
   const payload = {

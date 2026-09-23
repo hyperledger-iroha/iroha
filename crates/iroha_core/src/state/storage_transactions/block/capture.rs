@@ -5,7 +5,7 @@ use super::*;
 // Capture keeps an actual acquired writer or that writer's original release,
 // never a synthetic notification inferred from an error.
 type OriginalMembershipGuard<'storage> =
-    concread::release::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Arc<()>>>;
+    concread::release::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Identity>>;
 
 enum MembershipWriterPhase<'storage> {
     Attached(OriginalMembershipGuard<'storage>),
@@ -14,25 +14,28 @@ enum MembershipWriterPhase<'storage> {
 
 pub(in crate::state::storage_transactions) struct MembershipWriter<'storage> {
     phase: Option<MembershipWriterPhase<'storage>>,
+    pub(super) history: Option<history_slot::Slot<'storage>>,
 }
 
 impl<'storage> MembershipWriter<'storage> {
     pub(in crate::state::storage_transactions) fn new(
         guard: OriginalMembershipGuard<'storage>,
+        history: Option<history_slot::Slot<'storage>>,
     ) -> Self {
         Self {
             phase: Some(MembershipWriterPhase::Attached(guard)),
+            history,
         }
     }
 
-    pub(in crate::state::storage_transactions) fn identity(&self) -> &Arc<()> {
+    pub(in crate::state::storage_transactions) fn identity(&self) -> &Identity {
         match self.phase.as_ref() {
             Some(MembershipWriterPhase::Attached(guard)) => guard,
             _ => panic!("original membership writer was terminally released"),
         }
     }
 
-    pub(super) fn identity_mut(&mut self) -> &mut Arc<()> {
+    pub(super) fn identity_mut(&mut self) -> &mut Identity {
         match self.phase.as_mut() {
             Some(MembershipWriterPhase::Attached(guard)) => guard,
             _ => panic!("original membership writer was terminally released"),
@@ -40,6 +43,9 @@ impl<'storage> MembershipWriter<'storage> {
     }
 
     fn release(&mut self) {
+        if let Some(history) = self.history.as_mut() {
+            history.release();
+        }
         match self.phase.take() {
             Some(MembershipWriterPhase::Attached(guard)) => {
                 // Native unlock does not invoke the original callback.
@@ -50,11 +56,24 @@ impl<'storage> MembershipWriter<'storage> {
         }
     }
 
-    pub(super) fn into_release(mut self) -> concread::release::DeferredRelease {
+    pub(super) fn into_release(mut self) -> MembershipRelease {
         self.take_release()
     }
 
-    fn take_release(&mut self) -> concread::release::DeferredRelease {
+    fn take_release(&mut self) -> MembershipRelease {
+        self.release();
+        MembershipRelease {
+            _history: self.history.as_mut().map(|history| history.cleanup()),
+            _writer: self.take_writer_release(),
+        }
+    }
+
+    pub(super) fn into_writer_release(mut self) -> concread::release::DeferredRelease {
+        assert!(self.history.is_none(), "observation-only writer");
+        self.take_writer_release()
+    }
+
+    fn take_writer_release(&mut self) -> concread::release::DeferredRelease {
         self.release();
         match self.phase.take() {
             Some(MembershipWriterPhase::Released(release)) => release,
@@ -90,7 +109,7 @@ pub(crate) struct TransactionsCaptureSlot<'storage> {
     released: bool,
     // Last: the original staged payloads precede the successful capture's
     // deferred notification. All physical siblings must already be free.
-    cleanup: Option<concread::release::DeferredRelease>,
+    cleanup: Option<MembershipRelease>,
 }
 
 impl<'storage> TransactionsCaptureSlot<'storage> {
@@ -102,13 +121,16 @@ impl<'storage> TransactionsCaptureSlot<'storage> {
             "membership capture is one-shot"
         );
         self.attempted = true;
-        let MembershipCapturePhase::Attached(block) = &self.phase else {
+        let MembershipCapturePhase::Attached(block) = &mut self.phase else {
             panic!("original attached membership capture");
         };
         let publication = block.admit_publication()?;
-        // Same existing identity allocation as standalone prepare_commit.
-        // No second allocation is introduced by capture or terminal release.
-        let next_identity = Arc::new(());
+        let next_identity = block
+            ._guard
+            .history
+            .as_mut()
+            .expect("original history")
+            .next_identity();
         // All fallible work precedes extraction. Only original-owner moves
         // occur until the prepared owner is stored back in the caller slot.
         let MembershipCapturePhase::Attached(block) =
@@ -122,6 +144,16 @@ impl<'storage> TransactionsCaptureSlot<'storage> {
             next_identity,
         ));
         Ok(())
+    }
+
+    /// Acquire physical tree publication authority before any visible component
+    /// publishes. Refusal retains the exact original work in this caller slot.
+    pub(crate) fn try_prepare_physical(&mut self) -> Result<(), TransactionsBlockError> {
+        assert!(!self.released, "original membership capture is live");
+        let MembershipCapturePhase::Prepared(prepared) = &mut self.phase else {
+            panic!("logical original membership preparation precedes physical admission");
+        };
+        prepared.try_prepare_physical()
     }
 
     /// Release the prepared original writer while retaining its exact journal
@@ -220,6 +252,7 @@ impl<'storage> TransactionsCaptureSlot<'storage> {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn into_prepared(mut self) -> PreparedTransactionsBlock<'storage> {
         assert!(!self.released, "membership capture was terminally released");
         match &self.phase {
@@ -237,12 +270,7 @@ impl<'storage> TransactionsCaptureSlot<'storage> {
 
     /// Transfer only successful original capture, keeping its actual release
     /// separate until every enclosing physical writer/fence has released.
-    pub(crate) fn into_detached(
-        mut self,
-    ) -> (
-        DetachedTransactionsBlock,
-        concread::release::DeferredRelease,
-    ) {
+    pub(crate) fn into_detached(mut self) -> (DetachedTransactionsBlock, MembershipRelease) {
         assert!(!self.released, "membership capture was terminally released");
         match std::mem::replace(&mut self.phase, MembershipCapturePhase::Empty) {
             MembershipCapturePhase::Captured(journal) => (
@@ -307,6 +335,33 @@ impl<'storage> TransactionsBlockField<'storage> {
         self.slot.try_prepare()
     }
 
+    /// Nonblocking physical admission after the enclosing State writer and before
+    /// its visibility interval; snapshots acquire those owners in this same order.
+    pub(crate) fn try_prepare_physical(&mut self) -> Result<(), TransactionsBlockError> {
+        self.slot.try_prepare_physical()
+    }
+
+    /// Move the exact charged successor after a normal physical Busy refusal.
+    /// The existing field retains all physical-release notices until aggregate cleanup.
+    pub(crate) fn recover_preparation(&mut self) -> history::Pending {
+        let MembershipCapturePhase::Prepared(prepared) = &mut self.slot.phase else {
+            panic!("original logically prepared membership");
+        };
+        prepared.assert_unpublished();
+        let mut original = prepared
+            .block
+            ._guard
+            .history
+            .as_mut()
+            .expect("original history")
+            .recover();
+        original.next_identity = Some(std::mem::replace(
+            &mut prepared.next_identity,
+            original.predecessor.clone(),
+        ));
+        original
+    }
+
     pub(crate) fn publish_prepared(&mut self) {
         self.slot.publish_prepared();
     }
@@ -345,7 +400,7 @@ impl TransactionsReadOnly for TransactionsBlockField<'_> {
     fn get<Q>(&self, key: &Q) -> Option<Value>
     where
         Key: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + Eq + Ord + ?Sized,
     {
         self.slot.executing().get(key)
     }

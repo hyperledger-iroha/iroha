@@ -4,7 +4,7 @@
 //! that exact block, then destroys its moved payload, then releases its charge.
 //! No public operation exposes weak references, raw ownership or the counter.
 
-use std::alloc::Layout;
+use std::alloc::{alloc, handle_alloc_error, Layout};
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::{ManuallyDrop, MaybeUninit};
@@ -19,10 +19,55 @@ struct Allocation<T, Charge> {
     charge: ManuallyDrop<Charge>,
 }
 
-/// An originally allocated shell that has not yet received its payload.
-pub(crate) struct Reserved<T, Charge> {
+/// One originally allocated shell that has not yet received its payload.
+///
+/// Reserve it before entering a phase that cannot allocate, then consume it with
+/// [`Self::initialize`]. The opaque charge must already cover [`Self::layout`];
+/// this owner neither grants credit nor funds allocations nested in the payload
+/// or charge. Charge is caller-owned custody; this generic owner does not
+/// validate it as credit authority. Dropping an unused shell frees it before
+/// dropping its charge.
+///
+/// The shell cannot be cloned or initialized twice:
+/// ```compile_fail
+/// use concread::shared::Reserved;
+/// fn initialize_twice(shell: Reserved<u64, ()>) {
+///     let first = shell.initialize(1);
+///     let second = shell.initialize(2);
+/// }
+/// ```
+pub struct Reserved<T, Charge> {
     pointer: NonNull<Allocation<T, Charge>>,
 }
+
+/// The allocator refused one exact shared control-block layout.
+///
+/// This describes an allocation failure, not a pool admission decision. The
+/// failed constructor returns the original charge separately for retry or abort.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReservationError {
+    layout: Layout,
+}
+
+impl ReservationError {
+    /// Exact layout refused before any shell or payload was initialized.
+    pub fn layout(self) -> Layout {
+        self.layout
+    }
+}
+
+impl fmt::Display for ReservationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "shared allocation refused ({} bytes, alignment {})",
+            self.layout.size(),
+            self.layout.align()
+        )
+    }
+}
+
+impl std::error::Error for ReservationError {}
 
 /// Strong references to one original initialized allocation and its charge.
 pub struct Shared<T, Charge> {
@@ -44,22 +89,52 @@ unsafe impl<T: Send, Charge: Send> Send for Reserved<T, Charge> {}
 unsafe impl<T: Sync, Charge: Sync> Sync for Reserved<T, Charge> {}
 
 impl<T, Charge> Reserved<T, Charge> {
-    pub(crate) fn layout() -> Layout {
+    /// Exact original allocation layout, including the charge and all padding.
+    ///
+    /// Rust bounds this concrete sized layout before the allocator is called;
+    /// the reference count makes it nonzero even for zero-sized payload/charge.
+    pub fn layout() -> Layout {
         Layout::new::<Allocation<T, Charge>>()
     }
 
+    /// Allocate one uninitialized shell with its already admitted charge.
+    ///
+    /// On allocator refusal, return that same charge without destroying it or
+    /// constructing any payload. The caller can retry with the returned owner;
+    /// no allocation size estimate or replacement capacity grant is used.
+    /// Success retains the charge until the original allocation is freed.
+    pub fn try_new(charge: Charge) -> Result<Self, (Charge, ReservationError)> {
+        let layout = Self::layout();
+        // SAFETY: the concrete sized layout is valid and nonzero. alloc uses the
+        // same global allocator/layout that the existing Box reclamation owns.
+        let Some(pointer) = NonNull::new(unsafe { alloc(layout) }.cast::<Allocation<T, Charge>>())
+        else {
+            return Err((charge, ReservationError { layout }));
+        };
+        // SAFETY: this unique, correctly aligned allocation has room for the
+        // exact header. Initialize only its live fields; UnsafeCell<MaybeUninit<T>>
+        // permits uninitialized bytes. No payload-sized stack temporary or
+        // initialized T exists until the consuming initialize operation. These
+        // field moves cannot invoke user code or unwind.
+        unsafe {
+            std::ptr::addr_of_mut!((*pointer.as_ptr()).references).write(AtomicUsize::new(1));
+            std::ptr::addr_of_mut!((*pointer.as_ptr()).charge).write(ManuallyDrop::new(charge));
+        }
+        Ok(Self { pointer })
+    }
+
     pub(crate) fn new(charge: Charge) -> Self {
-        let allocation = Box::new(Allocation {
-            references: AtomicUsize::new(1),
-            value: UnsafeCell::new(MaybeUninit::uninit()),
-            charge: ManuallyDrop::new(charge),
-        });
-        Self {
-            pointer: NonNull::from(Box::leak(allocation)),
+        match Self::try_new(charge) {
+            Ok(shell) => shell,
+            Err((_charge, error)) => handle_alloc_error(error.layout()),
         }
     }
 
-    pub(crate) fn initialize(self, value: T) -> Shared<T, Charge> {
+    /// Consume this shell and move the payload into its original allocation.
+    ///
+    /// This does not allocate, clone, invoke a callback, or drop either owner.
+    /// The returned strong owner retains exactly the shell's original charge.
+    pub fn initialize(self, value: T) -> Shared<T, Charge> {
         let this = ManuallyDrop::new(self);
         // SAFETY: Reserved is unique, cannot be cloned and has no published
         // payload. Initialization happens exactly once before the type changes.
@@ -264,3 +339,7 @@ mod tests {
         assert_eq!(dropped.load(SeqCst), 1);
     }
 }
+
+#[cfg(all(test, feature = "maps", not(feature = "dhat-heap"), not(miri)))]
+#[path = "shared_reservation_tests.rs"]
+mod reservation_tests;

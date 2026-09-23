@@ -154,6 +154,11 @@ pub(crate) struct DeferredPublicationGuard<'fence, 'state, T> {
 }
 
 impl<'state, T> DeferredPublicationFence<'state, T> {
+    /// End access while retaining this original source through an enclosing State swap.
+    pub(crate) fn into_releases(self) -> concread::release::DeferredReleaseBatch {
+        self.releases
+    }
+
     /// Acquire the original mutex; release notification stays in this owner.
     pub(crate) fn lock(&mut self) -> DeferredPublicationGuard<'_, 'state, T> {
         DeferredPublicationGuard {

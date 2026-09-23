@@ -2663,6 +2663,9 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
     fn from(error: crate::state::StateBlockStartError<Self>) -> Self {
         match error {
             crate::state::StateBlockStartError::History(error) => Self::BlockHashAdmission(error),
+            crate::state::StateBlockStartError::Membership(error) => {
+                Self::MembershipAdmission(error)
+            }
             crate::state::StateBlockStartError::Stage(error) => error,
         }
     }
@@ -2672,6 +2675,8 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
 pub enum BlockValidationError {
     /// Local hash-history admission failed before State execution: {0}
     BlockHashAdmission(crate::state::BlockHashAdmissionError),
+    /// Local membership-history admission failed before State execution: {0}
+    MembershipAdmission(crate::state::MembershipAdmissionError),
     /// Block has committed transactions
     HasCommittedTransactions,
     /// Block contained no committed overlays
@@ -2868,6 +2873,7 @@ impl BlockValidationError {
         use crate::state::MergeLedgerCommitError;
         match error {
             MergeLedgerCommitError::BlockHashAdmission(error) => Self::BlockHashAdmission(error),
+            MergeLedgerCommitError::MembershipAdmission(error) => Self::MembershipAdmission(error),
             MergeLedgerCommitError::MissingCertifiedMergeSidecar { entry_hash } => {
                 Self::MissingCertifiedMergeSidecar { entry_hash }
             }
@@ -5481,7 +5487,7 @@ pub(crate) mod valid {
                             ivm::axt::HandleAmountResolutionError::MissingAmount => {
                                 (
                                     AxtRejectReason::Budget,
-                                    "intent amount is absent and no committed proof amount was provided",
+                                    "redacted remote spend amount has no qualified private proof relation",
                                 )
                             }
                             ivm::axt::HandleAmountResolutionError::InvalidProofEnvelope => {
@@ -5524,22 +5530,13 @@ pub(crate) mod valid {
                         resolved_proof_amounts.insert(amount_cache_key, resolved.clone());
                         resolved
                     };
-                    if fragment.intent.op.amount.is_some() {
-                        if fragment.amount.as_ref() != Some(&resolved_amount.amount) {
-                            return Err(make_env_error(
-                                envelope_lane,
-                                AxtRejectReason::Budget,
-                                "handle fragment amount does not match the resolved intent amount",
-                                Some(fragment.intent.asset_dsid),
-                                None,
-                                None,
-                            ));
-                        }
-                    } else if fragment.amount.is_some() {
+                    if fragment.intent.op.amount.as_ref() != Some(&resolved_amount.amount)
+                        || fragment.amount.as_ref() != Some(&resolved_amount.amount)
+                    {
                         return Err(make_env_error(
                             envelope_lane,
                             AxtRejectReason::Budget,
-                            "hidden handle amount must be redacted in fragment",
+                            "handle fragment amount does not match the clear intent amount",
                             Some(fragment.intent.asset_dsid),
                             None,
                             None,
@@ -7518,6 +7515,9 @@ pub(crate) mod valid {
                             crate::state::StateBlockStartError::History(error) => {
                                 BlockValidationError::BlockHashAdmission(error)
                             }
+                            crate::state::StateBlockStartError::Membership(error) => {
+                                BlockValidationError::MembershipAdmission(error)
+                            }
                             crate::state::StateBlockStartError::Stage(error) => {
                                 BlockValidationError::LocalStorageRecoveryRequired {
                                     reason: format!(
@@ -8304,9 +8304,15 @@ pub(crate) mod valid {
             let expected_actions = applier
                 .derive_npos_penalty_actions(&block.header())
                 .map_err(|err| {
-                    if let Some(local) = err.downcast_ref::<crate::state::BlockHashAdmissionError>()
-                    {
-                        BlockValidationError::BlockHashAdmission(local.clone())
+                    if let Some(local) = err.downcast_ref::<crate::state::StateAdmissionError>() {
+                        match local {
+                            crate::state::StateAdmissionError::History(e) => {
+                                BlockValidationError::BlockHashAdmission(e.clone())
+                            }
+                            crate::state::StateAdmissionError::Membership(e) => {
+                                BlockValidationError::MembershipAdmission(e.clone())
+                            }
+                        }
                     } else {
                         Self::npos_effects_error(format!("failed to derive NPoS effects: {err}"))
                     }
@@ -21753,6 +21759,36 @@ mod commit {
             proof_seed: &[u8],
             asset_policy: iroha_data_model::asset::AssetBalancePolicy,
         ) -> (State, AxtEnvelopeRecord) {
+            amount_fixture_with_asset_policy(dsid, manifest_tag, proof_seed, asset_policy, false)
+        }
+        fn clear_amount_fixture(
+            dsid: u64,
+            manifest_tag: u8,
+            proof_seed: &[u8],
+        ) -> (State, AxtEnvelopeRecord) {
+            amount_fixture_with_asset_policy(
+                dsid,
+                manifest_tag,
+                proof_seed,
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                true,
+            )
+        }
+        fn clear_amount_fixture_with_asset_policy(
+            dsid: u64,
+            manifest_tag: u8,
+            proof_seed: &[u8],
+            asset_policy: iroha_data_model::asset::AssetBalancePolicy,
+        ) -> (State, AxtEnvelopeRecord) {
+            amount_fixture_with_asset_policy(dsid, manifest_tag, proof_seed, asset_policy, true)
+        }
+        fn amount_fixture_with_asset_policy(
+            dsid: u64,
+            manifest_tag: u8,
+            proof_seed: &[u8],
+            asset_policy: iroha_data_model::asset::AssetBalancePolicy,
+            clear: bool,
+        ) -> (State, AxtEnvelopeRecord) {
             let dsid = DataSpaceId::new(dsid);
             let lane = LaneId::new(1);
             let (state, issuer, issuer_uaid, manifest_roots) =
@@ -21771,11 +21807,11 @@ mod commit {
             };
             let binding = binding_for_descriptor(&descriptor);
             let mut handle = sample_handle(binding, lane, dsid, 5, manifest_root);
-            handle.intent.op.amount = None;
-            handle.amount = None;
+            let effective_amount = Quantity::from(5_u64);
+            handle.intent.op.amount = clear.then(|| effective_amount.clone());
+            handle.amount = clear.then(|| effective_amount.clone());
             let mut handle =
                 sign_axt_validation_handle(handle, &state, &issuer, issuer_uaid, manifest_root);
-            let effective_amount = Quantity::from(5_u64);
             let (proof, commitment) = proof_blob_for_with_authenticated_amount(
                 dsid,
                 manifest_root,
@@ -22817,7 +22853,7 @@ mod commit {
         include!("block/axt_shared_budget_across_envelopes_test.rs");
         #[test]
         fn axt_validation_rejects_duplicate_authenticated_handle_usage() {
-            let (state, mut envelope) = hidden_amount_fixture(119, 0x77, b"duplicate-proof-claim");
+            let (state, mut envelope) = clear_amount_fixture(119, 0x77, b"duplicate-proof-claim");
             envelope.handles.push(envelope.handles[0].clone());
             expect_axt_envelope_error(
                 &state,
@@ -23159,7 +23195,7 @@ mod commit {
         #[test]
         fn axt_validation_rejects_proof_reused_for_another_remote_spend_recipient() {
             let (state, mut envelope) =
-                hidden_amount_fixture(71, 0x71, b"remote-spend-recipient-binding");
+                clear_amount_fixture(71, 0x71, b"remote-spend-recipient-binding");
             envelope.handles[0].intent.op.to = ACCOUNT_FROM_LITERAL.to_owned();
             expect_axt_envelope_error(
                 &state,
@@ -23170,7 +23206,7 @@ mod commit {
         }
         #[test]
         fn axt_validation_rejects_mutated_proof_amount_with_recomputed_commitment() {
-            let (state, mut envelope) = hidden_amount_fixture(18, 0x32, b"mutated-hidden-amount");
+            let (state, mut envelope) = clear_amount_fixture(18, 0x32, b"mutated-proof-amount");
             let handle = &mut envelope.handles[0];
             let proof = handle
                 .proof
@@ -23201,7 +23237,7 @@ mod commit {
         #[test]
         fn axt_validation_rejects_stale_fragment_commitment() {
             let (state, mut envelope) =
-                hidden_amount_fixture(19, 0x33, b"stale-fragment-commitment");
+                clear_amount_fixture(19, 0x33, b"stale-fragment-commitment");
             envelope.handles[0]
                 .amount_commitment
                 .as_mut()
@@ -23216,7 +23252,7 @@ mod commit {
         #[test]
         fn axt_validation_rejects_account_alias_in_remote_spend_intent() {
             let (state, mut envelope) =
-                hidden_amount_fixture(20, 0x34, b"noncanonical-intent-account");
+                clear_amount_fixture(20, 0x34, b"noncanonical-intent-account");
             envelope.handles[0].intent.op.to = "merchant@wonder".to_owned();
             expect_axt_envelope_error(
                 &state,
@@ -23917,7 +23953,7 @@ mod commit {
             );
         }
         #[test]
-        fn axt_validation_rejects_unanchored_hidden_amount_commitment() {
+        fn axt_validation_rejects_redacted_intent_before_unanchored_spend() {
             let (state, envelope) = hidden_amount_fixture(61, 0x61, b"hidden-amount");
             let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
             snapshot.entries[0].policy.next_handle_counter = 2;
@@ -23926,16 +23962,23 @@ mod commit {
             let mut state_block = state.block(block.header());
             {
                 let mut executed = state_block.transaction();
-                executed
+                let error = executed
                     .record_axt_envelope(envelope)
-                    .expect("hidden-amount commitment control must execute");
-                executed.apply();
+                    .expect_err("redacted intent cannot stage family budget consumption");
+                assert!(
+                    error.to_string().contains("MissingAmount"),
+                    "unexpected redacted amount rejection: {error}"
+                );
             }
             let result = validate_axt_envelopes(&block, &state_block);
-            expect_unanchored_axt_spend_rejection(result);
+            expect_axt_error(
+                result.expect_err("public proof scalar cannot authorize a redacted intent"),
+                AxtRejectReason::Budget,
+                "redacted remote spend amount has no qualified private proof relation",
+            );
         }
         #[test]
-        fn axt_validation_rejects_hidden_amount_commitment_mismatch() {
+        fn axt_validation_rejects_clear_amount_commitment_mismatch() {
             let dsid = DataSpaceId::new(62);
             let lane = LaneId::new(9);
             let (mut state, issuer, issuer_uaid, manifest_root) =
@@ -23960,15 +24003,15 @@ mod commit {
             let proof = proof_blob_for_with_amount(
                 dsid,
                 policy.manifest_root,
-                b"hidden-amount-mismatch",
+                b"clear-amount-mismatch",
                 9,
                 Some(5),
                 None,
                 Vec::new(),
             );
             let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
-            handle.intent.op.amount = None;
-            handle.amount = None;
+            handle.intent.op.amount = Some(Quantity::from(5_u64));
+            handle.amount = Some(Quantity::from(5_u64));
             handle.amount_commitment = Some([0xFF; 32]);
             let handle =
                 sign_axt_validation_handle(handle, &state, &issuer, issuer_uaid, manifest_root);
@@ -24178,7 +24221,8 @@ mod event {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
         Some(match err {
             BlockValidationError::LocalStorageRecoveryRequired { .. }
-            | BlockValidationError::BlockHashAdmission(_) => return None,
+            | BlockValidationError::BlockHashAdmission(_)
+            | BlockValidationError::MembershipAdmission(_) => return None,
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
             BlockValidationError::DuplicateTransactions

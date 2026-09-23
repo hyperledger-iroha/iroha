@@ -117,6 +117,20 @@ impl crate::sumeragi::v2_apply::validation_custody::CarrierValidator for ActualP
     }
 }
 
+// Keep each selected owner and its consuming callback in a separate worker
+// frame. The parent test retains the same service and candidate throughout;
+// only stack-local transfer temporaries leave its enclosing frame.
+#[inline(never)]
+fn consume_retained_phase<R, E>(
+    service: &mut crate::sumeragi::v2_apply::validation_custody::RetainedBodyValidationService<
+        ActualPhaseValidator,
+    >,
+    receipt: &crate::sumeragi::v2_body_store::ValidatedBodyReceipt,
+    publish: impl FnOnce(&ActualPhaseValidator, RetainedPhase) -> Result<R, (RetainedPhase, E)>,
+) -> Result<R, E> {
+    service.select(receipt).unwrap().try_consume(publish)
+}
+
 fn phase_allocations(phase: &RetainedPhase) -> [*const (); 6] {
     fn allocations<B>(
         journals: &super::super::super::PreparedCarrierJournals<PhaseReservation, B>,
@@ -303,22 +317,19 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
         .into_validated_receipt()
         .unwrap();
     let finality = signed_finality(context.clone(), subject(&proposal), commitment, 0);
-    let paused = service
-        .select(&receipt)
-        .unwrap()
-        .try_consume(|producer, phase| {
-            assert!(Arc::ptr_eq(&producer.state, &state));
-            assert!(Arc::ptr_eq(&producer.queue, &queue));
-            let RetainedPhase::Validated(journals) = phase else {
-                panic!("first selection owns the original validation");
-            };
-            let decision = journals
-                .bind_decision(finality, |_| {
-                    Ok::<_, Infallible>(PhaseReservation(Arc::clone(&producer.releases)))
-                })
-                .unwrap_or_else(|refusal| panic!("real signed decision: {:?}", refusal.error));
-            Err::<(), _>((RetainedPhase::Decided(decision), "await exact durability"))
-        });
+    let paused = consume_retained_phase(&mut service, &receipt, |producer, phase| {
+        assert!(Arc::ptr_eq(&producer.state, &state));
+        assert!(Arc::ptr_eq(&producer.queue, &queue));
+        let RetainedPhase::Validated(journals) = phase else {
+            panic!("first selection owns the original validation");
+        };
+        let decision = journals
+            .bind_decision(finality, |_| {
+                Ok::<_, Infallible>(PhaseReservation(Arc::clone(&producer.releases)))
+            })
+            .unwrap_or_else(|refusal| panic!("real signed decision: {:?}", refusal.error));
+        Err::<(), _>((RetainedPhase::Decided(decision), "await exact durability"))
+    });
     assert_eq!(paused, Err("await exact durability"));
     let decided = service.owner_for_test(durable.subject()).unwrap();
     assert!(matches!(decided, RetainedPhase::Decided(_)));
@@ -362,36 +373,30 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     assert_eq!(service.marker_counts_for_test(), (0, 2));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-    let paused = service
-        .select(&later_receipt)
-        .unwrap()
-        .try_consume(|producer, phase| {
-            let RetainedPhase::Decided(decision) = phase else {
-                panic!("reproposal retains the current decided phase");
-            };
-            producer
-                .state
-                .kura
-                .store_block(decision.block().clone())
-                .unwrap();
-            let durable_finality = producer
-                .state
-                .kura
-                .store_v2_finality_artifact(decision.finality())
-                .unwrap();
-            let checkpoint = producer
-                .state
-                .kura
-                .persist_wsv_checkpoint_for_v2_commit(
-                    &durable_finality,
-                    decision.journals.checkpoint,
-                )
-                .unwrap();
-            Err::<(), _>((
-                RetainedPhase::Checkpointed(decision.attach_checkpoint(checkpoint)),
-                "await publication",
-            ))
-        });
+    let paused = consume_retained_phase(&mut service, &later_receipt, |producer, phase| {
+        let RetainedPhase::Decided(decision) = phase else {
+            panic!("reproposal retains the current decided phase");
+        };
+        producer
+            .state
+            .kura
+            .store_block(decision.block().clone())
+            .unwrap();
+        let durable_finality = producer
+            .state
+            .kura
+            .store_v2_finality_artifact(decision.finality())
+            .unwrap();
+        let checkpoint = producer
+            .state
+            .kura
+            .persist_wsv_checkpoint_for_v2_commit(&durable_finality, decision.journals.checkpoint)
+            .unwrap();
+        Err::<(), _>((
+            RetainedPhase::Checkpointed(decision.attach_checkpoint(checkpoint)),
+            "await publication",
+        ))
+    });
     assert_eq!(paused, Err("await publication"));
     let checkpointed = service.owner_for_test(durable.subject()).unwrap();
     assert!(matches!(checkpointed, RetainedPhase::Checkpointed(_)));
@@ -412,23 +417,16 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     assert_eq!(releases.load(Ordering::SeqCst), 0);
 
     let held = hold(&state, "world.accounts");
-    let refusal = service
-        .select(&receipt)
-        .unwrap()
-        .try_consume(|producer, phase| {
-            let _queue = producer.queue.try_lock_lane_retirement_observer().unwrap();
-            let RetainedPhase::Checkpointed(decision) = phase else {
-                panic!("physical acquisition must receive the original checkpoint");
-            };
-            match decision
-                .try_prepare_physical(&producer.state, None, |_, _| Ok::<_, Infallible>(()))
-            {
-                Ok(_) => panic!("original account writer must defer publication"),
-                Err((decision, error)) => {
-                    Err::<(), _>((RetainedPhase::Checkpointed(decision), error))
-                }
-            }
-        });
+    let refusal = consume_retained_phase(&mut service, &receipt, |producer, phase| {
+        let _queue = producer.queue.try_lock_lane_retirement_observer().unwrap();
+        let RetainedPhase::Checkpointed(decision) = phase else {
+            panic!("physical acquisition must receive the original checkpoint");
+        };
+        match decision.try_prepare_physical(&producer.state, None, |_, _| Ok::<_, Infallible>(())) {
+            Ok(_) => panic!("original account writer must defer publication"),
+            Err((decision, error)) => Err::<(), _>((RetainedPhase::Checkpointed(decision), error)),
+        }
+    });
     let mut wait = busy_wait(refusal.unwrap_err()).wait_for_release();
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
@@ -450,20 +448,17 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     );
 
     // An explicit physical abort returns the same checkpointed phase too.
-    let aborted = service
-        .select(&later_receipt)
-        .unwrap()
-        .try_consume(|producer, phase| {
-            let _queue = producer.queue.try_lock_lane_retirement_observer().unwrap();
-            let RetainedPhase::Checkpointed(decision) = phase else {
-                panic!("retry cannot reconstruct a validation phase");
-            };
-            let original = acquire(decision, &producer.state).abort();
-            Err::<(), _>((
-                RetainedPhase::Checkpointed(original),
-                "abort physical attempt",
-            ))
-        });
+    let aborted = consume_retained_phase(&mut service, &later_receipt, |producer, phase| {
+        let _queue = producer.queue.try_lock_lane_retirement_observer().unwrap();
+        let RetainedPhase::Checkpointed(decision) = phase else {
+            panic!("retry cannot reconstruct a validation phase");
+        };
+        let original = acquire(decision, &producer.state).abort();
+        Err::<(), _>((
+            RetainedPhase::Checkpointed(original),
+            "abort physical attempt",
+        ))
+    });
     assert_eq!(aborted, Err("abort physical attempt"));
     assert_eq!(
         phase_allocations(service.owner_for_test(durable.subject()).unwrap()),
@@ -481,19 +476,16 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     assert_eq!(revalidated, later_receipt);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-    let published = service
-        .select(&receipt)
-        .unwrap()
-        .try_consume(|producer, phase| {
-            let _queue = producer.queue.try_lock_lane_retirement_observer().unwrap();
-            let RetainedPhase::Checkpointed(decision) = phase else {
-                panic!("the publisher consumes the retained checkpointed execution");
-            };
-            acquire(decision, &producer.state)
-                .publish()
-                .map_err(|(decision, error)| (RetainedPhase::Checkpointed(decision), error))
-        })
-        .unwrap();
+    let published = consume_retained_phase(&mut service, &receipt, |producer, phase| {
+        let _queue = producer.queue.try_lock_lane_retirement_observer().unwrap();
+        let RetainedPhase::Checkpointed(decision) = phase else {
+            panic!("the publisher consumes the retained checkpointed execution");
+        };
+        acquire(decision, &producer.state)
+            .publish()
+            .map_err(|(decision, error)| (RetainedPhase::Checkpointed(decision), error))
+    })
+    .unwrap();
     assert_eq!(published.block().hash(), proposal.hash());
     assert_eq!(state.committed_height(), 1);
     assert_eq!(foreign.committed_height(), 0);

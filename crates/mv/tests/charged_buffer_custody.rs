@@ -450,3 +450,6 @@ fn appending_copy_elements_never_invokes_payload_clone() {
     drop(entries);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[path = "charged_buffer_custody/from_charge.rs"]
+mod from_charge;

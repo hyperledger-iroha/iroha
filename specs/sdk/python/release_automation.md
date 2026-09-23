@@ -52,8 +52,8 @@ harness removes `dist/` on exit.
 3. Bind the reviewed package inventory into the canonical aggregate release
    manifest. The protected signer produces the raw 64-byte Ed25519 signature
    outside the repository through `signing_provider=authenticated_external_signer`
-   with exact `signing_backend=software`. A verified release is
-   `signer_qualification=software-key-qualified`.
+   under the reviewed public-key contract. Software and optional hardware custody
+   are both supported; verification does not claim key origin or exportability.
 4. Verify the public tuple before upload:
 
    ```bash

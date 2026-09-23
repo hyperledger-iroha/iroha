@@ -36,7 +36,7 @@ for (const [surface, moduleUrl] of [
     const originalSiblingTail = input.lanePrivacy.merkle.auditPath[0][31];
     const instruction = module.buildFinalizeElectionInstruction({
       electionId: "privacy-parity",
-      tally: [1],
+      tally: [1, 0],
       proof: input,
     });
     const proof = instruction.zk.FinalizeElection.tally_proof;
@@ -55,7 +55,7 @@ for (const [surface, moduleUrl] of [
       () =>
         module.buildFinalizeElectionInstruction({
           electionId: "privacy-parity",
-          tally: [1],
+          tally: [1, 0],
           proof: {
             ...attachmentInput(),
             verifyingKeyRef: "lane/privacy:legacy",
@@ -67,7 +67,7 @@ for (const [surface, moduleUrl] of [
       () =>
         module.buildFinalizeElectionInstruction({
           electionId: "privacy-parity",
-          tally: [1],
+          tally: [1, 0],
           proof: {
             ...attachmentInput(),
             lanePrivacy: {
