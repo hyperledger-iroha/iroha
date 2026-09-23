@@ -5,6 +5,8 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.charset.CodingErrorAction
+import java.security.MessageDigest
 
 /** Closed native coordinator methods. Frame schema 2 is the sole supported V1 protocol frame. */
 enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
@@ -12,6 +14,7 @@ enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
     BEGIN_SENDER_TRANSITION(4), PROVE_PREPARED_SENDER_TRANSITION(5), BUILD_TERMINAL_ENVELOPE(6),
     ACCEPT_INSTALLED_TERMINAL(7), RECOVER_SENDER(8), RECOVER_TERMINAL_ENVELOPE(9), RELEASE_OUTBOX(10), BEGIN_OBSERVATION(11),
     INITIAL_ENROLLMENT(12),
+    ACKNOWLEDGE_COMMITTED_APP_ATTEST(13),
 }
 
 /**
@@ -170,6 +173,26 @@ object KagemushaCoreCoordinatorFrameV1 {
                 5 -> { count(fields, 3); ticket(fields, 1); bounded(fields, 2, 16 * 1024) }
                 else -> throw IllegalArgumentException("unknown enrollment phase")
             }
+            KagemushaCoreCoordinatorMethodV1.ACKNOWLEDGE_COMMITTED_APP_ATTEST -> {
+                count(fields, 7); digest(fields, 0)
+                val keyID = field(fields, 1)
+                require(keyID.size in 1..512 && keyID.none { it == 0.toByte() } &&
+                    runCatching {
+                        Charsets.UTF_8.newDecoder()
+                            .onMalformedInput(CodingErrorAction.REPORT)
+                            .onUnmappableCharacter(CodingErrorAction.REPORT)
+                            .decode(ByteBuffer.wrap(keyID))
+                    }.isSuccess) { "invalid App Attest key ID" }
+                val selection = field(fields, 2)
+                val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000".toByteArray(Charsets.US_ASCII)
+                require(selection.size == 460 && selection.copyOfRange(0, domain.size).contentEquals(domain) &&
+                    ByteBuffer.wrap(selection, domain.size, 8).order(ByteOrder.LITTLE_ENDIAN).long == 403L) {
+                    "invalid App Attest selection"
+                }
+                bounded(fields, 3, 8 * 1024)
+                require(number(fields, 4).toUInt() != UInt.MAX_VALUE) { "App Attest counter exhausted" }
+                digest(fields, 5); digest(fields, 6)
+            }
         }
     }
 
@@ -215,6 +238,19 @@ object KagemushaCoreCoordinatorFrameV1 {
                 5 -> { count(response, 2); equal(response, 0, request, 1); digest(response, 1) }
                 6 -> count(response, 0)
                 else -> throw IllegalArgumentException("unknown enrollment phase")
+            }
+            KagemushaCoreCoordinatorMethodV1.ACKNOWLEDGE_COMMITTED_APP_ATTEST -> {
+                count(response, 7); equal(response, 0, request, 0)
+                (1..3).forEach { index ->
+                    require(response[index].contentEquals(
+                        MessageDigest.getInstance("SHA-256").digest(request[index]))) {
+                        "App Attest acknowledgment substituted original bytes"
+                    }
+                }
+                require(number(response, 4).toUInt() == number(request, 4).toUInt() + 1u) {
+                    "App Attest acknowledgment skipped the committed counter"
+                }
+                equal(response, 5, request, 5); equal(response, 6, request, 6)
             }
         }
     }

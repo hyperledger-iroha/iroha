@@ -28,13 +28,23 @@ internal class KagemushaSecureElementApduEndpointV1(
 
     override fun capabilities(): ByteArray = synchronized(lock) {
         check(!closed) { "secure-element channel is closed" }
-        exchange(
-            shortCommand(INS_CAPABILITIES, expectedLength = CAPABILITY_BYTES),
-            "capabilities",
-        ).also {
-            require(it.size == CAPABILITY_BYTES) {
-                "secure-element capability response must contain exactly $CAPABILITY_BYTES bytes"
+        try {
+            exchange(
+                shortCommand(INS_CAPABILITIES, expectedLength = CAPABILITY_BYTES),
+                "capabilities",
+            ).also {
+                if (it.size != CAPABILITY_BYTES) {
+                    it.fill(0)
+                    throw IllegalArgumentException(
+                        "secure-element capability response must contain exactly $CAPABILITY_BYTES bytes",
+                    )
+                }
             }
+        } catch (error: Throwable) {
+            // A malformed or lost capability reply cannot be retried on the same selected applet.
+            closed = true
+            runCatching { channel.close() }
+            throw error
         }
     }
 
@@ -46,9 +56,13 @@ internal class KagemushaSecureElementApduEndpointV1(
         val commandDigest = sha256(command)
         try {
             val begin = ByteArray(BEGIN_BYTES)
-            writeU32Le(begin, 0, command.size)
-            commandDigest.copyInto(begin, LENGTH_BYTES)
-            requireEmptySuccess(exchange(shortCommand(INS_BEGIN_COMMAND, data = begin), "begin"), "begin")
+            try {
+                writeU32Le(begin, 0, command.size)
+                commandDigest.copyInto(begin, LENGTH_BYTES)
+                requireEmptySuccess(exchange(shortCommand(INS_BEGIN_COMMAND, data = begin), "begin"), "begin")
+            } finally {
+                begin.fill(0)
+            }
 
             var commandOffset = 0
             var commandChunkIndex = 0
@@ -79,50 +93,67 @@ internal class KagemushaSecureElementApduEndpointV1(
                 shortCommand(INS_COMMIT_COMMAND, expectedLength = RESPONSE_METADATA_BYTES),
                 "commit",
             )
-            require(metadata.size == RESPONSE_METADATA_BYTES) {
-                "secure-element response metadata must contain exactly $RESPONSE_METADATA_BYTES bytes"
-            }
-            val responseLength = readU32Le(metadata, 0)
-            require(responseLength in MINIMUM_RESPONSE_BYTES..MAXIMUM_RESPONSE_BYTES) {
-                "secure-element response is outside the ABI-23 bound"
-            }
-            val expectedDigest = metadata.copyOfRange(LENGTH_BYTES, RESPONSE_METADATA_BYTES)
-            val response = ByteArray(responseLength)
             try {
-                var offset = 0
-                var index = 0
-                while (offset < response.size) {
-                    val count = minOf(CHUNK_BYTES, response.size - offset)
-                    val chunk = exchange(
-                        shortCommand(
-                            INS_READ_RESPONSE,
-                            p1 = index ushr 8,
-                            p2 = index,
-                            expectedLength = count,
-                        ),
-                        "read chunk $index",
-                    )
-                    require(chunk.size == count) {
-                        "secure-element response chunk $index has the wrong length"
+                require(metadata.size == RESPONSE_METADATA_BYTES) {
+                    "secure-element response metadata must contain exactly $RESPONSE_METADATA_BYTES bytes"
+                }
+                val responseLength = readU32Le(metadata, 0)
+                require(responseLength in MINIMUM_RESPONSE_BYTES..MAXIMUM_RESPONSE_BYTES) {
+                    "secure-element response is outside the ABI-23 bound"
+                }
+                val expectedDigest = metadata.copyOfRange(LENGTH_BYTES, RESPONSE_METADATA_BYTES)
+                try {
+                    val response = ByteArray(responseLength)
+                    try {
+                        var offset = 0
+                        var index = 0
+                        while (offset < response.size) {
+                            val count = minOf(CHUNK_BYTES, response.size - offset)
+                            val chunk = exchange(
+                                shortCommand(
+                                    INS_READ_RESPONSE,
+                                    p1 = index ushr 8,
+                                    p2 = index,
+                                    expectedLength = count,
+                                ),
+                                "read chunk $index",
+                            )
+                            try {
+                                require(chunk.size == count) {
+                                    "secure-element response chunk $index has the wrong length"
+                                }
+                                chunk.copyInto(response, offset)
+                            } finally {
+                                chunk.fill(0)
+                            }
+                            offset += count
+                            index += 1
+                        }
+                        val actualDigest = sha256(response)
+                        try {
+                            require(MessageDigest.isEqual(expectedDigest, actualDigest)) {
+                                "secure-element response digest mismatch"
+                            }
+                        } finally {
+                            actualDigest.fill(0)
+                        }
+                        return@synchronized response
+                    } catch (error: Throwable) {
+                        response.fill(0)
+                        throw error
                     }
-                    chunk.copyInto(response, offset)
-                    chunk.fill(0)
-                    offset += count
-                    index += 1
+                } finally {
+                    expectedDigest.fill(0)
                 }
-                require(MessageDigest.isEqual(expectedDigest, sha256(response))) {
-                    "secure-element response digest mismatch"
-                }
-                return@synchronized response
-            } catch (error: Throwable) {
-                response.fill(0)
-                throw error
             } finally {
-                expectedDigest.fill(0)
                 metadata.fill(0)
             }
         } catch (error: Throwable) {
             abortBestEffort()
+            // A lost commit or read response leaves the applet outcome uncertain. A fresh
+            // session must recover it by the original request ID before issuing more commands.
+            closed = true
+            runCatching { channel.close() }
             throw error
         } finally {
             commandDigest.fill(0)

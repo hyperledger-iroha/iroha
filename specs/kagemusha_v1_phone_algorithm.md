@@ -151,6 +151,17 @@ The current paired terminal relation also checks its supplied
 `hardware_terminal_commitment` for nonzero but does not yet derive it from the
 authenticated canonical terminal-body bytes. The staged terminal-body and
 durable-recovery helpers are not connected to the production recursive fold.
+The recursive State proof now carries six public limbs for the outgoing
+preparation ID and two sealed-stream digests, and the native preparation ID
+uses a fixed, domain-separated pre-proof transcript. These are candidate
+commitments. An isolated terminal helper now opens the exact 475-byte
+preparation transcript and both bounded sealed streams against recursively
+verified State carriers, with both-parity mutation tests. The live terminal
+fold has a release-authenticated redemption-manifest source in its 83-cell
+terminal public column, but no room for these SHA jobs in its fixed claim
+geometry; it leaves `verified_preparation_id`
+absent. The ID cannot authorize a terminal outcome until the complete opening
+is installed and qualified in the live proof.
 This is an unsatisfied proof obligation even for an OEM checkpoint profile;
 testnet execution must not be cited as proof of production hardware backing.
 
@@ -415,7 +426,8 @@ checkpoint service with signed original-result recovery, or a new physically
 verified primitive satisfying the same no-fork relation. An attested app and
 StrongBox key alone cannot be substituted for that relation.
 After the connected Pixel 6 moved to an Android 17 user build, it still
-advertised neither hardware single-use nor limited-use Keystore support.
+advertised neither hardware single-use nor limited-use Keystore support, and
+did not advertise the hardware Identity Credential feature.
 Its embedded `eSE1` reader was present, but no access rule for the current
 applet AID was observed. This recheck does not establish that an applet is
 installed or that this app can select it. The concrete internal eSE service
@@ -463,9 +475,10 @@ release; submitted operations must reach applied finality before counting as
 funded or redeemed. A testnet experimental device profile therefore needs
 explicit release/network-scoped proof and runtime installation, not a global
 hardware-admission bypass.
-The native testnet State observer now requires an operator-pinned network and
-authenticated release, verifies the actual paired State proof, and returns
-only an unqualified observation. A Rust-only owner retains that concrete
+The native testnet State observer now requires operator-pinned network, asset
+identity, asset incarnation, scale, reserve liability pool, and authenticated
+release; it verifies the actual paired State proof and returns only an
+unqualified observation. A Rust-only owner retains that concrete
 verifier and one process-local lane lineage. No app-facing native installation
 or durable monetary capability exists yet; the terminal hardware fold and
 monetary admission remain separate.
@@ -476,6 +489,13 @@ hardening still awaits the focused JVM and physical-device test rerun. It can
 exercise peer exchange and later online conflict detection, but the software
 use limit leaves no-fork unproven. Its raw observation carries an experimental
 profile and cannot be relabeled as hardware one-use evidence.
+The testnet phone probe can obtain a 460-byte frame directly from the Rust
+data model without pasted hex. For this raw observation only, eight synthetic
+identifiers use a distinct Pixel 6 diagnostic domain, the current app-owner
+scope and exact network; the operation is Rotate with index 0→1. These bytes
+are model-canonical but are not an issuer release, enrolled credential, real
+transition statement or monetary lineage. The diagnostic JNI export is separate
+from the coordinator and cannot satisfy production release admission.
 
 Testnet admission should still enforce finalized issuance, conservation,
 unique credit use, exact network/release binding, durable idempotency and
@@ -526,6 +546,14 @@ native/SDK transport and partial journal/service components. It does not yet
 compose a production native owner with a provisioned phone service, real
 funded proof corridor and signed device qualification. This distinction is a
 release condition, not an alternate V1 algorithm.
+
+The iPhone App Attest intent journal may move a completed assertion to the next
+ready counter only after native coordinator method 13 acknowledges the exact
+enrolled key, signed selection, original raw assertion, predecessor/next
+counter, committed terminal certificate and installed envelope. The native
+backend hook is unavailable by default; its future implementation must verify
+those fields against the authenticated durable Core journal. The mobile CAS
+and frame correlation do not themselves qualify a monetary commit.
 
 The implementation gap is concrete: Core's structural exact-next checks and
 recovery metadata exist, but its production hardware-guard hooks default to

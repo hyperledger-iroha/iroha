@@ -58,7 +58,7 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
   }
 
   private final class Endpoint: KagemushaCoreCoordinatorEndpointV1 {
-    var contractWords: [UInt32] = [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 12]
+    var contractWords: [UInt32] = [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 13]
     var returnedHandle = UInt64.max
     var openCalls = 0
     var invokeCalls = 0

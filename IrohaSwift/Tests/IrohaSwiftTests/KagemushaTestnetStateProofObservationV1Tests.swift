@@ -40,6 +40,9 @@ final class KagemushaTestnetStateProofObservationV1Tests: XCTestCase {
       (0, Data(repeating: 3, count: 257), .invalidObservation),
       (0, noritoEncode(typeName: "wrong.schema", payload: Data([1]),
                        flags: NoritoHeader.compactLen), .invalidObservation),
+      (0, noritoEncode(
+        typeName: "connect_norito_bridge::KagemushaTestnetStateObservationArchiveV1",
+        payload: Data([1]), flags: 0), .invalidObservation),
     ]
     for (status, archive, expected) in cases {
       let endpoint = Endpoint(status: status, archive: archive)

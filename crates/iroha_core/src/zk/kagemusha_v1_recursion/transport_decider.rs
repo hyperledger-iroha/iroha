@@ -60,7 +60,7 @@ const TRANSPORT_DECIDER_EQUATION_TAG_V1: u32 = 6;
 
 /// Public instance count of one compact outer parity.
 ///
-/// The decider deliberately preserves the recursive aggregate-state ABI: 87 semantic
+/// The decider deliberately preserves the recursive aggregate-state ABI: 93 semantic
 /// cells followed by the 34-limb terminal history produced by folding the
 /// private carrier's current opening claim into its complete prior history.
 pub(super) const KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1: usize =
@@ -566,8 +566,8 @@ fn assigned_u128_v1<F: halo2_base::utils::ScalarField>(
 
 const _: () = {
     assert!(PUBLIC_INSTANCE_COUNT == 85);
-    assert!(RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT == 87);
-    assert!(KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1 == 121);
+    assert!(RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT == 93);
+    assert!(KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1 == 127);
     assert!(INNER_BINDING_INDICES_V1.len() == 8);
 };
 

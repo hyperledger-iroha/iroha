@@ -271,7 +271,10 @@ class EvidenceFixture:
                 self.resign_command(command["id"])
 
 
-def _fixture(tmp_path: Path, *, provider_commitment: str = "d1" * 32) -> EvidenceFixture:
+def _fixture(
+    tmp_path: Path, *, provider_commitment: str = "d1" * 32,
+    sender_fixture_input_capture: list[dict[str, Any]] | None = None,
+) -> EvidenceFixture:
     tmp_path.mkdir(parents=True, exist_ok=True)
     tmp_path.chmod(0o700)
     root = tmp_path / "evidence"
@@ -863,7 +866,7 @@ def _fixture(tmp_path: Path, *, provider_commitment: str = "d1" * 32) -> Evidenc
     }
     policy = VERIFIER._load_observer_policy(observer_policy_path, fixture.observer_policy_sha256)
     builder = PHYSICAL_TEST._TranscriptBuilder(policy, {observer_authority_id: observer_seed})
-    document = builder.build()
+    document = builder.build(include_sender=sender_fixture_input_capture is None)
     provider_policy = fixture.manifest["profiles"][0]["provider_policy"]
     provider_root = VERIFIER.rust_provider_policy_root([hardware_profile], [provider_policy])
     document["profile"]["hardware_policy_id"] = provider_root
@@ -881,7 +884,13 @@ def _fixture(tmp_path: Path, *, provider_commitment: str = "d1" * 32) -> Evidenc
         "run_id": run_id, "candidate_context_digest": fixture.candidate_context_digest(),
         "artifact_set_digest": artifact_set_digest,
     })
-    builder.add_sender_validity(document, hardware_profile, suite_id, vk_digest)
+    builder.add_sender_validity(
+        document, hardware_profile, suite_id, vk_digest,
+        fixture_input_capture=sender_fixture_input_capture,
+    )
+    if sender_fixture_input_capture is not None:
+        # This branch only exports public Rust test inputs. It is not a release fixture.
+        return fixture
     fixture.write(physical_paths["transcript"], VERIFIER.canonical_json_bytes(document), "physical_transcript")
     oem_body = {
         **{key: provider_policy[key] for key in (

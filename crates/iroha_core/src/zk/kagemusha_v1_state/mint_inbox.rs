@@ -15,6 +15,10 @@ use super::*;
 use crate::zk::kagemusha_v1_recursion::{
     KagemushaAuthenticatedRecursiveVerifierV1, verify_kagemusha_mint_finality_helper_v1,
 };
+use iroha_data_model::isi::kagemusha_v1::{
+    KagemushaOperationKindV1, KagemushaOperationResultV1, KagemushaOperationStateV1,
+    KagemushaTopUpResultV1,
+};
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_MINT_CREDIT_MAX_BYTES_V1, KagemushaHardwareCredentialV1,
     KagemushaMintAuthorizationV1, kagemusha_mint_credit_opening_commitment_v1,
@@ -552,6 +556,70 @@ pub fn verify_mint_stage_v1(
     })
 }
 
+/// Match the finalized request's complete authorization to the pre-debit native reservation.
+pub(super) fn require_exact_top_up_reservation_v1(
+    reservation: &MintInboxReservationV1,
+    operation_id: DigestV1,
+    authorization: Option<&KagemushaMintAuthorizationV1>,
+) -> Result<(), KagemushaStateErrorV1> {
+    if operation_id != reservation.operation_id()
+        || authorization != Some(reservation.authorization())
+    {
+        return Err(KagemushaStateErrorV1::MintFinalityMismatch);
+    }
+    Ok(())
+}
+
+fn applied_top_up_result_v1(
+    status: &KagemushaOperationStatusV1,
+    reserved_operation_id: DigestV1,
+) -> Result<&KagemushaTopUpResultV1, KagemushaStateErrorV1> {
+    if status.operation_id != reserved_operation_id
+        || status.kind != KagemushaOperationKindV1::TopUp
+        || status.state != KagemushaOperationStateV1::Applied
+    {
+        return Err(KagemushaStateErrorV1::MintFinalityMismatch);
+    }
+    match status.result.as_ref() {
+        Some(KagemushaOperationResultV1::TopUp(result)) => Ok(result),
+        _ => Err(KagemushaStateErrorV1::MintFinalityMismatch),
+    }
+}
+
+/// Authenticate one applied chain top-up and its actual mint proofs for a reserved local inbox.
+///
+/// The finality anchor must come from an independently authenticated consensus context. This
+/// function binds the entire applied result to the exact pre-debit reservation before producing
+/// the native proof capability. It neither installs the credit nor qualifies device hardware:
+/// [`KagemushaStateMachineV1::stage_mint_credit`] still requires the original qualified Guard
+/// staging certificate and the installed reservation.
+///
+/// # Errors
+///
+/// Rejects pending/rejected/wrong-kind statuses, a mismatched reserved operation or
+/// authorization, invalid chain finality, or either invalid release-authenticated mint proof.
+pub fn verify_applied_top_up_mint_stage_v1(
+    verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+    artifacts: KagemushaRecursionArtifactsV1,
+    reservation: &MintInboxReservationV1,
+    status: &KagemushaOperationStatusV1,
+    trust_anchor: &KagemushaFinalityTrustAnchorV1,
+) -> Result<VerifiedMintStageV1, KagemushaStateErrorV1> {
+    // TODO: Exercise the complete positive path with one signed Applied status and a loaded
+    // authenticated verifier once a shared real-release mint fixture is available.
+    reservation.validate_inputs()?;
+    let result = applied_top_up_result_v1(status, reservation.operation_id())?;
+    status
+        .validate_against(trust_anchor)
+        .map_err(|_| KagemushaStateErrorV1::MintFinalityMismatch)?;
+    require_exact_top_up_reservation_v1(
+        reservation,
+        result.request.operation_id,
+        result.request.mint_authorization.as_ref(),
+    )?;
+    verify_mint_stage_v1(verifier, artifacts, reservation, &result.mint_credit)
+}
+
 /// Return the exact same canonical mint identity committed by the existing monetary replay tree.
 pub fn mint_envelope_digest_v1(
     credit: &KagemushaMintCreditV1,
@@ -1062,6 +1130,42 @@ mod tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
     use iroha_model_base::domain::DomainId;
+
+    #[test]
+    fn mint_stage_requires_an_applied_top_up_for_the_reserved_operation() {
+        let pending = KagemushaOperationStatusV1 {
+            version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+            operation_id: [0x41; 32],
+            kind: iroha_data_model::isi::kagemusha_v1::KagemushaOperationKindV1::TopUp,
+            state: KagemushaOperationStateV1::Pending,
+            result: None,
+            rejection: None,
+        };
+        assert!(matches!(
+            applied_top_up_result_v1(&pending, pending.operation_id),
+            Err(KagemushaStateErrorV1::MintFinalityMismatch)
+        ));
+        let missing_result = KagemushaOperationStatusV1 {
+            state: KagemushaOperationStateV1::Applied,
+            ..pending.clone()
+        };
+        assert!(matches!(
+            applied_top_up_result_v1(&missing_result, pending.operation_id),
+            Err(KagemushaStateErrorV1::MintFinalityMismatch)
+        ));
+        let wrong_kind = KagemushaOperationStatusV1 {
+            kind: KagemushaOperationKindV1::Redemption,
+            ..missing_result.clone()
+        };
+        assert!(matches!(
+            applied_top_up_result_v1(&wrong_kind, pending.operation_id),
+            Err(KagemushaStateErrorV1::MintFinalityMismatch)
+        ));
+        assert!(matches!(
+            applied_top_up_result_v1(&missing_result, [0x42; 32]),
+            Err(KagemushaStateErrorV1::MintFinalityMismatch)
+        ));
+    }
 
     // Deliberately nonauthorizing structural data for projection/accounting tests only.
     fn historical_receipt() -> AcceptedMintReceiptV1 {

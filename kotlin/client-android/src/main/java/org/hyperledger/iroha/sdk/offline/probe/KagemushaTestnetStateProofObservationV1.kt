@@ -35,11 +35,15 @@ class KagemushaTestnetStateProofObservationV1 private constructor(
         require(pairedProofArchive.size in 1..PAIRED_PROOF_MAX_BYTES) {
             "KAGEMUSHA testnet paired proof size is invalid"
         }
+        val publicInputs = publicInputsArchive.copyOf()
+        val pairedProof = pairedProofArchive.copyOf()
+        // JNI receives SDK-owned copies, so endpoint work cannot alter the caller's arrays or
+        // observe changes made to them after this copy while the trial head advances.
         // Direct memory is allocated before the native verifier can advance its trial head.
         // The JNI entry writes the complete response into this same buffer before success.
         val output = ByteBuffer.allocateDirect(OBSERVATION_MAX_BYTES)
         val status = try {
-            endpoint.observe(publicInputsArchive, pairedProofArchive, output)
+            endpoint.observe(publicInputs, pairedProof, output)
         } catch (error: LinkageError) {
             throw IllegalStateException("KAGEMUSHA testnet proof observer JNI is unavailable", error)
         }

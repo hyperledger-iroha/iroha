@@ -251,7 +251,8 @@ counter/checkpoint profile or another physically proven no-fork primitive is
 required to support this device for production offline money.
 The connected Pixel 6 was rechecked on an Android 17 user build with locked,
 green verified boot. It still advertises neither hardware single-use nor
-limited-use Keystore support; `eSE1` is connected but has no observed access
+limited-use Keystore support, and does not advertise the hardware Identity
+Credential feature. `eSE1` is connected but has no observed access
 rule for the current applet AID. The earlier StrongBox attestation was collected
 on Android 16, so the Android 17 feature recheck does not replace a fresh
 attestation or an applet SELECT/recovery qualification.
@@ -500,20 +501,24 @@ XCFramework for executable iOS qualification.
   validation lane, including both start challenges, results and padding in both
   fields. The exact claim geometry and processed small-key size tests also pass;
   genuine claim-proof execution remains pending.
-- **KGM-17 — Release blocker, dependency advisory policy does not pass.**
-  The current Core/mobile dependency graphs include unmaintained `smallstr
-  0.3.1` ([RUSTSEC-2026-0215](https://rustsec.org/advisories/RUSTSEC-2026-0215.html))
-  and `lru 0.16.4`, which has a conditional panic-safety defect
-  ([RUSTSEC-2026-0253](https://rustsec.org/advisories/RUSTSEC-2026-0253.html)).
-  The affected LRU threadcache module is disabled in the inspected mobile graphs;
-  Core uses `concread`'s B-tree and epoch-cell paths. That reachability result does
-  not resolve the dependency policy failure. The audit policy now explicitly
-  includes transitive unsoundness instead of inheriting workspace-only coverage.
-  Yanked `chacha20 0.10.0` and `spin 0.9.8` also require review; a yank alone is
-  not evidence of an exploit. The vulnerable optional `rkyv 0.7.46` lockfile entry
-  is absent from those actual mobile graphs. Dependency remediation and any
-  necessary lockfile-policy exception remain outstanding; no audit pass or
-  bundled SDK binary coverage is claimed.
+- **KGM-17 — Tracked-lock advisory vulnerabilities cleared; release artifacts unqualified.**
+  The current tracked workspace `Cargo.lock` does not contain `smallstr`;
+  `smallstr 0.3.1` ([RUSTSEC-2026-0215](https://rustsec.org/advisories/RUSTSEC-2026-0215.html))
+  survives only in ignored historical tool/fuzz/sample lockfiles in this checkout.
+  The tracked lock previously contained `lru 0.16.4`, which has a conditional
+  panic-safety defect ([RUSTSEC-2026-0253](https://rustsec.org/advisories/RUSTSEC-2026-0253.html))
+  and was pulled by the vendored `concread` manifest's optional `arcache` feature.
+  Core requests only `ebr`, `maps`, and `foldhash`, so the affected LRU code is
+  disabled in the inspected Core/mobile graph. The vendored dependency and tracked
+  lock now select patched `lru 0.18.2`. A fresh RustSec database also found
+  `rustls 0.23.40` affected by
+  [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html), so
+  the tracked lock now selects patched `rustls 0.23.45` and `rustls-webpki 0.103.15`.
+  On 2026-09-24, `cargo audit` against 1,267 advisories reports zero vulnerabilities;
+  denying transitive unsound and yanked warnings also passes. Ten unmaintained
+  warnings remain allowed by that invocation. The optional `concread` feature
+  compile, exact release-target dependency graphs, signed bundled binaries and
+  final release audit remain unqualified while compiled builds are held.
 - **KGM-18 — Corrected; focused durable-finality validation passes.** A valid staged reserve
   receipt could fail promotion after finality framing changed nested alignment.
   The four-times-wire allocation estimate missed 17,496 bytes of additional
@@ -560,6 +565,10 @@ XCFramework for executable iOS qualification.
   graph, generated keys and proofs remain unqualified. Four dense lanes still use
   148 advice columns, or 296 MiB for one k16 polynomial vector, before other memory.
   The original key and mobile limits remain; SHA removal alone does not close this gate.
+  Terminal now checks the distinct source indices referenced by each compact
+  reciprocal audit against the exact four-lane k16 scheduler before allocating
+  its consuming Base graph. This rejects impossible jobs early; it does not
+  reduce key size or qualify the graph.
   Sources: [resource inventory](../crates/iroha_core/src/zk/kagemusha_v1_recursion/artifact_resource_preflight.rs)
   and [generation preflight](../crates/iroha_core/src/zk/kagemusha_v1_recursion/generation.rs).
 - **KGM-20 — Corrected; focused reciprocal-audit validation passes.** Terminal

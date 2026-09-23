@@ -2099,7 +2099,7 @@ fn prove_funded_prerequisite(
 
 /// Fixed-shape CommitWrapper slot used by every state operation.
 ///
-/// Before the real post-commit keys exist, key generation uses a parseable 81-instance carrier
+/// Before the real post-commit keys exist, key generation uses a parseable 83-instance carrier
 /// with no monetary authority. The final `ReceiveFold` replaces every field with the genuine
 /// CommitWrapper proof and its recursively authenticated history.
 struct IncomingStateProofMaterial {
@@ -2556,6 +2556,7 @@ fn bootstrap_relation_for_corridor(
         receive_credit_binding_digest: [0; 32],
         lifecycle_binding_digest: guard.relation.statement.lifecycle_binding_digest,
         prepared_transition_binding_digest: [0; 32],
+        prepared_intent: None,
         transport_semantic_digest,
         guard_statement_digest: guard.relation.statement_digest(),
         eq_protocol_digest: protocols.eq_state,
@@ -2587,6 +2588,7 @@ fn transition_relation_for_corridor(
     protocols: RecursiveStateProtocolBindings,
     replay_insert: Option<KagemushaReplayInsertWitnessV1>,
     receive_credit: Option<KagemushaReceiveFoldCreditV1>,
+    prepared_intent: Option<KagemushaPreparedIntentCommitmentsV1>,
 ) -> KagemushaStateRelationWitnessV1 {
     let statement = &preview.proof_statement;
     let relation = KagemushaStateRelationWitnessV1 {
@@ -2605,6 +2607,7 @@ fn transition_relation_for_corridor(
         receive_credit_binding_digest: statement.receive_credit_binding_digest,
         lifecycle_binding_digest: statement.lifecycle_binding_digest,
         prepared_transition_binding_digest: statement.prepared_transition_binding_digest,
+        prepared_intent,
         transport_semantic_digest: preview.transport_semantic_digest,
         guard_statement_digest: guard.relation.statement_digest(),
         eq_protocol_digest: protocols.eq_state,

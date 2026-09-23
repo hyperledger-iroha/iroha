@@ -12,6 +12,14 @@ import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
 
 class AndroidPixel6TestnetStrongBoxObservationV1Test {
+    @Test fun pixel6RecognitionUsesHardwareCodenameRatherThanMarketingModel() {
+        assertTrue(isPixel6HardwareV1("Google", "oriole"))
+        assertTrue(isPixel6HardwareV1("google", "oriole"))
+        assertFalse(isPixel6HardwareV1("Google", "raven"))
+        assertFalse(isPixel6HardwareV1("Samsung", "oriole"))
+        assertFalse(isPixel6HardwareV1("Google", "Oriole"))
+    }
+
     private class Device : Pixel6TestnetObservationDeviceV1 {
         override var apiLevel = 31
         var pixel6 = true

@@ -7,7 +7,6 @@ import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.security.MessageDigest
-import java.security.SecureRandom
 import java.security.Signature
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
@@ -26,36 +25,18 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class AndroidPixel6TestnetStrongBoxObservationDeviceTest {
     @Test fun pixel6ProducesScopeBoundStrongBoxObservationWithoutHardwareOneUseClaim() {
-        assertEquals("This probe is scoped to the connected Pixel 6", "Pixel 6", Build.MODEL)
+        assertTrue("This probe is scoped to the connected Pixel 6",
+            isPixel6HardwareV1(Build.MANUFACTURER, Build.DEVICE))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val network = MessageDigest.getInstance("SHA-256")
             .digest("pixel6-experimental-test-network".toByteArray(Charsets.US_ASCII))
-        val release = MessageDigest.getInstance("SHA-256")
-            .digest("pixel6-experimental-test-release".toByteArray(Charsets.US_ASCII))
-        val lane = ByteArray(32).also(SecureRandom()::nextBytes)
-        val before = ByteArray(16)
-        val after = byteArrayOf(1) + ByteArray(15)
-        val frameDomain = "iroha:kagemusha:v1:hardware-transition-selection\u0000"
-            .toByteArray(Charsets.US_ASCII)
-        val frame = ByteArray(460)
-        frameDomain.copyInto(frame)
-        frame[49] = 0x93.toByte()
-        frame[50] = 1
-        frame[57] = 1
-        release.copyInto(frame, 59)
-        frame[91] = 1
-        frame[123] = 1
-        frame[155] = 1
-        network.copyInto(frame, 187)
-        lane.copyInto(frame, 219)
-        frame[251] = 1
-        frame[283] = 1
-        frame[291] = 1
-        frame[323] = 1
-        frame[331] = 1
-        frame[332] = 1
-        before.copyInto(frame, 428)
-        after.copyInto(frame, 444)
+            .also { it[31] = (it[31].toInt() or 1).toByte() }
+        val frame = Pixel6TestnetDiagnosticSelectionV1.open().create(network,
+            "${context.packageName}\u0000physical-probe\u0000".toByteArray(Charsets.UTF_8))
+        val release = frame.copyOfRange(59, 91)
+        val lane = frame.copyOfRange(219, 251)
+        val before = frame.copyOfRange(428, 444)
+        val after = frame.copyOfRange(444, 460)
         fun collect(releaseId: ByteArray): Pixel6TestnetObservationResultV1 =
             AndroidPixel6TestnetStrongBoxObservationV1.collect(
                 context, network, releaseId, frame, lane, before, after,

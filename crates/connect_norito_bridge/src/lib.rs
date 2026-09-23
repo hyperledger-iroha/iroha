@@ -182,17 +182,17 @@ pub use kagemusha_core_coordinator_v1::{
 mod kagemusha_device_bridge_v1;
 mod kagemusha_reserve_finality_v1;
 mod kagemusha_testnet_observation_v1;
+pub use kagemusha_reserve_finality_v1::{
+    connect_norito_kagemusha_reserve_finality_hint_v1,
+    connect_norito_kagemusha_reserve_finality_verify_v1,
+    connect_norito_kagemusha_top_up_signed_request_validate_v1,
+};
 pub use kagemusha_testnet_observation_v1::{
     KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1, KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1,
     KagemushaTestnetObservationInstallErrorV1, KagemushaTestnetStateObservationArchiveV1,
     connect_norito_kagemusha_testnet_state_proof_observe_v1,
     install_kagemusha_testnet_state_observation_owner_v1,
     load_and_install_kagemusha_testnet_state_observation_owner_v1,
-};
-pub use kagemusha_reserve_finality_v1::{
-    connect_norito_kagemusha_reserve_finality_hint_v1,
-    connect_norito_kagemusha_reserve_finality_verify_v1,
-    connect_norito_kagemusha_top_up_signed_request_validate_v1,
 };
 #[cfg(any(test, feature = "dev-tools"))]
 mod kagemusha_sender_release_evidence;
@@ -1384,7 +1384,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_contract_vector_v1(
     0
 }
 
-/// Copy the exact eleven-word KAGEMUSHA Core coordinator contract.
+/// Copy the exact twelve-word KAGEMUSHA Core coordinator contract.
 ///
 /// Success returns the written word count, not a generic zero status. The
 /// vector is an ABI compatibility probe and grants no monetary authority.
@@ -1512,6 +1512,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
     let response_frame = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if method == KagemushaCoreCoordinatorMethodV1::InitialEnrollment {
             backend.invoke_initial_enrollment(handle, &request_frame)
+        } else if method == KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest {
+            backend.acknowledge_committed_app_attest(handle, &request_frame)
         } else {
             backend.invoke(handle, method, &request_frame)
         }

@@ -27019,16 +27019,29 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     /// Poll one KAGEMUSHA reserve operation while withholding unverified applied results.
+    /// Only Torii's exact operation-resource 404 means the original signed request may be replayed.
     public func getKagemushaOperation(
         operationID: Data
-    ) async throws -> ToriiUnverifiedKagemushaOperationStatusV1 {
+    ) async throws -> ToriiUnverifiedKagemushaOperationStatusV1? {
         try Self.requireKagemushaOperationID(operationID)
         let request = try makeRequest(
             path: "/v1/kagemusha/operations/\(operationID.hexEncodedString())",
             headers: ["Accept": "application/json"]
         )
-        let (status, _) = try await receiveKagemushaOperationStatus(
-            request, acceptedStatuses: [200])
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "KAGEMUSHA operation status",
+            maximumBytes: Self.kagemushaOperationStatusResponseMaximumBytes
+        )
+        if response.statusCode == 404 {
+            try requireCanonicalKagemushaOperationAbsence(data, response: response)
+            return nil
+        }
+        guard response.statusCode == 200 else {
+            throw ToriiClientError.httpStatus(
+                code: response.statusCode, message: nil, rejectCode: nil)
+        }
+        let status = try parseKagemushaOperationStatusResponse(data, response: response)
         guard status.operationID == operationID else {
             throw ToriiClientError.invalidPayload(
                 "KAGEMUSHA operation response identity does not match the requested resource"
@@ -27107,6 +27120,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             throw ToriiClientError.httpStatus(
                 code: response.statusCode, message: nil, rejectCode: nil)
         }
+        return (try parseKagemushaOperationStatusResponse(data, response: response), response)
+    }
+
+    private func parseKagemushaOperationStatusResponse(
+        _ data: Data, response: HTTPURLResponse
+    ) throws -> ToriiUnverifiedKagemushaOperationStatusV1 {
         try ensureResponseMediaType(response, equals: "application/json")
         guard !data.isEmpty else { throw ToriiClientError.emptyBody }
         do {
@@ -27117,10 +27136,36 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         let root = try decodeJSON([String: ToriiJSONValue].self, from: data)
-        return (
-            try Self.parseKagemushaOperationStatus(root, responseJSON: data),
-            response
-        )
+        return try Self.parseKagemushaOperationStatus(root, responseJSON: data)
+    }
+
+    private func requireCanonicalKagemushaOperationAbsence(
+        _ data: Data, response: HTTPURLResponse
+    ) throws {
+        let code = "kagemusha_operation_not_found"
+        guard data.count <= 2_048 else {
+            throw ToriiClientError.invalidPayload("KAGEMUSHA operation 404 exceeds its error bound")
+        }
+        guard response.value(forHTTPHeaderField: "X-Iroha-Reject-Code") == code else {
+            throw ToriiClientError.invalidPayload(
+                "KAGEMUSHA operation 404 lacks Torii's exact resource code")
+        }
+        try ensureResponseMediaType(response, equals: "application/json")
+        guard !data.isEmpty else { throw ToriiClientError.emptyBody }
+        do {
+            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "KAGEMUSHA operation 404 must be UTF-8 JSON without duplicate keys")
+        }
+        let root = try decodeJSON([String: ToriiJSONValue].self, from: data)
+        guard Set(root.keys) == ["code", "message"],
+              root["code"] == .string(code),
+              case let .string(message)? = root["message"],
+              !message.isEmpty, message.count <= 1_024 else {
+            throw ToriiClientError.invalidPayload(
+                "KAGEMUSHA operation 404 is not canonical resource absence")
+        }
     }
 
     private static func parseKagemushaOperationStatus(

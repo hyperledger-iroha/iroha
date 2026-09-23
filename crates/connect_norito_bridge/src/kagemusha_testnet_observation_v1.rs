@@ -99,11 +99,12 @@ fn require_scope_release_pins(
 
 /// Authenticate one operator-pinned testnet release and install its native proof verifier.
 ///
-/// `trusted_authority_policy`, `scope`, and `profile` must come from an independent
-/// operator-controlled Rust configuration. Only the manifest, validation receipt,
+/// `trusted_authority_policy`, the complete network/asset/incarnation/scale/pool/release
+/// `scope`, and `profile` must come from an independent operator-controlled Rust
+/// configuration. Only the manifest, validation receipt,
 /// threshold attestation, and content-addressed artifact directory are untrusted
 /// package inputs. In particular, never read the authority policy or expected
-/// release/network pins from the submitted wallet proof or from that package.
+/// release, network, or reserve pins from the submitted wallet proof or from that package.
 ///
 /// This Rust-only entrypoint does not make a stock mobile binary usable by itself:
 /// TODO: package an approved signed testnet release, its 50 exact artifacts and
@@ -355,6 +356,10 @@ mod tests {
         };
         let encoded = norito::encode_canonical(&record).expect("canonical diagnostic");
         assert!(encoded.len() <= KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1);
+        // Struct fields, including fixed arrays, carry compact length prefixes.
+        // The mobile observer accepts this exact canonical archive layout.
+        assert!(encoded.len() > 40);
+        assert_eq!(encoded[39], norito::core::header_flags::COMPACT_LEN);
         let decoded: KagemushaTestnetStateObservationArchiveV1 =
             norito::decode_canonical(&encoded).expect("canonical diagnostic roundtrip");
         assert_eq!(decoded, record);
@@ -363,8 +368,10 @@ mod tests {
 
     #[test]
     fn release_scope_requires_both_independently_pinned_identities() {
-        let scope = KagemushaTestnetStateObservationScopeV1::new([1; 32], [2; 32], [3; 32])
-            .expect("distinct operator pins");
+        let scope = KagemushaTestnetStateObservationScopeV1::new(
+            [1; 32], [4; 32], [5; 32], 2, [6; 32], [2; 32], [3; 32],
+        )
+        .expect("distinct operator pins");
         assert!(require_scope_release_pins(scope, [2; 32], [3; 32]).is_ok());
         assert!(require_scope_release_pins(scope, [4; 32], [3; 32]).is_err());
         assert!(require_scope_release_pins(scope, [2; 32], [4; 32]).is_err());

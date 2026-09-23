@@ -195,9 +195,9 @@ pub use relation::{
 #[cfg(feature = "zk-halo2-ipa")]
 pub use state_checkpoint::{KagemushaRecursiveStateCheckpointV1, KagemushaStateCheckpointErrorV1};
 pub use state_relation::{
-    KagemushaReceiveFoldCreditV1, KagemushaStateRelationCircuitV1,
-    KagemushaStateRelationPublicInputsV1, KagemushaStateRelationWitnessV1,
-    public_instance as kagemusha_state_public_instance_v1,
+    KagemushaPreparedIntentCommitmentsV1, KagemushaReceiveFoldCreditV1,
+    KagemushaStateRelationCircuitV1, KagemushaStateRelationPublicInputsV1,
+    KagemushaStateRelationWitnessV1, public_instance as kagemusha_state_public_instance_v1,
 };
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 pub(crate) use terminal_authorization::public_instance as kagemusha_terminal_authorization_public_instance_v1;

@@ -1370,6 +1370,12 @@ where
             .map(|limb| range.gate().mul(ctx, limb, signed_transition))
     };
     builder.assigned_instances[0].extend(transition_limbs);
+    let prepared_intent_limbs = state_relation::assign_prepared_intent_public_v1(
+        &mut builder,
+        assigned_state.operation,
+        state.prepared_intent,
+    );
+    builder.assigned_instances[0].extend(prepared_intent_limbs);
     debug_assert_eq!(
         builder.assigned_instances[0].len(),
         state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
@@ -5800,7 +5806,7 @@ mod tests {
             authorization_proof_instances,
             INCOMING_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
         );
-        assert_eq!(authorization_proof_instances, 81);
+        assert_eq!(authorization_proof_instances, 83);
 
         assert!(
             validate_incoming_authorization_proof_shape_v1(

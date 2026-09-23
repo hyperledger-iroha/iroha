@@ -4790,6 +4790,7 @@ fn bootstrap_state_public_inputs(
         receive_credit_binding_digest: [0; 32],
         lifecycle_binding_digest: guard.lifecycle_binding_digest,
         prepared_transition_binding_digest: [0; 32],
+        prepared_intent: None,
         transport_semantic_digest: preview.transport_semantic_digest,
         guard_statement_digest: guard
             .canonical_digest()
@@ -4849,6 +4850,7 @@ fn transition_state_public_inputs(
         receive_credit_binding_digest: statement.receive_credit_binding_digest,
         lifecycle_binding_digest: statement.lifecycle_binding_digest,
         prepared_transition_binding_digest: statement.prepared_transition_binding_digest,
+        prepared_intent: None,
         transport_semantic_digest: preview.transport_semantic_digest,
         guard_statement_digest: guard_digest,
         eq_protocol_digest: artifacts.eq_protocol_digest,

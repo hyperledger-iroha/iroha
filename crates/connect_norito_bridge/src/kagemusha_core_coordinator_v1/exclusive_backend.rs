@@ -78,6 +78,16 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaExclusiveCoordinatorBackendV
         if handle == 0 || state.selected_handle != Some(handle) {
             return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
         }
+        if matches!(
+            method,
+            KagemushaCoreCoordinatorMethodV1::InitialEnrollment
+                | KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest
+        ) {
+            // These operations must use their dedicated native-owner hooks. A caller using
+            // the public Rust adapter directly cannot bypass the opaque enrollment attempt
+            // or the installed-terminal/App Attest journal check through generic dispatch.
+            return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
+        }
         // Keep the lock through device I/O and delegate result handling. The C/JNI entry point
         // independently validates the exact request and complete response archive before exposure.
         self.inner.invoke(handle, method, request_frame)
@@ -96,6 +106,22 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaExclusiveCoordinatorBackendV
             return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
         }
         self.inner.invoke_initial_enrollment(handle, request_frame)
+    }
+
+    fn acknowledge_committed_app_attest(
+        &self,
+        handle: u64,
+        request_frame: &[u8],
+    ) -> Result<Vec<u8>, KagemushaCoreCoordinatorBackendErrorV1> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+        if handle == 0 || state.selected_handle != Some(handle) {
+            return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
+        }
+        self.inner
+            .acknowledge_committed_app_attest(handle, request_frame)
     }
 
     fn close(&self, handle: u64) -> Result<(), KagemushaCoreCoordinatorBackendErrorV1> {
@@ -182,6 +208,31 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    #[test]
+    fn app_attest_ack_does_not_fall_back_to_generic_invoke() {
+        let backend = Arc::new(Backend::new(false));
+        let owner = KagemushaExclusiveCoordinatorBackendV1::new(backend.clone());
+        assert_eq!(owner.open("/private/wallet"), Ok(7));
+        assert_eq!(
+            owner.acknowledge_committed_app_attest(7, b"original-request"),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
+        );
+        assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            owner.invoke(
+                7,
+                KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest,
+                b"original-request",
+            ),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+        assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            owner.acknowledge_committed_app_attest(8, b"original-request"),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
     }
 
     #[test]
@@ -297,6 +348,15 @@ mod tests {
         assert_eq!(
             owner.invoke_initial_enrollment(7, b"phase-one"),
             Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
+        );
+        assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            owner.invoke(
+                7,
+                KagemushaCoreCoordinatorMethodV1::InitialEnrollment,
+                b"phase-one",
+            ),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
         );
         assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 0);
         assert_eq!(

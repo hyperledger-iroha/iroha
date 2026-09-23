@@ -18,8 +18,8 @@ use crate::zk::{
         mint_authorization::mint_authorization_public_instances_v1,
         state_relation::PUBLIC_INSTANCE_COUNT,
         terminal_authorization::{
-            KagemushaCommitEvidenceOpeningV1, canonical_commit_evidence_commitment_v1,
-            canonical_predecessor_conflict_nullifier_v1,
+            KagemushaCommitEvidenceOpeningV1, TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
+            canonical_commit_evidence_commitment_v1, canonical_predecessor_conflict_nullifier_v1,
             canonical_prepared_one_use_authorization_digest_v1,
         },
         transport_decider::{
@@ -1591,6 +1591,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
             &mint_preview.replay_insert_witness,
         )),
         None,
+        None,
     );
     let parent = parent_from_generated((*bootstrap).clone());
     let mint = Rc::new(prove_recursive_state_step(
@@ -1738,6 +1739,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         ),
         None,
         None,
+        Some(candidate.prepared_intent_commitments()),
     );
     // Outgoing candidates are verified against the canonical payment body. Core's local
     // preview digest instead identifies its journal transition and is not the candidate's
@@ -1820,8 +1822,14 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
             DiagnosticMilestoneV1::Wrapper | DiagnosticMilestoneV1::SenderClosure
         ) {
             let wrapper = wrapper::prove_sender_wrapper(&funded, artifacts, &incoming, terminal);
-            assert_eq!(wrapper.eq_protocol.num_instance, [81]);
-            assert_eq!(wrapper.ep_protocol.num_instance, [81]);
+            assert_eq!(
+                wrapper.eq_protocol.num_instance,
+                [TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]
+            );
+            assert_eq!(
+                wrapper.ep_protocol.num_instance,
+                [TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]
+            );
             assert_eq!(wrapper.incoming.eq_instances.len(), 1);
             assert_eq!(wrapper.incoming.ep_instances.len(), 1);
             assert_eq!(
@@ -2032,6 +2040,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
                         &retained_mint_preview.replay_insert_witness,
                     )),
                     None,
+                    None,
                 );
                 let rebound_mint_parent = parent_from_generated((*rebound_bootstrap).clone());
                 let rebound_mint = Rc::new(prove_recursive_state_step(
@@ -2053,6 +2062,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
                     rebound_protocols(),
                     None,
                     None,
+                    Some(retained_candidate.prepared_intent_commitments()),
                 );
                 rebound_send_relation.transport_semantic_digest = retained_candidate
                     .semantic_digest()

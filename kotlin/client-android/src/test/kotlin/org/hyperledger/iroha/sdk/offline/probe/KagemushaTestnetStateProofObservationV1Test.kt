@@ -13,11 +13,13 @@ import kotlin.test.assertTrue
 class KagemushaTestnetStateProofObservationV1Test {
     @Test
     fun `contract drift and missing symbol fail before accepting a proof`() {
-        val drift = Endpoint().apply { contractWords[2] = 6527 }
-        assertFailsWith<IllegalStateException> {
-            KagemushaTestnetStateProofObservationV1.openEndpoint(drift)
+        for (word in 0 until 4) {
+            val drift = Endpoint().apply { contractWords[word] += 1 }
+            assertFailsWith<IllegalStateException> {
+                KagemushaTestnetStateProofObservationV1.openEndpoint(drift)
+            }
+            assertEquals(0, drift.observeCalls)
         }
-        assertEquals(0, drift.observeCalls)
         assertFailsWith<IllegalStateException> {
             KagemushaTestnetStateProofObservationV1.openEndpoint(
                 Endpoint().apply { missingContract = true },
@@ -75,6 +77,20 @@ class KagemushaTestnetStateProofObservationV1Test {
     }
 
     @Test
+    fun `native endpoint cannot mutate caller proof inputs`() {
+        val endpoint = Endpoint().apply { mutateInputs = true }
+        val observer = KagemushaTestnetStateProofObservationV1.openEndpoint(endpoint)
+        val publicInputs = byteArrayOf(1, 2, 3)
+        val pairedProof = byteArrayOf(4, 5, 6)
+        assertContentEquals(byteArrayOf(7, 8, 9),
+            observer.observeStateProof(publicInputs, pairedProof))
+        assertContentEquals(byteArrayOf(1, 2, 3), publicInputs)
+        assertContentEquals(byteArrayOf(4, 5, 6), pairedProof)
+        assertContentEquals(byteArrayOf(1, 2, 3), endpoint.seenPublicInputs)
+        assertContentEquals(byteArrayOf(4, 5, 6), endpoint.seenPairedProof)
+    }
+
+    @Test
     fun `missing JNI observe symbol fails closed`() {
         val endpoint = Endpoint().apply { missingObserve = true }
         val observer = KagemushaTestnetStateProofObservationV1.openEndpoint(endpoint)
@@ -91,6 +107,9 @@ class KagemushaTestnetStateProofObservationV1Test {
         var missingObserve = false
         var sawDirectOutput = false
         var outputCapacity = 0
+        var mutateInputs = false
+        var seenPublicInputs: ByteArray? = null
+        var seenPairedProof: ByteArray? = null
 
         override fun contract(): IntArray? {
             if (missingContract) throw UnsatisfiedLinkError("missing contract symbol")
@@ -104,6 +123,12 @@ class KagemushaTestnetStateProofObservationV1Test {
         ): Int {
             if (missingObserve) throw UnsatisfiedLinkError("missing observe symbol")
             observeCalls++
+            seenPublicInputs = publicInputsArchive.copyOf()
+            seenPairedProof = pairedProofArchive.copyOf()
+            if (mutateInputs) {
+                publicInputsArchive[0] = 0
+                pairedProofArchive[0] = 0
+            }
             sawDirectOutput = output.isDirect
             outputCapacity = output.capacity()
             output.put(byteArrayOf(7, 8, 9))

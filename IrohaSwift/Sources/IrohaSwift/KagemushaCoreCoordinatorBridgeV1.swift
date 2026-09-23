@@ -11,6 +11,31 @@ protocol KagemushaCoreCoordinatorEndpointV1: AnyObject {
   func close(handle: UInt64) throws
 }
 
+/// Native Core's exact acknowledgment of one already committed App Attest transition.
+/// The initializer remains inside the SDK's validated native coordinator path. Frame
+/// correlation does not qualify the backend; stock method 13 remains unavailable.
+public struct KagemushaAppAttestCoreCommitAcknowledgmentV1: Equatable, Sendable {
+  public let operationID: Data
+  public let keyIDDigest: Data
+  public let selectionDigest: Data
+  public let rawAssertionDigest: Data
+  public let committedCounter: UInt32
+  public let terminalCertificateDigest: Data
+  public let installedEnvelopeDigest: Data
+
+  fileprivate init(_ response: [Data]) {
+    operationID = response[0]
+    keyIDDigest = response[1]
+    selectionDigest = response[2]
+    rawAssertionDigest = response[3]
+    committedCounter = response[4].enumerated().reduce(UInt32(0)) {
+      $0 | (UInt32($1.element) << ($1.offset * 8))
+    }
+    terminalCertificateDigest = response[5]
+    installedEnvelopeDigest = response[6]
+  }
+}
+
 /// Serialized transport to the process-owned native coordinator, without a software backend.
 /// Contract matching proves ABI compatibility only; native Core must admit its qualified hardware.
 /// Returned Norito archives remain opaque. Close revokes the handle; a new open needs a fresh process.
@@ -18,7 +43,7 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
   private let endpoint: any KagemushaCoreCoordinatorEndpointV1
   private var handle: UInt64
   private let lock = NSLock()
-  private static let expectedContract: [UInt32] = [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 12]
+  private static let expectedContract: [UInt32] = [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 13]
 
   private init(endpoint: any KagemushaCoreCoordinatorEndpointV1, handle: UInt64) {
     self.endpoint = endpoint
@@ -54,6 +79,21 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
     let request = try KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields: fields)
     let response = try endpoint.invoke(handle: handle, method: method.rawValue, request: request)
     return try KagemushaCoreCoordinatorFrameV1.decodeResponse(method, requestFrame: request, responseFrame: response)
+  }
+
+  /// Query native Core's retained committed terminal and original assertion before lane advance.
+  /// The qualified backend must independently authenticate all fields from its durable journal.
+  public func acknowledgeCommittedAppAttest(
+    operationID: Data, keyID: String, binding: KagemushaAppAttestTransitionBindingV1,
+    rawAssertion: Data, previousCounter: UInt32,
+    terminalCertificateDigest: Data, installedEnvelopeDigest: Data
+  ) throws -> KagemushaAppAttestCoreCommitAcknowledgmentV1 {
+    let response = try invoke(.acknowledgeCommittedAppAttest, fields: [
+      operationID, Data(keyID.utf8), binding.canonicalSelectionSigningBytes,
+      rawAssertion, KagemushaCoreCoordinatorFrameV1.u32(previousCounter),
+      terminalCertificateDigest, installedEnvelopeDigest,
+    ])
+    return KagemushaAppAttestCoreCommitAcknowledgmentV1(response)
   }
 
   /// Revoke locally before delegated teardown; repeated close is harmless.

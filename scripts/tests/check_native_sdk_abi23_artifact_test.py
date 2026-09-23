@@ -39,6 +39,8 @@ KAGEMUSHA_V1_C_SYMBOLS = {
     "connect_norito_kagemusha_core_coordinator_contract_v1",
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
+    "connect_norito_kagemusha_core_coordinator_close_v1",
+    "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
@@ -52,7 +54,7 @@ RETIRED_KAGEMUSHA_C_PREFIX = (
 
 
 def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
-    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 28
+    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 30
     for sdk in ("c-jni", "csharp"):
         required = [
             symbol for symbol in MODULE.REQUIRED_SYMBOLS[sdk]
@@ -100,10 +102,44 @@ def test_coordinator_jni_requires_the_kotlin_sdk_owner() -> None:
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
+        "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeCloseV1",
     } <= required
     assert not any(symbol.startswith("Java_pg_") for symbol in required)
     retired = "".join(reversed(("NativeCore", "Offline")))
     assert not any(retired in symbol for symbol in required)
+
+
+def test_android_diagnostic_jni_exports_survive_minification_and_artifact_inspection() -> None:
+    required = set(MODULE.REQUIRED_SYMBOLS["c-jni"])
+    rules = (REPO_ROOT / "kotlin/client-android/consumer-rules.pro").read_text()
+    native_sources = "\n".join(
+        (REPO_ROOT / path).read_text()
+        for path in (
+            "crates/connect_norito_bridge/src/lib.rs",
+            "crates/connect_norito_bridge/src/platform_jni/kagemusha_testnet_observation.rs",
+        )
+    )
+    owners = {
+        "org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1$NativeEndpoint": (),
+        "org.hyperledger.iroha.sdk.offline.KagemushaCoreCoordinatorJniV1": (
+            "nativeContractV1", "nativeOpenV1", "nativeInvokeV1", "nativeCloseV1",
+        ),
+        "org.hyperledger.iroha.sdk.offline.probe.KagemushaTestnetStateProofObservationJniV1": (
+            "nativeContractV1", "nativeObserveV1",
+        ),
+        "org.hyperledger.iroha.sdk.offline.probe.Pixel6TestnetDiagnosticSelectionJniV1": (
+            "nativeContractV1", "nativeCreateV1",
+        ),
+    }
+    for owner, methods in owners.items():
+        assert re.search(
+            rf"-keep class {re.escape(owner)}\s*\{{\s*native <methods>;\s*\}}",
+            rules,
+        ), owner
+        for method in methods:
+            symbol = f"Java_{owner.replace('.', '_').replace('$', '_00024')}_{method}"
+            assert symbol in required, symbol
+            assert re.search(rf"\bfn {re.escape(symbol)}\s*\(", native_sources), symbol
 
 
 def test_reserve_finality_rejects_each_missing_kotlin_jni_endpoint() -> None:
@@ -145,6 +181,8 @@ def test_native_c_probe_rejects_required_kagemusha_export() -> None:
             "connect_norito_kagemusha_core_coordinator_contract_v1",
             "connect_norito_kagemusha_core_coordinator_open_v1",
             "connect_norito_kagemusha_core_coordinator_invoke_v1",
+            "connect_norito_kagemusha_core_coordinator_close_v1",
+            "connect_norito_kagemusha_testnet_state_proof_observe_v1",
             "connect_norito_kagemusha_device_command_response_v1_verify",
             "connect_norito_kagemusha_reserve_finality_hint_v1",
             "connect_norito_kagemusha_reserve_finality_verify_v1",

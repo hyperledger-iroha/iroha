@@ -68,10 +68,7 @@ object KagemushaOmapiDeviceLifecycleV1 {
         val shutdownRequested = AtomicBoolean(false)
         val shutdownService: () -> Unit = {
             if (shutdownRequested.compareAndSet(false, true)) {
-                service.whenCompleteAsync(
-                    { connected, _ -> runCatching { connected?.shutdown() } },
-                    executor,
-                )
+                closeServiceWhenReady(service) { connected -> connected.shutdown() }
             }
         }
         val timeout = discoveryTimeoutExecutor.schedule(
@@ -185,6 +182,17 @@ object KagemushaOmapiDeviceLifecycleV1 {
         return completed
     }
 
+    /** Cleanup must still run if the caller shuts down its executor after discovery returns. */
+    internal fun <T : Any> closeServiceWhenReady(
+        service: CompletableFuture<T>,
+        close: (T) -> Unit,
+    ) {
+        service.whenCompleteAsync(
+            { connected, _ -> if (connected != null) runCatching { close(connected) } },
+            serviceShutdownExecutor,
+        )
+    }
+
     @TargetApi(Build.VERSION_CODES.P)
     private fun openChannel(reader: Reader, aid: ByteArray): OmapiChannel? {
         var session: Session? = null
@@ -242,5 +250,10 @@ object KagemushaOmapiDeviceLifecycleV1 {
     private val discoveryTimeoutExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "kagemusha-omapi-timeout").apply { isDaemon = true }
+        }
+
+    private val serviceShutdownExecutor: Executor =
+        Executors.newCachedThreadPool { runnable ->
+            Thread(runnable, "kagemusha-omapi-shutdown").apply { isDaemon = true }
         }
 }

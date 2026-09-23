@@ -91,7 +91,7 @@ public protocol KagemushaAppAttestServiceV1: Sendable {
 /// Store implementations must atomically reserve a single pending transition across all
 /// processes, sync it before returning, and sync the complete raw assertion before returning.
 /// Pending and complete records freeze the lane. Only an authenticated Core
-/// predecessor-commit acknowledgment may permit another assertion in a later protocol.
+/// predecessor-commit acknowledgment permits another assertion.
 public enum KagemushaAppAttestAssertionIntentV1: Equatable, Sendable {
   case ready(counter: UInt32)
   case pending(previousCounter: UInt32, selectionDigest: Data)
@@ -102,6 +102,8 @@ public protocol KagemushaAppAttestAssertionIntentStoringV1: Sendable {
   func load(keyID: String) throws -> KagemushaAppAttestAssertionIntentV1
   func reserve(keyID: String, previousCounter: UInt32, selectionDigest: Data) throws
   func complete(keyID: String, counter: UInt32, selectionDigest: Data, rawAssertion: Data) throws
+  func advanceAfterCommitted(keyID: String, counter: UInt32, selectionDigest: Data,
+    rawAssertion: Data, acknowledgment: KagemushaAppAttestCoreCommitAcknowledgmentV1) throws
 }
 
 public enum KagemushaAppAttestEvidenceErrorV1: Error, Equatable, Sendable {
@@ -401,6 +403,71 @@ public actor KagemushaAppAttestEvidenceProviderV1 {
       throw KagemushaAppAttestEvidenceErrorV1.assertionOutcomeUnknown
     }
     return evidence
+  }
+
+  /// Reverify a completed durable intent after process loss without spending another counter.
+  ///
+  /// The predecessor counter and selection must come from authenticated Core state. A pending
+  /// intent has an unknown hardware outcome and must never be retried through this method.
+  /// Returning evidence does not acknowledge a Core commit or permit the next assertion.
+  public func recoverCompletedTransition(keyID: String,
+    binding: KagemushaAppAttestTransitionBindingV1,
+    expectedPreviousCounter: UInt32) throws -> KagemushaAppAttestAssertionEvidenceV1 {
+    guard !keyID.isEmpty else { throw KagemushaAppAttestEvidenceErrorV1.emptyKeyID }
+    guard !assertionInFlight else {
+      throw KagemushaAppAttestEvidenceErrorV1.assertionAlreadyInFlight
+    }
+    guard expectedPreviousCounter < UInt32.max else {
+      throw KagemushaAppAttestEvidenceErrorV1.assertionCounterMismatch
+    }
+    let digest = binding.clientDataHash
+    let intent = try intentStore.load(keyID: keyID)
+    switch intent {
+    case .pending:
+      throw KagemushaAppAttestEvidenceErrorV1.assertionOutcomeUnknown
+    case .complete(let counter, let selectionDigest, let rawAssertion)
+      where counter == expectedPreviousCounter + 1 && selectionDigest == digest:
+      let evidence = try KagemushaAppAttestAssertionEvidenceV1(
+        rawAssertion: rawAssertion, clientDataHash: digest,
+        expectedAppIDHash: expectedAppIDHash, expectedRelease: expectedRelease,
+        enrolledAssertionPublicKeyX963: enrolledAssertionPublicKeyX963)
+      try evidence.validateExactNext(previousCounter: expectedPreviousCounter)
+      return evidence
+    default:
+      throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+    }
+  }
+
+  /// Advance only after the qualified native owner authenticates its already committed terminal.
+  /// A prepared candidate, local envelope, or caller-supplied counter cannot acknowledge a lane.
+  /// Method 13 remains unavailable in stock builds without the qualified native backend.
+  public func acknowledgeCommittedTransition(
+    keyID: String, binding: KagemushaAppAttestTransitionBindingV1,
+    expectedPreviousCounter: UInt32, operationID: Data,
+    terminalCertificateDigest: Data, installedEnvelopeDigest: Data,
+    coordinator: KagemushaNativeCoreCoordinatorAdapterV1
+  ) throws {
+    let evidence = try recoverCompletedTransition(
+      keyID: keyID, binding: binding, expectedPreviousCounter: expectedPreviousCounter)
+    assertionInFlight = true
+    defer { assertionInFlight = false }
+    let acknowledgment = try coordinator.acknowledgeCommittedAppAttest(
+      operationID: operationID, keyID: keyID, binding: binding,
+      rawAssertion: evidence.rawAssertion, previousCounter: expectedPreviousCounter,
+      terminalCertificateDigest: terminalCertificateDigest,
+      installedEnvelopeDigest: installedEnvelopeDigest)
+    do {
+      try intentStore.advanceAfterCommitted(
+        keyID: keyID, counter: evidence.signCount, selectionDigest: binding.clientDataHash,
+        rawAssertion: evidence.rawAssertion, acknowledgment: acknowledgment)
+      guard try intentStore.load(keyID: keyID) == .ready(counter: evidence.signCount) else {
+        throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+      }
+      locallyUncertain = false
+    } catch {
+      locallyUncertain = true
+      throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+    }
   }
 }
 

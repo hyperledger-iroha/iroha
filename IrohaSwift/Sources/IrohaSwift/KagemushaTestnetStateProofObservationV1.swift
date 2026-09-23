@@ -82,6 +82,8 @@ public enum KagemushaTestnetStateProofObservationBridgeV1 {
   ) throws -> KagemushaTestnetStateProofObservationV1 {
     guard !archive.isEmpty, archive.count <= maximumObservationBytes,
       let frame = noritoDecodeFrame(Data(archive)),
+      // Norito's struct derive length-prefixes each field, including fixed
+      // arrays, so the canonical Rust archive advertises compact lengths.
       frame.header.flags == NoritoHeader.compactLen,
       frame.header.schema == noritoSchemaHash(forTypeName: archiveSchema)
     else { throw KagemushaTestnetStateProofObservationErrorV1.invalidObservation }

@@ -104,6 +104,7 @@ def golden_profile() -> dict:
         "product_class_digest": "42" * 32, "firmware_policy_digest": "43" * 32,
         "enrollment_attestation_verifier_digest": "44" * 32,
         "attestation_trust_roots_digest": "45" * 32,
+        "app_attestation_authority_policy_digest": "a5" * 32,
         "allowed_suite_commitment": VERIFIER._suite_commitment("51" * 32),
         "policy_epoch": 65,
         "governance_credential_public_key": (
@@ -134,14 +135,14 @@ def test_provider_root_matches_rust_golden_and_dense_reference() -> None:
     nodes = [hashlib.sha256(b"iroha:kagemusha:v1:hardware-policy-empty\0").digest()] * 65536
     nodes[row["provider_profile_index"]] = hashlib.sha256(
         b"iroha:kagemusha:v1:hardware-policy-leaf\0"
-        + bytes.fromhex(profile["hardware_profile_id"]) + b"\x02\xff\xff"
+        + bytes.fromhex(profile["hardware_profile_id"]) + b"\x02\xff\xff\x00\x00"
         + bytes.fromhex(row["provider_authority_commitment"])
     ).digest()
     for _ in range(16):
         nodes = [hashlib.sha256(b"iroha:kagemusha:v1:hardware-policy-node\0" + left + right).digest()
                  for left, right in zip(nodes[::2], nodes[1::2])]
     assert root == nodes[0].hex()
-    assert root == "01e5b53f36db41dcd2f9db725171d6405005ca6ad5374b23b3cbce6e1efdc100"
+    assert root == "b710ef16a83d8fdc2fe333360c754d49a181ca3c4cd768308dc37a2a39b5386a"
 
 
 @pytest.mark.parametrize("field,value", [
@@ -187,6 +188,7 @@ def test_provider_policy_admits_each_governed_platform_and_binds_class(platform:
     profile = golden_profile()
     original = VERIFIER.rust_provider_policy_root([profile], [entry(profile)])
     profile["platform_class"] = platform
+    profile["capability_mask"] = VERIFIER._required_platform_guarantees(platform)
     profile["hardware_profile_id"] = VERIFIER.rust_hardware_profile_id(profile)
     changed = VERIFIER.rust_provider_policy_root([profile], [entry(profile)])
     assert (changed == original) == (platform == "dedicated_secure_element")

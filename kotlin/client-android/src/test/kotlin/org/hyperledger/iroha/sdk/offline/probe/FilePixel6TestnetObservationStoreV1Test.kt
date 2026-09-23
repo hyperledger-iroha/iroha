@@ -14,6 +14,7 @@ import java.security.spec.PKCS8EncodedKeySpec
 import java.util.Base64
 import kotlin.test.assertContentEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import org.junit.jupiter.api.Test
 
@@ -72,6 +73,44 @@ class FilePixel6TestnetObservationStoreV1Test {
     }
 
     @Test
+    fun attestationChallengeMustMatchTheReservedPixel6Intent() {
+        val directory = Files.createTempDirectory("iroha-pixel6-challenge-").toFile()
+        try {
+            val io = MemoryIo()
+            val store = FilePixel6TestnetObservationStoreV1(directory, io)
+            val context = "iroha:kagemusha:v1:pixel6-testnet-context\u0000"
+                .toByteArray(Charsets.US_ASCII) + network + release + lane + before + after +
+                sha256(frame)
+            val digest = sha256(context)
+            val alternateNonce = ByteArray(32) { 5 }
+            val alternateChallenge = sha256(
+                "iroha:kagemusha:v1:pixel6-testnet-attestation\u0000"
+                    .toByteArray(Charsets.US_ASCII) + digest + alternateNonce,
+            )
+            val slot = sha256(lane + before).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            val intent = digest + alternateChallenge
+            store.reserve(slot, intent)
+            val unsigned = Pixel6TestnetObservationResultV1.Evidence(
+                network, release, frame, lane, before, after, alternateNonce,
+                alternateChallenge, publicKey, listOf(certificate), byteArrayOf(0x30, 0), false,
+            )
+            val signature = Signature.getInstance("SHA256withECDSA").run {
+                initSign(privateKey)
+                update(unsigned.signedMessage())
+                sign()
+            }
+            val evidence = Pixel6TestnetObservationResultV1.Evidence(
+                network, release, frame, lane, before, after, alternateNonce,
+                alternateChallenge, publicKey, listOf(certificate), signature, false,
+            )
+            assertFailsWith<IllegalArgumentException> { store.persist(slot, intent, evidence) }
+            assertIs<Pixel6TestnetObservationLookupV1.Frozen>(store.lookup(slot, digest))
+        } finally {
+            directory.delete()
+        }
+    }
+
+    @Test
     fun incompleteReservationAndCorruptEvidenceFreezeRecovery() {
         val directory = Files.createTempDirectory("iroha-pixel6-testnet-store-").toFile()
         try {
@@ -87,6 +126,7 @@ class FilePixel6TestnetObservationStoreV1Test {
             )
             val slot = sha256(lane + before).joinToString("") { "%02x".format(it.toInt() and 0xff) }
             val intent = digest + challenge
+            val evidenceFile = File(directory, "kagemusha-pixel6-testnet-$slot.evidence")
             assertIs<Pixel6TestnetObservationLookupV1.Empty>(store.lookup(slot, digest))
             store.reserve(slot, intent)
             assertIs<Pixel6TestnetObservationLookupV1.Frozen>(store.lookup(slot, digest))
@@ -95,11 +135,38 @@ class FilePixel6TestnetObservationStoreV1Test {
                 network, release, frame, lane, before, after, nonce, challenge,
                 publicKey, listOf(certificate), byteArrayOf(0x30, 0), false,
             )
+            assertFailsWith<IllegalArgumentException> {
+                store.persist(slot, intent, unsigned)
+            }
+            assertIs<Pixel6TestnetObservationLookupV1.Frozen>(store.lookup(slot, digest))
+            val wrongMessageSignature = Signature.getInstance("SHA256withECDSA").run {
+                initSign(privateKey)
+                update(unsigned.signedMessage() + byteArrayOf(1))
+                sign()
+            }
+            val misbound = Pixel6TestnetObservationResultV1.Evidence(
+                network, release, frame, lane, before, after, nonce, challenge,
+                publicKey, listOf(certificate), wrongMessageSignature, false,
+            )
+            assertFailsWith<IllegalArgumentException> {
+                store.persist(slot, intent, misbound)
+            }
+            assertIs<Pixel6TestnetObservationLookupV1.Frozen>(store.lookup(slot, digest))
+            assertFalse(io.exists(evidenceFile))
             val signature = Signature.getInstance("SHA256withECDSA").run {
                 initSign(privateKey)
                 update(unsigned.signedMessage())
                 sign()
             }
+            val unattested = Pixel6TestnetObservationResultV1.Evidence(
+                network, release, frame, lane, before, after, nonce, challenge,
+                publicKey, listOf(Base64.getDecoder().decode(TEST_CERTIFICATE_WITHOUT_ATTESTATION_DER)),
+                signature, false,
+            )
+            assertFailsWith<IllegalArgumentException> {
+                store.persist(slot, intent, unattested)
+            }
+            assertFalse(io.exists(evidenceFile))
             val evidence = Pixel6TestnetObservationResultV1.Evidence(
                 network, release, frame, lane, before, after, nonce, challenge,
                 publicKey, listOf(certificate), signature, false,
@@ -115,7 +182,6 @@ class FilePixel6TestnetObservationStoreV1Test {
                 store.lookup(slot, ByteArray(32) { 9 }),
             )
 
-            val evidenceFile = File(directory, "kagemusha-pixel6-testnet-$slot.evidence")
             val original = requireNotNull(io.files[evidenceFile.absolutePath]).copyOf()
             val keyOffset = original.indexOf(publicKey)
             val certificateOffset = original.indexOf(certificate)
@@ -162,9 +228,24 @@ class FilePixel6TestnetObservationStoreV1Test {
         } ?: -1
 
     companion object {
-        // Disposable P-256 self-signed fixture. Its root is deliberately not a trusted
+        // Disposable P-256 self-signed fixture with a synthetic StrongBox key-description
+        // extension bound to this test's challenge. Its root is deliberately not a trusted
         // attestation anchor; this test checks recovery integrity only.
         private const val TEST_CERTIFICATE_DER =
+            "MIIB8DCCAZagAwIBAgIUULFZ/0MRK8WO0vsHfO5+D9VYTCYwCgYIKoZIzj0EAwIwIjEgMB4GA1UEAwwX" +
+                "UGl4ZWw2IFRlc3QgT2JzZXJ2YXRpb24wHhcNMjYwOTIzMjE1MjM4WhcNMzYwOTIwMjE1MjM4WjAi" +
+                "MSAwHgYDVQQDDBdQaXhlbDYgVGVzdCBPYnNlcnZhdGlvbjBZMBMGByqGSM49AgEGCCqGSM49AwEH" +
+                "A0IABN73yR6FEJ11TDyKRgdKA9ghlWth5MkcSbQo0KVcsiZwRif6y4604+X23/cM4yXzwWa8iyty" +
+                "aS/VHIZrEnnACm6jgakwgaYwHQYDVR0OBBYEFIGvkDRMoR89r29aIiIkVAOBn7vXMB8GA1UdIwQY" +
+                "MBaAFIGvkDRMoR89r29aIiIkVAOBn7vXMEYGCisGAQQB1nkCAREEODA2AgIBLAoBAgICASwKAQIE" +
+                "IPQtfOGYQ9YSptS7ynk6hEyh2dsuXVXva1LRSFDVkHimBAAwADAAMAwGA1UdEwEB/wQCMAAwDgYD" +
+                "VR0PAQH/BAQDAgeAMAoGCCqGSM49BAMCA0gAMEUCIQCedSQhir4yFaTtcECQ8P7r7LfD5iGEgf98" +
+                "VzcbhZlcpwIgc4R+6iAR2zhK3LTK9TN7sDLOALr0EV5EeoGIZDy2qk0="
+        private const val TEST_PRIVATE_KEY_PKCS8 =
+            "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgIck5030gf9buTp1iyAeuQtrjcY1E" +
+                "18vjIQHuLZPcsL6hRANCAATe98kehRCddUw8ikYHSgPYIZVrYeTJHEm0KNClXLImcEYn+suOtOP" +
+                "l9t/3DOMl88FmvIsrcmkv1RyGaxJ5wApu"
+        private const val TEST_CERTIFICATE_WITHOUT_ATTESTATION_DER =
             "MIIBmDCCAT+gAwIBAgIULAE4QMrizh16uZ4LA56kjbMRZfswCgYIKoZIzj0EAwIwIjEgMB4GA1UEAwwX" +
                 "UGl4ZWw2IFRlc3QgT2JzZXJ2YXRpb24wHhcNMjYwOTIzMTU1NjQ2WhcNMzYwOTIwMTU1NjQ2WjAi" +
                 "MSAwHgYDVQQDDBdQaXhlbDYgVGVzdCBPYnNlcnZhdGlvbjBZMBMGByqGSM49AgEGCCqGSM49AwEH" +
@@ -173,9 +254,5 @@ class FilePixel6TestnetObservationStoreV1Test {
                 "gBSBr5A0TKEfPa9vWiIiJFQDgZ+71zAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0cAMEQC" +
                 "IHiVMxE0ZA+faRAWymb5yxPKH+VPA9ne452xD6doq1yrAiBzLMkaZhteB/2VAJk602DqGn345OVY" +
                 "sqpffzeQnqpLTw=="
-        private const val TEST_PRIVATE_KEY_PKCS8 =
-            "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgIck5030gf9buTp1iyAeuQtrjcY1E" +
-                "18vjIQHuLZPcsL6hRANCAATe98kehRCddUw8ikYHSgPYIZVrYeTJHEm0KNClXLImcEYn+suOtOP" +
-                "l9t/3DOMl88FmvIsrcmkv1RyGaxJ5wApu"
     }
 }

@@ -410,6 +410,10 @@ versioned signed-transaction bytes unchanged to `/v1/kagemusha/top-up` and
 uses the lowercase operation ID as `Idempotency-Key`; there is no unsigned or
 request-only top-up overload. The embedded request ceiling is 16 KiB so both
 maximum-size recursive proof parities remain usable.
+`KagemushaToriiClientV1.getOperation(...)` returns `null` only for an exact
+Torii `kagemusha_operation_not_found` 404 whose JSON body and
+`X-Iroha-Reject-Code` header agree. Other 404 responses fail; an absent
+operation permits only byte-identical retry of the retained signed transaction.
 
 ### Fee quotes and sponsorship
 

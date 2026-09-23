@@ -45,6 +45,27 @@ public enum ExecutableBatchInputError: Error, LocalizedError, Equatable, Sendabl
     }
 }
 
+/// A prepared top-up must match the caller's transaction signing scope.
+public enum KagemushaTopUpTransactionInputError: Error, LocalizedError, Equatable, Sendable {
+    case networkMismatch
+    case payerMismatch
+    case authorityKeyMismatch
+    case unsupportedMultisigAuthority
+
+    public var errorDescription: String? {
+        switch self {
+        case .networkMismatch:
+            return "The top-up network does not match the expected transaction network."
+        case .payerMismatch:
+            return "The top-up payer does not match the transaction authority."
+        case .authorityKeyMismatch:
+            return "The signing key does not control the top-up transaction authority."
+        case .unsupportedMultisigAuthority:
+            return "This top-up builder requires a single-key authority; multisig requires a signature bundle."
+        }
+    }
+}
+
 /// Canonical dynamic instruction frame accepted by `InstructionBox`.
 public struct TransactionInstructionFrame: Equatable, Sendable {
     public let wireName: String
@@ -921,6 +942,35 @@ public final class IrohaSDK: @unchecked Sendable {
         return try SwiftTransactionEncoder.encodeTransfer(transfer: transfer,
                                                           signingKey: signingKey,
                                                           creationTimeMs: creationTimeMs)
+    }
+
+    /// Build the exact payer-signed transaction shape required by KAGEMUSHA top-up ingress.
+    ///
+    /// Encodes exactly one native top-up in `Executable::Instructions` with
+    /// `QueuePlanSynced` admission. The caller supplies the trusted network,
+    /// payer authority, fee intent, signing key, creation time, and TTL. The
+    /// signing key must control a single-key payer; multisig needs a signature
+    /// bundle. Persist the returned versioned bytes before submission and reuse
+    /// them on retries. This builds a transaction; it does not verify reserve
+    /// finality or credit funds.
+    public func buildSignedKagemushaTopUp(
+        request: KagemushaTopUpRequestV1,
+        networkId: NetworkId,
+        authority: String,
+        creationTimeMs: UInt64,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64 = 100_000,
+        signingKey: SigningKey
+    ) throws -> SignedTransactionEnvelope {
+        try SingleInstructionSwiftNoritoEncoder.encodeKagemushaTopUp(
+            request: request,
+            networkId: networkId,
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            feePayment: feePayment,
+            ttlMs: ttlMs,
+            signingKey: signingKey
+        )
     }
 
     /// Build the exact unsigned current batch payload at the caller's retained
