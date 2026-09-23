@@ -1475,7 +1475,7 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
 # inventory may be bulk-refreshed.
 _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
     "ingress::fair_v2_ingress_queue_gate_verdict": (
-        "c55656b8ec95bbb766c81c2e6366251087127686224f0c490e64bea95b30121d"
+        "d5549586e3eee7cbd0993ec0496cec15f1ce8130f91b19dfb7fdbe86ce8fccd3"
     ),
     "ingress::select_fair_v2_ingress_candidate": (
         "9d12522aa0b65a229efc08e35feae5d887c7656366fa074e05b14c2c370a6068"
@@ -4848,7 +4848,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
         "cb5b0f1088bd200ae57a9d5c8ca6fcdf97332fa376379e2f354d0b9706e36d67"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "c55656b8ec95bbb766c81c2e6366251087127686224f0c490e64bea95b30121d"
+        "d5549586e3eee7cbd0993ec0496cec15f1ce8130f91b19dfb7fdbe86ce8fccd3"
     ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"

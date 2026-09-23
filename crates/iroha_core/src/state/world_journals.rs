@@ -570,10 +570,25 @@ macro_rules! check_mode {
     };
 }
 
+// Keep one concrete field's construction temporaries out of the aggregate
+// materialization frame. Expanding these moves for every World field in that
+// frame exhausts the ordinary stack along the retained validation call path.
+// This uses the same admitted wrapper allocation and original cleanup owner.
+#[inline(never)]
+fn retain_captured_world_field<S: WorldCaptureSlot>(
+    field: &mut Option<(S, fn(&World) -> &S::Target)>,
+    name: &'static str,
+) -> Box<dyn RetainedWorldField> {
+    let (slot, target) = field.take().expect("original World capture slot");
+    Box::new(slot.retain(name, target))
+}
+
 macro_rules! retain_field {
     ($fields:ident, $pending:ident, $field:ident) => {{
-        let (slot, target) = $pending.$field.take().expect("original World capture slot");
-        $fields.push(Box::new(slot.retain(stringify!($field), target)));
+        $fields.push(retain_captured_world_field(
+            &mut $pending.$field,
+            stringify!($field),
+        ));
     }};
 }
 

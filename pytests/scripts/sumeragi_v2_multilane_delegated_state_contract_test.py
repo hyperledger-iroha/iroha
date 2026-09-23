@@ -35,7 +35,8 @@ def fixture(tmp_path):
     helper = support()
     checker = helper.load_checker()
     helper.copy_reviewed_source_fixture_with_includes(
-        tmp_path, checker, {Path(checker.delegated_state_contract.STATE)},
+        tmp_path, checker, {Path(checker.delegated_state_contract.STATE),
+                            Path(checker.delegated_state_contract.ADMISSION_CONVERSION_BINDING[0])},
     )
     result = tmp_path, helper, checker, helper.canonical_models()
     assert validate(result) == ()
@@ -129,6 +130,13 @@ def test_delegated_state_rejects_semantic_mutation(fixture, symbol, old, new):
 
 
 @pytest.mark.parametrize("symbol,old,new", [
+    ('validate_merge_execution_batch', 'LaneLifecycleReleases::new(self)', 'LaneLifecycleReleases::new(foreign_state)'),
+    ('validate_merge_execution_batch', '&mut releases,', '&mut foreign_releases,'),
+    ('validate_merge_execution_batch', 'let mut releases = LaneLifecycleReleases::new(self);', 'return Ok(()); let mut releases = LaneLifecycleReleases::new(self);'),
+    ('validate_merge_execution_batch_with_replay', '.view_retaining(&mut releases.hashes)', '.view()'),
+    ('validate_merge_execution_batch_with_replay', 'self.view_with_index_releases(releases)', 'self.view()'),
+    ('stage_certified_merge_entry_with_replay', 'self.read_releases\n            .state()', 'self.state_ref'),
+    ('stage_certified_merge_entry_with_replay', '&mut self.read_releases.lifecycle,', '&mut foreign_releases,'),
     ("validate_merge_execution_batch", "            active_lanes,", "            foreign_lanes,"),
     ("validate_merge_execution_batch", "            batch,", "            foreign_batch,"),
     ("validate_merge_execution_batch", "            validation_authority,", "            foreign_authority,"),
@@ -180,10 +188,11 @@ def test_merge_batch_delegation_preserves_original_owner_obligations(fixture):
 
 @pytest.mark.parametrize("symbol,old,new", [
     ("build_merge_execution_candidate_for_consensus", "deterministic_start_work_pending(&application_block_header)?", "deterministic_start_work_pending(&application_block_header).ok().flatten()"),
-    ("build_merge_execution_candidate_for_consensus", ".map_err(StateBlockStartError::History)", ".or_else(|_| Ok(None))"),
+    ("build_merge_execution_candidate_for_consensus", ".map_err(StateBlockStartError::from)", ".or_else(|_| Ok(None))"),
     ("select_merge_execution_candidate_for_consensus", "        )?;", "        ).unwrap_or(None);"),
     ("select_merge_execution_candidate_prefix", "build_batch(midpoint)?", "build_batch(midpoint).unwrap_or(None)"),
-    ("build_merge_execution_batch_from_source_prefix", "Err(MergeLedgerCommitError::BlockHashAdmission(error)) => return Err(error),", "Err(MergeLedgerCommitError::BlockHashAdmission(_)) => return Ok(None),"),
+    ("build_merge_execution_batch_from_source_prefix", "Err(MergeLedgerCommitError::BlockHashAdmission(error)) => return Err(error.into()),", "Err(MergeLedgerCommitError::BlockHashAdmission(_)) => return Ok(None),"),
+    ('build_merge_execution_batch_from_source_prefix', 'Err(MergeLedgerCommitError::MembershipAdmission(error)) => return Err(error.into()),', 'Err(MergeLedgerCommitError::MembershipAdmission(_)) => return Ok(None),'),
     ("select_merge_execution_candidate_for_consensus", "gas_limit_from_parameters(world.parameters())", "u64::MAX"),
     ("select_merge_execution_candidate_for_consensus", "sources[..prefix_len].to_vec()", "sources.clone()"),
     ("select_merge_execution_source_budget", "source.origin_proposal.descriptor.proposal_height", "source.certified.proposal.descriptor.proposal_height"),
@@ -211,7 +220,12 @@ def test_delegated_carrier_budget_and_publication_reject_semantic_mutation(fixtu
     assert not any("digest" in e or "must have one" in e for e in errors), errors
 
 
-@pytest.mark.parametrize("symbol,old,new", [('composed_external_events', 'self.external_event_count,', '0,'),
+@pytest.mark.parametrize("symbol,old,new", [
+ ('apply_verified_merge_beacon_pulse', 'current_base_hash,\n            original_root,', 'foreign_base_hash,\n            original_root,'),
+ ('apply_verified_merge_beacon_pulse', 'current_base_hash,\n            original_root,', 'current_base_hash,\n            foreign_root,'),
+ ('apply_verified_merge_beacon_pulse', 'self\n            .read_releases\n            .lane_execution_state_hash()', 'self.state_ref.lane_execution_state_hash()'),
+ ('apply_verified_merge_beacon_pulse', '.map_err(|error| eyre::eyre!(error.to_string()))?;', '.unwrap_or_default();'),
+ ('composed_external_events', 'self.external_event_count,', '0,'),
  ('composed_external_events', 'seal.external_event_count,', '0,'),
  ('composed_external_events',
   'seal.external_event_bytes.as_deref()',
@@ -266,3 +280,34 @@ def test_delegated_commit_retains_original_fields_and_authority(fixture, old, ne
     errors = validate(fixture)
     assert any("missing executable relation" in error for error in errors), errors
     assert not any("digest" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("old,new", [
+    ("StateAdmissionError::Membership(e) => Self::Membership(e)",
+     "StateAdmissionError::Membership(e) => Self::History(e)"),
+    ("StateAdmissionError::History(e) => Self::History(e)",
+     "StateAdmissionError::History(e) => Self::Membership(e)"),
+    ("Self::Membership(e)", "Self::Membership(replacement)"),
+])
+def test_delegated_selector_preserves_original_admission_kind(fixture, old, new):
+    """The generic conversion must retain the original kind and release owner."""
+    root, helper, checker, _ = fixture
+    path, kind, symbol, _ = checker.delegated_state_contract.ADMISSION_CONVERSION_BINDING
+    errors = []
+    with checker._reviewed_rust_source_cache():
+        original = checker._rust_binding_item(root, path, kind, symbol, "refusal preimage", errors)
+    assert errors == [] and original is not None and original.count(old) == 1
+    helper.replace_once(root / path, original, original.replace(old, new, 1))
+    errors = validate(fixture)
+    assert any("must preserve the exact original admission refusal" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+def test_delegated_selector_requires_conversion_ledger_owner(fixture):
+    """Deleting the typed conversion cannot shrink the reviewed census."""
+    _, _, checker, models = fixture
+    path, kind, symbol, _ = checker.delegated_state_contract.ADMISSION_CONVERSION_BINDING
+    model = next(m for m in models if m["module"] == checker.delegated_state_contract.MODEL)
+    model["production_symbols"] = [row for row in model["production_symbols"]
+        if (row["path"], row["kind"], row["symbol"]) != (path, kind, symbol)]
+    assert any(f"ledger owner {symbol}" in error for error in validate(fixture))

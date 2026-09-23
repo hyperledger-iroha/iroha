@@ -864,11 +864,25 @@ fn run_lifecycle_active_height(
             &mut active_runner,
             |_owner, _executor, services, _local_proposal| {
                 native.take_service_publication(services);
-                native.service_sources(services, now)?;
+                native.service_sources(services, now).inspect_err(|error| {
+                    iroha_logger::error!(
+                        ?error,
+                        height = context.height,
+                        "Sumeragi v2 Native source service failed closed"
+                    );
+                })?;
                 Ok::<_, V2RunnerError>(())
             },
         )?;
-        native.poll(native_global, native_network, now, receiver)?;
+        native
+            .poll(native_global, native_network, now, receiver)
+            .inspect_err(|error| {
+                iroha_logger::error!(
+                    ?error,
+                    height = context.height,
+                    "Sumeragi v2 Native process turn failed closed"
+                );
+            })?;
         liveness_watchdog.poll(now);
         activated.with_runner_runtime(
             &mut active_runner,
@@ -1246,7 +1260,16 @@ fn run_lifecycle_active_height(
             body_queue_capacity,
             control_queue_capacity,
             terminal_finalization_cut.as_ref(),
-        )?;
+        )
+        .inspect_err(|error| {
+            // Report the initiating failure while the activated services still
+            // exist; their fail-closed drop can wake a process-ending relay.
+            iroha_logger::error!(
+                ?error,
+                height = context.height,
+                "Sumeragi v2 lifecycle ingress turn failed closed"
+            );
+        })?;
         producer_claim = activated.producer_claim_projection()?;
         if let Some(reason) = drain_disposition.advance_executor_yield() {
             last_advance_executor_yield = Some(("pre-ingress", reason, Instant::now()));

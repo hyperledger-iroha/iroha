@@ -622,8 +622,28 @@ replay, preserving its isolated-State finality/wire/checkpoint tail. All six
 new publication/replay and snapshot controls pass within unchanged Core75's full
 580-control selection. Matching daemon73/harness74 fail earlier at height rollover:
 a whole-process ingress cut rejects process-lived Native custody. The separate
-authenticated closed-global cut is under validation; strict full-drain semantics,
-network qualification and the complete fault matrix remain required. Evidence belongs in the
+authenticated closed-global cut now passes its genuine retained-Native retry,
+physical-owner, corruption and caller regressions. Matching daemon91/harness92
+pass the seven-validator two-restart diagnostic (298.30 seconds) and the
+four-validator silent-author/sole-input/restart diagnostic (127.05 seconds) on
+unchanged captured sources and binaries. Core93's fieldwise retained-journal
+materialization correction passes all 137 focused controls, including the four
+former default-stack failures and a real Native retry on an explicit 2 MiB
+thread. Core96 corrects the diagnostic source assertion and passes all 810
+controls. The subsequent [Native/global queue correction](../docs/history/2026-09-23/native-global-ingress-ordering.md)
+removes a reproduced terminal-drain dependency on retained Native custody and
+keeps replenished Native traffic from starving a global recovery dependency.
+Final Core109 passes all 878 selected controls with an unchanged source, binary
+and Git join; all 100 contract/mutation controls and the canonical multilane
+structural gate pass. These structural checks do not prove runtime liveness.
+The final daemon/harness pair passes the real four-validator NPoS outage/restart,
+seven-validator two-restart and four-validator silent-author/sole-input/restart
+checks in 226.64, 320.76 and 113.16 seconds. The first two precede only a test
+correction; final daemon/harness bytes are identical and each original source
+capture remains explicit. Two earlier NPoS fail-stops remain causally
+unattributed. Complete process-memory admission, successor activation, the
+remaining fault/seed campaign and clean signed release qualification remain
+required. Earlier evidence remains in the
 [epoch-authority record](../docs/history/2026-09-22/epoch-authority-cutover.md).
 
 ## Required invariants
@@ -635,6 +655,10 @@ network qualification and the complete fault matrix remain required. Evidence be
    capacity or validation cannot exclude the event which releases that wait.
    No operation waits for a permit or capacity held by itself or its joining
    caller. External waiting releases execution leases it no longer needs.
+   Physical queue order remains authenticated, but does not create a dependency
+   between independent lifetimes: global finalization cannot wait for Native
+   custody that survives the height. Independently eligible traffic shares fair
+   service with the responses needed to release a blocked global owner.
 3. **Progress service survives ordinary saturation.** Clocks, authenticated
    progress messages, required responses and completions receive bounded service
    even when ordinary work fills its queues. Untrusted traffic cannot claim
@@ -669,7 +693,7 @@ belongs in `iroha_config`; hardware choices cannot alter consensus results.
 | L1 — One contract and complete progress inventory | **Active** | Core/Sumeragi and formal owners | Reconcile voting/replay contradictions against executable code; map every wait, resource hold, wake source, terminal result and durable reconstruction path. Map all nine runner states to their authoritative facts. Identify each independent scheduling decision and the exact code to remove. |
 | L2 — Remove competing scheduling authority | **Active** for inventoried runner slice; full L1 inventory remains prerequisite to closure | Lifecycle, runner and runtime owners | Production uses a fresh owner-derived action projection; remove the runner's shadow state and transition history, then consolidate duplicate runtime decisions. Wake events and deadlines stay serviceable under saturation. Meet the existing measured simplification/deletion obligations across the complete source closure, including moved code. |
 | L3 — Conserve work through completion and recovery | **Active** for Store publication/completion handoff; integrate with L2 | Reducer, lifecycle, WAL, body store and Kura owners | One stable obligation survives view/generation changes and every durable cut. Adopt results only under current authority; no lost work, double-signing, duplicate application or lifecycle resurrection. Replace redundant journals/repair paths with the minimum sufficient recovery representation. |
-| L4 — Close resource cycles and permanent retry loops | **Active** for certified-persistence retry audit; L2–L3 | Worker, P2P, validation and application owners | No asynchronous wait or failure/destructor path retains a resource needed by its own completion. Exercise typed retry dependencies at exact capacity. Terminal failures are observable and never silently retried. Ordinary work and authenticated recovery receive bounded fair service. |
+| L4 — Close resource cycles and permanent retry loops | **Active** for certified-persistence retries and Native/global dependency closure; L2–L3 | Worker, P2P, validation and application owners | No asynchronous wait or failure/destructor path retains a resource needed by its own completion. Exercise typed retry dependencies at exact capacity. Terminal failures are observable and never silently retried. Ordinary work and authenticated recovery receive bounded fair service. |
 | L5 — Exercise the assembled runtime | Open; test construction starts with L1 | Core tests, simulation and formal owners | Deterministically explore event orderings, saturation, restart cuts and generation changes through production scheduling/adapter paths. Replay minimized counterexamples. Pass current formal/trace checks and adversarial mutations; source-text matching and ghost fairness assumptions do not establish runtime progress. |
 | L6 — Qualify one immutable candidate | Open; L1–L5 | Integration, release and component owners | Pass the real four/seven-validator matrix and applicable existing formal, chaos, multilane, workspace and SDK gates on the same source/artifacts. Documentation describes the resulting implementation. Missing, failing, skipped or stale gates remain open. |
 

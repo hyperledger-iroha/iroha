@@ -22,7 +22,7 @@ use halo2_ecc::{
     fields::{FieldChip as _, Selectable as _, fp::FpChip},
 };
 use halo2_proofs::halo2curves::{
-    CurveAffine as _,
+    CurveAffine as _, CurveAffineExt as _,
     ff::Field as _,
     ff::PrimeField,
     secp256r1::{Fp as P256Base, Fq as P256Scalar, Secp256r1Affine},

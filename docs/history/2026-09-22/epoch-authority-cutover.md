@@ -995,3 +995,219 @@ allocation across roster replacement, and reject all nine stale global lane
 accounts under both cuts. Core76 and matching network qualification are pending.
 The failure receipt and actual peer stores remain retained; no network pass or
 L1–L6 completion is claimed.
+
+Core76 compiles with unchanged captured inputs. Its expanded physical-ingress and
+caller selection passes 161 of 163 tests, including the new retained-Native,
+corrupted-accounting and strict-drain regressions. Two older tests fail before
+their intended checks: one still expects the now-active public Native entrypoint
+to reject admission, and one locates the recovered-Sign completion using a
+retired missing-sidecar Apply comment. Generation233 prepares test-only repairs:
+exercise public admission and duplicate coalescing, and check the exact
+recovered-Sign struct and implementation separately. All ownership restrictions
+remain asserted. These corrections await the next captured Core build; the
+161/163 result is not a passing suite.
+
+Generation232's formal companion passes all 199 focused uncached controls on the
+captured candidate, including rejection of release-mode authentication bypasses,
+the strict full-drain negative and both global caller regressions. The nine
+reviewed Python files are applied with exact candidate hashes and unchanged
+branch, HEAD and index. A separate canonical-consumer check is in progress.
+
+The canonical generation232 consumers pass all 199 checks in 59.72 seconds with
+unchanged source and Git files. A second post-merge capture also passes 199 in
+59.42 seconds. Daemon77 exits successfully, but its build overlaps an external
+merge from `ddaa8ede8818912b864aaad73566c6f4cc3a87f0` to
+`b45ec0457eb0664e46c2cdfd8a4b619caefd02b9`, changing 229 captured Rust inputs.
+Harness78 is unchanged on the preceding inputs. The exact-artifact network
+preflight refuses this pair before starting any peer; this is neither a network
+pass nor a runtime counterexample. All external changes are retained. The two
+test-only expectation corrections are applied and fresh Core79, daemon80 and
+harness81 captures are compiling the current checkout.
+
+Current Core79, daemon80 and harness81 stop at the same merged DataModel schema
+error: the release-manifest Revoke action uses named enum fields unsupported by
+IntoSchema. Generation235 replaces them with one dedicated documented revocation
+payload, updates every Rust consumer and adds binary/strict-JSON/schema coverage;
+no compatibility decoder is added. The registry regression also gains its missing
+cfg(test) boundary. The codec retirement guard passes. Model82 gets past that
+production schema error but fails test compilation on two separate merged
+KAGEMUSHA fixtures (missing authenticated app evidence and a moved borrowed
+policy), before any test executes. Authentic fixture corrections are prepared
+off-tree for the next source capture.
+
+After the merge, generation229's four uncached Native-preparation consumers fail
+fixture setup with 47 owner-binding diagnostics on unchanged inputs. The full
+canonical multilane gate reports 545 diagnostic lines on unchanged source,
+including 291 repeated refusals for the newly included Kura transaction-history
+budget test. Generation236 reviews that three-test include, extends the precise
+allowlist and its authenticated digest, and passes both the current-manifest and
+exact Kura owner/source controls. The intermediate missing-digest failures remain
+recorded. Other Native, membership, prepublication and delegated-State bindings
+remain under review; no whole-gate pass is asserted.
+
+Generation233's genuine process regression is applied for the next Core build.
+It retains an actual PreparedDequeued owner under control capacity one, preserves
+a third queued occurrence through the authenticated global cut, real gate
+retirement/rebinding and a changed global roster, then requires all three real
+timeout votes to reach Native view one at fixed time. It adds no production API
+or fabricated publication authority; runtime qualification remains pending.
+
+
+The post-merge production daemon87 compiles, but its source join is invalidated by
+necessary test-source repairs. A fresh daemon91 then builds on unchanged source
+and Git metadata. The harness88 also compiles with an invalidated source join;
+harness92 is a fresh capture. No newer network pass is asserted.
+
+Model89 passes all ten release-manifest regressions on unchanged captured inputs.
+Its retained component artifact subsequently passes 15/16 enrollment/hardware
+controls. The remaining test expected issuer-evidence rejection for a changed
+nonce, but the new authenticated app owner correctly rejects that nonce earlier
+as a binding mismatch. The fixture now asserts that exact rejection and separately
+signs a detached issuer evidence commitment to preserve the issuer-boundary
+negative control. No production authentication check is relaxed.
+
+Core86 exposes two missing capability-constant imports and a missing terminal
+credential app-binding witness. Those fixtures now import the defining constant
+and supply both exact credential bindings; both curve suites additionally mutate
+each binding separately. The pending Core90 capture includes these corrections.
+The missing privacy fixture include is restored from the exact preceding source
+with current Orchard/private-IVM reserve records. Its `test_*` filename had been
+ignored by the repository-wide pattern; an exact Git-ignore exception now keeps
+the required include visible. The production P-256 gadget also imports the trait
+which defines its existing coordinate operations. Core/privacy runtime execution
+remains pending.
+
+Generation240 replaces admission-capacity checks for retired runner-side merge
+selection with the actual single Native worker and authenticated preparation path.
+Its 98 controls pass on unchanged captured sources, including stale completion,
+second-worker, source custody, wrong State/guard, ordinary fallback and effect
+clearing mutations. Exact framing and height-based optional-evidence priority
+remain enforced by the existing assembler checks. This is structural evidence;
+it does not establish network or release qualification.
+
+
+Generation235's five-file membership/Native binding patch is applied only after
+all canonical bases and reviewed candidate hashes match. Membership passes 189
+controls; Native focused controls pass 137 plus one corrected, uncached free-function
+extractor mutation. The final 17 uncached controls pass, including four actual
+consumers and removed/commented fixture-gate and Busy-recovery mutations. That
+last broad snapshot changed only in the concurrent parent-owned admission-capacity
+checker; all generation235-owned files and Rust inputs remain unchanged. Earlier
+failed extraction/setup receipts are retained. No Rust implementation or proof
+claim is changed by this patch.
+
+
+## Current Core90 and real-network checkpoint
+
+Core/model90, daemon91 and harness92 compile with unchanged captured inputs and
+Git metadata. The retained model artifact passes all 26 release-manifest and
+enrollment/hardware controls. The complete selected Core runtime executes all
+809 controls on its unchanged captured source and binary: 804 pass, four abort
+with default-stack overflow, and the recovered-Sign source check cannot find its
+retired doc-comment delimiter. The separate five-control global-cut selection
+passes its four genuine runtime regressions and fails that same source check.
+Both failed suite joins remain recorded; neither is a passing suite. The four
+overflows are the control-only, single and atomic Native-service retained
+execution/publication tests and retained-current-genesis publication.
+
+Matching daemon91/harness92 pass the real seven-validator two-restart diagnostic
+in 298.296444 seconds and the real four-validator silent-author diagnostic in
+127.048639 seconds. Each runs exactly once with real-network enforcement, no
+skips, unchanged listed inputs, unchanged retained binaries and unchanged Git
+metadata. The seven-validator test checks economic execution before the outage,
+execution with two validators offline, both authenticated historical restarts,
+and the final sole finite transaction on every validator. The four-validator
+test checks the unavailable initial Native author, later-view quorum, sole-input
+execution and restart recovery. Receipts and peer logs are retained under
+`dist/sumeragi-main-work/generation188-real-process-build/two-restarts91-local1`
+and `silent-author91-local1`. Test-log SHA-256 values are respectively
+`c9d34ffd080c8e6d7fb9f9f83b5e991f957c51975b6e04c571e6f5597dc3dac3` and
+`50f24147b798df308488dccdd13a5ea955582422bb6046a482ae7ec747db6e9f`.
+These use the documented local-release/stable-metadata development artifacts;
+they do not qualify the clean signed release, all fault schedules or production
+readiness.
+
+The current canonical multilane structural gate passes on unchanged sources
+(generation234 `multilane-current3`). Generation240's actual candidate/capacity
+controls pass 98 tests. Its inventory interface repair passes all eleven tests;
+the earlier 18/19 result is retained. Generation242 passes all 25 exact
+drain/handoff controls and five newly added negative controls. Generation241
+passes all 116 delegated-State controls, 78 related controls and five uncached
+conversion controls. Its final join records unchanged Rust, owned checker
+candidates and Git, and identifies the three concurrent parent-owned formal
+applications exactly. The gate binds five refinement kernels and the composed
+in-flight relation; it explicitly makes no production trace-extraction claim.
+The L1–L6 goals, default-stack failures, complete process-memory admission and
+full fault/release matrix remain open.
+
+
+The additional four-validator NPoS leader-timeout scenario fails twice on the
+unchanged daemon91/harness92 candidate (60.48 and 57.73 seconds including the
+wrapper). All validators finalize genesis; three advance past height two, while
+one writes height-two finality but exits through `ProductionV2Services::drop`.
+The relay observes that fail-stop and exits before the outer runner prints its
+initiating error. Both original failed receipts and durable peer directories are
+retained (`npos-timeout91-local1` and `npos-timeout91-local2`); the permissioned
+network passes do not qualify this NPoS schedule. Generation245 adds diagnostic
+reporting for Native source/process and lifecycle ingress failures while their
+activated services still exist. This is diagnostic work, not a claimed repair
+of the NPoS failure.
+
+Generation242's retained-stack diagnosis independently reproduces all four
+default-stack failures against the unchanged Core90 artifact under LLDB. The
+shared production call chain materializes all World fields in one 587,664-byte
+closure, inside a 139,136-byte World journal frame, a 277,248-byte State component
+frame and a 649,680-byte prepared-carrier frame. The current correction isolates
+each concrete field's temporary construction in a non-inlined helper borrowing
+its original slot. It reuses the admitted wrapper allocation and preserves
+original capture, cleanup and notification custody. An explicit fixed 2 MiB
+regression covers the actual retained Native execution/retry/revalidation path;
+no stack-size increase is used. Core93, daemon94 and harness95 are compiling
+this correction, the recovered-Sign delimiter repair and the initiating-error
+diagnostics. No passing post-correction runtime result is asserted yet.
+
+
+## Core93 and NPoS94 follow-up
+
+Core93, daemon94 and harness95 compile on identical captured Rust inputs with
+unchanged Git metadata. The focused default-stack selection passes all 137
+controls, including the four former retained-publication overflows, the new
+explicit 2 MiB Native body-store retry and the recovered-Sign source boundary.
+Its final source/executable join is true. The broader selection executes all
+810 controls: 809 pass and the terminal-finalization source test still expects
+`native.poll(` before the diagnostic closure introduced a line break. That suite
+remains failed; its unchanged-source receipt and failure are retained.
+
+The matching four-validator NPoS outage/restart diagnostic passes once in
+196.099495 seconds, with no ignored cases and unchanged source, binaries and Git.
+Its log SHA-256 is
+`a88930c83441ba862f1c2d22acdd6eb0da8e0a7c1d9c7f009f9d393ffea103cf`.
+This pass does not explain the two earlier daemon91 fail-stops. A separate
+historical replay of the exact old daemon91/harness92 pair also passes in
+207.995141 seconds. That run inserts an off-tree library which delays only
+nonzero process exit by two seconds so the initiating runner error can be
+printed after fail-stop; it is diagnostic evidence, not unmodified network
+qualification. Original binaries and current workspace inputs remain unchanged.
+Its log SHA-256 is
+`ecf4d7030e795275213150e78233234cbe0da366f07e55cb040caea8db831b09`.
+The intermittent failure remains open pending a concrete initiating error and
+regression.
+
+The current canonical multilane gate (`multilane-current5`) passes on unchanged
+sources after generation243 aligns the sole Autonomous runner ledger row and
+passive consumer with the exact diagnostic wrappers. All 16 companion controls
+pass, including changed arguments, lost error propagation and injected control
+actions. No proof or production trace-extraction claim changes.
+
+## Core96 assertion closure and subsequent queue counterexample
+
+Core96 corrects the Native-poll source assertion without changing its required
+arguments or error propagation. All 810 selected controls then pass with an
+unchanged source/executable/Git join. Daemon97/harness98 separately pass the real
+seven-validator two-restart diagnostic in 235.197038 seconds.
+
+The subsequent [Native/global ingress record](../2026-09-23/native-global-ingress-ordering.md)
+contains the new terminal-drain and dependency-priority counterexamples, their
+final regressions and network evidence. The older NPoS failures remain
+causally unattributed; neither successful replays nor the independently
+reproduced queue defect establish their initiating error.

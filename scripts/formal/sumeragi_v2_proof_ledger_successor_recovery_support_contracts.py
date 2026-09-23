@@ -3460,7 +3460,7 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
             "continue",
             "if !drained_terminal_ingress && !drained_terminal_relay",
             "break",
-            "receiver.ensure_closed_drained_cut()",
+            "receiver.ensure_closed_global_drained_cut()",
             "activated.into_finalized_rollover(&mut active_runner)?",
         ),
     )

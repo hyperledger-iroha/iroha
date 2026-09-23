@@ -228,6 +228,7 @@ clean_copy/*
 test_*
 # Keep native protocol fixture sources required by tracked test modules.
 !crates/fastpq_prover/src/backend/compact_protocol/test_fixture.rs
+!crates/iroha_core/src/privacy_state/test_fixtures.rs
 !crates/iroha_sccp/src/test_fixtures/
 !crates/iroha_sccp/src/test_fixtures/*.rs
 # Keep Python test sources discoverable without force-adding each new test.

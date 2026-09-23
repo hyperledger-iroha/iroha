@@ -14,6 +14,7 @@ use iroha_data_model::{
     sorafs::release_manifest_authority::{
         ReleaseManifestCheckPhaseV1, ReleaseManifestCheckV1, ReleaseManifestCompleteV1,
         ReleaseManifestExpireV1, ReleaseManifestFloorV1, ReleaseManifestReserveV1,
+        ReleaseManifestRevocationV1,
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsFinalPromotion;
@@ -180,10 +181,10 @@ fn role13_grants_match_only_their_action_and_independent_observer() {
     for action in [
         Action::Configure(Vec::new()),
         Action::Enroll(Vec::new()),
-        Action::Revoke {
+        Action::Revoke(ReleaseManifestRevocationV1 {
             signer: true,
             attester: false,
-        },
+        }),
     ] {
         let request = instruction(action);
         assert!(authorized(world, &f.manager, &request));
@@ -239,10 +240,10 @@ fn every_role13_action_remains_closed_even_with_exact_permission() {
         (Action::Configure(Vec::new()), &f.manager),
         (Action::Enroll(Vec::new()), &f.manager),
         (
-            Action::Revoke {
+            Action::Revoke(ReleaseManifestRevocationV1 {
                 signer: true,
                 attester: false,
-            },
+            }),
             &f.manager,
         ),
     ];

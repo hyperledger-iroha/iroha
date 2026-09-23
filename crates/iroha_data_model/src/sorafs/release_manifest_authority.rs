@@ -31,10 +31,48 @@ pub const RELEASE_MANIFEST_OPERATION_LIMIT_V1: u64 = 65_536;
 /// Maximum exclusive reservation lifetime, further capped by governed custody.
 pub const RELEASE_MANIFEST_RESERVATION_MS_V1: u64 = 60_000;
 
+/// Governed revocation of the current release signer or independent attester generation.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestRevocationV1"
+)]
+#[norito(deny_unknown_fields)]
+pub struct ReleaseManifestRevocationV1 {
+    /// Revoke the current signer key generation.
+    pub signer: bool,
+    /// Revoke the current independent attester generation.
+    pub attester: bool,
+}
+
 /// Exact reviewed manifest request and audit predecessor to reserve before provider I/O.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestReserveV1"
@@ -49,8 +87,19 @@ pub struct ReleaseManifestReserveV1 {
 
 /// Completion claims the original reservation and commits privately staged signatures.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestCompleteV1"
@@ -72,8 +121,19 @@ pub struct ReleaseManifestCompleteV1 {
 
 /// Explicit terminalization without deleting the operation-ID tombstone.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestExpireV1"
@@ -89,13 +149,29 @@ pub struct ReleaseManifestExpireV1 {
 
 /// Claimed immutable operation outcome; the native reader must authenticate the retained row.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestOutcomeV1"
 )]
-#[norito(tag = "state", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[norito(
+    tag = "state",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ReleaseManifestOutcomeV1 {
     /// Exclusive slot remains open, with no signature released.
     #[codec(index = 0)]
@@ -110,8 +186,19 @@ pub enum ReleaseManifestOutcomeV1 {
 
 /// Claimed native indexed row, never proof of its own execution or finality.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestOperationV1"
@@ -128,8 +215,19 @@ pub struct ReleaseManifestOperationV1 {
 
 /// Independently retained finalized floor requested for a fresh Check.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestFloorV1"
@@ -145,13 +243,29 @@ pub struct ReleaseManifestFloorV1 {
 
 /// Closed phase set; every invocation requires a separately retained fresh challenge.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestCheckPhaseV1"
 )]
-#[norito(tag = "phase", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[norito(
+    tag = "phase",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ReleaseManifestCheckPhaseV1 {
     /// Current eligible custody and exact audit predecessor, before reservation.
     #[codec(index = 0)]
@@ -175,8 +289,18 @@ pub enum ReleaseManifestCheckPhaseV1 {
 
 /// No-write Check claim; only a native exact transaction/result reader can authenticate it.
 #[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestCheckV1"
@@ -199,15 +323,30 @@ pub struct ReleaseManifestCheckV1 {
     pub phase: ReleaseManifestCheckPhaseV1,
 }
 
-/// Closed action surface, not yet an InstructionBox or production authorization path.
+/// Release-manifest action claim; registered native dispatch remains closed.
 #[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestActionV1"
 )]
-#[norito(tag = "action", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[norito(
+    tag = "action",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ReleaseManifestActionV1 {
     /// Canonical role-13 custody policy, admitted only by future native permission checks.
     #[codec(index = 0)]
@@ -217,12 +356,7 @@ pub enum ReleaseManifestActionV1 {
     Enroll(Vec<u8>),
     /// Governed emergency revocation invalidates the active operation.
     #[codec(index = 2)]
-    Revoke {
-        /// Revoke the current signer key generation.
-        signer: bool,
-        /// Revoke the current independent attester generation.
-        attester: bool,
-    },
+    Revoke(ReleaseManifestRevocationV1),
     /// Reserve one exact original operation before key I/O.
     #[codec(index = 3)]
     Reserve(ReleaseManifestReserveV1),

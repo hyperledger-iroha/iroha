@@ -85,7 +85,7 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
     let settlement = source_region(
         source,
         "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
-        "/// Drive and retry one exact missing-sidecar lifecycle Decision Apply owner.",
+        "pub(in crate::sumeragi) fn drive_lifecycle_decision_apply_deferred(",
     );
     assert_source_tokens_in_order(
         settlement,
