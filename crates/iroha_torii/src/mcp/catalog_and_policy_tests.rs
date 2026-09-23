@@ -1899,7 +1899,7 @@ fn stateless_discovery_includes_toolset_version() {
     );
     assert_eq!(
         payload.get("supportedVersions"),
-        Some(&norito::json!([protocol::MODERN_PROTOCOL_VERSION]))
+        Some(&norito::json!([(protocol::MODERN_PROTOCOL_VERSION)]))
     );
 }
 #[test]
