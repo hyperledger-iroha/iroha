@@ -946,6 +946,12 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             LOCKED_REPROPOSAL_QUEUE_CAPACITY,
             observer_pressure_view_change_rules,
         )
+        .with_config_layer(|layer| {
+            layer.write(
+                ["logger", "filter"],
+                "iroha_p2p::network=debug,iroha_p2p::peer=debug,iroha_core::sumeragi::v2_runner=debug,iroha_core::sumeragi::v2_block_sync=debug",
+            );
+        })
         .with_sync_timeout(Duration::from_secs(240))
         .with_peer_startup_timeout(Duration::from_secs(180));
     let context = stringify!(signed_observer_slow_reader_pressure_recovers_exact_successor);
@@ -1129,7 +1135,22 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
         network
             .ensure_blocks_with(|height| height.total >= LOCKED_REPROPOSAL_HEIGHT)
             .await
-            .wrap_err("observers did not recover the later-view body")?;
+            .wrap_err_with(|| {
+                let relay_stats = observers
+                    .iter()
+                    .zip(&relay_stats_before)
+                    .map(|(observer, before)| {
+                        (
+                            observer.mnemonic().to_owned(),
+                            *before,
+                            network.observer_slow_reader_relay_stats_for(&observer.id()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                format!(
+                    "observers did not recover the later-view body after relays reopened: relay_stats={relay_stats:?}"
+                )
+            })?;
         wait_for_normal_statuses(
             &all_participants,
             LOCKED_REPROPOSAL_HEIGHT,
@@ -3388,8 +3409,24 @@ async fn wait_for_validator_commit_before_observer_catchup(
     );
     let deadline = Instant::now() + timeout;
     loop {
-        let validator_statuses = normal_statuses(validators).await?;
-        let observer_statuses = normal_statuses(observers).await?;
+        let statuses = async {
+            let validators = normal_statuses(validators).await?;
+            let observers = normal_statuses(observers).await?;
+            Ok::<_, eyre::Report>((validators, observers))
+        }
+        .await;
+        let (validator_statuses, observer_statuses) = match statuses {
+            Ok(statuses) => statuses,
+            Err(error) => {
+                if Instant::now() >= deadline {
+                    return Err(eyre!(
+                        "validator-before-observer recovery witness at height {height} did not become readable within {timeout:?}: last status error: {error:#}"
+                    ));
+                }
+                sleep(FAST_STATUS_POLL_INTERVAL).await;
+                continue;
+            }
+        };
         let validators_committed = validator_statuses
             .iter()
             .all(|status| status.blocks >= height);

@@ -8,7 +8,7 @@
       { "name": "transactions", "type": "Vec<RawGenesisTx>" },
       { "name": "consensus_mode", "type": "SumeragiConsensusMode" },
       { "name": "wire_protocol_version", "type": "u32" },
-      { "name": "consensus_fingerprint", "type": "Option<String>" },
+      { "name": "consensus_fingerprint", "type": "Option<ConsensusFingerprint>" },
       { "name": "sumeragi_v2", "type": "SumeragiV2GenesisContextParameters" },
       {
         "name": "kagemusha_mint_finality",
@@ -21,40 +21,36 @@
   "SumeragiV2GenesisContextParameters": {
     "Struct": [
       { "name": "da_layout", "type": "DataAvailabilityLayout" },
-      { "name": "nexus_amx_context_hash", "type": "[u8; 32]" },
-      { "name": "execution_policy_hash", "type": "[u8; 32]" }
+      { "name": "nexus_amx_context_hash", "type": "Array<u8, 32>" },
+      { "name": "execution_policy_hash", "type": "Array<u8, 32>" }
     ],
     "docs": "Required signed Sumeragi v2 height-context transport and execution-policy parameters."
   },
   "KagemushaMintFinalityGenesisParametersV1": {
     "Struct": [
       {
-        "name": "epoch_roster",
-        "type": "KagemushaMintFinalityEpochRosterTemplateV1"
-      },
-      {
-        "name": "next_epoch_roster",
-        "type": "Option<KagemushaMintFinalityEpochRosterTemplateV1>"
+        "name": "authority_generation",
+        "type": "KagemushaMintFinalityAuthorityGenerationTemplateV1"
       }
     ],
-    "docs": "Required signed network-independent KAGEMUSHA mint-finality authority. The epoch-zero roster is mandatory; next_epoch_roster must be present and is non-null exactly when NPoS height one is an epoch boundary."
+    "docs": "Required signed network-independent KAGEMUSHA mint-finality authority. Genesis must contain exactly one generation-zero authority template."
   },
-  "KagemushaMintFinalityEpochRosterTemplateV1": {
+  "KagemushaMintFinalityAuthorityGenerationTemplateV1": {
     "Struct": [
       { "name": "version", "type": "u16" },
-      { "name": "epoch", "type": "u64" },
+      { "name": "generation", "type": "u64" },
       {
         "name": "validators",
         "type": "Vec<KagemushaMintFinalityValidatorKeysV1>"
       }
     ],
-    "docs": "Strictly ordered exact 3f + 1 consensus/Pasta public-key roster for one epoch."
+    "docs": "Strictly ordered exact 3f + 1 consensus/Pasta public-key roster for one authority generation."
   },
   "KagemushaMintFinalityValidatorKeysV1": {
     "Struct": [
       { "name": "validator", "type": "PeerId" },
-      { "name": "eq_proof_public_key", "type": "[u8; 32]" },
-      { "name": "ep_proof_public_key", "type": "[u8; 32]" }
+      { "name": "eq_proof_public_key", "type": "Array<u8, 32>" },
+      { "name": "ep_proof_public_key", "type": "Array<u8, 32>" }
     ],
     "docs": "Consensus validator identity plus separately provisioned canonical compressed Pasta public keys."
   },
@@ -63,10 +59,10 @@
       { "name": "parameters", "type": "Option<Parameters>" },
       { "name": "instructions", "type": "Vec<InstructionBox>" },
       { "name": "ivm_triggers", "type": "Vec<GenesisIvmTrigger>" },
-      { "name": "topology", "type": "Vec<TopologyEntry>" }
+      { "name": "topology", "type": "Vec<GenesisTopologyEntry>" }
     ]
   },
-  "TopologyEntry": {
+  "GenesisTopologyEntry": {
     "Struct": [
       {
         "name": "peer",
@@ -75,15 +71,16 @@
       },
       {
         "name": "pop_hex",
-        "type": "HexString",
+        "type": "Option<String>",
         "docs": "Proof-of-possession hex (lowercase, without 0x)."
       }
     ],
-    "docs": "Entries are objects with `peer` and `pop_hex` to keep PoPs adjacent to peers."
+    "docs": "Entries keep each peer and its optional proof of possession together in source manifests."
   },
   "ManifestCrypto": {
     "Struct": [
       { "name": "sm_openssl_preview", "type": "bool" },
+      { "name": "sm_intrinsics", "type": "String" },
       { "name": "default_hash", "type": "String" },
       { "name": "allowed_signing", "type": "Vec<Algorithm>" },
       { "name": "sm2_distid_default", "type": "String" },

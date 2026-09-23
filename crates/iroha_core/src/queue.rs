@@ -555,6 +555,7 @@ pub struct LaneQueueReservationScopeV1 {
     pub proposal_identity_hash: Hash,
 }
 impl LaneQueueReservationScopeV1 {
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     fn validate(self) -> Result<(), LaneQueueReservationError> {
         if self.proposal_height == 0 {
             return Err(LaneQueueReservationError::InvalidIdentity(
@@ -606,6 +607,7 @@ pub enum LaneQueueReservationRoutingMode {
     SingleRouteOnly,
 }
 impl LaneQueueReservationRoutingMode {
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     fn allows(self, plan: &RoutingPlan) -> bool {
         match self {
             Self::AnyCoordinatorPlan => true,
@@ -1451,6 +1453,7 @@ pub(crate) struct AutonomousLaneReplicaQueueDispositionFence<'queue> {
     _reservation_transition: QueueDurabilityTransition<'queue>,
 }
 enum AutonomousLaneReplicaQueueDispositionStartupGate<'startup> {
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     Live,
     Startup {
         receipt: &'startup LaneReservationStartupReconciliationReceipt,
@@ -1509,6 +1512,7 @@ impl<'queue> AutonomousLaneReplicaQueueDispositionAuthorization<'queue> {
 /// inserted. It is deliberately not accepted by Kura persistence APIs.
 #[must_use = "a Queue-authenticated producer fanout must be consumed by the exact payload effect"]
 #[allow(missing_copy_implementations)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
 pub(crate) struct AutonomousLanePayloadFanoutAuthorization<'queue> {
     height_context_id: iroha_data_model::block::consensus_v2::HeightContextId,
     validator_count: u8,
@@ -1519,6 +1523,7 @@ pub(crate) struct AutonomousLanePayloadFanoutAuthorization<'queue> {
 impl AutonomousLanePayloadFanoutAuthorization<'_> {
     /// Borrow the exact committee and group facts rechecked by Queue while the
     /// embedded durability transition remains live.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     pub(crate) const fn facts(
         &self,
     ) -> (
@@ -4127,6 +4132,7 @@ impl<'queue> QueueLaneRetirementObserver<'queue> {
     /// Observe pending retirement work during synchronous State publication.
     /// The transition fence already precedes State's lifecycle fence; acquire
     /// and release only the inner Queue owners inside the publication callback.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     pub(crate) fn lane_pending_work_release(
         &self,
         lane_id: LaneId,
@@ -6178,6 +6184,7 @@ impl Queue {
     /// # Errors
     /// Returns an error when slot authority, lifecycle, route, identity, bounds,
     /// or reservation-journal durability cannot be proven exactly.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     pub(crate) fn reserve_transactions_for_lane_bounded(
         &self,
         state: &State,
@@ -7143,6 +7150,7 @@ impl Queue {
     /// # Errors
     /// Returns an identity, durable-claim, FIFO, journal, or concurrent-
     /// transition error without minting Kura authority.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     pub(crate) fn authorize_lane_reservation_kura_activation<'queue>(
         &'queue self,
         authorization: AutonomousLaneReservationSelectionAuthorization,
@@ -7237,6 +7245,7 @@ impl Queue {
     /// without minting terminalization authority. A pre-existing durability
     /// transition for the same hashes is temporary: Queue waits for it and then
     /// revalidates the complete physical disposition under its mutation lock.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     pub(crate) fn authorize_autonomous_lane_replica_queue_disposition<'queue>(
         &'queue self,
         cursor_read: &AutonomousLifecycleCursorRead,
@@ -7498,6 +7507,7 @@ impl Queue {
     /// # Errors
     /// Returns an identity, durable-claim, FIFO, journal, or concurrent-
     /// transition error without minting fanout authority.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     pub(crate) fn authorize_lane_reservation_payload_fanout<'queue>(
         &'queue self,
         authorization: AutonomousLaneReservationSelectionAuthorization,
@@ -7530,6 +7540,7 @@ impl Queue {
     /// # Errors
     /// Returns a typed identity, FIFO, durable-claim, composed-transition, or journal error before
     /// publishing any in-memory release.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     pub(crate) fn release_pre_kura_autonomous_reservation_batch(
         &self,
         context: PreKuraDirectReleaseContext,
@@ -14501,6 +14512,7 @@ impl Queue {
             .is_some_and(|claim| claim.global_admission_identity.is_some())
     }
     /// Return the exact requested hashes which currently retain global admission custody.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     pub(crate) fn globally_bound_durable_claim_hashes(
         &self,
         hashes: impl IntoIterator<Item = EntrypointHash>,
@@ -19629,6 +19641,7 @@ impl Queue {
         }
         age_ring.push_back((hash, enqueued_at_ms));
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     fn validate_reservation_scope_against_view(
         state_view: &impl StateReadOnly,
         scope: LaneQueueReservationScopeV1,

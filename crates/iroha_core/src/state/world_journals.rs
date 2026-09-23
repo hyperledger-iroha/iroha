@@ -515,10 +515,22 @@ fn fill_world_capture(fill: impl FnOnce()) {
     fill()
 }
 
-// Wrapper construction temporaries do not overlap native capture work.
+// Wrapper construction does not overlap native capture work. Each field also
+// needs its own frame: debug builds otherwise reserve the temporaries of every
+// expanded field in this large World inventory at once.
 #[inline(never)]
 fn finish_world_capture<R>(finish: impl FnOnce() -> R) -> R {
     finish()
+}
+
+#[inline(never)]
+fn retain_world_capture_field<Slot: WorldCaptureSlot>(
+    fields: &mut Vec<Box<dyn RetainedWorldField>>,
+    pending: &mut Option<(Slot, fn(&World) -> &Slot::Target)>,
+    name: &'static str,
+) {
+    let (slot, target) = pending.take().expect("original World capture slot");
+    fields.push(Box::new(slot.retain(name, target)));
 }
 
 macro_rules! world_capture_mode {
@@ -570,25 +582,9 @@ macro_rules! check_mode {
     };
 }
 
-// Keep one concrete field's construction temporaries out of the aggregate
-// materialization frame. Expanding these moves for every World field in that
-// frame exhausts the ordinary stack along the retained validation call path.
-// This uses the same admitted wrapper allocation and original cleanup owner.
-#[inline(never)]
-fn retain_captured_world_field<S: WorldCaptureSlot>(
-    field: &mut Option<(S, fn(&World) -> &S::Target)>,
-    name: &'static str,
-) -> Box<dyn RetainedWorldField> {
-    let (slot, target) = field.take().expect("original World capture slot");
-    Box::new(slot.retain(name, target))
-}
-
 macro_rules! retain_field {
     ($fields:ident, $pending:ident, $field:ident) => {{
-        $fields.push(retain_captured_world_field(
-            &mut $pending.$field,
-            stringify!($field),
-        ));
+        retain_world_capture_field(&mut $fields, &mut $pending.$field, stringify!($field));
     }};
 }
 

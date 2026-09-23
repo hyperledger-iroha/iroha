@@ -150,16 +150,28 @@ impl<'state> PreparedCarrier<'state> {
     }
 
     /// Borrow the context retained from the actual candidate validator.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn context(&self) -> &HeightContext {
         &self.context
     }
 
     /// Return the unchanged execution-prefix commitment after metadata admission.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn execution_prefix_commitment(&self) -> ExecutionCommitment {
         self.execution_prefix
     }
 
     /// Borrow the exact manifest derived before deterministic metadata staging.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn native_amx_manifest(&self) -> &exec::NativeAmxApplicationManifestV1 {
         &self.native_amx_manifest
     }

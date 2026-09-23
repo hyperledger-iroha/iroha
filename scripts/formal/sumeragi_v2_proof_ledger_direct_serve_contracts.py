@@ -4149,7 +4149,7 @@ _LIFECYCLE_CONSTRUCTION_RECONCILED_OWNERS = {'ordinary_loop': ('lifecycle_run_in
                     'let body_store_authority = kura.mint_v2_body_store_directory_authority()',
                     'V2BodyStore::open_with_kura_authority_and_capacity(kura.as_ref(), '
                     'body_store_authority, context.clone(), signature_policy',
-                    'let (exact_output_service_owner, exact_output_transport_owner) = '
+                    'let (exact_output_service_owner, _) = '
                     'durable_exact_output_handoff_owner_pair();',
                     'Arc::clone(&output_guard), Arc::clone(&block_rx), '
                     'Arc::clone(&kura_replica_advert_refresh), exact_output_service_owner, '
@@ -4175,7 +4175,7 @@ _LIFECYCLE_CONSTRUCTION_RECONCILED_OWNERS = {'ordinary_loop': ('lifecycle_run_in
                    'let body_store_authority = kura.mint_v2_body_store_directory_authority()',
                    'V2BodyStore::open_with_kura_authority_and_capacity(kura.as_ref(), '
                    'body_store_authority, context.clone(), signature_policy',
-                   'let (exact_output_service_owner, exact_output_transport_owner) = '
+                   'let (exact_output_service_owner, _) = '
                    'durable_exact_output_handoff_owner_pair();',
                    'Arc::clone(&output_guard), Arc::clone(&block_rx), '
                    'Arc::clone(&kura_replica_advert_refresh), exact_output_service_owner, '
@@ -4900,7 +4900,7 @@ _LANE_STORAGE_RECONCILIATION_RULES = {
         'path': 'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
         'name': 'durable_lane_rollover_authority',
         'context': ['impl V2LaneWorkAdapter'],
-        'attributes': [],
+        'attributes': ['#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]'],
         'exact': False,
         'expected': """if self.has_pending_historical_recovery()? {
             return Ok(None);
@@ -4911,7 +4911,7 @@ _LANE_STORAGE_RECONCILIATION_RULES = {
         'path': 'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
         'name': 'durable_lane_rollover_authority',
         'context': ['impl V2LaneWorkAdapter'],
-        'attributes': [],
+        'attributes': ['#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]'],
         'exact': False,
         'expected': """let mut durable_sessions = BTreeMap::new();
         for proposal in winning_proposals.values() {
@@ -4962,7 +4962,7 @@ _LANE_STORAGE_RECONCILIATION_RULES = {
         'path': 'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
         'name': 'reconstruct_durable_lane_certificate',
         'context': ['impl V2LaneWorkAdapter'],
-        'attributes': [],
+        'attributes': ['#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]'],
         'exact': False,
         'expected': """    fn reconstruct_durable_lane_certificate(
         &self,
@@ -5173,7 +5173,7 @@ _LANE_STORAGE_RECONCILIATION_RULES = {
         'path': 'crates/iroha_core/src/sumeragi/v2_runner/canonical_recovery_ingress.rs',
         'name': 'service_historical_recovery_tick',
         'context': [],
-        'attributes': [],
+        'attributes': ['#[allow(dead_code, reason = "TODO: native cutover")]'],
         'exact': True,
         'expected': """fn service_historical_recovery_tick(
     lane_work: &mut V2LaneWorkAdapter,
@@ -5192,7 +5192,7 @@ _LANE_STORAGE_RECONCILIATION_RULES = {
         'path': 'crates/iroha_core/src/sumeragi/v2_runner.rs',
         'name': 'dispatch_lane_work_effects_with_progress',
         'context': [],
-        'attributes': [],
+        'attributes': ['#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]'],
         'exact': True,
         'expected': """fn dispatch_lane_work_effects_with_progress(
     lane_work: &mut V2LaneWorkAdapter,
@@ -5522,7 +5522,7 @@ _LANE_STORAGE_RECONCILIATION_RULES = {
         'path': 'crates/iroha_core/src/kura/consensus_storage_reads.rs',
         'name': 'recover_canonical_lane_block_artifacts_at_proposal_height_matching',
         'context': ['impl Kura'],
-        'attributes': [],
+        'attributes': ['#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]'],
         'exact': True,
         'expected': """    pub(crate) fn recover_canonical_lane_block_artifacts_at_proposal_height_matching<F>(
         &self,

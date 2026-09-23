@@ -29,6 +29,7 @@ use iroha::{
         },
         isi::{
             Grant, InstructionBox, Log, Mint, Register, SetParameter,
+            consensus_keys::RegisterConsensusKey,
             musubi::{
                 AddMusubiArchiveLocationV1, PublishMusubiReleaseV1, RegisterMusubiArchiveV1,
                 RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
@@ -85,19 +86,20 @@ use iroha_config::{
     },
 };
 use iroha_config_base::WithOrigin;
-use iroha_core::{da::proof_policy_bundle, kura::Kura};
+use iroha_core::{da::proof_policy_bundle, kura::Kura, state::derive_committee_key_id};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_executor_data_model::permission::sorafs::{
     CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder,
 };
+use iroha_genesis::GenesisTopologyEntry;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, dataspace_setup_instruction,
-    domain_setup_instruction_in_dataspace, init_instruction_registry,
-    unexecuted_genesis_factory_with_post_topology,
+    domain_setup_instruction_in_dataspace, genesis_participant_committee_key_instructions,
+    init_instruction_registry, unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::json::{self, Value as JsonValue};
@@ -237,7 +239,10 @@ fn da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lane_config = ActualLaneConfig::from_catalog(&catalog);
     proof_policy_bundle(&lane_config)
 }
-fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<InstructionBox>> {
+fn genesis_post_topology_transactions(
+    topology: &[PeerId],
+    topology_entries: &[GenesisTopologyEntry],
+) -> Vec<Vec<InstructionBox>> {
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = fee_asset_definition_id();
     let gas_account_id = gas_account();
@@ -290,6 +295,10 @@ fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Instructio
         .into(),
     ];
     let mut validator_tx = Vec::with_capacity(topology.len() * lane_ids.len() * 2);
+    bootstrap_tx.extend(genesis_participant_committee_key_instructions(
+        topology_entries,
+        topology,
+    ));
     for (index, peer_id) in topology.iter().enumerate() {
         let validator_id = validator_account(index);
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
@@ -388,7 +397,7 @@ fn localnet_builder() -> NetworkBuilder {
         .with_genesis_block(|topology, topology_entries| {
             let mut genesis = unexecuted_genesis_factory_with_post_topology(
                 Vec::new(),
-                genesis_post_topology_transactions(topology.as_ref()),
+                genesis_post_topology_transactions(topology.as_ref(), &topology_entries),
                 topology,
                 topology_entries,
             );
@@ -2767,6 +2776,7 @@ fn offline_kura_config(store_dir: std::path::PathBuf) -> KuraConfig {
             iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+        membership_storage: defaults::kura::MEMBERSHIP_STORAGE_POLICY,
     }
 }
 fn decode_block_index_entry(bytes: &[u8], height: u64) -> Result<(u64, u64)> {
@@ -3054,17 +3064,34 @@ async fn native_amx_rotating_validator_fault_soak_preserves_independent_particip
 #[test]
 fn genesis_staking_plans_bind_funded_validators_to_configured_custody() {
     iroha_test_network::init_instruction_registry();
-    let topology = (0..4)
+    let entries = (0..4)
         .map(|index| {
             let key = iroha_crypto::KeyPair::try_from_seed(
                 vec![index + 1; 32],
                 iroha_crypto::Algorithm::BlsNormal,
             )
             .expect("deterministic genesis staking validator");
-            iroha_model_base::peer::PeerId::new(key.public_key().clone())
+            GenesisTopologyEntry::new(
+                PeerId::new(key.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("deterministic genesis staking validator PoP"),
+            )
         })
         .collect::<Vec<_>>();
-    let transactions = genesis_post_topology_transactions(&topology);
+    let topology = entries
+        .iter()
+        .map(|entry| entry.peer.clone())
+        .collect::<Vec<_>>();
+    let transactions = genesis_post_topology_transactions(&topology, &entries);
+    let committee_registrations = transactions
+        .iter()
+        .flatten()
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<RegisterConsensusKey>())
+        .collect::<Vec<_>>();
+    assert_eq!(committee_registrations.len(), topology.len());
+    for (registration, peer) in committee_registrations.iter().zip(&topology) {
+        assert_eq!(registration.id, derive_committee_key_id(peer.public_key()));
+    }
     let registrations = transactions
         .iter()
         .flatten()

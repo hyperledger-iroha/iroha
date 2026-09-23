@@ -14,7 +14,7 @@ use halo2_base::{
     QuantumCell::Constant,
     gates::GateInstructions as _,
     gates::RangeInstructions as _,
-    utils::{BigPrimeField, modulus, power_of_two},
+    utils::{BigPrimeField, CurveAffineExt as _, modulus, power_of_two},
 };
 use halo2_ecc::{
     bigint::{FixedOverflowInteger, ProperCrtUint, big_less_than},
@@ -22,7 +22,7 @@ use halo2_ecc::{
     fields::{FieldChip as _, Selectable as _, fp::FpChip},
 };
 use halo2_proofs::halo2curves::{
-    CurveAffine as _, CurveAffineExt as _,
+    CurveAffine as _,
     ff::Field as _,
     ff::PrimeField,
     secp256r1::{Fp as P256Base, Fq as P256Scalar, Secp256r1Affine},
@@ -35,13 +35,6 @@ use super::pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1
 /// SEC1 byte range and equality to an enrolled public key are separate required
 /// constraints in the eventual signature relation. This function alone does
 /// not bind a point to a credential.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 signature relation consumes this after cutover"
-    )
-)]
 pub(crate) fn assert_p256_affine_point<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -101,13 +94,6 @@ pub(crate) fn double_p256_affine_point<F: BigPrimeField>(
 ///
 /// SEC1 decoders must reject `(0, 0)` as a public key; it is used only as the
 /// internal group identity for complete addition and scalar multiplication.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 group relation consumes this after cutover"
-    )
-)]
 pub(crate) fn assert_p256_affine_or_identity<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -135,13 +121,6 @@ pub(crate) fn assert_p256_affine_or_identity<F: BigPrimeField>(
 /// This uses the actual P-256 `a = -3` doubling numerator. Denominators are
 /// masked to one in inactive cases before division, so no exceptional case
 /// reaches an undefined nonnative-field division.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 group relation consumes this after cutover"
-    )
-)]
 pub(crate) fn add_p256_affine_complete<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -206,13 +185,6 @@ pub(crate) fn add_p256_affine_complete<F: BigPrimeField>(
 }
 
 /// Select a point coordinate-wise with a constrained Boolean selector.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 group relation consumes this after cutover"
-    )
-)]
 fn select_p256_point<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -231,13 +203,6 @@ fn select_p256_point<F: BigPrimeField>(
 /// The caller must later bind a 256-bit instantiation to a canonical scalar
 /// representation; this bounded group primitive does not yet do that. Its
 /// shape depends on `N`, not on the private bit values.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 group relation consumes this after cutover"
-    )
-)]
 pub(crate) fn multiply_p256_affine_bits<F: BigPrimeField, const N: usize>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -262,13 +227,6 @@ pub(crate) fn multiply_p256_affine_bits<F: BigPrimeField, const N: usize>(
 ///
 /// The last two bits of the 86-by-three limb layout must be zero. This works
 /// for canonical P-256 base coordinates and scalar residues alike.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 ECDSA relation consumes this after cutover"
-    )
-)]
 fn p256_uint_bits_le<F: BigPrimeField>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -287,13 +245,6 @@ fn p256_uint_bits_le<F: BigPrimeField>(
 }
 
 /// Interpret 32 constrained, big-endian digest bytes as a 256-bit integer.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 ECDSA relation consumes this after cutover"
-    )
-)]
 fn p256_digest_bits_le<F: BigPrimeField>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -311,13 +262,6 @@ fn p256_digest_bits_le<F: BigPrimeField>(
 /// `n` is the P-256 scalar order. Both operands are below 2^256 and `n` is
 /// above 2^255, so `quotient` must be one bit. Independent 128-bit halves keep
 /// all arithmetic below the Pasta modulus and prevent native-field wraparound.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 ECDSA relation consumes this after cutover"
-    )
-)]
 fn assert_p256_mod_n_relation<F: BigPrimeField>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -355,13 +299,6 @@ fn assert_p256_mod_n_relation<F: BigPrimeField>(
 }
 
 /// Constrain the direct-signature profile's canonical low-S rule.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 ECDSA relation consumes this after cutover"
-    )
-)]
 fn assert_p256_low_s<F: BigPrimeField>(
     scalar_chip: &FpChip<'_, F, P256Scalar>,
     ctx: &mut Context<F>,
@@ -391,13 +328,6 @@ fn assert_p256_low_s<F: BigPrimeField>(
 ///
 /// TODO: Bind signed authenticator data, App Attest counter, digest SHA-256,
 /// and credential policy in the parent recursive hardware-selection relation.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 ECDSA relation consumes this after cutover"
-    )
-)]
 pub(crate) fn assert_p256_ecdsa_digest<
     F: BigPrimeField,
     const N: usize,
@@ -480,13 +410,6 @@ pub(crate) fn assert_p256_ecdsa_digest<
 }
 
 /// Convert eight copy-bound SHA-256 words to their canonical big-endian bytes.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion relation consumes this after cutover"
-    )
-)]
 fn sha256_words_to_be_bytes<F: BigPrimeField>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -525,13 +448,6 @@ fn sha256_words_to_be_bytes<F: BigPrimeField>(
 /// parse or authorize those extensions, so no production monetary profile may
 /// rely on it until a qualified extension relation is recursively bound.
 /// See <https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server>.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion relation consumes this after cutover"
-    )
-)]
 pub(crate) fn queue_apple_assertion_digest<F, const S_LEN: usize, const AUTH_LEN: usize>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -619,12 +535,9 @@ where
 /// hash/key to the enrolled Apple credential, and the two indices to the
 /// recursive transition. The SHA jobs must be realized with
 /// [`PastaSha256JobsV1::synthesize`] after Base synthesis.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion relation consumes this after cutover"
-    )
+#[expect(
+    dead_code,
+    reason = "staged Apple assertion relation consumes this after cutover"
 )]
 pub(crate) fn assert_apple_assertion_ecdsa<
     F,
@@ -681,12 +594,9 @@ where
 mod tests {
     use super::*;
     use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
-    use halo2_base::utils::CurveAffineExt as _;
     use halo2_proofs::{
         dev::MockProver,
         halo2curves::{
-            ff::Field as _,
-            ff::PrimeField as _,
             group::{Curve as _, prime::PrimeCurveAffine as _},
             pasta::{Fp, Fq},
         },
@@ -1008,10 +918,7 @@ mod apple_assertion_tests {
     use halo2_proofs::{
         circuit::{Layouter, V1},
         dev::MockProver,
-        halo2curves::{
-            ff::Field as _,
-            pasta::{Fp, Fq},
-        },
+        halo2curves::pasta::{Fp, Fq},
         plonk::{Circuit, ConstraintSystem, Error},
     };
     use sha2::{Digest as _, Sha256};

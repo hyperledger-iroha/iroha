@@ -45,6 +45,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio_tungstenite::tungstenite::http::Uri;
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 const ED25519_IDENTITY_SEED_LEN_V1: usize = 32;
 // First-release admission limits for operator-controlled relay artifacts. The
 // 1 MiB config corridor fits 8,192 inline 32-byte revocations (the existing
@@ -62,12 +63,19 @@ const RELAY_CONFIG_JSON_MAX_DEPTH_V1: usize = 32;
 // Its largest field is the 4,032-byte ML-DSA-65 private key encoded as 8,064
 // hex characters; the complete mandatory key material occupies 8,128 hex
 // characters before member names and JSON punctuation.
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 const DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1: usize = 16 * 1024;
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 const DESCRIPTOR_MANIFEST_JSON_MAX_FIELD_BYTES_V1: usize = 8 * 1024;
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 const DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_STRING_BYTES_V1: usize = 12 * 1024;
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 const DESCRIPTOR_MANIFEST_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 8;
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 const DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 16;
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 const DESCRIPTOR_MANIFEST_JSON_MAX_ALLOCATED_BYTES_V1: usize = 128 * 1024;
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 const DESCRIPTOR_MANIFEST_JSON_MAX_DEPTH_V1: usize = 4;
 fn absolute_replay_state_path(path: &Path) -> io::Result<PathBuf> {
     if path.is_absolute() {
@@ -82,6 +90,7 @@ const RELAY_CONFIG_JSON_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     RELAY_CONFIG_JSON_MAX_ALLOCATED_BYTES_V1,
     RELAY_CONFIG_JSON_MAX_DEPTH_V1,
 );
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 const DESCRIPTOR_MANIFEST_JSON_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     DESCRIPTOR_MANIFEST_JSON_MAX_SEQUENCE_ELEMENTS_V1,
     DESCRIPTOR_MANIFEST_JSON_MAX_FIELD_BYTES_V1,
@@ -103,6 +112,7 @@ const fn relay_config_json_preflight_limits_v1() -> json::JsonPreflightLimits {
         RELAY_CONFIG_JSON_MAX_DEPTH_V1,
     )
 }
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 const fn descriptor_manifest_json_preflight_limits_v1() -> json::JsonPreflightLimits {
     json::JsonPreflightLimits::new(
         DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1,
@@ -3324,17 +3334,20 @@ impl CertificateConfig {
 ///
 /// This owner is deliberately non-cloneable. Callers consume the two signing
 /// identities from one immutable manifest snapshot.
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 pub(crate) struct ManifestSecrets {
     ed25519_private_key: [u8; ED25519_IDENTITY_SEED_LEN_V1],
     mldsa65_private_key: Vec<u8>,
 }
 impl ManifestSecrets {
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     pub(crate) fn into_private_keys(mut self) -> ([u8; ED25519_IDENTITY_SEED_LEN_V1], Vec<u8>) {
         let ed25519 = std::mem::take(&mut self.ed25519_private_key);
         let mldsa65 = std::mem::take(&mut self.mldsa65_private_key);
         (ed25519, mldsa65)
     }
 
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     fn clear_private_material(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.ed25519_private_key);
         clear_sensitive_bytes(&mut self.mldsa65_private_key);
@@ -3611,6 +3624,7 @@ impl HandshakePolicy {
     pub fn descriptor_manifest_path(&self) -> Option<&Path> {
         self.descriptor_manifest_path.as_deref()
     }
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     pub(crate) fn manifest_secrets(&self) -> Result<ManifestSecrets, ConfigError> {
         let path = self.descriptor_manifest_path().ok_or_else(|| {
             ConfigError::Handshake(
@@ -3679,12 +3693,14 @@ fn clear_manifest_json_strings(value: &mut norito::json::Value) {
         _ => {}
     }
 }
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 fn manifest_error(path: &Path, message: impl Into<String>) -> ConfigError {
     ConfigError::DescriptorManifest {
         path: path.to_path_buf(),
         message: message.into(),
     }
 }
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 fn require_exact_manifest_fields(
     object: &norito::json::Map,
     object_name: &str,
@@ -3705,6 +3721,7 @@ fn require_exact_manifest_fields(
     }
     Ok(())
 }
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 fn parse_manifest_secrets_v1(value: &norito::json::Value) -> Result<ManifestSecrets, String> {
     let root = value
         .as_object()
@@ -3744,6 +3761,7 @@ fn parse_manifest_secrets_v1(value: &norito::json::Value) -> Result<ManifestSecr
     secrets.mldsa65_private_key = decode_manifest_mldsa65_private_key(mldsa65_hex)?;
     Ok(secrets)
 }
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 fn require_canonical_lowercase_hex(hex_value: &str, field: &str) -> Result<(), String> {
     if !hex_value
         .as_bytes()
@@ -3756,6 +3774,7 @@ fn require_canonical_lowercase_hex(hex_value: &str, field: &str) -> Result<(), S
     }
     Ok(())
 }
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 fn decode_manifest_identity_seed(
     hex_value: &str,
 ) -> Result<[u8; ED25519_IDENTITY_SEED_LEN_V1], String> {
@@ -3780,6 +3799,7 @@ fn decode_manifest_identity_seed(
     }
     Ok(seed)
 }
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 fn decode_manifest_mldsa65_private_key(hex_value: &str) -> Result<Vec<u8>, String> {
     let field = "identity.mldsa65_private_key_hex";
     let expected_len = MlDsaSuite::MlDsa65.secret_key_len();

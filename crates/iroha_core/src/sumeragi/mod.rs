@@ -566,13 +566,6 @@ pub(crate) mod v2_lane_instance;
     )
 )]
 pub(crate) mod v2_lane_payload;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "native transport is compiled but awaits the sole runner cutover"
-    )
-)]
 pub(crate) mod v2_lane_transport;
 #[cfg_attr(
     not(test),
@@ -3923,6 +3916,11 @@ enum FairV2IngressCheckedSelectionScope {
     /// Only process-owned Native traffic and exact retained source responses.
     NativeProcess,
     /// Admit only independent lane-local traffic under an authenticated lifecycle barrier.
+    // TODO: route this class through the sole native ingress consumer.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native lane ingress cutover")
+    )]
     LifecycleLaneLocal {
         _permit: v2_runner::LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
     },
@@ -5131,6 +5129,7 @@ impl FairV2Ingress {
         Ok(operation(value))
     }
     /// Prove that the closed physical ingress has no queued or in-flight owner.
+    #[cfg(test)]
     pub(crate) fn ensure_closed_drained_cut(&self) -> Result<(), String> {
         let _service_guard = self.service_lock.lock();
         let _publication_guard = self.producer_publication_lock.lock();
@@ -6362,6 +6361,10 @@ impl FairV2Ingress {
     /// The sealed permit grants no global leader-wire authority. This path still validates the
     /// durable leader-wire census, but lane-local traffic is selected independently of its global
     /// ingress barrier and committed through the ordinary ownership/accounting tail.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native lane ingress cutover")
+    )]
     pub(in crate::sumeragi) fn try_recv_lifecycle_lane_local_checked(
         &self,
         permit: v2_runner::LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,

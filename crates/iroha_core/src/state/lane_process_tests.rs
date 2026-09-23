@@ -46,6 +46,7 @@ fn native_process_three_route_source_fixture() -> Box<NativeProcessFixture> {
     let state = Arc::new(state);
     let (ids, validators) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validators);
+    seed_committee_consensus_keys_with_pops(&state, &validators);
     install_lane_manifest_registry(
         &state,
         &[
@@ -203,15 +204,6 @@ fn native_process_fixture(
     }
     fixture
 }
-/// Share the actual authenticated four-validator State and keys with Native runner tests.
-/// No local lane signer, body receipt, reducer effect or transport output is fabricated.
-#[inline(never)]
-pub(crate) fn native_dispatch_state_fixture() -> (Arc<State>, Vec<KeyPair>) {
-    let NativeProcessFixture { state, keys, .. } =
-        *native_process_fixture(false, std::time::Instant::now());
-    (state, keys)
-}
-
 fn native_process_limits_for_test() -> crate::sumeragi::v2_lane_instance::LaneProcessLimits {
     crate::sumeragi::v2_lane_instance::LaneProcessLimits {
         instances: nonzero!(3_usize),

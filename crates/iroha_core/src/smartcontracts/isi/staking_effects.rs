@@ -7,7 +7,7 @@ use iroha_data_model::nexus::{
     public_lane_reward_record_commitment,
 };
 
-/// Restrict genesis plans to initial height one and network plans to a committed epoch window.
+/// Restrict genesis consent to height one and network consent to a committed epoch window.
 pub(super) fn validate_plan_context(
     state_transaction: &StateTransaction<'_, '_>,
     network_scope: &PublicLaneMonetaryScopeV1,
@@ -34,7 +34,7 @@ pub(super) fn validate_plan_context(
         // schedule, which Permissioned genesis must not contain.
         if height != 1 || valid_until_height != 1 {
             return Err(Error::InvariantViolation(
-                "genesis staking monetary plans must expire at initial height one".into(),
+                "genesis staking monetary plan must expire at the genesis height one".into(),
             ));
         }
         return Ok(());

@@ -647,7 +647,6 @@ where
     gate.assert_is_const(ctx, &enabled_zero_count, &C::Base::ZERO);
     let index_lt_count = range.is_less_than(ctx, leaf_index, top_up_count, 32);
     let one = ctx.load_constant(C::Base::ONE);
-    let zero = ctx.load_constant(C::Base::ZERO);
     constrain_equal_if(ctx, gate, index_lt_count, one, finalized_mint);
 
     let validator_count_value = witness.authority_generation.validators.len();

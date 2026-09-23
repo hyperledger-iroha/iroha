@@ -179,11 +179,14 @@ use thiserror::Error;
 // runtime tuning knobs.
 const MAX_FETCH_MERGE_SIGNER_PROOFS: usize = 4_096;
 const MAX_FETCH_MERGE_VALIDATORS: usize = 4_096;
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 const MAX_FETCH_MERGE_QC_BYTES: usize = 4 * 1024 * 1024;
 const MERGE_QC_PROOF_BYTES: usize = 96;
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 const MERGE_QC_AUTH_CACHE_DOMAIN: &[u8] = b"iroha:sumeragi:v2:merge-qc-auth-cache:v1\0";
 /// Maximum progress-bearing sidecar effects drained before one queued,
 /// replayable responder control receives its own scheduler turn.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 const SIDECAR_PROGRESS_DRAIN_WEIGHT: u8 = 3;
 #[cfg(test)]
 fn classify_committed_lane_block_execution_status(
@@ -472,10 +475,12 @@ fn merge_entry_carries_lane(
 /// Authenticated source for the sole height-one projection which is not yet
 /// available from committed state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) enum AuthenticatedGenesisNexusAmxContext {
     /// Projection recomputed from the validated, uncommitted genesis overlay.
     Staged(StagedGenesisNexusAmxContext),
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl AuthenticatedGenesisNexusAmxContext {
     const fn hash(self) -> Hash {
         match self {
@@ -612,6 +617,7 @@ fn authenticate_bounded_merge_sidecar_holders(
     .map_err(|_| "certified merge QC aggregate signature is invalid".to_owned())?;
     Ok(holders)
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn preferred_merge_sidecar_holder(
     context: &wire::HeightContext,
     reference: &CertifiedMergeLedgerReference,
@@ -643,6 +649,7 @@ pub(crate) fn authenticate_merge_entry_for_height_context(
     authenticate_bounded_merge_sidecar_holders(context, &reference)?;
     Ok(())
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn merge_entry_has_exact_carrier_binding(
     context: &wire::HeightContext,
     entry: &MergeLedgerEntry,
@@ -660,6 +667,7 @@ fn merge_entry_has_exact_carrier_binding(
     entry.merge_qc.carrier_height == context.height
         && expected_parent == Some(entry.merge_qc.carrier_parent_hash)
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn bounded_merge_qc_authentication_key(
     reference: &CertifiedMergeLedgerReference,
 ) -> Result<Hash, String> {
@@ -771,6 +779,7 @@ impl V2LaneWorkLimits {
         self
     }
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn native_amx_signing_guard_capacity(
     limits: V2LaneWorkLimits,
 ) -> Result<NonZeroUsize, V2LaneWorkError> {
@@ -784,11 +793,13 @@ fn native_amx_signing_guard_capacity(
 /// participant-committee requesters share the second committee-sized corridor,
 /// so the sum is bounded by the transport's protocol-wide ceiling even when a
 /// carrier names many dataspaces.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 const fn merge_sidecar_server_stream_capacity(roster_len: usize) -> usize {
     roster_len + wire::MAX_VALIDATORS_PER_HEIGHT
 }
 /// One authenticated lane-local transport action emitted by the adapter.
 #[derive(Clone, Debug)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) enum V2LaneWorkEffect {
     /// Send one canonical lane-local message to a committee member.
     PostLaneBlock {
@@ -846,6 +857,7 @@ pub(crate) enum V2LaneWorkEffect {
         message: Arc<CertifiedMergeSidecarMessage>,
     },
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl V2LaneWorkEffect {
     /// Return whether adapter-owned catalog state can recreate this exact
     /// request after the worker declines ownership.
@@ -867,6 +879,7 @@ impl V2LaneWorkEffect {
 /// Result of registering an otherwise-valid body whose certified merge
 /// sidecar is not yet present locally.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) enum MergeSidecarDeferralDisposition {
     /// A bounded authenticated fetch is active (or already active).
     Fetching,
@@ -880,16 +893,19 @@ pub(crate) enum MergeSidecarDeferralDisposition {
 }
 /// Terminal validation result for an exact fetched merge sidecar.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) struct RejectedMergeSidecar {
     entry_hash: HashOf<MergeLedgerEntry>,
     reason: String,
 }
 impl RejectedMergeSidecar {
     /// Hash shared by every deferred body waiting for this exact entry.
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     pub(crate) const fn entry_hash(&self) -> HashOf<MergeLedgerEntry> {
         self.entry_hash
     }
     /// Deterministic full-entry validation diagnostic.
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     pub(crate) fn reason(&self) -> &str {
         &self.reason
     }
@@ -906,6 +922,7 @@ pub(crate) enum V2LaneIngressOutcome {
 }
 /// Result of binding reducer-owned Prepare-lock identity into lane work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) enum GlobalBodyLockOutcome {
     /// A first or strictly higher exact lock replaced local speculative ownership.
     Inserted,
@@ -914,6 +931,7 @@ pub(crate) enum GlobalBodyLockOutcome {
 }
 /// Fail-closed adapter construction or durable-retention error.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) enum V2LaneWorkError {
     /// Local State could not admit a complete predecessor-bound successor.
     #[error(transparent)]
@@ -1362,6 +1380,7 @@ struct GlobalBodyLock {
     subject: wire::BlockSubject,
 }
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 enum LockedGlobalBodyOrigin<'a> {
     AuthenticatedHeaderAtOrBeforeLock,
     FixedGenesisViewZero {
@@ -1399,12 +1418,14 @@ fn exact_merge_certificate_signers(
 /// The completed session remains available for reset filtering through the end
 /// of the global height even after every destination has transferred ownership.
 #[derive(Clone, Debug)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 struct PendingCommittedLaneOutput {
     session: CommittedLaneBlockSession,
     next_validator: usize,
 }
 /// Exact durable reconstruction source for one winning lane proposal.
 #[derive(Clone, Debug)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 enum DurableLaneSessionSource {
     Persistent {
         proposal: LaneBlockProposalV1,
@@ -1434,6 +1455,10 @@ pub(crate) struct DurableLaneRolloverAuthority {
     durable_sessions: BTreeMap<Hash, DurableLaneSessionSource>,
 }
 impl DurableLaneRolloverAuthority {
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: connect native lane rollover")
+    )]
     fn new(
         finality_artifact: &wire::finality::V2FinalityArtifact,
         winning_proposal_hashes: BTreeSet<Hash>,
@@ -1547,6 +1572,7 @@ impl DurableLaneRolloverAuthority {
         )
     }
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl DurableLaneSessionSource {
     fn persistent(
         finality_artifact: &wire::finality::V2FinalityArtifact,
@@ -1614,6 +1640,10 @@ pub(crate) fn lane_output_identity(message: &BlockMessage) -> Option<(u64, Hash)
 /// lane-session authority cannot retire them. Their separate exact-attempt
 /// retirement path keeps transport admission from silently dropping those
 /// messages without weakening durable rollover authority.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: connect native body fanout")
+)]
 fn lane_fanout_height(message: &BlockMessage) -> Option<u64> {
     match message {
         BlockMessage::LaneBlockProposal(proposal) => Some(proposal.descriptor.proposal_height),
@@ -1689,6 +1719,7 @@ fn validate_lane_vote_for_proposal(
 }
 /// Return whether two lane QCs carry the same Prepare/Commit decision while
 /// differing only in quorum proof bytes.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn lane_qcs_certify_same_decision(left: &LaneBlockQcV1, right: &LaneBlockQcV1) -> bool {
     left.body == right.body
         && left.validator_set_hash_version == right.validator_set_hash_version
@@ -1701,6 +1732,7 @@ fn lane_qcs_certify_same_decision(left: &LaneBlockQcV1, right: &LaneBlockQcV1) -
 }
 /// Return whether two validated certified artifacts encode the same lane
 /// decision while permitting different valid quorum signer subsets.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn certified_lane_artifacts_certify_same_decision(
     left: &CertifiedLaneBlockArtifact,
     right: &CertifiedLaneBlockArtifact,
@@ -1710,6 +1742,7 @@ fn certified_lane_artifacts_certify_same_decision(
         && lane_qcs_certify_same_decision(&left.commit_qc, &right.commit_qc)
 }
 /// Return whether two optional READY certificates differ only in quorum proof bytes.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn lane_payload_availability_qcs_certify_same_subject(
     left: Option<&LanePayloadAvailabilityQcV1>,
     right: Option<&LanePayloadAvailabilityQcV1>,
@@ -1758,6 +1791,7 @@ fn validated_autonomous_validator_pops(
 }
 /// Project the exact Prepare/Commit signer union from a session's complete
 /// autonomous READY authority for legacy certified-artifact storage.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn autonomous_lane_session_signer_pops(
     session: &CommittedLaneBlockSession,
 ) -> Result<Option<BTreeMap<PublicKey, Vec<u8>>>, String> {
@@ -1776,6 +1810,7 @@ fn autonomous_lane_session_signer_pops(
     }
     Ok(Some(signer_pops))
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn project_qc_signer_pops(
     qc: &LaneBlockQcV1,
     validator_pops: &BTreeMap<PublicKey, Vec<u8>>,
@@ -1793,6 +1828,7 @@ fn project_qc_signer_pops(
         })
         .collect()
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn project_lane_session_signer_pops(
     session: &CommittedLaneBlockSession,
     validator_pops: &BTreeMap<PublicKey, Vec<u8>>,
@@ -1953,6 +1989,7 @@ fn validate_winning_lane_qc(
     validate_lane_block_qc_aggregate(qc, signer_pops).map_err(|error| error.to_string())
 }
 /// Match a terminal replay's execution role to its exact canonical payload.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn validate_terminal_autonomous_availability(
     phase: CertPhase,
     actual: Option<&iroha_data_model::block::consensus::LanePayloadAvailabilityBodyV1>,
@@ -1979,6 +2016,7 @@ fn validate_terminal_autonomous_availability(
     }
 }
 /// Authenticate a completed proposal's vote without creating a live session.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn validate_terminal_autonomous_vote(
     vote: &LaneBlockVoteV1,
     payload: &LaneExecutablePayloadV1,
@@ -1996,6 +2034,7 @@ fn validate_terminal_autonomous_vote(
     )
 }
 /// Authenticate a completed proposal's QC without creating a live session or lock.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn validate_terminal_autonomous_qc(
     qc: &LaneBlockQcV1,
     payload: &LaneExecutablePayloadV1,
@@ -2013,6 +2052,7 @@ fn validate_terminal_autonomous_qc(
 /// READY is the immutable autonomous-role marker. A missing autonomous anchor
 /// must not redirect that certificate into ordinary direct-receipt recovery,
 /// and an ordinary certificate must not borrow an autonomous payload anchor.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn require_lane_certificate_execution_role_matches_anchor(
     prepare_qc: &LaneBlockQcV1,
     autonomous_anchor: bool,
@@ -2067,6 +2107,7 @@ pub(crate) struct HistoricalRecoveryIdentity {
     descriptor_hash: Hash,
     proposal_block_hash: HashOf<BlockHeader>,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl HistoricalRecoveryIdentity {
     fn from_proposal(proposal: &LaneBlockProposalV1) -> Result<Self, V2LaneWorkError> {
         let Some(hint) = proposal.payload_block_hint else {
@@ -2090,6 +2131,7 @@ impl HistoricalRecoveryIdentity {
 include!("v2_lane_work/canonical_executed_block_application_repair.rs");
 /// Durable boundary at which an earlier-height recovery attempt is waiting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) enum HistoricalRecoveryStage {
     /// Waiting for the exact committed global block identity/body.
     CanonicalAnchor,
@@ -2103,6 +2145,7 @@ pub(crate) enum HistoricalRecoveryStage {
 /// Typed recoverable dependency. Immutable identity drift is never represented
 /// here and instead returns a fail-closed [`V2LaneWorkError`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) enum HistoricalRecoveryWaitReason {
     /// State has not yet published the proposal height.
     StateCommitPending,
@@ -2115,6 +2158,7 @@ pub(crate) enum HistoricalRecoveryWaitReason {
     /// The canonical block is local but its committed results are not yet durable.
     CanonicalResultsPending,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl HistoricalRecoveryWaitReason {
     const fn stage(self) -> HistoricalRecoveryStage {
         match self {
@@ -2150,6 +2194,7 @@ impl HistoricalRecoveryWaitReason {
 }
 /// Recovery source which can make a typed wait retryable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) enum HistoricalRecoveryRetry {
     /// Retry after locally serialized State/Kura publication advances.
     LocalState,
@@ -2199,6 +2244,7 @@ impl HistoricalRecoveryWait {
         self.first_observation
     }
     /// Deterministic bounded retry delay for the serialized runner.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn retry_delay(self, floor: Duration, ceiling: Duration) -> Duration {
         let ceiling = ceiling.max(floor);
         let tier = (self.consecutive_attempts.saturating_sub(1) / self.retry_tier_attempts.get())
@@ -2208,6 +2254,7 @@ impl HistoricalRecoveryWait {
 }
 /// Result of one bounded earlier-height recovery service turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) enum HistoricalRecoveryServiceOutcome {
     /// No earlier-height owner is pending.
     Idle,
@@ -2217,11 +2264,13 @@ pub(crate) enum HistoricalRecoveryServiceOutcome {
     Waiting(HistoricalRecoveryWait),
 }
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 struct HistoricalRecoveryWaitRecord {
     observation: HistoricalRecoveryWait,
     seen_reason_bits: u16,
     reported_stuck_bits: u16,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 struct HistoricalRecoveryDiagnostics {
     capacity: usize,
     stuck_attempts: NonZeroU32,
@@ -2230,6 +2279,7 @@ struct HistoricalRecoveryDiagnostics {
     records: BTreeMap<HistoricalRecoveryIdentity, HistoricalRecoveryWaitRecord>,
     order: VecDeque<HistoricalRecoveryIdentity>,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl HistoricalRecoveryDiagnostics {
     fn new(
         capacity: usize,
@@ -2325,12 +2375,14 @@ impl HistoricalRecoveryDiagnostics {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 enum HistoricalRecoveryPersistence {
     Complete,
     Superseded,
     Waiting(HistoricalRecoveryWaitReason),
 }
 #[derive(Clone, Debug)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 struct OutstandingHistoricalRecoveryRequest {
     request_hash: HashOf<LaneHistoricalRecoveryRequestV1>,
     request: LaneHistoricalRecoveryRequestV1,
@@ -2342,11 +2394,13 @@ struct OutstandingHistoricalRecoveryRequest {
     canonical_body_destinations: BTreeSet<PeerId>,
 }
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 struct HistoricalRecoveryRequestCadence {
     reason: HistoricalRecoveryWaitReason,
     retained_attempts: u32,
     next_retry_at: Instant,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl HistoricalRecoveryRequestCadence {
     fn immediate(reason: HistoricalRecoveryWaitReason, now: Instant) -> Self {
         Self {
@@ -2404,12 +2458,14 @@ struct AutonomousLanePayloadKey {
 /// an idempotent duplicate. Only storage, recovery, or READY-cache failures
 /// without exact terminal application evidence are fatal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 enum AutonomousPayloadDurabilityOutcome {
     Authorized,
     DeferredUntilCarrierProtection,
     AlreadyTerminalApplication,
 }
 #[derive(Debug, Error, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 enum AutonomousPayloadDurabilityError {
     #[error("{0}")]
     MissingLaneArtifact(String),
@@ -2447,6 +2503,7 @@ impl From<&crate::lane_consensus::LaneBlockNewViewBodyV1> for AutonomousLanePayl
         }
     }
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn autonomous_new_view_body_matches_payload(
     body: &crate::lane_consensus::LaneBlockNewViewBodyV1,
     payload: &LaneExecutablePayloadV1,
@@ -2475,12 +2532,14 @@ fn autonomous_new_view_body_matches_payload(
     )
     .is_ok_and(|expected| expected == *body)
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 struct PendingAutonomousReservationBatch {
     slot: AutonomousLaneReservationSlotPlan,
     reservations: Vec<LaneReservedTransaction>,
     envelope_byte_limit: usize,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 enum LaneWorkEffectInsertionOutcome {
     Inserted,
     Duplicate,
@@ -2491,10 +2550,18 @@ enum LaneWorkEffectInsertionOutcome {
 /// inserted. Implementations consume the checked transition inside
 /// `publish`, so the authorization cannot be copied onto another transport
 /// occurrence or consumed after publication.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: connect native body fanout")
+)]
 trait FirstReleaseBodyPublicationAuthorization {
     fn matches_effect(&self, effect: &V2LaneWorkEffect) -> bool;
     fn publish<R>(self, publish: impl FnOnce() -> R) -> R;
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: connect native body fanout")
+)]
 fn first_release_transport_validator_geometry(
     validators: &[PeerId],
 ) -> Result<(u8, u128), V2LaneWorkError> {
@@ -2515,6 +2582,10 @@ fn first_release_transport_validator_geometry(
     };
     Ok((validator_count, validator_mask))
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: connect native body fanout")
+)]
 fn first_release_transport_peer_bit(
     validators: &[PeerId],
     peer: &PeerId,
@@ -2537,6 +2608,10 @@ fn first_release_transport_peer_bit(
             ))
         })
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: connect native body fanout")
+)]
 fn first_release_transport_bitmap(
     validators: &[PeerId],
     bitmap: &[u8],
@@ -2588,11 +2663,19 @@ fn first_release_transport_bitmap(
 /// and the exact effect insertion all occur. A duplicate queued effect never
 /// asks for this authority and is therefore an abstract stutter.
 #[must_use = "producer fanout authority must be consumed by the exact fresh effect insertion"]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: connect native body fanout")
+)]
 struct FirstReleaseFanoutFromProducerAuthorization<'queue> {
     checked: CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
     effect_key: Hash,
     reservation_authorization: AutonomousLanePayloadFanoutAuthorization<'queue>,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: connect native body fanout")
+)]
 impl<'queue> FirstReleaseFanoutFromProducerAuthorization<'queue> {
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -2764,10 +2847,18 @@ impl FirstReleaseBodyPublicationAuthorization for FirstReleaseFanoutFromProducer
 /// response effect. The response destination and complete encoded body are
 /// bound by `effect_key`; a duplicate queued response remains a stutter.
 #[must_use = "late-body authority must be consumed by the exact fresh effect insertion"]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: connect native body fanout")
+)]
 struct FirstReleaseServeLateBodyAuthorization {
     checked: CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
     effect_key: Hash,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: connect native body fanout")
+)]
 impl FirstReleaseServeLateBodyAuthorization {
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -3018,12 +3109,14 @@ impl FirstReleaseBodyPublicationAuthorization for FirstReleaseServeLateBodyAutho
 /// binding while holding the serialized reservation transition lock; this
 /// context carries no claim about remote validator custody.
 #[must_use = "pre-Kura direct-release context must cross the checked queue boundary"]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) struct PreKuraDirectReleaseContext {
     validator_count: u8,
     producer: u128,
     expected_group: LaneQueueReservationGroupBindingV1,
     ordered_keys: Vec<LaneQueueReservationKeyV1>,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl PendingAutonomousReservationBatch {
     fn pre_kura_direct_release_context(
         &self,
@@ -3124,6 +3217,7 @@ impl PendingAutonomousReservationBatch {
         })
     }
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl PreKuraDirectReleaseContext {
     pub(crate) const fn validator_count(&self) -> u8 {
         self.validator_count
@@ -3138,12 +3232,14 @@ impl PreKuraDirectReleaseContext {
         &self.ordered_keys
     }
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 enum AutonomousProducerBatchOutcome {
     Pending,
     Published(LaneExecutablePayloadV1),
     Released,
     AlreadyTerminal,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn canonical_autonomous_lane_payload_envelope_len(
     envelope: &AutonomousLanePayloadEnvelopeV1,
 ) -> Result<usize, norito::Error> {
@@ -3163,6 +3259,7 @@ struct LanePersistencePause {
 /// authorizes a durable generation fence which commits empty successor
 /// responder tables before clearing predecessor state; no process-local writer
 /// or queued output can survive the sealed handoff.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) struct DurableMergeSidecarRolloverAuthority {
     _exact_output_handoff: DurableExactOutputHandoffReceipt,
 }
@@ -3171,12 +3268,14 @@ pub(crate) struct DurableMergeSidecarRolloverAuthority {
 /// Fields stay private so a raw [`MergeSidecarTransport`] cannot be paired with
 /// a receipt from another service, even when both services use identical
 /// canonical height bytes.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) struct RetainedMergeSidecars {
     transport: MergeSidecarTransport,
     exact_output_handoff: DurableExactOutputHandoffReceipt,
     successor_context_id: wire::HeightContextId,
     successor_context_hash: HashOf<wire::HeightContext>,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl RetainedMergeSidecars {
     fn rehydrate_for_successor(
         self,
@@ -3215,6 +3314,9 @@ type AcknowledgedMergeSidecarCloseKey = (
     crate::merge_sidecar::CertifiedMergeSidecarStreamEpochV1,
 );
 /// Authoritative bounded adapter retained for exactly one global height.
+// TODO: complete the native lane runner cutover and remove each staged-path
+// expectation as its exact production owner becomes live.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) struct V2LaneWorkAdapter {
     context: wire::HeightContext,
     /// Authenticated PoPs in the frozen height roster, keyed by validator.
@@ -3360,6 +3462,7 @@ impl V2LaneWorkAdapter {
     /// This fixed oracle exposes no dependency parts. It prevents a lifecycle
     /// Decision Apply deferral from registering or waking through a foreign height,
     /// State, Kura instance, or consensus output corridor.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(in crate::sumeragi) fn matches_lifecycle_dependencies(
         &self,
         context: &wire::HeightContext,
@@ -3382,6 +3485,8 @@ impl V2LaneWorkAdapter {
     /// advance it first. The method never scans past fair FIFO order, and an
     /// exact request is returned to the same sidecar lane if the service
     /// corridor retains source ownership under backpressure.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(in crate::sumeragi) fn dispatch_next_lifecycle_decision_apply_sidecar_request(
         &mut self,
         services: &ProductionV2Services,
@@ -3648,6 +3753,7 @@ impl V2LaneWorkAdapter {
     /// Open the exact unactivated lane owner used by pending-Kura lifecycle tests.
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     pub(in crate::sumeragi) fn pending_kura_lifecycle_fixture_for_test(
         context: wire::HeightContext,
         local_peer: PeerId,
@@ -3708,6 +3814,8 @@ impl V2LaneWorkAdapter {
     /// Open one production adapter and retain process-local sidecar ownership
     /// from the immediately preceding height.
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn new_with_output_guard_and_transport(
         verified_context: &VerifiedHeightContext,
         local_peer: PeerId,
@@ -3798,6 +3906,7 @@ impl V2LaneWorkAdapter {
         )
     }
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn new_with_output_guard_and_transport_inner(
         context: wire::HeightContext,
         frozen_validator_pops: BTreeMap<PublicKey, Vec<u8>>,
@@ -4126,6 +4235,7 @@ impl V2LaneWorkAdapter {
     /// activation. Hydration is followed by an exact revalidation of every local
     /// durable reservation owner against the already-installed Queue before any
     /// lane session is driven.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn activate_after_lane_drain_queue_install(
         &mut self,
         queue: &Arc<Queue>,
@@ -4177,6 +4287,7 @@ impl V2LaneWorkAdapter {
     /// identity even if it carries byte-identical finality. No committed lane
     /// output or undispatched effect may remain outside the sealed worker
     /// corridor.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn into_retained_merge_sidecars(
         self,
         exact_output_handoff: DurableExactOutputHandoffReceipt,
@@ -4233,6 +4344,7 @@ impl V2LaneWorkAdapter {
     /// Construction remains queue-independent for deterministic recovery
     /// tests, but a production adapter cannot sign or carry a drain
     /// certificate until this exact blocker source is installed.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn install_lane_drain_queue(
         &mut self,
         queue: Arc<Queue>,
@@ -4250,6 +4362,7 @@ impl V2LaneWorkAdapter {
         self.lane_drain_queue = Some(queue);
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn revalidate_hydrated_autonomous_queue_owners(
         &self,
         queue: &Queue,
@@ -4274,6 +4387,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn autonomous_route_quota(
         total: usize,
         route_count: usize,
@@ -4288,6 +4402,7 @@ impl V2LaneWorkAdapter {
         let rotated_index = (route_index + route_count - (rotation % route_count)) % route_count;
         base + usize::from(rotated_index < remainder)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn autonomous_proposal_matches_reservation_slot(
         proposal: &LaneBlockProposalV1,
         slot: &AutonomousLaneReservationSlotPlan,
@@ -4315,6 +4430,7 @@ impl V2LaneWorkAdapter {
     /// the same participant lane slot and split honest first-vote locks. Every
     /// validator derives this rotation from the same committed route catalog,
     /// height, and certified view; non-Native autonomous work remains parallel.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn autonomous_native_coordinator_for_view(
         &self,
         view: wire::View,
@@ -4329,6 +4445,7 @@ impl V2LaneWorkAdapter {
         let ordinal = (u128::from(self.context.height) + u128::from(view)) % route_count;
         routes.keys().nth(usize::try_from(ordinal).ok()?).copied()
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn drive_pending_autonomous_reservation_batch(
         &mut self,
         batch: &PendingAutonomousReservationBatch,
@@ -4726,6 +4843,7 @@ impl V2LaneWorkAdapter {
     /// height-rotated author of each independent lane may reserve FIFO work.
     /// Queue ownership is durable before the selected entries leave ordinary
     /// FIFO, and the completed hint-free payload is durable before fanout.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn schedule_autonomous_lane_production(
         &mut self,
         active_view: wire::View,
@@ -5127,6 +5245,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(header)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn ensure_globally_applied_lane_receipts_durable(&self) -> Result<(), V2LaneWorkError> {
         let ordinary = self
             .state
@@ -5308,6 +5427,7 @@ impl V2LaneWorkAdapter {
             .collect()
     }
     /// Bind locally planned lane proposals to the exact global block body.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn bind_local_candidate(
         &mut self,
         round: wire::ConsensusRound,
@@ -5376,6 +5496,7 @@ impl V2LaneWorkAdapter {
     /// [`Self::bind_locked_global_body`] before any lane proposal becomes
     /// signable.
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn mark_global_body_locked(
         &mut self,
         round: wire::ConsensusRound,
@@ -5427,6 +5548,7 @@ impl V2LaneWorkAdapter {
     /// Prune losing pending merge entries after a certified view transition
     /// only when neither a safety lock nor a durable Decision protects an
     /// earlier immutable body.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn retain_merge_sidecars_for_global_view(
         &mut self,
         view: wire::View,
@@ -5455,6 +5577,7 @@ impl V2LaneWorkAdapter {
     /// unlocked losing proposal must release its lifecycle barrier so an
     /// unavailable sidecar holder cannot prevent the next leader from
     /// producing or the pacemaker from advancing again.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(in crate::sumeragi) fn lifecycle_validate_sidecar_is_superseded(
         &self,
         round: wire::ConsensusRound,
@@ -5468,6 +5591,7 @@ impl V2LaneWorkAdapter {
             })
     }
 
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retain_merge_sidecars_for_global_view_guarded(
         &mut self,
         view: wire::View,
@@ -5536,6 +5660,7 @@ impl V2LaneWorkAdapter {
         Ok(())
     }
     /// Return the certified Native-AMX output round, terminal state, and live request owners.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn native_amx_output_retention(
         &self,
     ) -> Option<(
@@ -5573,6 +5698,7 @@ impl V2LaneWorkAdapter {
             V2LaneWorkError::Persistence(error.to_string())
         })
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn lane_application_receipt_at_proposal_slot(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -5585,6 +5711,7 @@ impl V2LaneWorkAdapter {
     /// Fresh lane consensus cannot reopen an ordinary application or a shared
     /// prefix already applied by Native AMX. Authenticate both namespaces before
     /// choosing either owner; historical receipt recovery uses its own helpers.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn lane_application_slot_is_closed(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -5598,6 +5725,7 @@ impl V2LaneWorkAdapter {
             .is_some();
         Ok(native_applied || ordinary_applied)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn lane_application_receipt_available(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -5622,6 +5750,7 @@ impl V2LaneWorkAdapter {
         }
         self.consensus_storage_read(self.kura.read_block_body(height))
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn proposal_is_bound_to_decided_carrier(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -5686,6 +5815,7 @@ impl V2LaneWorkAdapter {
                 error
             })
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn lane_message_is_allowed_after_decision(&self, message: &BlockMessage) -> bool {
         match message {
             BlockMessage::LaneBlockProposal(proposal) => {
@@ -5764,6 +5894,7 @@ impl V2LaneWorkAdapter {
             _ => false,
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retire_autonomous_payload_batch(
         &self,
         payloads: &[LaneExecutablePayloadV1],
@@ -5937,6 +6068,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn release_pending_autonomous_reservation_batches(&mut self) -> Result<usize, V2LaneWorkError> {
         if self.pending_autonomous_reservation_batches.is_empty() {
             return Ok(0);
@@ -5966,6 +6098,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(released)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn release_autonomous_reservation_batch(
         &self,
         batch: &PendingAutonomousReservationBatch,
@@ -5983,6 +6116,7 @@ impl V2LaneWorkAdapter {
             .release_pre_kura_autonomous_reservation_batch(context)
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retain_autonomous_carrier(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -6053,6 +6187,7 @@ impl V2LaneWorkAdapter {
             LaneBlockNewViewCertificateCache::new(self.limits.session_capacity.get());
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retain_exact_autonomous_new_view_evidence(&mut self) {
         let payloads = &self.autonomous_payloads;
         self.autonomous_new_view_votes.retain(|body| {
@@ -6066,6 +6201,7 @@ impl V2LaneWorkAdapter {
                 .is_some_and(|payload| autonomous_new_view_body_matches_payload(body, payload))
         });
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn discard_volatile_autonomous_payload(&mut self, key: AutonomousLanePayloadKey) {
         self.pending_autonomous_anchor_payloads.remove(&key);
         self.autonomous_payloads.remove(&key);
@@ -6075,6 +6211,7 @@ impl V2LaneWorkAdapter {
         self.autonomous_new_view_started_at.remove(&key);
         self.retain_exact_autonomous_new_view_evidence();
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn missing_autonomous_artifact_became_terminal(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -6085,6 +6222,7 @@ impl V2LaneWorkAdapter {
             AutonomousPayloadDurabilityError::MissingLaneArtifact(_)
         ) && self.lane_application_receipt_available(proposal)?)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retire_speculative_work_after_decision(
         &mut self,
         decided: wire::BlockSubject,
@@ -6114,6 +6252,7 @@ impl V2LaneWorkAdapter {
         self.schedule_committed_lane_outputs()?;
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retire_speculative_native_amx(&mut self) {
         self.native_sessions.clear();
         self.native_requests.clear();
@@ -6134,6 +6273,7 @@ impl V2LaneWorkAdapter {
     /// This ordinary path authenticates an immutable block header from the
     /// locked round or an earlier unchanged reproposal round. Height-one recovery must use
     /// [`Self::bind_locked_genesis_body`] instead.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn bind_locked_global_body(&mut self, block: &SignedBlock) -> V2LaneIngressOutcome {
         self.bind_locked_global_body_from_origin(
             block,
@@ -6148,6 +6288,7 @@ impl V2LaneWorkAdapter {
     /// later round. The supplied staged genesis is the runner-authenticated
     /// source of truth; this path rejects every other byte sequence and every
     /// parented, context-bearing, or non-height-one body.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn bind_locked_genesis_body(
         &mut self,
         block: &SignedBlock,
@@ -6166,6 +6307,7 @@ impl V2LaneWorkAdapter {
     /// Recover autonomous lane work from the exact body durably decided and
     /// applied by the global executor, independently of any earlier local
     /// Prepare lock or asynchronous body-load lifetime.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn recover_decided_canonical_lane_body(
         &mut self,
         receipt: &KuraV2CommitReceipt,
@@ -6267,6 +6409,7 @@ impl V2LaneWorkAdapter {
         operation.complete();
         Ok(outcome)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn bind_locked_global_body_from_origin(
         &mut self,
         block: &SignedBlock,
@@ -6855,6 +6998,7 @@ impl V2LaneWorkAdapter {
     ///
     /// Returns [`V2LaneWorkError::Persistence`] if an anchored certificate or
     /// its canonical globally-applied receipt cannot be written durably.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn persist_anchored_sessions(&mut self) -> Result<usize, V2LaneWorkError> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
@@ -7043,6 +7187,7 @@ impl V2LaneWorkAdapter {
     /// Quorum evidence conflicting with Kura's canonical lane identity is a
     /// safety failure. Proposal-only losing work is pruned; exact unfinished
     /// winners retain their votes, QCs, signing locks, and retransmit cursors.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn prepare_canonical_lane_rollover(
         &mut self,
         finality_artifact: &wire::finality::V2FinalityArtifact,
@@ -7199,6 +7344,7 @@ impl V2LaneWorkAdapter {
     /// Build the complete lane-output rollover authority after every winning
     /// current-height session is independently readable across Kura's strict
     /// certificate and application-receipt boundaries.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn durable_completion_matches_finality(
         &self,
         finality_artifact: &wire::finality::V2FinalityArtifact,
@@ -7210,6 +7356,7 @@ impl V2LaneWorkAdapter {
     /// Build the complete lane-output rollover authority after every winning
     /// current-height session is independently readable across Kura's strict
     /// certificate and application-receipt boundaries.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn durable_lane_rollover_authority(
         &self,
         finality_artifact: &wire::finality::V2FinalityArtifact,
@@ -7475,6 +7622,8 @@ impl V2LaneWorkAdapter {
     }
     /// Retire finalized height-local auxiliary effects and retain only effects
     /// whose exact semantic source moves into the successor.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn retain_successor_owned_rollover_effects(
         &mut self,
         finality_artifact: &wire::finality::V2FinalityArtifact,
@@ -7552,6 +7701,7 @@ impl V2LaneWorkAdapter {
     /// transport snapshot. Every request byte remains derived from immutable
     /// historical authority, and an empty snapshot falls back to the exact
     /// CommitQC signers retained by that authority.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn service_next_historical_recovery_with_archive_targets(
         &mut self,
         current_archive_targets: &[PeerId],
@@ -7568,6 +7718,7 @@ impl V2LaneWorkAdapter {
     ) -> Result<HistoricalRecoveryServiceOutcome, V2LaneWorkError> {
         self.service_next_historical_recovery_at_with_archive_targets(now, &[])
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn service_next_historical_recovery_at_with_archive_targets(
         &mut self,
         now: Instant,
@@ -7656,6 +7807,7 @@ impl V2LaneWorkAdapter {
             }
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retire_historical_recovery_request(&mut self, identity: HistoricalRecoveryIdentity) {
         if let Some(retired) = self.historical_recovery_requests.remove(&identity) {
             if self
@@ -7692,6 +7844,7 @@ impl V2LaneWorkAdapter {
     }
     /// Drain exact historical request identities whose source owner completed
     /// through local recovery or another authenticated response.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn drain_retired_historical_recovery_request_hashes(
         &mut self,
     ) -> BTreeSet<HashOf<LaneHistoricalRecoveryRequestV1>> {
@@ -7699,6 +7852,7 @@ impl V2LaneWorkAdapter {
     }
     /// Restore a drained cancellation batch when the exact-output corridor
     /// could not preflight its ownership indexes.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn requeue_retired_historical_recovery_request_hashes(
         &mut self,
         request_hashes: BTreeSet<HashOf<LaneHistoricalRecoveryRequestV1>>,
@@ -7727,6 +7881,7 @@ impl V2LaneWorkAdapter {
     }
     /// Retire requester output which lost its exact transport attempt during
     /// one successful transport mutation.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retire_inactive_merge_sidecar_requests(
         &mut self,
         previously_active: BTreeSet<HashOf<crate::merge_sidecar::CertifiedMergeSidecarRequestV1>>,
@@ -7807,12 +7962,14 @@ impl V2LaneWorkAdapter {
         Ok(worker_owned.len())
     }
     /// Drain exact sidecar requester identities whose transport owner retired.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn drain_retired_merge_sidecar_request_hashes(
         &mut self,
     ) -> BTreeSet<HashOf<crate::merge_sidecar::CertifiedMergeSidecarRequestV1>> {
         std::mem::take(&mut self.retired_merge_sidecar_request_hashes)
     }
     /// Restore a drained sidecar cancellation batch after worker preflight failed.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn requeue_retired_merge_sidecar_request_hashes(
         &mut self,
         request_hashes: BTreeSet<HashOf<crate::merge_sidecar::CertifiedMergeSidecarRequestV1>>,
@@ -7840,6 +7997,7 @@ impl V2LaneWorkAdapter {
             .extend(request_hashes);
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn coalesce_acknowledged_merge_sidecar_close(
         &mut self,
         acknowledgement: CertifiedMergeSidecarCloseAckV1,
@@ -7875,6 +8033,7 @@ impl V2LaneWorkAdapter {
             .insert(key, acknowledgement);
         Ok(true)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retire_acknowledged_merge_sidecar_close(
         &mut self,
         acknowledgement: &CertifiedMergeSidecarCloseAckV1,
@@ -7900,6 +8059,7 @@ impl V2LaneWorkAdapter {
         Ok(before.saturating_sub(self.sidecar_effects.len()))
     }
     /// Drain cumulative requester Close acknowledgements for exact-output cancellation.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn drain_acknowledged_merge_sidecar_closes(
         &mut self,
     ) -> Vec<CertifiedMergeSidecarCloseAckV1> {
@@ -7908,6 +8068,7 @@ impl V2LaneWorkAdapter {
             .collect()
     }
     /// Restore cumulative Close acknowledgements after worker preflight failed.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn requeue_acknowledged_merge_sidecar_closes(
         &mut self,
         acknowledgements: impl IntoIterator<Item = CertifiedMergeSidecarCloseAckV1>,
@@ -7917,6 +8078,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn coalesce_obsolete_merge_sidecar_generation_hint(
         &mut self,
         hint: CertifiedMergeSidecarGenerationHintV1,
@@ -7960,6 +8122,7 @@ impl V2LaneWorkAdapter {
     }
     /// Drain authenticated generation fences before dispatching replacement
     /// requester traffic under each responder's strongest successor generation.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn drain_obsolete_merge_sidecar_generation_hints(
         &mut self,
     ) -> Vec<CertifiedMergeSidecarGenerationHintV1> {
@@ -7968,6 +8131,7 @@ impl V2LaneWorkAdapter {
             .collect()
     }
     /// Restore generation-fence cancellation ownership after worker preflight failed.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn requeue_obsolete_merge_sidecar_generation_hints(
         &mut self,
         hints: impl IntoIterator<Item = CertifiedMergeSidecarGenerationHintV1>,
@@ -7977,6 +8141,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn historical_recovery_request_fits_frame(
         &self,
         request: &LaneHistoricalRecoveryRequestV1,
@@ -7990,6 +8155,7 @@ impl V2LaneWorkAdapter {
                 .get()
                 .min(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn historical_recovery_signer_pops(
         &self,
         session: &CommittedLaneBlockSession,
@@ -8097,6 +8263,7 @@ impl V2LaneWorkAdapter {
         })?;
         Ok(signer_pops)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn schedule_historical_recovery_request(
         &mut self,
         identity: HistoricalRecoveryIdentity,
@@ -8359,6 +8526,7 @@ impl V2LaneWorkAdapter {
     }
     /// Return whether an earlier-height lane session still owns local
     /// persistence/application recovery.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn has_pending_historical_recovery(&self) -> Result<bool, V2LaneWorkError> {
         if !self.historical_recovery_sessions.is_empty() {
             return Ok(true);
@@ -8378,6 +8546,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(false)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn historical_proposal_still_needs_recovery(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -8393,6 +8562,7 @@ impl V2LaneWorkAdapter {
     pub(crate) fn historical_recovery_waits_snapshot(&self) -> Vec<HistoricalRecoveryWait> {
         self.historical_recovery_diagnostics.snapshot()
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn persist_historical_recovery_session(
         &self,
         session: &CommittedLaneBlockSession,
@@ -8690,6 +8860,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(HistoricalRecoveryPersistence::Complete)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn historical_autonomous_payload_from_anchor(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -8758,6 +8929,7 @@ impl V2LaneWorkAdapter {
     }
     /// Retire losing certified merge sidecars once another carrier is durably
     /// finalized at this height.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn prune_finalized_merge_sidecars(&mut self) -> Result<(), V2LaneWorkError> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
@@ -8787,6 +8959,7 @@ impl V2LaneWorkAdapter {
         operation.complete();
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn historical_proposal_anchor_wait(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -8851,6 +9024,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(None)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn historical_block_anchors_proposal(
         &self,
         block: &SignedBlock,
@@ -8933,6 +9107,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(exact)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn historical_proposal_has_exact_canonical_anchor(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -9010,6 +9185,7 @@ impl V2LaneWorkAdapter {
     ///
     /// Missing, altered, or route-inconsistent ownership fails closed at this
     /// seam; callers cannot reconstruct it from public sender identities.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn accept_lane_message_with_ingress_ownership(
         &mut self,
         mut inbound: InboundBlockMessage,
@@ -9040,6 +9216,7 @@ impl V2LaneWorkAdapter {
         let ingress_ownership = inbound.take_ingress_ownership();
         self.accept_lane_message_owned(inbound, ingress_ownership, active_view)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_lane_message_owned(
         &mut self,
         inbound: InboundBlockMessage,
@@ -9145,6 +9322,7 @@ impl V2LaneWorkAdapter {
         }
         outcome
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn autonomous_origin_matches_context(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -9267,6 +9445,7 @@ impl V2LaneWorkAdapter {
             .map(|artifact| artifact.executable_payload)
             .filter(|payload| payload.origin_proposal == *proposal))
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn latest_durable_autonomous_new_view_certificate(
         artifact: &AutonomousLaneBlockArtifact,
         current_view: u64,
@@ -9303,6 +9482,7 @@ impl V2LaneWorkAdapter {
     /// and returns without requiring a private artifact. A local owner instead
     /// seeds the latest durable certificate for immediate retransmission and
     /// never changes the immutable origin proposal used by READY/Prepare/Commit.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn restore_autonomous_new_view_state(
         &mut self,
         payload: &LaneExecutablePayloadV1,
@@ -9439,6 +9619,7 @@ impl V2LaneWorkAdapter {
             .durable_autonomous_payload_for_proposal(proposal)?
             .is_some())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn lane_ready_session_key(proposal: &LaneBlockProposalV1) -> LaneBlockSessionKey {
         let descriptor = &proposal.descriptor;
         LaneBlockSessionKey {
@@ -9450,6 +9631,7 @@ impl V2LaneWorkAdapter {
             proposal_hash: proposal.proposal_hash,
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn prune_lane_ready_authorizations(&mut self) {
         let lane_sessions = &self.lane_sessions;
         self.lane_ready_authorizations
@@ -9458,6 +9640,7 @@ impl V2LaneWorkAdapter {
     /// Reauthenticate the repair-disabled execution-input readback and install
     /// at most one move-only READY authority for the local signer. Recovery
     /// calls this same boundary with the durable historical height context.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn authorize_autonomous_ready_from_durable_input(
         &mut self,
         payload: &LaneExecutablePayloadV1,
@@ -9515,6 +9698,7 @@ impl V2LaneWorkAdapter {
     }
     /// Cross the payload and execution-input durability barriers before
     /// authorizing any READY signature for this exact proposal.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn persist_and_authorize_autonomous_payload(
         &mut self,
         payload: &LaneExecutablePayloadV1,
@@ -9737,6 +9921,7 @@ impl V2LaneWorkAdapter {
             .map_err(AutonomousPayloadDurabilityError::Fatal)?;
         Ok(AutonomousPayloadDurabilityOutcome::Authorized)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn persist_autonomous_prepare_availability(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -9813,6 +9998,7 @@ impl V2LaneWorkAdapter {
     /// already binds the READY body, so recreating live READY authority would
     /// both be unnecessary and fail because the session has deliberately been
     /// removed. A different payload remains an ordinary rejected replay.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn commit_certified_autonomous_payload_replay_outcome(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -9846,6 +10032,7 @@ impl V2LaneWorkAdapter {
             },
         )
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn insert_autonomous_lane_payload(
         &mut self,
         payload: LaneExecutablePayloadV1,
@@ -10039,6 +10226,7 @@ impl V2LaneWorkAdapter {
             }
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn autonomous_new_view_transition_is_current(
         &self,
         body: &crate::lane_consensus::LaneBlockNewViewBodyV1,
@@ -10107,6 +10295,7 @@ impl V2LaneWorkAdapter {
             .is_ok_and(|expected| expected == *body),
         )
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn pops_for_autonomous_new_view(
         &self,
         certificate: &crate::lane_consensus::LaneBlockNewViewCertificateV1,
@@ -10152,6 +10341,7 @@ impl V2LaneWorkAdapter {
                 .collect(),
         )
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn persist_and_install_autonomous_new_view_certificate(
         &mut self,
         certificate: crate::lane_consensus::LaneBlockNewViewCertificateV1,
@@ -10264,6 +10454,7 @@ impl V2LaneWorkAdapter {
         operation.complete();
         Ok(LaneBlockNewViewPersistenceOutcome::Persisted(target))
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn try_insert_autonomous_new_view_vote(
         &mut self,
         vote: crate::lane_consensus::LaneBlockNewViewVoteV1,
@@ -10322,6 +10513,7 @@ impl V2LaneWorkAdapter {
             LaneBlockNewViewCacheOutcome::Duplicate => V2LaneIngressOutcome::Duplicate,
         })
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn insert_autonomous_new_view_vote(
         &mut self,
         vote: crate::lane_consensus::LaneBlockNewViewVoteV1,
@@ -10340,6 +10532,7 @@ impl V2LaneWorkAdapter {
             }
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn try_insert_autonomous_new_view_certificate(
         &mut self,
         certificate: crate::lane_consensus::LaneBlockNewViewCertificateV1,
@@ -10393,6 +10586,7 @@ impl V2LaneWorkAdapter {
             Err(_) => Ok(V2LaneIngressOutcome::Rejected),
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn insert_autonomous_new_view_certificate(
         &mut self,
         certificate: crate::lane_consensus::LaneBlockNewViewCertificateV1,
@@ -10422,6 +10616,7 @@ impl V2LaneWorkAdapter {
     /// The requester retains and periodically retransmits its incomplete
     /// proposal, so an occupied effect slot leaves reconstruction at the
     /// durable source instead of requiring an unbounded response queue here.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn serve_durable_lane_certificate(
         &mut self,
         proposal: &LaneBlockProposalV1,
@@ -10479,6 +10674,7 @@ impl V2LaneWorkAdapter {
             })?
             .is_some())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn reconstruct_durable_lane_certificate(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -10549,6 +10745,7 @@ impl V2LaneWorkAdapter {
             commit_qc: artifact.commit_qc,
         }))
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn historical_recovery_response_fits_frame(
         &self,
         response: &LaneHistoricalRecoveryResponseV1,
@@ -10563,6 +10760,7 @@ impl V2LaneWorkAdapter {
                 .historical_recovery_response_frame_capacity
                 .get()
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn peer_is_ready_signer(
         availability: &iroha_data_model::block::consensus::LanePayloadAvailabilityQcV1,
         peer: &PeerId,
@@ -10573,6 +10771,7 @@ impl V2LaneWorkAdapter {
             .position(|validator| validator == peer)
             .is_some_and(|index| bitmap_selects(&availability.signers_bitmap, index))
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn validate_historical_recovery_request(
         &self,
         request: &LaneHistoricalRecoveryRequestV1,
@@ -10719,6 +10918,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(session)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn serve_historical_recovery_request(
         &mut self,
         request: LaneHistoricalRecoveryRequestV1,
@@ -10938,6 +11138,7 @@ impl V2LaneWorkAdapter {
             V2LaneIngressOutcome::Duplicate
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_historical_recovery_response(
         &mut self,
         response: LaneHistoricalRecoveryResponseV1,
@@ -11303,6 +11504,7 @@ impl V2LaneWorkAdapter {
     /// merge sidecar. The merge QC authenticates its own immutable carrier view,
     /// which may precede the enclosing proposal round and is never rebound to
     /// that proposal's view.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn defer_missing_merge_sidecar(
         &mut self,
         round: wire::ConsensusRound,
@@ -11313,6 +11515,11 @@ impl V2LaneWorkAdapter {
     }
     /// Register a decided Apply dependency using transport capacity reserved
     /// from speculative validation work.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
+    #[cfg_attr(
+        test,
+        allow(dead_code, reason = "TODO: exercise decided sidecar deferral")
+    )]
     pub(crate) fn defer_missing_decided_merge_sidecar(
         &mut self,
         round: wire::ConsensusRound,
@@ -11325,6 +11532,8 @@ impl V2LaneWorkAdapter {
     ///
     /// A terminal full-entry rejection is retained in a dedicated owner class
     /// so the ordinary executor recovery drain cannot consume it first.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(in crate::sumeragi) fn defer_missing_lifecycle_decision_apply_sidecar(
         &mut self,
         round: wire::ConsensusRound,
@@ -11356,6 +11565,8 @@ impl V2LaneWorkAdapter {
     }
     /// Register one lifecycle-owned Validate dependency without transferring
     /// it into the generic executor deferral census.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(in crate::sumeragi) fn defer_missing_lifecycle_validate_sidecar(
         &mut self,
         round: wire::ConsensusRound,
@@ -11364,6 +11575,7 @@ impl V2LaneWorkAdapter {
     ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
         self.defer_missing_merge_sidecar_with_priority(round, subject, reference, false, true)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn defer_missing_merge_sidecar_with_priority(
         &mut self,
         round: wire::ConsensusRound,
@@ -11388,6 +11600,7 @@ impl V2LaneWorkAdapter {
         }
         result
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn defer_missing_merge_sidecar_guarded(
         &mut self,
         round: wire::ConsensusRound,
@@ -11477,6 +11690,7 @@ impl V2LaneWorkAdapter {
             Err(error) => Ok(MergeSidecarDeferralDisposition::Rejected(error.to_string())),
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn authenticate_merge_sidecar_reference(
         &mut self,
         reference: &CertifiedMergeLedgerReference,
@@ -11513,12 +11727,14 @@ impl V2LaneWorkAdapter {
     }
     /// Borrow one durable-sidecar readiness notification until every exact
     /// deferred Apply owner has entered the bounded worker queue.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn completed_merge_sidecar(&self) -> Option<HashOf<MergeLedgerEntry>> {
         let _permit = self.output_guard.acquire()?;
         self.completed_merge_sidecars.iter().next().copied()
     }
     /// Retire the borrowed readiness notification after successful worker
     /// admission. Backpressure must leave it available for the next turn.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn acknowledge_completed_merge_sidecar(
         &mut self,
         entry_hash: HashOf<MergeLedgerEntry>,
@@ -11536,6 +11752,11 @@ impl V2LaneWorkAdapter {
     }
     /// Take one exact full-entry rejection to apply to every retained body
     /// referencing the same hash.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
+    #[cfg_attr(
+        test,
+        allow(dead_code, reason = "TODO: exercise sidecar rejection handoff")
+    )]
     pub(crate) fn take_rejected_merge_sidecar(&mut self) -> Option<RejectedMergeSidecar> {
         let output_guard = Arc::clone(&self.output_guard);
         let _permit = output_guard.acquire()?;
@@ -11548,6 +11769,7 @@ impl V2LaneWorkAdapter {
     }
     /// Release transport reservations for validation tasks no longer owned by
     /// the executor after a certified view transition or terminal completion.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn retain_deferred_merge_sidecars(
         &mut self,
         pending_blocks: &BTreeSet<HashOf<BlockHeader>>,
@@ -11567,6 +11789,7 @@ impl V2LaneWorkAdapter {
         Ok(())
     }
     /// Accept one lane relay, merge signature, or context-bound Native AMX message.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(super) fn accept_relay_message(
         &mut self,
         message: LaneRelayMessage,
@@ -11624,6 +11847,7 @@ impl V2LaneWorkAdapter {
         }
     }
     /// Clone the next fairly selected effect without transferring its ownership.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn next_effect(&self) -> Option<V2LaneWorkEffect> {
         let output_guard = Arc::clone(&self.output_guard);
         let _permit = output_guard.acquire()?;
@@ -11642,12 +11866,14 @@ impl V2LaneWorkAdapter {
         }
     }
     /// Number of bounded effects available for one complete fair scheduler scan.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn effect_count(&self) -> usize {
         self.effects
             .len()
             .saturating_add(self.sidecar_effects.len())
     }
     /// Return one temporarily unserviceable effect to the tail of its owner lane.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn requeue_effect(&mut self, effect: V2LaneWorkEffect) -> bool {
         match effect {
             V2LaneWorkEffect::PostCertifiedMergeSidecar {
@@ -11666,6 +11892,7 @@ impl V2LaneWorkAdapter {
     ///
     /// This moves an already-admitted occurrence without re-running fresh
     /// storage admission. A failed fresh read must never erase a retry owner.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn rotate_next_effect(&mut self) -> bool {
         let Some(effect) = self.drain_effects(1).pop() else {
             return false;
@@ -11681,6 +11908,7 @@ impl V2LaneWorkAdapter {
         true
     }
     /// Drain at most `limit` explicit transport effects.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn drain_effects(&mut self, limit: usize) -> Vec<V2LaneWorkEffect> {
         let output_guard = Arc::clone(&self.output_guard);
         let Some(_permit) = output_guard.acquire() else {
@@ -11737,6 +11965,7 @@ impl V2LaneWorkAdapter {
     /// target changes only retransmission coordination; READY, Prepare,
     /// Commit, and merge certification remain bound to the immutable origin
     /// proposal carried by `LaneExecutablePayloadV1`.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn schedule_autonomous_new_view_timeouts(
         &mut self,
         now: Instant,
@@ -11947,9 +12176,11 @@ impl V2LaneWorkAdapter {
     ///
     /// Returns a restart-required or durable-persistence error before this
     /// process may publish any later consensus output.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn schedule_retransmission(&mut self) -> Result<(), V2LaneWorkError> {
         self.schedule_retransmission_at(Instant::now())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn schedule_retransmission_at(&mut self, now: Instant) -> Result<(), V2LaneWorkError> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
@@ -12036,6 +12267,7 @@ impl V2LaneWorkAdapter {
         operation.complete();
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn schedule_lane_artifact_retransmissions(&mut self) -> Result<(), V2LaneWorkError> {
         // Peer-queue admission is only a volatile delivery boundary. Begin a
         // fresh bounded fanout round after the previous round transferred all
@@ -12257,6 +12489,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn schedule_native_retransmissions(&mut self) {
         if self.globally_locked_body.is_some() || self.decision_pending() {
             return;
@@ -12348,6 +12581,7 @@ impl V2LaneWorkAdapter {
             self.native_retransmit_cursor = (start + transferred_through) % request_count;
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn schedule_merge_share_retransmissions(
         &mut self,
         active_merge_view: wire::View,
@@ -12380,6 +12614,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn sidecar_effect_slots(&self) -> usize {
         let progress_effects = self
             .sidecar_effects
@@ -12391,6 +12626,7 @@ impl V2LaneWorkAdapter {
             .get()
             .saturating_sub(progress_effects)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn next_sidecar_effect_selection(&self) -> Option<(usize, bool)> {
         let progress = self
             .sidecar_effects
@@ -12415,6 +12651,7 @@ impl V2LaneWorkAdapter {
             (None, None) => None,
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn push_merge_sidecar_post(&mut self, post: MergeSidecarPost) -> bool {
         let MergeSidecarPost {
             peer,
@@ -12445,6 +12682,7 @@ impl V2LaneWorkAdapter {
     /// peer-writer-flush receipt is applied. Stateless GenerationHint and
     /// durable-prefix CloseAck responses are instead reproducible by replay and
     /// may be dropped by their bounded responder-control corridor.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn push_merge_sidecar_post_or_restart(
         &mut self,
         post: MergeSidecarPost,
@@ -12494,6 +12732,7 @@ impl V2LaneWorkAdapter {
     }
     /// Apply one exact peer-writer flush receipt and schedule the source's next
     /// chunk without changing any sibling source cursor.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn acknowledge_certified_merge_sidecar_chunk_admission(
         &mut self,
         admission: &CertifiedMergeSidecarChunkAdmission,
@@ -12525,6 +12764,7 @@ impl V2LaneWorkAdapter {
         operation.complete();
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn remove_acknowledged_sidecar_retry_effect(
         &mut self,
         admission: &CertifiedMergeSidecarChunkAdmission,
@@ -12562,6 +12802,7 @@ impl V2LaneWorkAdapter {
             .map(lane_work_effect_key)
             .collect();
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn apply_closed_server_prefixes(&mut self) -> bool {
         let mut changed = false;
         for prefix in self.merge_sidecars.drain_closed_server_prefixes() {
@@ -12595,6 +12836,7 @@ impl V2LaneWorkAdapter {
             .collect();
         changed
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn coalesce_closed_sidecar_prefix(
         &mut self,
         prefix: CertifiedMergeSidecarClosedPrefix,
@@ -12627,6 +12869,7 @@ impl V2LaneWorkAdapter {
         }
     }
     /// Drain authenticated close prefixes for the worker exact-output owner.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn drain_closed_sidecar_prefixes(
         &mut self,
     ) -> Vec<CertifiedMergeSidecarClosedPrefix> {
@@ -12639,6 +12882,7 @@ impl V2LaneWorkAdapter {
     ///
     /// Prefixes which arrived after the failed drain are coalesced by the same
     /// lexicographic generation/epoch/floor relation as ordinary ingress.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn requeue_closed_sidecar_prefixes(
         &mut self,
         prefixes: impl IntoIterator<Item = CertifiedMergeSidecarClosedPrefix>,
@@ -12649,9 +12893,11 @@ impl V2LaneWorkAdapter {
     }
     /// Confirm that drained sidecar prefixes have terminated every covered
     /// exact-output fanout and writer-flush receipt.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn confirm_closed_sidecar_prefix_handoff(&mut self) {
         self.merge_sidecars.confirm_closed_server_prefix_handoff();
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn stranded_retryable_sidecar_control_index(
         &self,
         candidate: &V2LaneWorkEffect,
@@ -12665,6 +12911,7 @@ impl V2LaneWorkAdapter {
                 && !retryable_sidecar_server_control_has_writable_route(retained)
         })
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn replace_stranded_retryable_sidecar_control(
         &mut self,
         retained_index: usize,
@@ -12689,6 +12936,7 @@ impl V2LaneWorkAdapter {
         self.sidecar_effects.push_back(candidate);
         true
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn push_merge_sidecar_effect(&mut self, effect: V2LaneWorkEffect) -> bool {
         if !matches!(&effect, V2LaneWorkEffect::PostCertifiedMergeSidecar { .. })
             || !lane_work_effect_reply_routes_have_valid_shape(&effect)
@@ -12760,6 +13008,7 @@ impl V2LaneWorkAdapter {
         self.sidecar_effects.push_back(effect);
         true
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_certified_merge_sidecar(
         &mut self,
         sender: PeerId,
@@ -12816,6 +13065,7 @@ impl V2LaneWorkAdapter {
     /// exact across later manifest, peer, configuration, and incarnation churn.
     /// The caller still owns canonical Kura finality and compact-reference
     /// authentication before this predicate may authorize bytes.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn finalized_merge_active_lane_committee_contains(
         &self,
         entry: &MergeLedgerEntry,
@@ -12838,6 +13088,7 @@ impl V2LaneWorkAdapter {
     }
     /// Resolve one outsider request to its exact globally finalized entry and
     /// historical lane authority before allocating responder state.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn exact_historical_lane_sidecar_requester(
         &self,
         request: &crate::merge_sidecar::CertifiedMergeSidecarRequestV1,
@@ -12873,6 +13124,7 @@ impl V2LaneWorkAdapter {
     /// global-roster recovery corridor is unchanged. Additional governed-lane
     /// access requires the finalized entry's complete QC-bound lane catalog;
     /// current mutable lane membership never grants that access.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn authenticates_certified_merge_sidecar_service_for_requester(
         &self,
         entry: &MergeLedgerEntry,
@@ -12929,6 +13181,7 @@ impl V2LaneWorkAdapter {
                 })))
     }
     /// Load the exact durable predecessor roster which owns the rollover corridor.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn immediate_predecessor_sidecar_requesters(
         &mut self,
     ) -> Result<Option<&BTreeSet<PeerId>>, V2LaneWorkError> {
@@ -12982,6 +13235,7 @@ impl V2LaneWorkAdapter {
     /// owns the Kura lookup directly: this poll uses the scheduler-returned
     /// requester, request, and exact authenticated route, so a flooding relay
     /// cannot substitute its newest occurrence for older roster-owned work.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn service_next_certified_merge_sidecar_materialization(
         &mut self,
         now: Instant,
@@ -13089,6 +13343,7 @@ impl V2LaneWorkAdapter {
             }
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_certified_merge_sidecar_request(
         &mut self,
         sender: PeerId,
@@ -13219,6 +13474,7 @@ impl V2LaneWorkAdapter {
             V2LaneIngressOutcome::Duplicate
         })
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_certified_merge_sidecar_close(
         &mut self,
         sender: PeerId,
@@ -13286,6 +13542,7 @@ impl V2LaneWorkAdapter {
             },
         )
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_certified_merge_sidecar_close_ack(
         &mut self,
         sender: PeerId,
@@ -13316,6 +13573,7 @@ impl V2LaneWorkAdapter {
             }
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_certified_merge_sidecar_generation_hint(
         &mut self,
         sender: PeerId,
@@ -13374,6 +13632,7 @@ impl V2LaneWorkAdapter {
             }
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_certified_merge_sidecar_chunk(
         &mut self,
         sender: PeerId,
@@ -13472,6 +13731,7 @@ impl V2LaneWorkAdapter {
             Err(error) => Err(V2LaneWorkError::Persistence(error.to_string())),
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retry_completed_merge_sidecar(
         &mut self,
         entry_hash: HashOf<MergeLedgerEntry>,
@@ -13489,9 +13749,11 @@ impl V2LaneWorkAdapter {
         }
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn round_is_current(&self, round: wire::ConsensusRound) -> bool {
         round.context_id == self.context.id() && round.height == self.context.height
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_lane_relay(
         &mut self,
         envelope: LaneRelayEnvelope,
@@ -13522,6 +13784,7 @@ impl V2LaneWorkAdapter {
             Err(_) => Ok(V2LaneIngressOutcome::Rejected),
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn insert_lane_proposal(
         &mut self,
         proposal: LaneBlockProposalV1,
@@ -13542,6 +13805,7 @@ impl V2LaneWorkAdapter {
             Err(_) => V2LaneIngressOutcome::Rejected,
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn insert_lane_vote(
         &mut self,
         vote: LaneBlockVoteV1,
@@ -13598,6 +13862,7 @@ impl V2LaneWorkAdapter {
             LaneBlockSessionInsertOutcome::Duplicate => V2LaneIngressOutcome::Duplicate,
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn insert_lane_qc(
         &mut self,
         qc: LaneBlockQcV1,
@@ -13655,6 +13920,7 @@ impl V2LaneWorkAdapter {
     /// carrier, finality proof, or committed-State identity is durable local
     /// corruption, so continuing with weaker private/ordinary evidence would
     /// make restart behavior depend on message order.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn finalized_autonomous_ingress_payload_or_fail_stop(
         &mut self,
         body: &iroha_data_model::block::consensus::LaneBlockVoteBodyV1,
@@ -13676,6 +13942,7 @@ impl V2LaneWorkAdapter {
     /// Proposals and executable payloads do not carry a separate vote body at
     /// the ingress seam, but a malformed durable sibling is the same local
     /// corruption as one discovered while importing a vote or QC.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn finalized_autonomous_ingress_payload_for_proposal_or_fail_stop(
         &mut self,
         proposal: &LaneBlockProposalV1,
@@ -13694,6 +13961,7 @@ impl V2LaneWorkAdapter {
     }
     /// Hydrate verification-only session state from a finalized public
     /// autonomous carrier without acquiring committee-local custody.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn hydrate_finalized_autonomous_observer_session(
         &self,
         sessions: &mut LaneBlockSessionCache,
@@ -13726,6 +13994,7 @@ impl V2LaneWorkAdapter {
             })?;
         Ok(Some(proposal.clone()))
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn insert_lane_certificate(
         &mut self,
         certificate: LaneBlockCertificateV1,
@@ -13848,6 +14117,7 @@ impl V2LaneWorkAdapter {
             V2LaneIngressOutcome::Duplicate
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn insert_historical_lane_certificate(
         &mut self,
         proposal: LaneBlockProposalV1,
@@ -13891,6 +14161,7 @@ impl V2LaneWorkAdapter {
         self.historical_recovery_sessions.push_back(session);
         V2LaneIngressOutcome::Inserted
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn lane_proposal_authorized(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -13964,6 +14235,7 @@ impl V2LaneWorkAdapter {
     ) -> Option<&'a PeerId> {
         lane_proposal_author(proposal)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn expected_lane_author<'a>(&'a self, proposal: &'a LaneBlockProposalV1) -> Option<&'a PeerId> {
         if let Some(record) = self.historical_autonomous_recovery_record_for_proposal(proposal) {
             let author = lane_proposal_author(proposal)?;
@@ -13971,6 +14243,7 @@ impl V2LaneWorkAdapter {
         }
         lane_proposal_author(proposal)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn lane_vote_authorized(&self, vote: &LaneBlockVoteV1, active_view: wire::View) -> bool {
         let body = &vote.body;
         if body.proposal_height == self.context.height {
@@ -14002,6 +14275,7 @@ impl V2LaneWorkAdapter {
                 .is_some_and(|proposal| proposal.descriptor.validator_set.contains(&vote.signer))
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn lane_qc_authorized(&self, qc: &LaneBlockQcV1, active_view: wire::View) -> bool {
         let body = &qc.body;
         if body.proposal_height == self.context.height {
@@ -14036,6 +14310,7 @@ impl V2LaneWorkAdapter {
     /// and read-only certified slots. Missing authority preserves its owner;
     /// corrupt authority or a conflicting quorum fails before any mutation.
     /// Output queues retain their separate handoff ownership.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retire_applied_autonomous_sessions(&mut self) -> Result<usize, V2LaneWorkError> {
         let mut candidates = Vec::new();
         for body in self.lane_sessions.retained_vote_bodies() {
@@ -14125,6 +14400,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(retired)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn drive_lane_sessions(&mut self) {
         if self.output_guard.restart_required() {
             return;
@@ -14316,6 +14592,7 @@ impl V2LaneWorkAdapter {
             Err(_) => return,
         });
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn sign_lane_vote(
         &mut self,
         proposal: &LaneBlockProposalV1,
@@ -14552,6 +14829,10 @@ impl V2LaneWorkAdapter {
             None => Ok(false),
         }
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: connect native body fanout")
+    )]
     fn fanout_lane_message(&mut self, message: BlockMessage, validators: &[PeerId]) {
         if matches!(&message, BlockMessage::LaneExecutablePayload(_)) {
             iroha_logger::error!(
@@ -14609,6 +14890,10 @@ impl V2LaneWorkAdapter {
     /// geometry and remain ordinary transport effects. Every lane-committee
     /// recipient, however, must consume its own checked move-only authority at
     /// the fresh effect insertion boundary.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: connect native body fanout")
+    )]
     fn fanout_producer_lane_executable_payload(
         &mut self,
         payload: &LaneExecutablePayloadV1,
@@ -14782,6 +15067,7 @@ impl V2LaneWorkAdapter {
             }
         )
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn push_effect_with_fresh_authorization<Authorization>(
         &mut self,
         effect: V2LaneWorkEffect,
@@ -14832,6 +15118,7 @@ impl V2LaneWorkAdapter {
             .retain(|effect| !matches!(effect, V2LaneWorkEffect::BroadcastMerge(_)));
         self.effect_keys = self.effects.iter().map(lane_work_effect_key).collect();
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retain_native_amx_for_global_view(
         &mut self,
         view: wire::View,
@@ -14871,6 +15158,7 @@ impl V2LaneWorkAdapter {
         self.native_retransmit_cursor %= request_count.max(1);
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn purge_queued_global_body_effects_except_committed_outputs(
         &mut self,
     ) -> Result<(), V2LaneWorkError> {
@@ -14924,6 +15212,7 @@ impl V2LaneWorkAdapter {
         self.effect_keys = self.effects.iter().map(lane_work_effect_key).collect();
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retain_committed_lane_outputs_for_subject(&mut self, subject: wire::BlockSubject) {
         self.pending_committed_lanes.retain(|session| {
             session
@@ -14940,6 +15229,7 @@ impl V2LaneWorkAdapter {
                 .is_some_and(|hint| hint.proposal_block_hash == subject.block_hash)
         });
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn schedule_committed_lane_outputs(&mut self) -> Result<(), V2LaneWorkError> {
         if self.output_guard.restart_required() {
             return Err(V2LaneWorkError::RestartRequired);
@@ -15018,6 +15308,7 @@ impl V2LaneWorkAdapter {
     }
     /// Return whether a completed lane CommitQC still awaits transfer into the
     /// network actor's exact-output corridor.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn has_pending_committed_output_handoff(&self) -> Result<bool, V2LaneWorkError> {
         if self.output_guard.restart_required() {
             return Err(V2LaneWorkError::RestartRequired);
@@ -15053,6 +15344,7 @@ impl V2LaneWorkAdapter {
                 )
             }))
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn collect_committed_lane_sessions(&mut self) -> Result<(), V2LaneWorkError> {
         let remaining = self.limits.session_capacity.get().saturating_sub(
             self.committed_lane_outputs
@@ -15102,6 +15394,7 @@ impl V2LaneWorkAdapter {
         self.schedule_committed_lane_outputs()?;
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn proposal_body_available(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -15135,6 +15428,7 @@ impl V2LaneWorkAdapter {
     ///
     /// This is transport authority only. It never authorizes historical local
     /// voting and it does not treat the raw artifact as applied lane progress.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn historical_raw_proposal_can_solicit_certificate(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -15167,6 +15461,7 @@ impl V2LaneWorkAdapter {
         )?;
         Ok(canonical.as_slice() == [anchor])
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn proposal_can_be_transported(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -15239,6 +15534,7 @@ impl V2LaneWorkAdapter {
             },
         )
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn proposal_can_progress(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -15283,6 +15579,7 @@ impl V2LaneWorkAdapter {
                 || self.proposal_is_bound_to_decided_carrier(proposal)?)
             && self.proposal_predecessor_is_ready_for_progress(proposal)?)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn lane_vote_body_can_progress(
         &self,
         body: &iroha_data_model::block::consensus::LaneBlockVoteBodyV1,
@@ -15300,6 +15597,7 @@ impl V2LaneWorkAdapter {
             None => Ok(false),
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn lane_vote_body_available(
         &self,
         body: &iroha_data_model::block::consensus::LaneBlockVoteBodyV1,
@@ -15369,6 +15667,7 @@ impl V2LaneWorkAdapter {
         );
         LaneRelayEnvelope::lane_qc_mode_tag_for(lane_id, dataspace_id, &context_tag)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn hydrate_canonical_lane_artifacts(&mut self) -> Result<(), V2LaneWorkError> {
         if self.kura.emergency_fast_startup_enabled() {
             // Fast mode deliberately keeps Queue reservation quarantine closed, so no local lane
@@ -15871,6 +16170,7 @@ impl V2LaneWorkAdapter {
             .filter(|proposal| proposal.vote_body(body.phase) == *body)
             .cloned()
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn historical_lane_recovery_message_is_authorized(
         &self,
         message: &BlockMessage,
@@ -16351,6 +16651,7 @@ impl V2LaneWorkAdapter {
             )?
             .filter(|payload| payload.origin_proposal == *proposal))
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn session_has_canonical_anchor(
         &self,
         session: &CommittedLaneBlockSession,
@@ -16513,6 +16814,7 @@ impl V2LaneWorkAdapter {
             lane_id,
         )
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn pops_for_lane_qc(&self, qc: &LaneBlockQcV1) -> BTreeMap<PublicKey, Vec<u8>> {
         if let Some(record) = self
             .historical_autonomous_recovery_proposal_for_vote_body(&qc.body)
@@ -16547,6 +16849,7 @@ impl V2LaneWorkAdapter {
             })
             .collect()
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn pops_for_lane_session(
         &self,
         session: &CommittedLaneBlockSession,
@@ -16558,6 +16861,7 @@ impl V2LaneWorkAdapter {
         pops.extend(self.pops_for_lane_qc(&session.commit_qc));
         pops
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_native_amx(
         &mut self,
         sender: PeerId,
@@ -16584,6 +16888,7 @@ impl V2LaneWorkAdapter {
             }
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_native_request(
         &mut self,
         sender: PeerId,
@@ -16655,6 +16960,7 @@ impl V2LaneWorkAdapter {
         }
         V2LaneIngressOutcome::Inserted
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn native_request_sender_authorized(
         &self,
         request: &NativeAmxAttestationRequestV2,
@@ -16689,6 +16995,7 @@ impl V2LaneWorkAdapter {
                 &slot,
             )
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_native_vote(
         &mut self,
         sender: PeerId,
@@ -16957,6 +17264,7 @@ impl V2LaneWorkAdapter {
             Some((_, _, _, _, None)) => false,
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn native_committee(
         &self,
         body: &NativeAmxAttestationBodyV2,
@@ -17771,6 +18079,7 @@ impl V2LaneWorkAdapter {
         });
         self.effect_keys = self.effects.iter().map(lane_work_effect_key).collect();
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retire_native_request_for_peer(&mut self, body: &NativeAmxAttestationBodyV2, peer: &PeerId) {
         let remove_body = self.native_requests.get_mut(body).is_some_and(|entry| {
             entry.expected_peers.remove(peer);
@@ -18025,6 +18334,7 @@ impl V2LaneWorkAdapter {
         self.schedule_lane_drain_vote_retransmission(&committee);
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_lane_drain_vote(
         &mut self,
         sender: PeerId,
@@ -18169,6 +18479,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn decode_and_validate_leader_candidate(
         &mut self,
         signature: &MergeCommitteeSignature,
@@ -19320,6 +19631,7 @@ impl V2LaneWorkAdapter {
         }
         Ok(MergeRefreshOutcome::Ready)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn accept_merge_signature(
         &mut self,
         signature: MergeCommitteeSignature,
@@ -19797,6 +20109,7 @@ impl V2LaneWorkAdapter {
         operation.complete();
         Ok(PreparedCandidateWork::default())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn frozen_roster_contains(&self, peer: &PeerId) -> bool {
         self.context
             .roster
@@ -20074,6 +20387,7 @@ fn lane_session_overflow_indices(
     }
     Ok(overflow)
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn bitmap_selects(bitmap: &[u8], index: usize) -> bool {
     bitmap
         .get(index / 8)
@@ -20084,6 +20398,7 @@ fn reply_routes_are_live_for_peer(reply_routes: &NetworkReplyRoutes, peer: &Peer
         && reply_routes.semantic_target() == peer
         && reply_routes.iter().any(NetworkReplyRoute::is_active)
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn retryable_sidecar_server_control_peer(effect: &V2LaneWorkEffect) -> Option<&PeerId> {
     let V2LaneWorkEffect::PostCertifiedMergeSidecar {
         peer,
@@ -20103,6 +20418,7 @@ fn retryable_sidecar_server_control_peer(effect: &V2LaneWorkEffect) -> Option<&P
         | CertifiedMergeSidecarMessage::Chunk(_) => None,
     }
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn retryable_sidecar_server_control_has_writable_route(effect: &V2LaneWorkEffect) -> bool {
     retryable_sidecar_server_control_peer(effect).is_some()
         && matches!(
@@ -20382,6 +20698,7 @@ fn verified_native_committee_pops(
             .collect(),
     )
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn native_amx_message_body(message: &NativeAmxMessage) -> &NativeAmxAttestationBodyV2 {
     match message {
         NativeAmxMessage::PrepareRequest(request) => &request.body,
@@ -20460,6 +20777,7 @@ fn lane_proposal_author(proposal: &LaneBlockProposalV1) -> Option<&PeerId> {
 /// Missing evidence is the recoverable applied-tip crash boundary. Conflicting
 /// evidence is an invalid durable state and therefore returns an error instead
 /// of being treated as incomplete.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) fn durable_lane_completion_matches_finality(
     kura: &Kura,
     finality_artifact: &wire::finality::V2FinalityArtifact,
@@ -20480,6 +20798,7 @@ pub(crate) fn durable_lane_completion_matches_finality_during_startup(
         finality_artifact,
     )
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 enum DurableLaneCompletionReaders<'a, 'k> {
     Runtime(&'a Kura),
     Startup(&'a V2StartupFinalityVerificationSession<'k>),
@@ -20718,6 +21037,7 @@ fn durable_lane_completion_matches_finality_with_readers(
 /// Recovery therefore authenticates the canonical block hash, exact sidecars,
 /// frozen lifecycle/committee/tag bindings, proposer authority, and applied
 /// predecessor instead of consulting the post-persistence frontier.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) fn canonical_v2_lane_payload_matches_kura(
     state: &State,
     kura: &Kura,
@@ -20796,6 +21116,7 @@ fn canonical_raw_lane_predecessor_matches_proposal(
     )?;
     Ok(canonical.as_slice() == [artifact])
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn canonical_v2_lane_payload_matches_kura_inner(
     state: &State,
     kura: &Kura,

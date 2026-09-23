@@ -531,8 +531,8 @@ impl PreparedFairIngressQueueWitness {
         let selected_projection = frozen_projection_for_ordinal(&current, selected_ordinal)
             .ok_or(FairIngressQueueCutError::QueueCutChanged)?
             .clone();
-        let selected_context =
-            target_lifecycle_context(selected).ok_or(FairIngressQueueCutError::QueueCutChanged)?;
+        let selected_context = target_lifecycle_context(selected, state.leader_wire_context)
+            .ok_or(FairIngressQueueCutError::QueueCutChanged)?;
         let bound_context = state
             .leader_wire_context
             .ok_or(FairIngressQueueCutError::QueueCutChanged)?;
@@ -630,7 +630,7 @@ impl PreparedFairIngressQueueWitness {
             state,
             self.selected_identity.physical_admission_ordinal,
         )
-        .and_then(target_lifecycle_context)
+        .and_then(|selected| target_lifecycle_context(selected, state.leader_wire_context))
         .zip(state.leader_wire_context)
         .is_some_and(|(carrier, bound)| {
             carrier == bound && lifecycle_context_from_wire(bound) == self.selected_identity.context
@@ -1625,7 +1625,8 @@ fn freeze_live_geometry(
                     entry.admission_ordinal,
                     FairIngressSelectorOccurrence {
                         physical_admission_ordinal: entry.admission_ordinal,
-                        context: target_lifecycle_context(entry).map(lifecycle_context_from_wire),
+                        context: target_lifecycle_context(entry, state.leader_wire_context)
+                            .map(lifecycle_context_from_wire),
                         source_class: source.class(),
                         class: entry.class,
                         queue_gate,
@@ -2022,6 +2023,7 @@ fn source_for_physical_ordinal(
 }
 fn target_lifecycle_context(
     entry: &FairV2IngressEntry,
+    bound_context: Option<(wire::HeightContextId, wire::Height)>,
 ) -> Option<(wire::HeightContextId, wire::Height)> {
     let token_context = entry
         .leader_wire_token
@@ -2049,16 +2051,20 @@ fn target_lifecycle_context(
                 return (token.identity.phase == FairV2IngressLeaderWirePhase::Chunk)
                     .then_some((token.identity.context_id, token.identity.height));
             }
-            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => {
-                Some((request.round.context_id, request.round.height))
+            // Historical Serve is executed by the *current* lifecycle. Its
+            // signed historical context stays in the request for Kura-backed
+            // authentication, but cannot be the queue's dequeue context.
+            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_) => {
+                if token_context.is_some() {
+                    return None;
+                }
+                return bound_context;
             }
             wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) => Some((
                 response.manifest.round.context_id,
                 response.manifest.round.height,
             )),
-            wire::ConsensusMessageV2Payload::CommitCertificateRequest(request) => {
-                Some((request.context_id, request.height))
-            }
             wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => Some((
                 response.certificate.round.context_id,
                 response.certificate.round.height,
@@ -2295,6 +2301,123 @@ mod tests {
             message,
             ordinal,
         )
+    }
+    #[test]
+    fn historical_commit_request_uses_current_lifecycle_for_exact_dequeue() {
+        let historical_context = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"historical-commit-request-context",
+        )));
+        let active_context = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"active-historical-serve-context",
+        )));
+        let peer = PeerId::from(KeyPair::random().public_key().clone());
+        let ingress = FairV2Ingress::new(16, 1024 * 1024, 512 * 1024, 0, 0);
+        ingress
+            .configure_roster([peer.clone()])
+            .expect("current validator lane fits the historical request fixture");
+        ingress.state.lock().leader_wire_context = Some((active_context, 3));
+        ingress.open().expect("open current lifecycle ingress");
+        let request = commit_certificate_request(historical_context, 2, &peer, 17);
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                request.clone(),
+                peer,
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let active = lifecycle_context_from_wire((active_context, 3));
+        let selected = ingress
+            .capture_next_ingress_turn_cut(|candidate| candidate.context() == Some(active))
+            .expect("historical Serve must remain a valid fair-ingress occurrence")
+            .expect("historical Serve must be selected under the current lifecycle");
+        let narrowed = selected
+            .narrow_to_lifecycle(active)
+            .unwrap_or_else(|_| panic!("historical Serve must narrow to the active lifecycle"));
+        let FairIngressTurnContextCut::Lifecycle(narrowed) = narrowed else {
+            panic!("historical Serve must remain lifecycle-owned");
+        };
+        let (dequeued, disposition) = narrowed
+            .into_ordinary_turn_cut()
+            .dequeue_exact_retaining()
+            .unwrap_or_else(|_| panic!("historical Serve must dequeue with exact ownership"));
+        assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+        assert_same_v2_message(dequeued.message(), &request);
+        assert_eq!(ingress.len(), 0);
+    }
+    #[test]
+    fn historical_certified_body_request_uses_current_lifecycle_for_exact_dequeue() {
+        let historical_context = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"historical-certified-body-context",
+        )));
+        let active_context = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"active-certified-body-serve-context",
+        )));
+        let peer = PeerId::from(KeyPair::random().public_key().clone());
+        let BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+            ..
+        }) = certified_body_response(historical_context, 2, &peer)
+        else {
+            unreachable!("certified-body fixture must carry its response");
+        };
+        let round = response.manifest.round;
+        let subject = response.manifest.subject;
+        let request = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(wire::CertifiedBodyRequest {
+                round,
+                subject,
+                certificate: wire::QuorumCertificate {
+                    round,
+                    proposal_round: round,
+                    phase: wire::GlobalPhase::Commit,
+                    subject,
+                    execution_commitment:
+                        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                            Hash::new(b"historical-parent"),
+                            Hash::new(b"historical-post"),
+                            Hash::new(b"historical-writes"),
+                            1,
+                            Hash::new(b"historical-wire"),
+                        ),
+                    signers: vec![0],
+                    aggregate_signature: vec![0x5A],
+                },
+                requester: peer.clone(),
+                signature: vec![0x5A],
+            }),
+        ));
+        let ingress = FairV2Ingress::new(16, 1024 * 1024, 512 * 1024, 0, 0);
+        ingress
+            .configure_roster([peer.clone()])
+            .expect("current validator lane fits the historical body fixture");
+        ingress.state.lock().leader_wire_context = Some((active_context, 3));
+        ingress.open().expect("open current lifecycle ingress");
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                request.clone(),
+                peer,
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let active = lifecycle_context_from_wire((active_context, 3));
+        let selected = ingress
+            .capture_next_ingress_turn_cut(|candidate| candidate.context() == Some(active))
+            .expect("historical body Serve must remain a valid fair-ingress occurrence")
+            .expect("historical body Serve must be selected under the current lifecycle");
+        let FairIngressTurnContextCut::Lifecycle(narrowed) =
+            selected.narrow_to_lifecycle(active).unwrap_or_else(|_| {
+                panic!("historical body Serve must narrow to the active lifecycle")
+            })
+        else {
+            panic!("historical body Serve must remain lifecycle-owned");
+        };
+        let (dequeued, disposition) = narrowed
+            .into_ordinary_turn_cut()
+            .dequeue_exact_retaining()
+            .unwrap_or_else(|_| panic!("historical body Serve must dequeue with exact ownership"));
+        assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+        assert_same_v2_message(dequeued.message(), &request);
+        assert_eq!(ingress.len(), 0);
     }
     fn two_commit_request_ingress() -> (FairV2Ingress, u64, u64) {
         const HEIGHT: wire::Height = 19;

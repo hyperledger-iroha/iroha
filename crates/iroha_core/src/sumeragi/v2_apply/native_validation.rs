@@ -784,10 +784,6 @@ pub(crate) struct NativeSourceRecoveryCompletion {
     source: Arc<AuthenticatedLaneAdmittedInputSourceV1>,
 }
 impl NativeSourceRecoveryCompletion {
-    /// Exact applying subject whose original source response completed.
-    pub(crate) fn subject(&self) -> wire::BlockSubject {
-        self.subject
-    }
     /// Equality of the retained source allocation and exact applying occurrence.
     pub(crate) fn matches(
         &self,
@@ -903,7 +899,7 @@ impl V2ApplyService {
     }
 
     /// Keep the original publication beside a dedicated lifecycle Apply completion.
-    pub(crate) fn execute_retained_lifecycle_apply(
+    pub(in crate::sumeragi) fn execute_retained_lifecycle_apply(
         &self,
         context: &wire::HeightContext,
         body_store: &mut V2BodyStore,

@@ -375,6 +375,8 @@ pub(crate) fn check_production_in_flight_first_release_observe_replica_queue_rel
     )
 }
 /// Derive, check, and witness `FanoutFromProducer`.
+// TODO: connect the checked producer fanout to the native lane transport path.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native lane transport"))]
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_fanout_from_producer_transition(
     before: ProductionInFlightFirstReleaseStateProjection,
@@ -387,6 +389,8 @@ pub(crate) fn check_production_in_flight_first_release_fanout_from_producer_tran
     )
 }
 /// Derive, check, and witness `ServeLateBody`.
+// TODO: connect checked late-body service to the native lane transport path.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native lane transport"))]
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_serve_late_body_transition(
     before: ProductionInFlightFirstReleaseStateProjection,

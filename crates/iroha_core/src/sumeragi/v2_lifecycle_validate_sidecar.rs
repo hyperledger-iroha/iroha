@@ -4,7 +4,7 @@ use super::{
     CapacityClass, CausalRoot, LifecycleContext, LifecycleCoordinator, LifecycleDigest,
     LifecycleKey, LifecycleStage, LifecycleStageKind, LifecycleState,
     LifecycleValidateDispatchKeyV1, LifecycleWorkClass, OwnerId, PhysicalSlotId, PredecessorScope,
-    ReadyEvent, ReadyValidateSuccessorV1, TerminalOutcome, WaitSource, WaitToken,
+    ReadyEvent, TerminalOutcome, WaitSource, WaitToken,
     concrete_admission::LifecycleWorkRegistryHolder,
     ledger::{LifecycleLedgerError, LifecycleLedgerStoreV1},
 };
@@ -123,13 +123,15 @@ pub(in crate::sumeragi) enum LifecycleValidateSidecarRegistrationErrorV1 {
     Persistence(String),
     /// Sidecar transport rejected or could not service the exact registration.
     #[error("Validate sidecar registration service failed: {0}")]
+    // TODO: exercise this failure after native sidecar registration is live.
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: native runner cutover"))]
     Service(String),
 }
 
 /// Exact executor cleanup authority minted after an unwoken sidecar wait is
 /// durably cancelled.
 ///
-/// This is deliberately distinct from a [`ReadyValidateSuccessorV1`]. A
+/// This is deliberately distinct from a [`super::ReadyValidateSuccessorV1`]. A
 /// missing-sidecar Validate has not published or woken its same-address
 /// successor, so no preliminary retransmit owner exists yet. The sealed round,
 /// subject, and dispatch key let the executor retire only the ordinal-bound

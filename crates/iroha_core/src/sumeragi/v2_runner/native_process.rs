@@ -259,14 +259,6 @@ impl NativeRunnerProcess {
             .map_err(V2RunnerError::Service)
     }
 
-    /// Inspect retained transport custody without completing or replacing an output.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn retained_transport_outputs_for_test(
-        &self,
-    ) -> Vec<(Arc<super::super::message::BlockMessageWire>, Vec<PeerId>)> {
-        self.transport.retained_outputs_for_test()
-    }
-
     /// Native and exact historical responses continue while global Validate waits.
     pub(in crate::sumeragi) fn service_native_ingress(
         &mut self,
@@ -309,13 +301,6 @@ impl NativeRunnerProcess {
         self.source
             .as_ref()
             .is_some_and(|source| source.admits(message))
-    }
-
-    pub(in crate::sumeragi) fn matches_output_guard(
-        &self,
-        guard: &Arc<ConsensusOutputGuard>,
-    ) -> bool {
-        Arc::ptr_eq(&self.guard, guard)
     }
 
     pub(in crate::sumeragi) fn accept_source_response(
@@ -736,7 +721,7 @@ mod pending_ingress_rollover_tests {
     #[test]
     fn native_prepared_capacity_retry_survives_global_cut_and_rebind_then_advances() {
         let now = Instant::now();
-        let (state, keys) = crate::state::native_dispatch_state_fixture();
+        let (state, keys) = crate::state::State::native_dispatch_source_fixture_for_test();
         let state_before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
         let observed = state.verified_lane_consensus_contexts().unwrap().unwrap();
         let lane = &observed.contexts()[0];

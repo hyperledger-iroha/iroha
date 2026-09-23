@@ -208,7 +208,7 @@ fn private_settlement_authority_rejects_validator_only_state_authority() {
             &authority,
         )
         .is_err(),
-        "private settlement must not inherit the transparent participant-lane Validator fallback"
+        "private settlement must reject Validator-only participant authority"
     );
 }
 
