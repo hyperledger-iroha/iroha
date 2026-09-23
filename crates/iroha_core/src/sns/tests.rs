@@ -1536,7 +1536,6 @@ fn register_name_accepts_underscore_account_alias_labels() {
 fn sns_state_block_does_not_advance_transaction_height() {
     use iroha_data_model::block::BlockHeader;
     use nonzero_ext::nonzero;
-    use std::collections::HashSet;
     let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -1576,10 +1575,7 @@ fn sns_state_block_does_not_advance_transaction_height() {
         tx.apply();
     }
     block
-        .transactions
-        .insert_block(HashSet::new(), nonzero!(1_usize));
-    block
-        .commit()
+        .commit_empty_block_for_testing()
         .expect("real block commit after SNS mutation should succeed");
     assert_eq!(state.transactions_latest_height_for_testing(), 1);
 }

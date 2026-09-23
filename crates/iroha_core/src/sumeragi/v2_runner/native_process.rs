@@ -8,7 +8,7 @@ use super::*;
 use crate::sumeragi::{
     v2::VerifiedHeightContext,
     v2_lane_driver::{NativeLaneDecisionHandoff, NativeLaneDriver, NativeLaneDriverLimits},
-    v2_lane_instance::{LaneOutbound, LanePhysicalShutdown, LaneProcessLimits},
+    v2_lane_instance::{LaneCurrentGate, LaneOutbound, LanePhysicalShutdown, LaneProcessLimits},
     v2_lane_transport::{
         NativeDecisionTransportAdmission, NativeLaneTransport, NativeTransportAdmission,
         NativeTransportProgress,
@@ -26,6 +26,9 @@ pub(in crate::sumeragi) struct NativeRunnerProcess {
     pub(super) key: KeyPair,
     retransmit: Duration,
     source: Option<NativeSourceRequest>,
+    // Scheduling only: a turn lacking current State uses the existing IDLE_POLL
+    // wake instead of exposing expired clocks it could not service.
+    awaiting_current_observation: bool,
     pub(super) candidate_job: Option<super::native_candidate::NativeCandidateJob>,
     pub(super) candidate_result: Option<super::native_candidate::NativeCandidateResult>,
     pub(super) candidate_source:
@@ -104,6 +107,7 @@ impl NativeRunnerProcess {
             key,
             retransmit,
             source: None,
+            awaiting_current_observation: true,
             candidate_job: None,
             candidate_result: None,
             candidate_source: None,
@@ -136,12 +140,21 @@ impl NativeRunnerProcess {
             .state
             .verified_lane_consensus_contexts()
             .map_err(V2RunnerError::Service)?;
+        self.note_current_observation(observed.as_ref());
         if let Some(observed) = observed.as_ref() {
             self.service_ready_output(observed, global, network)?;
         }
         self.service_native_ingress(receiver)?;
-        if let Some(source) = self.source.as_mut() {
-            source.poll(network, &self.guard, now, self.retransmit)?;
+        let source_gate = NativeSourceRequest::retire_closed_instance(
+            &mut self.source,
+            self.driver.process(),
+            observed.as_ref(),
+        );
+        self.awaiting_current_observation |= source_gate == LaneCurrentGate::ObservationChanged;
+        if source_gate != LaneCurrentGate::ObservationChanged {
+            if let Some(source) = self.source.as_mut() {
+                source.poll(network, &self.guard, now, self.retransmit)?;
+            }
         }
         if let Some(prepared) = self.pending_ingress.take() {
             self.consume_native_ingress(prepared, receiver)?;
@@ -156,8 +169,13 @@ impl NativeRunnerProcess {
                 .any(|lane| lane.frozen().admitted_binding_hash == *binding)
         });
         self.driver
+            .prepare_one_retirement()
+            .map_err(V2RunnerError::Service)?;
+        self.driver
             .poll(&observed, now)
             .map_err(V2RunnerError::Service)?;
+        self.note_current_observation(Some(&observed));
+        self.awaiting_current_observation |= source_gate == LaneCurrentGate::ObservationChanged;
         if self.relay_context != Some(global.context().id()) {
             self.relayed.clear();
             self.relay_context = Some(global.context().id());
@@ -319,6 +337,34 @@ impl NativeRunnerProcess {
         services: &mut ProductionV2Services,
         now: Instant,
     ) -> Result<(), V2RunnerError> {
+        // Authentication is needed only for an actual instance source need.
+        // The common no-source turn must not repeat Kura/State observation work.
+        let needs_current =
+            self.source
+                .as_ref()
+                .is_some_and(NativeSourceRequest::targets_instance)
+                || self.driver.process().instance_ids().any(|id| {
+                    self.driver.process().is_productive(id)
+                        && self.driver.process().instance(id).is_some_and(|instance| {
+                            instance.source_recovery_requirement().is_some()
+                        })
+                });
+        let observed = if needs_current {
+            self.state
+                .verified_lane_consensus_contexts()
+                .map_err(V2RunnerError::Service)?
+        } else {
+            None
+        };
+        if NativeSourceRequest::retire_closed_instance(
+            &mut self.source,
+            self.driver.process(),
+            observed.as_ref(),
+        ) == LaneCurrentGate::ObservationChanged
+        {
+            self.awaiting_current_observation = true;
+            return Ok(());
+        }
         if let Some(mut source) = self.source.take() {
             match source.settle(&mut self.driver, services, &mut self.recovered_sources) {
                 Ok(true) => {}
@@ -333,14 +379,23 @@ impl NativeRunnerProcess {
             return Ok(());
         }
         let need = if let Some((subject, _, source)) = services.native_source_requirement() {
-            Some((source, NativeSourceTarget::Validation(subject)))
+            Some((source, NativeSourceTarget::Validation(Box::new(subject))))
         } else {
             self.driver.process().instance_ids().find_map(|id| {
+                let target = self
+                    .driver
+                    .process()
+                    .source_recovery_target(id, observed.as_ref()?)?;
                 self.driver
                     .process()
                     .instance(id)
                     .and_then(|instance| instance.source_recovery_requirement())
-                    .map(|source| (Arc::new(source.clone()), NativeSourceTarget::Instance(id)))
+                    .map(|source| {
+                        (
+                            Arc::new(source.clone()),
+                            NativeSourceTarget::Instance(target),
+                        )
+                    })
             })
         }
         .or_else(|| {
@@ -493,7 +548,15 @@ impl NativeRunnerProcess {
         &mut self.driver
     }
 
+    fn note_current_observation(&mut self, observed: Option<&crate::state::VerifiedLaneContexts>) {
+        self.awaiting_current_observation =
+            observed.is_none_or(|observed| !observed.is_current(&self.state));
+    }
+
     pub(in crate::sumeragi) fn next_deadline(&self) -> Option<Instant> {
+        if self.awaiting_current_observation {
+            return None;
+        }
         self.driver
             .next_deadline()
             .into_iter()
@@ -503,6 +566,54 @@ impl NativeRunnerProcess {
                     .and_then(NativeSourceRequest::next_deadline),
             )
             .min()
+    }
+
+    #[cfg(all(test, feature = "bls"))]
+    pub(super) fn assert_observation_deadline_for_test(
+        state: Arc<State>,
+        source: NativeSourceRequest,
+        key: &KeyPair,
+        now: Instant,
+    ) {
+        let mut process = Self::new(
+            Arc::clone(&state),
+            ConsensusOutputGuard::isolated(),
+            PeerId::new(key.public_key().clone()),
+            key.clone(),
+            true,
+            &crate::sumeragi::v2::SumeragiV2Adapter::native_source_lifecycle_config_for_test(),
+            32 * 1024 * 1024,
+            Duration::from_secs(10),
+            Duration::from_secs(1),
+        )
+        .expect("actual Native process and bounded physical pools");
+        process.source = Some(source);
+        let observed = state.verified_lane_consensus_contexts().unwrap().unwrap();
+        process.note_current_observation(Some(&observed));
+        assert_eq!(
+            process.next_deadline(),
+            Some(now),
+            "the genuine request is already due"
+        );
+        for _ in 0..3 {
+            process.note_current_observation(None);
+            assert_eq!(
+                process.next_deadline(),
+                None,
+                "the runner must use its bounded IDLE_POLL fallback, not a zero-duration expired-source loop"
+            );
+            assert!(
+                process.source.is_some(),
+                "observation delay cannot consume the original request"
+            );
+        }
+        process.note_current_observation(Some(&observed));
+        assert_eq!(
+            process.next_deadline(),
+            Some(now),
+            "the same retry remains due when service resumes"
+        );
+        process.shutdown().join().unwrap();
     }
 
     /// Capture actual Decisions while all live reducer/Apply custody stays local.

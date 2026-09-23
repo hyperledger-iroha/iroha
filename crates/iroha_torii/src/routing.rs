@@ -69008,7 +69008,7 @@ routing_test! { sync collect_pending_public_lane_rewards_includes_unclaimed_epoc
     let pending = collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.get(&(lane_id, account.clone())), std::iter::empty(), rewards.iter()).unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].amount, Quantity::from(25_u64));
-    assert_eq!(pending[0].pending_through_epoch, 0);
+    assert_eq!(pending[0].latest_unprocessed_epoch, Some(0));
     assert_eq!(pending[0].processed_through_epoch, None);
     claims.insert((lane_id, account.clone()), iroha_data_model::nexus::PublicLaneRewardClaimStateV1 { through_epoch: Some(0) });
     assert!(collect_pending_public_lane_rewards(lane_id, &account, 0, None, claims.get(&(lane_id, account.clone())), std::iter::empty(), rewards.iter()).unwrap().is_empty());
@@ -69096,11 +69096,78 @@ routing_test! { sync collect_pending_public_lane_rewards_ignores_mismatched_rewa
     assert_eq!(&pending[0].account, &account);
     assert_eq!(&pending[0].asset, &asset);
     assert_eq!(pending[0].processed_through_epoch, Some(1));
-    assert_eq!(pending[0].pending_through_epoch, 5);
+    assert_eq!(pending[0].latest_unprocessed_epoch, Some(5));
     assert_eq!(
         &pending[0].amount,
         &iroha_primitives::numeric::Quantity::from(12_u32)
     );
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync collect_pending_public_lane_rewards_retains_processed_dust_by_exact_source
+    let account = AccountId::new(checked_routing_fixture_keypair(
+        0x7E, Algorithm::Ed25519, "derive retained reward recipient",
+    ).public_key().clone());
+    let other = AccountId::new(checked_routing_fixture_keypair(
+        0x7F, Algorithm::Ed25519, "derive second reward custody source",
+    ).public_key().clone());
+    let lane_id = LaneId::new(19);
+    let definition = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bd");
+    let first_source = AssetId::new(definition.clone(), account.clone());
+    let second_source = AssetId::new(definition, other.clone());
+    let claims = BTreeMap::from([(
+        (lane_id, account.clone()),
+        iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(100),
+        },
+    )]);
+    let mut accruals = BTreeMap::from([
+        ((lane_id, account.clone(), first_source.clone()), Quantity::from(2_u32)),
+        ((lane_id, other, second_source.clone()), Quantity::from(99_u32)),
+    ]);
+    let reward = |epoch: u64, asset: AssetId, amount: u32| PublicLaneRewardRecord {
+        lane_id,
+        epoch,
+        asset,
+        total_reward: Quantity::from(amount),
+        shares: vec![PublicLaneRewardShare {
+            account: account.clone(),
+            role: PublicLaneRewardRole::Nominator,
+            amount: Quantity::from(amount),
+        }],
+        metadata: Metadata::default(),
+    };
+    let rewards = BTreeMap::from([
+        ((lane_id, 0), reward(0, first_source.clone(), 11)),
+        ((lane_id, 101), reward(101, first_source.clone(), 7)),
+        ((lane_id, 102), reward(102, second_source.clone(), 3)),
+    ]);
+    let pending = collect_pending_public_lane_rewards(
+        lane_id, &account, 101, None, claims.get(&(lane_id, account.clone())), accruals.iter(), rewards.iter(),
+    ).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].asset, first_source);
+    assert_eq!(pending[0].processed_through_epoch, Some(100));
+    assert_eq!(pending[0].latest_unprocessed_epoch, Some(101));
+    assert_eq!(pending[0].amount, Quantity::from(9_u32));
+    let dust_only = collect_pending_public_lane_rewards(
+        lane_id, &account, 100, None, claims.get(&(lane_id, account.clone())), accruals.iter(), rewards.iter(),
+    ).unwrap();
+    assert_eq!(dust_only.len(), 1);
+    assert_eq!(dust_only[0].amount, Quantity::from(2_u32));
+    assert_eq!(dust_only[0].processed_through_epoch, Some(100));
+    assert_eq!(dust_only[0].latest_unprocessed_epoch, None);
+    let filtered = collect_pending_public_lane_rewards(
+        lane_id, &account, 102, Some(&second_source), claims.get(&(lane_id, account.clone())), accruals.iter(), rewards.iter(),
+    ).unwrap();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].asset, second_source);
+    assert_eq!(filtered[0].amount, Quantity::from(3_u32));
+    assert_eq!(filtered[0].latest_unprocessed_epoch, Some(102));
+    accruals.remove(&(lane_id, account.clone(), first_source));
+    let paid = collect_pending_public_lane_rewards(
+        lane_id, &account, 100, None, claims.get(&(lane_id, account.clone())), accruals.iter(), rewards.iter(),
+    ).unwrap();
+    assert!(paid.is_empty(), "a paid source must not remain pending");
 }
 #[cfg(all(test, feature = "app_api"))]
 async fn public_lane_items_payload(response: Response) -> Value {
@@ -69398,15 +69465,15 @@ fn pending_reward_to_json(
     map.insert("asset".into(), Value::from(reward.asset.to_string()));
     map.insert(
         "processed_through_epoch".into(),
-        reward.processed_through_epoch.map(Value::from).unwrap_or(Value::Null),
+        reward.processed_through_epoch.map_or(Value::Null, Value::from),
     );
     map.insert(
-        "pending_through_epoch".into(),
-        Value::from(reward.pending_through_epoch),
+        "latest_unprocessed_epoch".into(),
+        reward.latest_unprocessed_epoch.map_or(Value::Null, Value::from),
     );
     map.insert("amount".into(), Value::from(reward.amount.to_string()));
     (
-        format!("{}#{}", reward.asset, reward.pending_through_epoch),
+        reward.asset.to_string(),
         Value::Object(map),
     )
 }

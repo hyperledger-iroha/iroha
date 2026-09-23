@@ -25728,7 +25728,7 @@ pub mod isi {
                         Error::InvalidParameter(InvalidParameterError::SmartContract(message))
                             if message.contains(expected)
                     ),
-                    "unexpected {label} error: {error}"
+                    "unexpected {label} error: {error:?}"
                 );
                 assert!(
                     stx.world
@@ -29512,7 +29512,10 @@ pub mod isi {
                 provisional_finality.finality_artifact.height_context.network_id,
             );
             let (fixture, finality) = store_exact_sccp_finality_for_test(&kura, &fixture);
-            assert_eq!(state.network_id_ref(), &finality.finality_artifact.height_context.network_id);
+            assert_eq!(
+                state.network_id_ref(),
+                &finality.finality_artifact.height_context.network_id
+            );
             let mut state_block = state.block(finality.block_header.clone());
             let exact_sender = exact_sccp_fixture_sender(&fixture);
             let exact_key = crate::bridge::test_sccp_outbound_message_key(&fixture.bundle.payload);

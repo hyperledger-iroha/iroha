@@ -15672,6 +15672,7 @@ impl Kura {
             if let Some(prepared) = prepared_retained_record.as_ref() {
                 self.persist_prepared_retained_block_record(&blocks_dir, canonical_hash, prepared)?;
             }
+            self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;
             self.publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(
                 height,
                 canonical_hash,
@@ -15733,6 +15734,7 @@ impl Kura {
                 return Err(Error::ConflictingV2FinalityArtifact { height });
             }
             self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;
+            self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;
             self.publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(
                 height,
                 canonical_hash,
@@ -15750,6 +15752,52 @@ impl Kura {
         )?;
         self.record_durable_v2_finality_telemetry(artifact);
         Ok(v2_commit_receipt(artifact))
+    }
+    // Caller holds the original prune and canonical-chain guards and has
+    // authenticated these exact record bytes. A previous writer may have
+    // renamed successfully and failed its later durability barrier; presence
+    // alone cannot grant the receipt. Keep the exact file and each ancestor
+    // open while repeating synchronization, then recheck their original identity.
+    fn resync_verified_v2_finality_record(
+        &self,
+        path: &Path,
+        directory: &Path,
+        verified: &StableSidecarRead,
+    ) -> Result<()> {
+        let namespace = self.open_bound_progress_namespace(path, path)?;
+        let file = Self::open_bound_progress_file(&namespace, path, &verified.metadata)?;
+        file.sync_all()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        Self::sync_bound_progress_intent_directories(&namespace)
+            .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+        let readback = self
+            .read_regular_sidecar_snapshot(path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)?
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "verified v2 finality disappeared during durability retry",
+                    ),
+                    path.to_path_buf(),
+                )
+            })?;
+        let opened = secure_file_metadata::from_file(&file)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        if readback.bytes != verified.bytes
+            || readback.bytes_hash != verified.bytes_hash
+            || !Self::stable_sidecar_file_binding_unchanged(&verified.metadata, &readback.metadata)
+            || !Self::sidecar_file_metadata_unchanged(&verified.metadata.file, &opened)
+            || !self.bound_progress_namespace_unchanged(&namespace)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "verified v2 finality changed during durability retry",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(())
     }
     fn decode_v2_finality_record_at(
         &self,
@@ -16212,6 +16260,25 @@ impl Kura {
         parliament_timed_ovn_casting_bindings: &[ParliamentTimedOvnCastingContextBindingV1],
     ) -> Result<()> {
         self.durable_mutation_authorized()?;
+        let staged = Self::prepare_kagemusha_finality_sidecar(
+            height,
+            block_hash,
+            witness,
+            expected,
+            parliament_timed_ovn_casting_bindings,
+        )?;
+        let _guard = self.sidecar_lock.lock();
+        self.stage_kagemusha_finality_sidecar_under_sidecar_guard(&staged)
+    }
+    /// Derive the complete proof projection before any durable namespace mutation.
+    /// Both standalone staging and the original joint publication lease use this core.
+    fn prepare_kagemusha_finality_sidecar(
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        witness: &ExecWitness,
+        expected: ExecutionCommitment,
+        parliament_timed_ovn_casting_bindings: &[ParliamentTimedOvnCastingContextBindingV1],
+    ) -> Result<StagedKagemushaFinalitySidecarV1> {
         let (validation_fee_policy_witness, validation_fee_root) =
             crate::receiver_snapshot::validation_fee_policy_witness_proof_v1(witness)
                 .map_err(Error::KagemushaFinalitySidecar)?;
@@ -16276,6 +16343,16 @@ impl Kura {
             parliament_timed_ovn_casting_bindings: parliament_timed_ovn_casting_bindings.to_vec(),
             kagemusha_reserve_receipts,
         };
+        Ok(staged)
+    }
+    /// Persist the exact projection while the caller owns this Kura's sidecar fence.
+    /// No publication mutex is reacquired; all no-clobber, readback and accounting
+    /// obligations remain with the same writer used by standalone staging.
+    fn stage_kagemusha_finality_sidecar_under_sidecar_guard(
+        &self,
+        staged: &StagedKagemushaFinalitySidecarV1,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
         let bytes = staged.encode();
         if bytes.len() > MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES {
             return Err(Error::KagemushaFinalitySidecarTooLarge {
@@ -16283,15 +16360,14 @@ impl Kura {
                 max: MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES,
             });
         }
-        let _guard = self.sidecar_lock.lock();
         let directory = self.kagemusha_finality_staging_dir();
         create_dir_all_with_context(&directory)?;
         if let Some(parent) = directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
-        let path = self.kagemusha_finality_staging_path(height);
+        let path = self.kagemusha_finality_staging_path(staged.height);
         if let Some((existing, identity)) = self.decode_staged_kagemusha_finality(&path)? {
-            if existing == staged
+            if &existing == staged
                 && identity.bytes == bytes
                 && identity.bytes_hash == Hash::new(&bytes)
             {
@@ -16310,7 +16386,7 @@ impl Kura {
                     "staged Kagemusha V1 sidecar disappeared during publication".to_owned(),
                 ));
             };
-            if existing != staged {
+            if &existing != staged {
                 return Err(Error::KagemushaFinalitySidecar(
                     "no-clobber race published a conflicting Kagemusha V1 stage".to_owned(),
                 ));
@@ -16321,7 +16397,7 @@ impl Kura {
                 "staged Kagemusha V1 sidecar disappeared after publication".to_owned(),
             ));
         };
-        if persisted != staged
+        if &persisted != staged
             || identity.bytes != bytes
             || identity.bytes_hash != Hash::new(&bytes)
         {
@@ -16354,12 +16430,13 @@ impl Kura {
         resource_mutation.finish_resources_before_disk_rescan();
         Ok(())
     }
-    pub(crate) fn promote_kagemusha_finality_sidecar(
+    /// Join every receipt field and the actual durable artifact under the caller's
+    /// original prune/canonical fences before any stage or promotion mutation.
+    fn authenticate_kagemusha_finality_receipt_under_publication_guards(
         &self,
         artifact: &V2FinalityArtifact,
         receipt: &KuraV2CommitReceipt,
     ) -> Result<()> {
-        self.durable_mutation_authorized()?;
         if receipt.height != artifact.height
             || receipt.block_hash != artifact.block_hash
             || receipt.context_id != artifact.context_id()
@@ -16371,17 +16448,30 @@ impl Kura {
                 "finality receipt does not identify the Kagemusha V1 artifact".to_owned(),
             ));
         }
-        let durable = self.v2_finality_artifact(artifact.height)?.ok_or_else(|| {
-            Error::KagemushaFinalitySidecar(
-                "Kagemusha V1 promotion has no durable finality artifact".to_owned(),
-            )
-        })?;
+        let durable = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(artifact.height)?
+            .map(|(_, artifact, _)| artifact)
+            .ok_or_else(|| {
+                Error::KagemushaFinalitySidecar(
+                    "Kagemusha V1 promotion has no durable finality artifact".to_owned(),
+                )
+            })?;
         if durable != *artifact || HashOf::new(&durable) != receipt.artifact_hash {
             return Err(Error::KagemushaFinalitySidecar(
                 "durable finality differs from Kagemusha V1 promotion receipt".to_owned(),
             ));
         }
-        let _guard = self.sidecar_lock.lock();
+        Ok(())
+    }
+    /// Promote only after receipt authentication under the enclosing original
+    /// prune/canonical guards; this caller also retains the sidecar fence.
+    /// These guards stay held through final readback and exact stage retirement.
+    fn promote_kagemusha_finality_sidecar_under_sidecar_guard(
+        &self,
+        artifact: &V2FinalityArtifact,
+        receipt: &KuraV2CommitReceipt,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
         let final_path = self.kagemusha_finality_sidecar_path(artifact.height);
         let staged_path = self.kagemusha_finality_staging_path(artifact.height);
         if let Some((existing, _)) = self.decode_kagemusha_finality_sidecar(&final_path)? {
@@ -17231,9 +17321,10 @@ impl Kura {
     }
     /// Persist the durable commit manifest for a committed block height.
     ///
-    /// Manifests are written after the block body is durable and WSV commit succeeds. They are the
-    /// mandatory replay-integrity join point between Kura's canonical block log, the memory-only
-    /// WSV surface, and authenticated v2 finality. Only the sole interrupted pending tip may lack
+    /// Manifests are written after the block body and original captured WSV checkpoint are
+    /// durable, before finality grants restart commit authority or live State is published.
+    /// They join Kura's canonical block log, the memory-only WSV surface and authenticated
+    /// v2 finality for mandatory replay integrity. Only the sole interrupted pending tip may lack
     /// one until startup completes it; authenticated hash-only snapshot prefixes are exempt.
     ///
     /// # Errors
@@ -17264,6 +17355,7 @@ impl Kura {
         let dir = self.commit_manifest_dir();
         create_dir_all_with_context(&dir)?;
         let path = self.commit_manifest_path(manifest.height);
+        let namespace = self.open_bound_progress_namespace(&path, &path)?;
         let tmp_path = path.with_extension("norito.tmp");
         let bytes = manifest.encode();
         Self::ensure_sidecar_encoding_within_limit(
@@ -17284,7 +17376,20 @@ impl Kura {
             file.sync_data()
         })?;
         std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
-        sync_dir(&dir).map_err(|err| Error::IO(err, dir.clone()))?;
+        // The newly created manifest directory itself must survive before the
+        // checkpoint can name it. A later finality writer cannot close this
+        // pre-finality crash window on our behalf.
+        Self::sync_bound_progress_intent_directories(&namespace)
+            .map_err(|error| Error::IO(error, dir.clone()))?;
+        if !self.bound_progress_namespace_unchanged(&namespace) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "commit manifest namespace changed during durability publication",
+                ),
+                dir,
+            ));
+        }
         // Publish the external checkpoint binding only after the complete manifest is durable.
         // Recovery can therefore trust a matching digest without ever observing a checkpoint that
         // points at absent or partially promoted manifest bytes.

@@ -1652,6 +1652,40 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(lane_registrations.len(), LANE_VALIDATOR_COUNT);
+        for registration in &lane_registrations {
+            assert_eq!(
+                registration.monetary_plan.network_scope,
+                iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Genesis
+            );
+            assert_eq!(registration.monetary_plan.valid_until_height, 1);
+            assert_eq!(
+                registration.monetary_plan.source_asset,
+                iroha_data_model::asset::AssetId::new(
+                    stake_asset_definition_id(),
+                    registration.validator.clone()
+                )
+            );
+            assert_eq!(
+                registration.monetary_plan.destination_asset,
+                iroha_data_model::asset::AssetId::new(
+                    stake_asset_definition_id(),
+                    routing_probe_gas_account_id()
+                )
+            );
+            assert_eq!(
+                registration.monetary_plan.amount,
+                registration.initial_stake
+            );
+            assert_eq!(
+                registration.monetary_plan.precondition,
+                iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                    iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
+                        activation_height: 1
+                    }
+                )
+            );
+        }
+
         assert!(
             lane_registrations
                 .iter()

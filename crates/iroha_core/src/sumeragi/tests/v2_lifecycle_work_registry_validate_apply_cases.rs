@@ -2363,6 +2363,7 @@ fn ready_validate_apply_actor_global_child_fixture(
     assert_eq!(planner_io.queued_lifecycle_decision_apply_count(), 1);
     assert_eq!(executor.status().pending_applications, 0);
 
+    planner_io.retry_lifecycle_apply_after_physical_release_for_test(&mut services);
     planner_io.execute_one_lifecycle_decision_apply_fixture(std::sync::Arc::clone(&output_guard));
     let completion = match services
         .take_next_lifecycle_completion()
@@ -2771,6 +2772,7 @@ fn recovered_decision_apply_validate_retry_retirement_fixture() {
             ordinal: apply_ordinal,
         }
     );
+    planner_io.retry_lifecycle_apply_after_physical_release_for_test(&mut services);
     planner_io.execute_one_lifecycle_decision_apply_fixture(std::sync::Arc::clone(&output_guard));
     let completion = match services
         .take_next_lifecycle_completion()
@@ -3285,7 +3287,8 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
             .into_lineage_for_test(LifecycleDecisionApplyLineageV1::Recovered, live_tag);
     let live_deferred = crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1::Deferred {
         refusal: crate::sumeragi::v2_body_store::LocalValidationRefusal::RecoveryRequired(
-            "lineage substitution must be rejected before a local recovery refusal is consumed".to_owned(),
+            "lineage substitution must be rejected before a local recovery refusal is consumed"
+                .to_owned(),
         ),
         task: live_deferred_task,
     };
@@ -3334,7 +3337,8 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
     let recovered_deferred =
         crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1::Deferred {
             refusal: crate::sumeragi::v2_body_store::LocalValidationRefusal::RecoveryRequired(
-                "lineage substitution must be rejected before a local recovery refusal is consumed".to_owned(),
+                "lineage substitution must be rejected before a local recovery refusal is consumed"
+                    .to_owned(),
             ),
             task: recovered_deferred_task,
         };

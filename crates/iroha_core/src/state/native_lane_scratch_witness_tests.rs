@@ -23,6 +23,16 @@ fn native_scratch_due_unlock_fixture() -> Box<NativeEconomicFixture> {
                     .public_key()
                     .clone(),
             );
+            let slash_receiver = AccountId::new(
+                KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519)
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+            );
+            let (id, account) = Account::new(slash_receiver.clone())
+                .build(&owner)
+                .into_key_value();
+            world.accounts.insert(id, account);
             let definition = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("native-economics", "universal").unwrap(),
                 "coin".parse().unwrap(),
@@ -44,16 +54,37 @@ fn native_scratch_due_unlock_fixture() -> Box<NativeEconomicFixture> {
                     slashed: Quantity::zero(),
                     expiry_height: 6,
                     direction: 0,
-                    duration_blocks: 0,
+                    duration_blocks: 1,
                     custody: GovernanceLockCustody {
                         escrowed: true,
-                        asset_definition_id: definition,
-                        bond_escrow_account: escrow,
-                        slash_receiver_account: owner,
+                        asset_definition_id: definition.clone(),
+                        bond_escrow_account: escrow.clone(),
+                        slash_receiver_account: slash_receiver.clone(),
                     },
                 },
             );
+            let mut governance = iroha_config::parameters::actual::Governance::default();
+            governance.voting_asset_id = definition;
+            governance.bond_escrow_account = escrow;
+            governance.slash_receiver_account = slash_receiver;
+            governance.min_bond_amount = Quantity::from(10u32);
+            governance.conviction_step_blocks = 1;
             let mut block = world.block();
+            block.governance_referenda.insert(
+                NATIVE_SCRATCH_UNLOCK.into(),
+                GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 5,
+                    status: GovernanceReferendumStatus::Open,
+                    mode: GovernanceReferendumMode::Plain,
+                    plain_context: crate::query::standalone_plain_test_fixture::context(
+                        &governance,
+                        0,
+                    ),
+                    plain_result:
+                        iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
+                },
+            );
             block.put_governance_locks(NATIVE_SCRATCH_UNLOCK.into(), locks);
             block.commit();
         },

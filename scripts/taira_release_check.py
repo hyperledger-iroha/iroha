@@ -49,9 +49,11 @@ Configuration and compiler paths match authenticated preparation, while source
 remains the mutable checkout. These checks never qualify release artifacts and
 accept no live configuration, credentials, SSH, deployment or signing inputs.
 Repeat --focus-regression HARNESS=EXACT_TEST for prequalification: metadata-check
-and compile only explicitly selected harnesses. Selected portable MV/Concread
-controls run first in a separate diagnostic Cargo graph. Configuration and the
-remaining targets build afterward in the same warm lane; configuration must pass
+and compile selected harnesses. Core focus also compiles data-model to retain the
+shared Core/data-model Cargo feature graph across focused reruns; it executes no
+unrequested data-model tests. Selected portable MV/Concread controls run first in
+a separate diagnostic Cargo graph. Configuration and the remaining targets build
+afterward in the same warm lane; configuration must pass
 before nonportable tests and overall success. Unselected harnesses wait for
 immutable preparation, whose complete compile graph is unchanged. Selected Pending
 Kura recovery runs immediately after configuration and must pass before the
@@ -1078,6 +1080,35 @@ CORE_ADMISSION_STARTUP_STAGES += CORE_PENDING_KURA_RECOVERY_STAGES
 CORE_ADMISSION_STARTUP_STAGES += (("typed State status contention and integrity boundary", (
     'state::telemetry_status::tests::status_source_busy_is_distinct_from_changed_or_invalid_journal',
 )), )
+
+
+CORE_REWARD_ACCOUNTING_STAGES = (("retained reward cursors, unpaid custody and reserve accounting", (
+    'smartcontracts::isi::domain::tests::unregister_account_rejects_retained_reward_processing_cursor',
+    'smartcontracts::isi::domain::tests::unregister_account_rejects_when_account_is_reward_claim_asset_owner',
+    'smartcontracts::isi::domain::tests::unregister_asset_definition_ignores_mismatched_public_lane_reward_record',
+    'smartcontracts::isi::multisig::tests::rekey_public_lane_reward_cursors_and_unpaid_sources_preserve_scope_and_quantity',
+    'smartcontracts::isi::staking::rewards::tests::outstanding_rewards_retains_processed_dust_in_its_exact_source',
+    'smartcontracts::isi::staking::tests::reward_epoch_zero_is_claimable_once',
+    'smartcontracts::isi::staking::tests::reward_dust_accumulates_until_paid',
+    'smartcontracts::isi::staking::tests::reward_reserve_blocks_transfer_and_burn_but_releases_paid_rewards',
+    'smartcontracts::isi::staking::tests::reward_failed_payment_restores_claim_and_reserve',
+    'smartcontracts::isi::staking::tests::reward_obligation_audit_rejects_corrupt_record_keys',
+    'smartcontracts::isi::staking::tests::reward_claim_uses_recorded_custody_after_fee_policy_changes',
+    'smartcontracts::isi::staking::tests::reward_recording_excludes_bonded_custody_from_a_shared_fee_sink',
+    'smartcontracts::isi::staking::tests::reward_failed_second_asset_rolls_back_the_enclosing_transaction',
+    'smartcontracts::isi::staking::tests::claim_rewards_transfers_and_marks_epoch',
+    'smartcontracts::isi::staking::tests::claim_rewards_defers_dust_without_marking_paid',
+    'smartcontracts::isi::staking::tests::claim_rewards_rejects_mismatched_reward_record_rows_without_releasing_reserves',
+    'smartcontracts::isi::staking::tests::claim_rewards_accepts_i105_fee_sink',
+    'smartcontracts::isi::staking::tests::staking_custody_and_rewards_share_one_additive_reserve_floor',
+)), )
+CORE_ADMISSION_STARTUP_STAGES += CORE_REWARD_ACCOUNTING_STAGES
+
+CORE_MONETARY_AUTHORITY_STAGES = (("exact signed staking and reward monetary authority", (
+    'smartcontracts::isi::staking::tests::registration_rejects_changed_signed_monetary_fields_without_custody_writes',
+    'smartcontracts::isi::staking::tests::reward_claim_rejects_changed_record_source_and_entitlement_without_payment',
+)), )
+CORE_ADMISSION_STARTUP_STAGES += CORE_MONETARY_AUTHORITY_STAGES
 
 
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
@@ -2207,7 +2238,7 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::lifecycle_effect_refusal_precedes_storage_and_preserves_exact_retry',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_capture_reservation_survives_physical_refusal_and_exact_retry',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::changed_world_predecessor_releases_all_earlier_families_without_rebinding',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::actual_validation_overlay_defers_at_hash_before_taking_its_world_writers',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::actual_validation_overlay_releases_hash_before_retaining_membership_writers',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::identical_foreign_state_cannot_replace_the_original_physical_owners',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_reservation_outlives_component_writers_and_state_fences_on_drop_and_abort',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_kura_contention_returns_exact_decided_carrier_and_release_driven_retry',
@@ -2700,9 +2731,15 @@ def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...
 
 def compile_test_harnesses(root: Path, env: dict[str, str], *,
                           harnesses: tuple[str, ...],
-                          lock_fds: tuple[int, ...] = ()) -> NativeArtifactCopies:
+                          lock_fds: tuple[int, ...] = (),
+                          normal_core_library_probe: bool = False) -> NativeArtifactCopies:
     """Build selected library, integration and binary tests with one feature graph."""
-    command = _compile_command(root, env, native_harness_selection(harnesses))
+    selection = native_harness_selection(harnesses)
+    if normal_core_library_probe and "core" not in harnesses:
+        raise CheckError("normal Core library metadata probe requires the Core harness")
+    feature_selection = (["--features", CORE_NORMAL_LIBRARY_PROBE_FEATURE]
+                         if normal_core_library_probe else [])
+    command = _compile_command(root, env, [*selection, *feature_selection])
     return _build_harnesses(root, command, env, harnesses, lock_fds)
 
 
@@ -2824,24 +2861,44 @@ def native_harness_selection(harnesses: tuple[str, ...]) -> list[str]:
     return [*selection, *targets]
 
 
+CORE_NORMAL_LIBRARY_PROBE_EXAMPLE = "race_prover"
+CORE_NORMAL_LIBRARY_PROBE_FEATURE = "iroha_core/iroha-core-tests"
+CORE_NORMAL_LIBRARY_PROBE_FEATURE_NAME = "iroha-core-tests"
+
+
 def check_test_harnesses(root: Path, env: dict[str, str], *,
-                        harnesses: tuple[str, ...], lock_fds: tuple[int, ...] = ()) -> None:
-    """Check the selected test graph before codegen; never produce qualification.
+                        harnesses: tuple[str, ...], lock_fds: tuple[int, ...] = (),
+                        normal_core_library_probe: bool = False) -> None:
+    """Check selected test targets, optionally including the normal Core library.
 
     Stable Cargo's --profile test enables cfg(test) for the explicit lib/bin/test
-    targets. --tests would broaden the selection to unrelated integration tests.
-    Reuse the caller's coordinated target, toolchain, features and jobserver.
+    targets. A Core-only --lib check does not compile the non-test Core library;
+    the existing featureless Core example imports it in this same Cargo graph.
+    Match the CLI test graph's Core fixture feature in both metadata and codegen
+    so production code guarded by that feature cannot escape Core-only focus.
+    --tests would broaden the selection to unrelated integration tests. Reuse
+    the caller's coordinated target, toolchain, features and jobserver.
     Build scripts and procedural macros can still require host code generation.
     """
     selection = native_harness_selection(harnesses)
+    if normal_core_library_probe and "core" not in harnesses:
+        raise CheckError("normal Core library metadata probe requires the Core harness")
+    probe_selection = (["--example", CORE_NORMAL_LIBRARY_PROBE_EXAMPLE]
+                       if normal_core_library_probe else [])
+    feature_selection = (["--features", CORE_NORMAL_LIBRARY_PROBE_FEATURE]
+                         if normal_core_library_probe else [])
     command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "check",
                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
-               *selection, "--profile", "test", "--message-format=json-render-diagnostics"]
+               *selection, *probe_selection, *feature_selection,
+               "--profile", "test", "--message-format=json-render-diagnostics"]
     progress = CargoBuildProgress("test metadata", {
         (HARNESS_TARGETS[harness][2], HARNESS_TARGETS[harness][1]) for harness in harnesses
     }, test_profile=True)
     started = time.monotonic()
     observed = set()
+    observed_normal_core_library = False
+    observed_featured_normal_core_library = False
+    observed_probe_example = False
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds,
                           umask=0o077) as child, progress.heartbeat():
@@ -2853,13 +2910,28 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if (not isinstance(event, dict) or event.get("reason") != "compiler-artifact"
-                    or event.get("profile", {}).get("test") is not True):
+            if not isinstance(event, dict) or event.get("reason") != "compiler-artifact":
                 continue
-            target = event.get("target", {})
+            target, profile = event.get("target"), event.get("profile")
+            if not isinstance(target, dict) or not isinstance(profile, dict):
+                continue
+            kinds = target.get("kind")
+            if not isinstance(kinds, list):
+                continue
+            if normal_core_library_probe and profile.get("test") is False:
+                if target.get("name") == "iroha_core" and "lib" in kinds:
+                    observed_normal_core_library = True
+                    features = event.get("features")
+                    if (isinstance(features, list)
+                            and CORE_NORMAL_LIBRARY_PROBE_FEATURE_NAME in features):
+                        observed_featured_normal_core_library = True
+                if target.get("name") == CORE_NORMAL_LIBRARY_PROBE_EXAMPLE and "example" in kinds:
+                    observed_probe_example = True
+            if profile.get("test") is not True:
+                continue
             for harness in harnesses:
                 _, name, kind, _ = HARNESS_TARGETS[harness]
-                if target.get("name") == name and kind in target.get("kind", []):
+                if target.get("name") == name and kind in kinds:
                     observed.add(harness)
         code = child.wait()
     elapsed = time.monotonic() - started
@@ -2869,8 +2941,16 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
     missing = [harness for harness in harnesses if harness not in observed]
     if missing:
         raise CheckError("native test metadata check omitted selected test targets: " + ", ".join(missing))
+    if normal_core_library_probe:
+        if not observed_normal_core_library:
+            raise CheckError("native test metadata check omitted normal Core library")
+        if not observed_featured_normal_core_library:
+            raise CheckError("normal Core library omitted fixture feature")
+        if not observed_probe_example:
+            raise CheckError("native test metadata check omitted Core library probe example")
     print(f"[taira-check] native test metadata check passed in {elapsed:.1f}s; "
-          "full harness compilation remains required", flush=True)
+          + ("normal Core library checked; " if normal_core_library_probe else "")
+          + "full harness compilation remains required", flush=True)
 
 
 def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
@@ -4285,11 +4365,14 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
     _, complete_selections, _ = native_harness_plan(scoped, shipping)
     if not set(focused).issubset(complete_selections):
         raise CheckError("focused regression lacks its selected native compile target")
-    # This mutable diagnostic cannot publish qualification evidence. Request only
-    # configuration and focused harnesses; Cargo can add implicit targets within
-    # their shared package graph. Prepare owns the complete qualification graph.
+    # This mutable diagnostic cannot publish qualification evidence. Keep the
+    # data-model package in Core's compile graph even when its tests are not
+    # requested: its default/test features otherwise change the shared Cargo
+    # feature union and rebuild Core's dependencies on every focus transition.
+    # Only focused tests execute. Prepare owns the complete qualification graph.
+    compile_only = {"data-model"} if "core" in focused else set()
     selections = tuple(name for name in complete_selections
-                       if name == "config" or name in focused)
+                       if name == "config" or name in focused or name in compile_only)
     selected_harness_count = len(selections)
     portable = tuple(name for name in selections if name in MV_OWNERSHIP_HARNESSES)
     selections = tuple(name for name in selections if name not in portable)
@@ -4320,9 +4403,15 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
     print("[taira-prequalify] remaining diagnostic Cargo graph: " + ", ".join(selections)
           + "; execute mandatory configuration before nonportable regressions", flush=True)
     source_unchanged("remaining test metadata")
-    check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
+    # CLI and network already depend on the normal Core library. A Core-only
+    # focus otherwise checks only cfg(test), which can hide production errors
+    # until a later combined graph. Probe it in this same metadata invocation.
+    normal_core_probe = "core" in focused and "cli" not in focused and "network" not in focused
+    probe_options = {"normal_core_library_probe": True} if normal_core_probe else {}
+    check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds, **probe_options)
     source_unchanged("remaining test codegen")
-    with compile_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds) as harnesses:
+    with compile_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds,
+                                **probe_options) as harnesses:
         # Configuration remains mandatory for final success and gates the
         # nonportable phase. Explicit focused config tests must not run twice.
         source_unchanged("mandatory configuration regressions")

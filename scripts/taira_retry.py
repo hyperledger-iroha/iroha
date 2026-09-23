@@ -2845,6 +2845,38 @@ def _continuity_checked_hash_body(value):
     return value[5:69].lower()
 
 
+def _continuity_mint_finality_peers(manifest):
+    """Read the sole first-release generation-zero authority in native order."""
+    mint = manifest.get("kagemusha_mint_finality")
+    _continuity_need(
+        isinstance(mint, dict) and set(mint) == {"authority_generation"},
+        "Genesis must contain only the first-release mint-finality authority",
+    )
+    authority = mint["authority_generation"]
+    _continuity_need(
+        isinstance(authority, dict)
+        and authority.get("version") == 1
+        and authority.get("generation") == 0
+        and isinstance(authority.get("validators"), list),
+        "Genesis must contain a generation-zero mint-finality authority",
+    )
+    rows = authority["validators"]
+    _continuity_need(len(rows) == 4, "Exact four native ordered peers required")
+    peers = []
+    for row in rows:
+        _continuity_need(
+            isinstance(row, dict)
+            and isinstance(row.get("validator"), str)
+            and bool(row["validator"]),
+            "Mint-finality validator identity is missing",
+        )
+        peers.append(row["validator"])
+    _continuity_need(
+        len(set(peers)) == 4, "Exact four distinct native ordered peers required"
+    )
+    return peers
+
+
 def _continuity_capture(args):
     _continuity_need(
         not os.path.lexists(CONTINUITY_OUT),
@@ -2870,14 +2902,7 @@ def _continuity_capture(args):
     manifest = _continuity_parse(
         CONTINUITY_PREP / "network/genesis.json", limit=32 * 1024 * 1024
     )
-    peers = [
-        item["validator"]
-        for item in manifest["kagemusha_mint_finality"]["authority_generation"]["validators"]
-    ]
-    _continuity_need(
-        len(peers) == 4 and len(set(peers)) == 4,
-        "Exact four native ordered peers required",
-    )
+    peers = _continuity_mint_finality_peers(manifest)
     renderer = _continuity_load_public_module(
         CONTINUITY_UNIT_RENDERER, CONTINUITY_RENDERER_SHA
     )

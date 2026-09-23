@@ -25,8 +25,7 @@ use iroha::{
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
         isi::{InstructionBox, Log, Register, register::RegisterBox},
         parameter::system::SumeragiNposParameters,
-        prelude::FindAccounts,
-        query::{dsl::IntoPredicate as _, prelude::QueryBuilderExt},
+        prelude::FindAccountIds,
         transaction::Executable,
     },
 };
@@ -4316,21 +4315,53 @@ async fn wait_for_held_quorum_evidence(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-/// Query one exact account without mistaking transport or authorization errors for absence.
-fn query_account_visibility(client: &Client, expected: &AccountId) -> Result<bool> {
-    let stored = client
-        .client()
-        .query(FindAccounts)
-        .filter_with(|account| account.equals("id", expected.clone()).into_predicate())
-        .execute_single_opt()?;
-    match stored {
-        Some(stored) if stored.id() == expected => Ok(true),
-        Some(stored) => Err(eyre!(
-            "account query for {expected} returned unexpected account {}",
-            stored.id()
-        )),
-        None => Ok(false),
+/// Establish account presence from the bounded account-identity producer.
+/// Absence requires exhausting the successful cursor; every query error survives.
+fn account_visibility_from_ids(
+    accounts: impl IntoIterator<Item = std::result::Result<AccountId, iroha::query::QueryError>>,
+    expected: &AccountId,
+) -> Result<bool> {
+    for account in accounts {
+        if &account? == expected {
+            return Ok(true);
+        }
     }
+    Ok(false)
+}
+
+/// Query identities only: consensus visibility does not require account metadata.
+fn query_account_visibility(client: &Client, expected: &AccountId) -> Result<bool> {
+    account_visibility_from_ids(client.client().query(FindAccountIds).execute()?, expected)
+}
+
+#[test]
+fn account_visibility_requires_the_exact_id_or_complete_absence() -> Result<()> {
+    let expected = fixture_account(0xD1)?;
+    let other = fixture_account(0xD2)?;
+    assert!(account_visibility_from_ids(
+        [Ok(other.clone()), Ok(expected.clone())],
+        &expected,
+    )?);
+    assert!(!account_visibility_from_ids([Ok(other)], &expected)?);
+    assert!(!account_visibility_from_ids([], &expected)?);
+    Ok(())
+}
+
+#[test]
+fn account_visibility_propagates_failed_cursor_instead_of_absence() -> Result<()> {
+    let expected = fixture_account(0xD1)?;
+    let other = fixture_account(0xD2)?;
+    for prefix in [false, true] {
+        let rows = prefix.then_some(Ok(other.clone())).into_iter().chain([
+            Err(iroha::query::QueryError::Other(eyre!(
+                "cursor source unavailable"
+            ))),
+            Ok(expected.clone()),
+        ]);
+        let error = account_visibility_from_ids(rows, &expected).unwrap_err();
+        ensure!(format!("{error:#}").contains("cursor source unavailable"));
+    }
+    Ok(())
 }
 
 async fn assert_accounts_absent(peers: &[NetworkPeer], accounts: &[AccountId]) -> Result<()> {

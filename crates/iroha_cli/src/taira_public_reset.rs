@@ -131,6 +131,10 @@ pub(crate) struct PublicReset {
 enum PublicResetCommand {
     /// Reversibly advance the fixed dispatcher after a sealed occupied deployment.
     DispatcherTransition(host::dispatcher_transition::DispatcherTransition),
+    /// Capture the stopped installed runtime into a private typed transition input.
+    CaptureDispatcherCurrentRuntime(
+        host::dispatcher_transition::prepare::capture::CaptureDispatcherCurrentRuntime,
+    ),
     /// Derive a pinned reversible dispatcher plan from qualified transfer and current runtime evidence.
     PrepareDispatcherTransition(host::dispatcher_transition::prepare::PrepareDispatcherTransition),
     /// Export the exact clean local source manifest without contacting hosts or loading keys.
@@ -342,6 +346,9 @@ impl PublicReset {
     pub(super) fn run_without_client_config<W: Write>(&self, mut output: W) -> Result<()> {
         let report = match &self.command {
             PublicResetCommand::DispatcherTransition(args) => return args.run(&mut output),
+            PublicResetCommand::CaptureDispatcherCurrentRuntime(args) => {
+                return args.run(&mut output);
+            }
             PublicResetCommand::PrepareDispatcherTransition(args) => return args.run(&mut output),
             PublicResetCommand::SourceManifest(args) => {
                 source::export_manifest(&args.source_root, &mut output)?;

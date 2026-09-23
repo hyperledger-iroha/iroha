@@ -1204,7 +1204,10 @@ impl StrictReplayFixture {
         block: SignedBlock,
         artifact: wire::finality::V2FinalityArtifact,
     ) -> Arc<Kura> {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = Self::fresh_kura(self.options);
+        // A fork retains the original configured/network authority before its
+        // adversarial history is installed; replay still validates that history.
+        drop(self.replay_state(Arc::clone(&kura)));
         kura.store_block(Arc::new(block.clone()))
             .expect("store forked canonical block");
         kura.store_wsv_checkpoint(HEIGHT, block.hash(), self.checkpoint_hash)
@@ -1295,7 +1298,10 @@ impl StrictReplayFixture {
         // Production finality publication intentionally rejects this tuple while preparing the
         // retained archive. Install the mutually correlated bytes through test-only corruption
         // hooks so strict replay, rather than the writer, remains the component under test.
-        let kura = Kura::blank_kura_for_testing();
+        let kura = Self::fresh_kura(self.options);
+        // A fork retains the original configured/network authority before its
+        // adversarial history is installed; replay still validates that history.
+        drop(self.replay_state(Arc::clone(&kura)));
         kura.store_block(Arc::new(block.clone()))
             .expect("store malformed-SCCP canonical block");
         kura.store_wsv_checkpoint(HEIGHT, block.hash(), self.checkpoint_hash)

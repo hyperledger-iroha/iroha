@@ -638,7 +638,8 @@ mod tests {
             time::{TimeEvent, TimeInterval},
             trigger_completed::TriggerCompletedOutcome,
         },
-        isi::{Log, consensus_keys::ThresholdKeyLifecycleCertificateV1},
+        isi::{Log, SetParameter, consensus_keys::ThresholdKeyLifecycleCertificateV1},
+        parameter::system::Parameter,
         transaction::{
             ExecutionStep, FeePaymentIntent, IvmBytecode, TransactionBuilder,
             signed::TransactionResult,

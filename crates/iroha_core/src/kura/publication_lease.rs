@@ -145,6 +145,23 @@ impl Drop for AcquiredKuraPublicationFences<'_> {
 }
 
 impl Kura {
+    /// Promote exact standalone witness custody under the original storage fences.
+    /// The retained carrier uses its existing lease and these same private cores.
+    pub(crate) fn promote_kagemusha_finality_sidecar(
+        &self,
+        artifact: &super::V2FinalityArtifact,
+        receipt: &super::KuraV2CommitReceipt,
+    ) -> super::Result<()> {
+        self.durable_mutation_authorized()?;
+        let mut fences = AcquiredKuraPublicationFences::new(self);
+        fences.prune = Some(self.prune_lock.lock());
+        self.ensure_prune_recovery_not_required()?;
+        fences.canonical = Some(self.canonical_chain_lock.lock());
+        self.authenticate_kagemusha_finality_receipt_under_publication_guards(artifact, receipt)?;
+        fences.sidecar = Some(self.sidecar_lock.lock());
+        self.promote_kagemusha_finality_sidecar_under_sidecar_guard(artifact, receipt)
+    }
+
     /// Capture immutable pending-byte accounting before acquiring geometry/sidecar.
     /// The caller owns prune and canonical fences. Cold merge lookups must return
     /// the actual sidecar release observation instead of blocking behind its owner.
@@ -544,6 +561,37 @@ impl KuraPublicationLease<'_> {
     ) -> super::Result<super::lane_admission_source::FinalizedAdmissionCarrierReadV1> {
         self.kura
             .read_first_admission_carrier_under_prune_and_canonical_guards(height, expected_hash)
+    }
+
+    /// Publish the original witness without releasing or reacquiring this boundary.
+    ///
+    /// The caller must first join its original source and checkpoint on this lease.
+    /// Exact durable artifact/receipt authentication precedes every stage mutation;
+    /// the common proof, no-clobber, readback and cleanup cores retain all four
+    /// physical fences through final witness authentication. This grants no State
+    /// publication authority and cannot substitute for that complete source join.
+    pub(crate) fn publish_execution_witness(
+        &self,
+        finality: &super::V2FinalityArtifact,
+        receipt: &super::KuraV2CommitReceipt,
+        witness: &super::ExecWitness,
+        parliament_timed_ovn_casting_bindings: &[super::ParliamentTimedOvnCastingContextBindingV1],
+    ) -> super::Result<()> {
+        self.kura.durable_mutation_authorized()?;
+        self.kura
+            .authenticate_kagemusha_finality_receipt_under_publication_guards(finality, receipt)?;
+        let staged = Kura::prepare_kagemusha_finality_sidecar(
+            finality.height,
+            finality.block_hash,
+            witness,
+            finality.commit_qc.execution_commitment,
+            parliament_timed_ovn_casting_bindings,
+        )?;
+        self.kura
+            .stage_kagemusha_finality_sidecar_under_sidecar_guard(&staged)?;
+        self.kura
+            .promote_kagemusha_finality_sidecar_under_sidecar_guard(finality, receipt)?;
+        self.reauthenticate_execution_witness(finality)
     }
 
     /// Require the final witness projection under the original publication fences.

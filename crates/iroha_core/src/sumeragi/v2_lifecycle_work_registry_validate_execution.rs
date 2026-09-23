@@ -5,36 +5,6 @@ use crate::sumeragi::v2_apply::validation_custody::{
 // DURABLE_VALIDATE_ASYNC_HANDOFF_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DetachedDurableValidateExecution {
-    /// Execute the exact detached request through the scheduler-free body-store
-    /// validation boundary.
-    ///
-    /// The request is consumed once. A storage failure returns it intact for a
-    /// typed recovery decision; a successful storage call seals the request and
-    /// closed outcome together in one move-only token.
-    #[allow(clippy::result_large_err)]
-    fn execute<F, E>(
-        self,
-        body_store: &mut V2BodyStore,
-        validator: F,
-    ) -> Result<
-        ExecutedDurableValidateExecution,
-        (V2BodyStoreError, DetachedDurableValidateExecution),
-    >
-    where
-        F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
-        E: BodyValidationError,
-    {
-        let outcome = match body_store.execute_durable_validation(
-            self.durable_receipt.clone(),
-            self.expected_manifest_hash,
-            validator,
-        ) {
-            Ok(outcome) => outcome,
-            Err(error) => return Err((error, self)),
-        };
-        self.seal_outcome(outcome)
-    }
-
     /// Execute with the original candidate owner retained in the exact open
     /// store's service, including unfinished capture and durable marker retries.
     #[allow(clippy::result_large_err)]
@@ -136,29 +106,6 @@ impl DurableValidateDispatch {
             && self.request.lifecycle_key.phase().is_validate()
             && self.request.lifecycle_stage.kind() == super::LifecycleStageKind::ValidateBody
     }
-    /// Execute the exact request after its claimed lifecycle row became an
-    /// external wait.
-    ///
-    /// A body-store error reconstructs and returns the complete dispatch,
-    /// including its exact wake authority, so retry cannot mint a second
-    /// request or wait token.
-    #[allow(clippy::result_large_err)]
-    pub(in crate::sumeragi) fn execute<F, E>(
-        self,
-        body_store: &mut V2BodyStore,
-        validator: F,
-    ) -> Result<ExecutedDurableValidateDispatch, (V2BodyStoreError, Self)>
-    where
-        F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
-        E: BodyValidationError,
-    {
-        let Self { request, wake } = self;
-        match request.execute(body_store, validator) {
-            Ok(executed) => Ok(ExecutedDurableValidateDispatch { executed, wake }),
-            Err((error, request)) => Err((error, Self { request, wake })),
-        }
-    }
-
     /// Execute through the existing retained validator without detaching its
     /// candidate owner from the service. Errors return this same request and
     /// wake authority; marker retries, cache hits and reproposals retain the
@@ -167,7 +114,6 @@ impl DurableValidateDispatch {
     /// The caller must keep the exact store/service pair alive through selected
     /// publication. A receipt alone cannot replace its missing carrier, and this
     /// dispatch cannot create Apply authority or fall back to scalar execution.
-    /// TODO: wire the worker only with its concrete aggregate admission owner.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn execute_retained<P: CarrierValidator>(
         self,

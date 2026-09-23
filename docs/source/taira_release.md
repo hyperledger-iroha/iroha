@@ -419,7 +419,7 @@ public artifacts: `genesis.json`, `genesis.signed.nrt`, `genesis.hash`,
 `canary-onboarding-request.json` and `public-inputs.json`, with mode0644 inside a
 mode0700 directory. The typed record binds `raw_manifest_sha256` and distinguishes
 the native consensus genesis hash from the signed wire's SHA256. An incomplete
-four-file bundle is rejected; prepare a fresh complete output. Repeating an
+five-file bundle is rejected; prepare a fresh complete output. Repeating an
 identical complete request verifies the retained bundle without replacing it.
 The explicit `--canary-public-key PATH` alternative is mutually exclusive with
 `--intent` and reads only that public key.
@@ -449,11 +449,15 @@ includes Kagami. See the [maintained retry caller](taira_retry.md) for the exact
 current path records and preparation order.
 
 The signed genesis must leave room for onboarding, funding, the canary's real
-QueuePlan admission and execution carriers, and certificate installation before
-the first mandatory pulse. Finalization uses the authenticated observed height.
-The sole threshold-key certificate uses signed Ordinary admission, retaining its
-exact next-height and current-roster quorum checks; other public transactions
-continue to use QueuePlanSynced admission.
+QueuePlan admission and execution carriers, real DKG completion, and the
+certificate installation before the first mandatory beacon pulse. Finalization
+uses the authenticated observed height. The sole threshold-key certificate uses
+signed Ordinary admission with exact next-height and current-roster quorum
+checks; other public transactions continue to use QueuePlanSynced admission.
+The certificate must be committed on all four validators, followed by all four
+`BeaconActivate` provider installations before restart proof. Epoch retention
+observes complete authenticated Retain transitions on finalized workload
+blocks; it never creates empty blocks.
 
 Public validator client settings can reference the native-generated
 `runtime/taira-runtime-signers/peerN.private_key` sidecar through

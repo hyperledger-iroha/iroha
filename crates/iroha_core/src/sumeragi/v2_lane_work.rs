@@ -24735,26 +24735,59 @@ pub(super) mod tests {
         lane_relay_tx
             .try_send(LaneRelayMessage::CertifiedMergeSidecar {
                 sender: observed_request.responder.clone(),
-                reply_route: Some(reply_route),
-                message: CertifiedMergeSidecarMessage::GenerationHint(hint),
+                reply_route: None,
+                message: CertifiedMergeSidecarMessage::GenerationHint(hint.clone()),
             })
-            .expect("queue the authenticated generation Hint behind shared runner ingress");
+            .expect("queue a retired generation Hint behind shared runner ingress");
         assert!(
             adapter.obsolete_merge_sidecar_generation_hints.is_empty(),
-            "the cancellation tombstone cannot exist before the runner consumes its relay owner"
+            "the fixture has not authenticated the generation Hint yet"
         );
-        // Test this sidecar adapter's authenticated cancellation directly. The
-        // Native runner accepts only QueuePlan admission on this relay channel.
-        let queued = lane_relay_rx
-            .try_recv()
-            .expect("original queued successor Hint");
-        assert_ne!(
-            adapter.accept_relay_message(queued, observed_round.view),
-            V2LaneIngressOutcome::Rejected
+        let mut queue_plan = queue_plan_owner_from_adapter(&adapter, &keys, 2);
+        assert!(
+            crate::sumeragi::v2_runner::drain_finalized_lane_relay_prefix_for_test(
+                &lane_relay_rx,
+                &mut queue_plan,
+                observed_round.view,
+                1,
+            )
+            .expect("terminal exact relay prefix"),
+            "the closed terminal relay prefix retires the old envelope without adapter authority"
         );
         assert!(
-            lane_relay_rx.try_recv().is_err(),
-            "the exact queued prefix is finite"
+            !crate::sumeragi::v2_runner::drain_finalized_lane_relay_prefix_for_test(
+                &lane_relay_rx,
+                &mut queue_plan,
+                observed_round.view,
+                1,
+            )
+            .expect("terminal exact relay prefix"),
+            "the admitted relay prefix is finite after shared ingress closure"
+        );
+        assert!(
+            adapter.obsolete_merge_sidecar_generation_hints.is_empty(),
+            "the production QueuePlan relay must not dispatch to the retired adapter"
+        );
+        assert_eq!(
+            ticket_fixtures
+                .lock()
+                .expect("inspect unchanged actor waiter")[0]
+                .waiter_count(),
+            1,
+            "retiring the old envelope cannot cancel a service-owned output"
+        );
+        // Exercise the adapter's exact cancellation contract directly, independently
+        // of the production relay, which now owns only QueuePlan certificates.
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::CertifiedMergeSidecar {
+                    sender: observed_request.responder.clone(),
+                    reply_route: Some(reply_route),
+                    message: CertifiedMergeSidecarMessage::GenerationHint(hint),
+                },
+                observed_round.view,
+            ),
+            V2LaneIngressOutcome::Inserted
         );
         assert_eq!(adapter.obsolete_merge_sidecar_generation_hints.len(), 1);
         let _ = apply_retired_merge_sidecar_requests(&mut adapter, &services)
@@ -24764,7 +24797,7 @@ pub(super) mod tests {
                 &mut adapter,
                 &services,
             )
-            .expect("cancel the original generation-fenced Close")
+            .expect("cancel the generation-fenced service-owned Close before global output retry")
                 > 0
         );
         assert!(

@@ -3863,6 +3863,21 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                     if let Some(register) =
                         instr.as_any().downcast_ref::<RegisterPublicLaneValidator>()
                     {
+                        assert_eq!(
+                            register.monetary_plan,
+                            PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(
+                                    default_npos_bootstrap_stake_asset_id(),
+                                    register.validator.clone(),
+                                ),
+                                AssetId::new(
+                                    default_npos_bootstrap_stake_asset_id(),
+                                    expected_escrow.clone(),
+                                ),
+                                register.initial_stake.clone(),
+                            ),
+                            "signed bootstrap must bind its configured stake custody",
+                        );
                         validators.insert(register.validator.clone());
                         assert_eq!(
                             register.monetary_plan,
@@ -4108,6 +4123,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             with_test_authority_for_topology(alias_backed_npos_genesis_file(), &peers);
         let (_config_directory, config_path) =
             nexus_profile_with_stake_asset_id(&genesis_file, "xor#universal");
+        let manifest = RawGenesisTransaction::from_path(&genesis_file)
+            .expect("parse alias-backed NPoS genesis fixture");
+        let _chain_discriminant = staged_genesis_chain_discriminant(&manifest);
+        let config = load_peer_config(&config_path).expect("load staking configuration");
+        let expected_escrow = configured_npos_bootstrap_escrow_account_id(&manifest, Some(&config))
+            .expect("resolve configured staking escrow");
         let args = Args {
             genesis_file,
             out_file: None,
@@ -4139,6 +4160,21 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                         instr.as_any().downcast_ref::<RegisterBox>()
                     {
                         registered_asset_ids.insert(register.object.id.clone());
+                    }
+                    if let Some(register) =
+                        instr.as_any().downcast_ref::<RegisterPublicLaneValidator>()
+                    {
+                        assert_eq!(
+                            register.monetary_plan,
+                            PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(
+                                    configured_asset_id.clone(),
+                                    register.stake_account.clone()
+                                ),
+                                AssetId::new(configured_asset_id.clone(), expected_escrow.clone()),
+                                register.initial_stake.clone(),
+                            ),
+                        );
                     }
                 }
             }

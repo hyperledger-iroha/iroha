@@ -10,6 +10,7 @@ use super::physical_publication::{
 use super::{PublishedCarrier, RetainedCarrier};
 use crate::{
     block::VerifiedV2FinalityArtifact,
+    kura::CommitManifest,
     state::State,
     sumeragi::{
         v2_apply::carrier_queue_retirement::OriginalCarrierQueue,
@@ -83,7 +84,6 @@ fn physical_refusal(
         E::Fence { field, wait }
         | E::Queue(Q::Busy { field, wait })
         | E::Kura(K::Busy { field, wait })
-        | E::Archive(A::Kura(K::Busy { field, wait }))
         | E::Component {
             field,
             cause: M::Busy(wait),
@@ -193,7 +193,25 @@ impl<A> RetainedCarrier<A> {
                 let kura = &decision.journals.kura;
                 let durable = (|| {
                     kura.store_block(decision.block().clone())?;
-                    let receipt = kura.store_v2_finality_artifact(decision.finality())?;
+                    // Finality is the restart commit marker. Publish the exact
+                    // captured checkpoint and its authenticated manifest first;
+                    // every earlier crash cut remains one recoverable pending tip.
+                    // Never derive this checkpoint from a later live State.
+                    let artifact = decision.finality();
+                    let checkpoint = decision.journals.checkpoint;
+                    kura.store_wsv_checkpoint(artifact.height, artifact.block_hash, checkpoint)?;
+                    kura.store_commit_manifest(
+                        CommitManifest::new(
+                            artifact.height,
+                            artifact.block_hash,
+                            None,
+                            None,
+                            checkpoint,
+                            None,
+                        )
+                        .with_authenticated_v2_commit_authority(artifact),
+                    )?;
+                    let receipt = kura.store_v2_finality_artifact(artifact)?;
                     kura.persist_wsv_checkpoint_for_v2_commit(
                         &receipt,
                         decision.journals.checkpoint,

@@ -38,9 +38,11 @@ fn owned_lane_reservation_test_state() -> (Arc<State>, TempDir) {
         fsync_mode: kura_defaults::FSYNC_MODE,
         fsync_interval: kura_defaults::FSYNC_INTERVAL,
     };
-    let (kura, _) = Kura::new_fresh_single_lane(
+    let nexus = Nexus::default();
+    let (kura, _) = Kura::new_with_configured_lane_catalog(
         &config,
-        &iroha_config::parameters::actual::LaneConfig::default(),
+        &nexus.lane_config,
+        &nexus.configured_lane_catalog,
     )
     .expect("open an exclusively owned lane-reservation Kura root");
     let mut state = State::new(

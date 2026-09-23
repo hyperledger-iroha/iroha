@@ -120,15 +120,18 @@ rebasing retained validator configs. Retry keeps the key unchanged and rejects
 missing or noncanonical public identity before retirement. Native assembly and
 child descriptor custody verify the actual credential; Python reads no key bytes.
 
-Native apply runs the prepared application canary and its fresh beacon ceremony
-before readiness-dependent four-peer convergence, then qualifies prepared application mutations
-and one validator restart for signed `core_testnet` scope. The `full_inrou` scope
-also requires Inrou runtime health and all four ordered restart waves through
-these direct endpoints before staging or switching the public edge. The same retained
-mutations and restart evidence flow into the release proof. After cutover,
-`EdgeVerify` proves public HTTPS, discovery and doctor checks. Candidate failures
-remain before public cutover; a failed rollback remains resumable and must be
-verified complete before another attempt is admitted.
+Native apply runs the prepared application canary and the real four-validator
+DKG ceremony before readiness-dependent four-peer convergence. The committed
+certificate is installed, then all four `BeaconActivate` actions install the
+matching provider custody before restart proof. Scheduling epochs retain the
+incumbent authenticated authority generation. `core_testnet` qualifies prepared application mutations and one
+validator restart. `full_inrou` also requires Inrou runtime health and all four
+ordered restart waves through the direct endpoints before staging or switching
+the public edge. The same retained mutations and restart evidence flow into the
+release proof. After cutover, `EdgeVerify` proves public HTTPS, discovery and
+doctor checks. Candidate failures remain before public cutover; a failed rollback
+remains resumable and must be verified complete before another attempt is
+admitted.
 
 The preceding assembly's `native-local-args.json` is a closed, ordered path list:
 `--public-inputs`, `--runtime-client-config`,
@@ -174,9 +177,9 @@ both `inrou_canary` and `inrou_stage_tree_sha256`. `full_inrou` requires the sta
 argument and the complete matching native stage object and hash. The old `inrou`
 spelling is rejected.
 
-The signed scope also selects the native journal sequence: core has 15 steps and
-no Preseed step; full has 16. Both include `EpochSupervisorPause` after Stage and
-before Stop. The durable Seal cursor is 13 for core and 14 for full. Reopening and completed-receipt checks use the same immutable scope;
+The signed scope also selects the native journal sequence: core has 14 steps and
+no Preseed step; full has 15. The durable Seal cursor is 12 for core and 13 for
+full. Reopening and completed-receipt checks use the same immutable scope;
 indices from another scope cannot be reused as recovery authority.
 
 Read-only admission measures the complete native artifact closure, including

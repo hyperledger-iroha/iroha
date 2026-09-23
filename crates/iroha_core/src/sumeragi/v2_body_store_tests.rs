@@ -80,7 +80,9 @@ mod tests {
             .collect::<Vec<_>>();
         let network_id = test_network_id();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 100, &roster);
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 100, &roster,
+            );
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -1810,7 +1812,12 @@ mod tests {
         (
             foreign_context.kagemusha_mint_finality_authorization,
             foreign_context.kagemusha_mint_finality_authority,
-        ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(foreign_context.network_id, foreign_context.epoch, foreign_context.epoch_end_height, &foreign_context.roster);
+        ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
+            foreign_context.network_id,
+            foreign_context.epoch,
+            foreign_context.epoch_end_height,
+            &foreign_context.roster,
+        );
         foreign_context
             .validate()
             .expect("foreign receipt belongs to a separately valid network context");
@@ -1904,13 +1911,8 @@ mod tests {
         let released_directory = TempDir::new().unwrap();
         let mut released_store =
             store_with_promoted_terminal_outcomes(released_directory.path(), &context, &keys);
-        let receipt = released_store
-            .validated
-            .values()
-            .next()
-            .unwrap()
-            .durable()
-            .clone();
+        let validated = released_store.validated.values().next().unwrap().clone();
+        let receipt = validated.durable().clone();
         let released_claim = claim(&receipt, 2, 50);
         let other_history = claim(&receipt, 5, 60);
         let mut catalog = released_store
@@ -1924,6 +1926,27 @@ mod tests {
             .commit_selected_with_released_validate(released_claim)
             .unwrap();
         assert_eq!(released.ordinal(), 50);
+        assert!(released_store.validated_recovery_catalog().is_empty());
+        assert!(matches!(
+            released_store.verify_validated_receipt(&validated),
+            Err(V2BodyStoreError::ReceiptMismatch)
+        ));
+        released_store
+            .verify_recovered_apply_validated_receipt(&validated)
+            .expect("released terminal retains only exact Apply readback");
+        let foreign = ValidatedBodyReceipt::for_test(
+            released_store
+                .rejected
+                .values()
+                .next()
+                .unwrap()
+                .durable
+                .clone(),
+        );
+        assert!(matches!(
+            released_store.verify_recovered_apply_validated_receipt(&foreign),
+            Err(V2BodyStoreError::ReceiptMismatch)
+        ));
         assert!(
             released_store.take_recovered_terminal_results().is_empty(),
             "all historical claims for the released body remain inert beside its sole Apply"

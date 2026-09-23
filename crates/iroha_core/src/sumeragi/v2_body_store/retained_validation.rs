@@ -43,6 +43,46 @@ impl V2BodyStore {
             .map(|_| ())
     }
 
+    /// Retain the exact cold terminal success for recovered Apply only.
+    /// The lifecycle ledger and semantic replay already selected this inert
+    /// terminal result. Keeping it separate from `validated` prevents the
+    /// worker handoff from accidentally restoring any Vote authority.
+    pub(in crate::sumeragi) fn authorize_recovered_terminal_apply(
+        &mut self,
+        terminal: &super::super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1,
+    ) -> Result<(), V2BodyStoreError> {
+        let receipt = terminal
+            .validated_receipt()
+            .ok_or(V2BodyStoreError::ReceiptMismatch)?;
+        let durable = receipt.durable();
+        let key = (durable.round(), durable.subject());
+        if self.recovered_terminal_apply_receipt.is_some()
+            || self.validated.contains_key(&key)
+            || terminal.key() != key
+            || self.entries.get(&key) != Some(durable)
+        {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        }
+        self.load_validation_envelope(durable, durable.manifest_hash())?;
+        self.recovered_terminal_apply_receipt = Some(receipt.clone());
+        Ok(())
+    }
+
+    /// Recovered Apply, including ordinary Decision Apply, may consume the one
+    /// selected terminal result without exposing it to voting.
+    pub(crate) fn verify_recovered_apply_validated_receipt(
+        &self,
+        receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), V2BodyStoreError> {
+        if self.recovered_terminal_apply_receipt.as_ref() == Some(receipt) {
+            let durable = receipt.durable();
+            return self
+                .load_validation_envelope(durable, durable.manifest_hash())
+                .map(|_| ());
+        }
+        self.verify_validated_receipt(receipt)
+    }
+
     /// Plan the exact retained-service descriptor allocations before construction.
     /// Candidate execution and nested journals require separate admission.
     pub(crate) fn retained_validation_descriptor_bytes<P: CarrierValidator>(
@@ -71,7 +111,7 @@ impl V2BodyStore {
     /// Validate with complete custody installed before the success marker write.
     /// Cache and reproposal paths require the same executed owner. A local write
     /// refusal leaves its pending receipt and every older confirmed receipt.
-    /// TODO: replace live scalar validation only with a real reserved publisher.
+    /// Restart replay and the live worker use this same store-owned service.
     pub(crate) fn execute_retained_durable_validation<P: CarrierValidator>(
         &mut self,
         durable: DurableBodyReceipt,

@@ -192,3 +192,49 @@ pub(super) fn opaque_staking_policy_asset_effect(
     };
     touches.then_some(wire_id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn staking_wire_ids_match_the_canonical_registry() {
+        let registry = iroha_data_model::instruction_registry::default();
+        macro_rules! check {
+            ($($ty:ty => $wire_id:literal),+ $(,)?) => {$(
+                assert_eq!(registry.wire_id(core::any::type_name::<$ty>()), Some($wire_id));
+            )+};
+        }
+        check!(
+            RegisterPublicLaneCandidate => "iroha.staking.register_public_lane_candidate",
+            RegisterPublicLaneValidator => "iroha.instruction.v1::staking::RegisterPublicLaneValidator",
+            BondPublicLaneStake => "iroha.instruction.v1::staking::BondPublicLaneStake",
+            FinalizePublicLaneUnbond => "iroha.instruction.v1::staking::FinalizePublicLaneUnbond",
+            SlashPublicLaneValidator => "iroha.instruction.v1::staking::SlashPublicLaneValidator",
+            RecordPublicLaneRewards => "iroha.instruction.v1::staking::RecordPublicLaneRewards",
+            ClaimPublicLaneRewards => "iroha.instruction.v1::staking::ClaimPublicLaneRewards",
+        );
+
+        let reward_asset = AssetId::of(
+            AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::try_new("wonderland", "universal")
+                    .expect("test domain"),
+                "xor".parse().expect("test asset name"),
+            ),
+            iroha_test_samples::ALICE_ID.clone(),
+        );
+        let instruction: InstructionBox = RecordPublicLaneRewards {
+            lane_id: iroha_model_base::topology::LaneId::SINGLE,
+            epoch: 0,
+            reward_asset,
+            total_reward: Quantity::zero(),
+            shares: Vec::new(),
+            metadata: iroha_model_base::metadata::Metadata::default(),
+        }
+        .into();
+        assert_eq!(
+            monetary_staking_wire_id(&instruction),
+            Some("iroha.instruction.v1::staking::RecordPublicLaneRewards")
+        );
+    }
+}

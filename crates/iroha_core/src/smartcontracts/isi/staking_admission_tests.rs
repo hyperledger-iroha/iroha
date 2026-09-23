@@ -6,19 +6,15 @@ fn signed_candidate(
     stake: u64,
     lane_id: LaneId,
 ) -> RegisterPublicLaneCandidate {
-    let mut registration = RegisterPublicLaneValidator {
-        monetary_plan: fixture_registration_plan(
-            &stx,
-            &(validator.clone()),
-            &(Quantity::from(stake)),
-        ),
+    let mut registration = RegisterPublicLaneValidator::new(
         lane_id,
-        validator: validator.clone(),
-        peer_id: PeerId::new(peer_key.public_key().clone()),
-        stake_account: validator.clone(),
-        initial_stake: Quantity::from(stake),
-        metadata: Metadata::default(),
-    };
+        validator.clone(),
+        PeerId::new(peer_key.public_key().clone()),
+        validator.clone(),
+        Quantity::from(stake),
+        Metadata::default(),
+        fixture_registration_plan(&stx, &validator, Quantity::from(stake)),
+    );
     let registered = stx
         .world
         .peers
@@ -199,19 +195,15 @@ fn activation_requires_validator_authority_after_genesis() {
     let mut block = state.block(block_header_with_height(2));
     let mut stx = block.transaction();
     let (validator, intruder, _, _) = prepare_accounts(&mut stx);
-    RegisterPublicLaneValidator {
-        monetary_plan: fixture_registration_plan(
-            &stx,
-            &(validator.clone()),
-            &(Quantity::from(1000_u64)),
-        ),
-        lane_id: LaneId::SINGLE,
-        validator: validator.clone(),
-        peer_id: validator_peer_id(&validator),
-        stake_account: validator.clone(),
-        initial_stake: Quantity::from(1000_u64),
-        metadata: Metadata::default(),
-    }
+    RegisterPublicLaneValidator::new(
+        LaneId::SINGLE,
+        validator.clone(),
+        validator_peer_id(&validator),
+        validator.clone(),
+        Quantity::from(1000_u64),
+        Metadata::default(),
+        fixture_registration_plan(&stx, &validator, Quantity::from(1000_u64)),
+    )
     .execute(&validator, &mut stx)
     .expect("registration");
     let instruction = ActivatePublicLaneValidator::new(LaneId::SINGLE, validator.clone());
@@ -299,19 +291,15 @@ fn pending_rebind_requires_network_bound_replacement_peer_consent() {
     let mut block = state.block(block_header_with_height(2));
     let mut stx = block.transaction();
     let (validator, _, _, _) = prepare_accounts(&mut stx);
-    RegisterPublicLaneValidator {
-        monetary_plan: fixture_registration_plan(
-            &stx,
-            &(validator.clone()),
-            &(Quantity::from(1000_u64)),
-        ),
-        lane_id: LaneId::SINGLE,
-        validator: validator.clone(),
-        peer_id: validator_peer_id(&validator),
-        stake_account: validator.clone(),
-        initial_stake: Quantity::from(1000_u64),
-        metadata: Metadata::default(),
-    }
+    RegisterPublicLaneValidator::new(
+        LaneId::SINGLE,
+        validator.clone(),
+        validator_peer_id(&validator),
+        validator.clone(),
+        Quantity::from(1000_u64),
+        Metadata::default(),
+        fixture_registration_plan(&stx, &validator, Quantity::from(1000_u64)),
+    )
     .execute(&validator, &mut stx)
     .expect("register owner-bound peer");
     let replacement_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -491,15 +479,15 @@ fn global_pool_guard_preserves_safe_unbonds_and_rejects_exit_or_minimum_crossing
     let lane_id = LaneId::new(42);
     stx.nexus.staking.min_validator_stake = 1000_u64.into();
     stx.nexus.staking.unbonding_delay = Duration::ZERO;
-    RegisterPublicLaneValidator {
-        monetary_plan: fixture_registration_plan(&stx, &(validator.clone()), &(2000_u64.into())),
+    RegisterPublicLaneValidator::new(
         lane_id,
-        validator: validator.clone(),
-        peer_id: validator_peer_id(&validator),
-        stake_account: validator.clone(),
-        initial_stake: 2000_u64.into(),
-        metadata: Metadata::default(),
-    }
+        validator.clone(),
+        validator_peer_id(&validator),
+        validator.clone(),
+        2000_u64.into(),
+        Metadata::default(),
+        fixture_registration_plan(&stx, &validator, Quantity::from(2000_u64)),
+    )
     .execute(&validator, &mut stx)
     .expect("seed retained validator before topology freeze");
     stx.commit_topology
@@ -533,9 +521,9 @@ fn global_pool_guard_preserves_safe_unbonds_and_rejects_exit_or_minimum_crossing
         monetary_plan: fixture_bond_plan(
             &stx,
             lane_id,
-            &(validator.clone()),
-            &(delegator.clone()),
-            &(100_u64.into()),
+            &validator,
+            &delegator,
+            Quantity::from(100_u64),
         ),
         lane_id,
         validator: validator.clone(),
@@ -578,15 +566,15 @@ fn global_pool_guard_rejects_bond_restoring_under_minimum_global_candidate() {
     let mut stx = block.transaction();
     let (validator, _, _, _) = prepare_accounts(&mut stx);
     let lane_id = LaneId::SINGLE;
-    RegisterPublicLaneValidator {
-        monetary_plan: fixture_registration_plan(&stx, &(validator.clone()), &(1000_u64.into())),
+    RegisterPublicLaneValidator::new(
         lane_id,
-        validator: validator.clone(),
-        peer_id: validator_peer_id(&validator),
-        stake_account: validator.clone(),
-        initial_stake: 1000_u64.into(),
-        metadata: Metadata::default(),
-    }
+        validator.clone(),
+        validator_peer_id(&validator),
+        validator.clone(),
+        1000_u64.into(),
+        Metadata::default(),
+        fixture_registration_plan(&stx, &validator, Quantity::from(1000_u64)),
+    )
     .execute(&validator, &mut stx)
     .expect("seed retained validator");
     stx.commit_topology
@@ -598,9 +586,9 @@ fn global_pool_guard_rejects_bond_restoring_under_minimum_global_candidate() {
         monetary_plan: fixture_bond_plan(
             &stx,
             lane_id,
-            &(validator.clone()),
-            &(validator.clone()),
-            &(1000_u64.into()),
+            &validator,
+            &validator,
+            Quantity::from(1000_u64),
         ),
         lane_id,
         validator: validator.clone(),
@@ -629,15 +617,15 @@ fn global_pool_guard_checks_later_tenure_union_and_allows_permanent_redundancy()
     let mut stx = block.transaction();
     let (validator, delegator, _, _) = prepare_accounts(&mut stx);
     let lane_id = LaneId::SINGLE;
-    RegisterPublicLaneValidator {
-        monetary_plan: fixture_registration_plan(&stx, &(validator.clone()), &(1000_u64.into())),
+    RegisterPublicLaneValidator::new(
         lane_id,
-        validator: validator.clone(),
-        peer_id: validator_peer_id(&validator),
-        stake_account: validator.clone(),
-        initial_stake: 1000_u64.into(),
-        metadata: Metadata::default(),
-    }
+        validator.clone(),
+        validator_peer_id(&validator),
+        validator.clone(),
+        1000_u64.into(),
+        Metadata::default(),
+        fixture_registration_plan(&stx, &validator, Quantity::from(1000_u64)),
+    )
     .execute(&validator, &mut stx)
     .expect("seed retained validator");
     stx.commit_topology

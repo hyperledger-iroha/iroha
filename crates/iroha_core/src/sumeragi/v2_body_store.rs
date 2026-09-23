@@ -1185,10 +1185,24 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
             return None;
         }
         let validated = self.selected_validated.get(&key)?.clone();
+        // This successful terminal leaves the vote-authorizing catalog, but
+        // its exact decided body remains needed for a later recovered Apply.
+        // Bind an Apply-only readback seal before consuming the marker.
+        if self.store.recovered_terminal_apply_receipt.is_some()
+            || self.store.entries.get(&key) != Some(validated.durable())
+            || self
+                .store
+                .load_validation_envelope(validated.durable(), validated.durable().manifest_hash())
+                .is_err()
+        {
+            return None;
+        }
         let authority =
             AuthenticatedRecoveredReleasedValidateNoSuccessorV1::from_consumed_body_store_success(
-                claim, validated,
+                claim,
+                validated.clone(),
             )?;
+        self.store.recovered_terminal_apply_receipt = Some(validated);
         self.selected_validated.remove(&key);
         self.publish_retained_terminal();
         self.restore_unselected();
@@ -2425,6 +2439,10 @@ pub(crate) struct V2BodyStore {
         (wire::ConsensusRound, wire::BlockSubject),
         Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,
     >,
+    /// Exact decided receipt released by a cold terminal Validate. This is
+    /// worker Apply authority only; it never enters the vote-authorizing
+    /// validated catalog or the runtime recovery catalog.
+    recovered_terminal_apply_receipt: Option<ValidatedBodyReceipt>,
 }
 /// Move-only same-store input accepted by unified production lifecycle startup.
 ///
@@ -2862,6 +2880,7 @@ impl V2BodyStore {
             || !self.rejected.is_empty()
             || !self.retired_revalidation.is_empty()
             || !self.retired_terminal_frontier.is_empty()
+            || self.recovered_terminal_apply_receipt.is_some()
         {
             return Err(V2BodyStoreError::RecoveredMarkersAlreadyPromoted);
         }
@@ -3141,6 +3160,7 @@ impl V2BodyStore {
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
             recovered_terminal_results: BTreeMap::new(),
+            recovered_terminal_apply_receipt: None,
         };
         let mut body_frame_bytes = 0_u64;
         let mut body_leaves = Vec::new();
@@ -3339,6 +3359,7 @@ impl V2BodyStore {
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
             recovered_terminal_results: BTreeMap::new(),
+            recovered_terminal_apply_receipt: None,
         })
     }
     /// Open an empty, context-addressed store for non-cryptographic lifecycle fixtures.
@@ -3375,6 +3396,7 @@ impl V2BodyStore {
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
             recovered_terminal_results: BTreeMap::new(),
+            recovered_terminal_apply_receipt: None,
         })
     }
     /// Recover the durable receipt indexed by an exact round and subject.
@@ -3450,6 +3472,7 @@ impl V2BodyStore {
     /// because validation consumes the signed body and immutable height
     /// context, not the manifest round; every round-local marker remains
     /// checked against that result.
+    #[cfg(test)]
     pub(crate) fn revalidate_recovered_markers<F, E>(
         &mut self,
         mut validator: F,
@@ -3948,7 +3971,7 @@ impl V2BodyStore {
     /// and decoded. A success or deterministic rejection result is minted only
     /// after its closed outcome marker has crossed the file-and-directory
     /// durability boundary. Missing-sidecar deferrals are never persisted.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn execute_durable_validation<F, E>(
         &mut self,
         durable: DurableBodyReceipt,

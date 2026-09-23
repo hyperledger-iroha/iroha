@@ -447,7 +447,7 @@ fn load_profile_kagemusha_mint_finality_parameters(
         .collect::<Vec<_>>();
     expected_validators.sort();
     let current_validators = parameters
-        .epoch_roster
+        .authority_generation
         .validators
         .iter()
         .map(|entry| entry.validator.clone())
@@ -455,14 +455,6 @@ fn load_profile_kagemusha_mint_finality_parameters(
     if current_validators != expected_validators {
         return Err(format!(
             "operator-provisioned KAGEMUSHA mint-finality roster `{}` does not match the exact {} profile topology",
-            path.display(),
-            spec.slug
-        )
-        .into());
-    }
-    if parameters.next_epoch_roster.is_some() {
-        return Err(format!(
-            "operator-provisioned KAGEMUSHA mint-finality parameters `{}` must set `next_epoch_roster` to null because the fixed {} profile schedule does not end epoch zero at height one",
             path.display(),
             spec.slug
         )
@@ -1501,12 +1493,11 @@ mod tests {
             )
             .with_kagemusha_mint_finality_genesis_parameters(
                 iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
-                    epoch_roster: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterTemplateV1 {
+                    authority_generation: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                         version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
-                        epoch: 0,
+                        generation: 0,
                         validators,
                     },
-                    next_epoch_roster: None,
                 },
             )
         }
@@ -1603,15 +1594,13 @@ mod tests {
         );
     }
     #[test]
-    fn profile_authority_rejects_a_successor_outside_the_fixed_schedule() {
+    fn profile_authority_rejects_nonzero_genesis_generation() {
         let profile = PROFILES[0];
         let peers = build_peers(&profile).expect("build deterministic profile peers");
         let mut parameters = stub_genesis()
             .kagemusha_mint_finality_genesis_parameters()
             .clone();
-        let mut next_epoch_roster = parameters.epoch_roster.clone();
-        next_epoch_roster.epoch = 1;
-        parameters.next_epoch_roster = Some(next_epoch_roster);
+        parameters.authority_generation.generation = 1;
         let directory = tempdir().expect("profile authority directory");
         fs::write(
             directory.path().join(format!("{}.json", profile.slug)),
@@ -1621,11 +1610,11 @@ mod tests {
 
         let error =
             load_profile_kagemusha_mint_finality_parameters(&profile, &peers, directory.path())
-                .expect_err("fixed profile schedule must reject a successor roster");
+                .expect_err("genesis authority generation must be zero");
         assert!(
             error
                 .to_string()
-                .contains("does not end epoch zero at height one")
+                .contains("mint_finality.genesis.authority_generation")
         );
     }
     #[test]

@@ -195,6 +195,7 @@ async fn queue_throttling() {
     state_block
         .transactions
         .insert_block(transaction_hashes, nonzero!(1_usize));
+    state_block.block_hashes.push(block_header.hash());
     state_block.commit().unwrap();
     // Cleanup transactions
     let transactions = queue.collect_transactions_for_block(&state.view(), nonzero!(10_usize));

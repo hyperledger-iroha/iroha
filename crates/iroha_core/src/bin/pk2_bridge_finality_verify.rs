@@ -1285,6 +1285,9 @@ mod tests {
             BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V2,
             BridgeFinalityAttestationBodyV1,
         },
+        isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
+        },
         transaction::signed::TransactionBuilder,
     };
     #[cfg(unix)]
@@ -1372,9 +1375,6 @@ mod tests {
             .replace_signatures(std::collections::BTreeSet::from([final_signature]))
             .expect("replace result-bearing genesis signature");
         genesis_block
-            .validate_entrypoint_merkle_cache()
-            .expect("canonical genesis entrypoint Merkle cache");
-        genesis_block
             .validate_output_merkle_cache()
             .expect("canonical genesis result Merkle cache");
         assert_eq!(genesis_block.committed_fragment_count(), Some(1));
@@ -1398,29 +1398,35 @@ mod tests {
         let genesis_executed_wire_len =
             u64::try_from(signed_genesis.len()).expect("genesis wire length fits u64");
         let genesis_executed_wire_hash = Hash::new(&signed_genesis);
-        let mint_finality_roster =
-            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
-                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
-                network_id,
-                generation: 0,
-                validators: roster.iter().enumerate().map(|(index, validator)| {
+        let mint_finality_authority = KagemushaMintFinalityAuthorityGenerationV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            generation: 0,
+            validators: roster
+                .iter()
+                .enumerate()
+                .map(|(index, validator)| {
                     iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                         &[0xA0 + u8::try_from(index).expect("four-validator fixture"); 32],
                         0,
                         validator.validator.clone(),
                     ).expect("derive real paired-Pasta fixture authority")
-                }).collect(),
-            };
-        let mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
-            &mint_finality_roster, 10,
-        ).expect("canonical fixture genesis authorization");
+                })
+                .collect(),
+        };
+        let mint_finality_authorization =
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &mint_finality_authority,
+                10,
+            )
+            .expect("canonical fixture genesis authorization");
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
             kagemusha_mint_finality_authorization: mint_finality_authorization,
-            kagemusha_mint_finality_authority: mint_finality_roster,
+            kagemusha_mint_finality_authority: mint_finality_authority,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
@@ -2126,10 +2132,11 @@ mod tests {
             .as_mut()
             .expect("commit summary")
             .signed_power = 4;
+        let wrong_power_error =
+            verify_fixture(&wrong_power).expect_err("reject mismatched status power");
         assert!(
-            verify_fixture(&wrong_power)
-                .expect_err("reject mismatched status power")
-                .contains("quorum summary does not exactly match")
+            wrong_power_error.contains("CommitQC summary does not satisfy its frozen quorum"),
+            "{wrong_power_error}"
         );
         let mut missing_commit = fixture();
         missing_commit.status.phase = SumeragiV2StatusPhase::AwaitingProposal;

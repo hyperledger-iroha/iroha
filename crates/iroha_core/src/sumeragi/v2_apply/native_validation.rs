@@ -838,8 +838,18 @@ impl V2ApplyService {
         {
             return Err(V2ApplyError::TaskMismatch);
         }
-        // Recheck the actual stored marker; a scalar caller-supplied receipt cannot select an owner.
-        body_store.verify_validated_receipt(task.validated_receipt())?;
+        // Recheck the exact body authority before selecting the retained
+        // owner. A cold terminal result may authorize only an ordinary or
+        // recovered lifecycle Apply; live lifecycle requires a voting marker.
+        match task {
+            super::ExactApplyTaskRef::Ordinary(_)
+            | super::ExactApplyTaskRef::LifecycleRecovered(_) => {
+                body_store.verify_recovered_apply_validated_receipt(task.validated_receipt())?
+            }
+            super::ExactApplyTaskRef::LifecycleLive(_) => {
+                body_store.verify_validated_receipt(task.validated_receipt())?;
+            }
+        }
         let finality = crate::block::VerifiedV2FinalityArtifact::verify(
             wire::finality::V2FinalityArtifact::new(
                 context.clone(),

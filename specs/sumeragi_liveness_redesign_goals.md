@@ -579,6 +579,38 @@ vector and configure/set/publish protocol have been removed. Exact identity
 validation and the pending-work plus two-batch bound remain enforced, and
 passive network Fetch ownership remains outside the runnable-owner census.
 
+The September 23 local four-validator diagnostic additionally identifies an
+Apply lock-handoff failure: source authentication releases Kura before witness
+and archive persistence, and a queued exact advert-tip reader can repeatedly
+preempt its next try-only acquisition. The current correction retains one
+original joint Kura lease through source authentication, guarded witness/archive
+writes, final proof authentication and Queue/State/component acquisition. Every
+refusal still returns the original decided owner after joint guard cleanup.
+L4 requires a coordinated reader regression that proves the same release
+observation remains pending through all phases; L5/L6 require a fresh matching
+source network run. All seven lease/drop regressions pass within the unchanged 356-control Core
+selection, including unlock-before-admission cleanup on drop/unwind and the
+complete participant inventory. The matching local four-validator run applies
+and authenticates genesis on every peer. After switching the setup assertion to
+the bounded account-identity producer, the test reaches the actual author
+outage: all three survivors admit the sole finite input at global height 2, but
+execution finality exceeds the 180-second bound. Retained real-peer logs expose
+the raw P2P classifier rejecting Native control tags 11/12 before authentication.
+The correction, explicit nested decode bounds and bounded descriptor retirement
+pass all 303 captured Core controls. Matching daemon50/harness51 clear the raw
+wire rejection, then expose a height-3 economic rejection because carrier time
+ignored the Native input creation time after an idle interval. Assembly and
+validation now share the exact retained Network-input clock floor, recomputed
+after prefix trimming. Matching daemon54/harness55 now successfully execute the
+sole input on all three survivors and authenticate its later-view Native quorum.
+Restart of the stopped author then fails at genesis: the retained publisher wrote
+finality without the checkpoint-bound commit manifest required by strict recovery.
+The correction writes the original captured checkpoint and authenticated manifest
+before finality, preserving the existing interrupted-tip recovery cuts. Current
+Rust and crash-cut validation, plus a complete unchanged outage/restart run,
+remain in progress. Evidence belongs in the
+[epoch-authority record](../docs/history/2026-09-22/epoch-authority-cutover.md).
+
 ## Required invariants
 
 1. **One obligation, one owner.** Every accepted consensus obligation retains

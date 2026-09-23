@@ -84,6 +84,14 @@ impl Drop for Reservation {
 type Decision =
     DecisionBoundCarrierJournals<Reservation, DetachedCarrierComponents, KuraWsvCheckpointReceipt>;
 
+fn publish_archives_for_test(
+    decision: &mut Decision,
+) -> Result<(), CarrierArchivePublicationError> {
+    let kura = Arc::clone(&decision.journals.kura);
+    let lease = kura.try_publication_lease().expect("isolated phase lease");
+    decision.publish_archives(&lease)
+}
+
 struct Fixture {
     // Drop captured values before their external archive handles and directory.
     decision: Decision,
@@ -324,14 +332,14 @@ fn original_archives_publish_and_exact_retry_preserves_files_without_state_publi
     let kura = tree_image(&fixture.state.kura.store_root());
     assert!(fixture.provider.is_empty().unwrap());
     assert!(fixture.reputation.is_empty().unwrap());
-    fixture.decision.publish_archives().unwrap();
+    publish_archives_for_test(&mut fixture.decision).unwrap();
     fixture.assert_exact_archives();
     let archives = tree_image(fixture.directory.path());
     let generations = (
         fixture.provider.health_generation().unwrap(),
         fixture.reputation.health_generation().unwrap(),
     );
-    fixture.decision.publish_archives().unwrap();
+    publish_archives_for_test(&mut fixture.decision).unwrap();
     assert_eq!(tree_image(fixture.directory.path()), archives);
     assert_eq!(
         (
@@ -373,7 +381,7 @@ fn provider_refusal_preserves_both_original_captures_and_never_starts_reputation
     fs::create_dir(&records).unwrap();
     let before = tree_image(&root);
     assert!(matches!(
-        fixture.decision.publish_archives(),
+        publish_archives_for_test(&mut fixture.decision),
         Err(CarrierArchivePublicationError::Provider(_))
     ));
     assert_eq!(tree_image(&root), before);
@@ -384,7 +392,7 @@ fn provider_refusal_preserves_both_original_captures_and_never_starts_reputation
     fixture.assert_unpublished();
     fs::remove_dir(&records).unwrap();
     fs::rename(&saved, &records).unwrap();
-    fixture.decision.publish_archives().unwrap();
+    publish_archives_for_test(&mut fixture.decision).unwrap();
     fixture.assert_exact_archives();
     original.assert_retained(&fixture.decision);
     fixture.assert_unpublished();
@@ -402,7 +410,7 @@ fn reputation_refusal_retains_provider_success_and_retries_original_captures() {
     let reputation_before = tree_image(&root.join("reputation"));
     let kura = tree_image(&fixture.state.kura.store_root());
     assert!(matches!(
-        fixture.decision.publish_archives(),
+        publish_archives_for_test(&mut fixture.decision),
         Err(CarrierArchivePublicationError::Reputation(_))
     ));
     assert!(!fixture.provider.is_empty().unwrap());
@@ -415,7 +423,7 @@ fn reputation_refusal_retains_provider_success_and_retries_original_captures() {
     // Retrying while the original namespace is still substituted must repeat
     // the integrity refusal without rewriting/accounting the completed provider.
     assert!(matches!(
-        fixture.decision.publish_archives(),
+        publish_archives_for_test(&mut fixture.decision),
         Err(CarrierArchivePublicationError::Reputation(_))
     ));
     assert_eq!(tree_image(&root.join("provider")), provider_after);
@@ -425,7 +433,7 @@ fn reputation_refusal_retains_provider_success_and_retries_original_captures() {
     );
     fs::remove_dir(&anchors).unwrap();
     fs::rename(&saved, &anchors).unwrap();
-    fixture.decision.publish_archives().unwrap();
+    publish_archives_for_test(&mut fixture.decision).unwrap();
     fixture.assert_exact_archives();
     assert_eq!(tree_image(&root.join("provider")), provider_after);
     assert_eq!(
@@ -443,12 +451,10 @@ fn kura_busy_preserves_archive_custody_and_uses_actual_release_before_retry() {
     let original = OriginalCustody::capture(&fixture.decision);
     let before = tree_image(fixture.directory.path());
     let held = fixture.state.kura.canonical_publication_lease();
-    let wait = match fixture.decision.publish_archives() {
-        Err(CarrierArchivePublicationError::Kura(KuraPublicationPreparationError::Busy {
-            wait,
-            ..
-        })) => wait,
-        result => panic!("actual original canonical owner must refuse before writes: {result:?}"),
+    let wait = match fixture.state.kura.try_publication_lease() {
+        Err(crate::kura::KuraPublicationPreparationError::Busy { wait, .. }) => wait,
+        Err(error) => panic!("expected contention on original Kura: {error:?}"),
+        Ok(_) => panic!("original Kura must refuse before persistence"),
     };
     let mut wait = wait.wait_for_release();
     let wakes = Arc::new(WakeCount::default());
@@ -462,7 +468,7 @@ fn kura_busy_preserves_archive_custody_and_uses_actual_release_before_retry() {
     drop(held);
     assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
     assert_eq!(Pin::new(&mut wait).poll(&mut context), Poll::Ready(()));
-    fixture.decision.publish_archives().unwrap();
+    publish_archives_for_test(&mut fixture.decision).unwrap();
     fixture.assert_exact_archives();
     fixture.assert_unpublished();
 }
@@ -491,7 +497,7 @@ fn archive_index_contention_returns_release_wait_and_preserves_original_retry(
         let decision = &mut fixture.decision;
         let run_while_reader_held = || {
             let publisher = scope.spawn(move || {
-                let _ = completed.send(decision.publish_archives());
+                let _ = completed.send(publish_archives_for_test(decision));
             });
             // Bound a regressed blocking writer, then release the reader before
             // joining it so a failure cannot leave a worker or Kura fence stuck.
@@ -546,10 +552,10 @@ fn archive_index_contention_returns_release_wait_and_preserves_original_retry(
     assert_eq!(fixture.provider.is_empty().unwrap(), blocked_provider);
     assert!(fixture.reputation.is_empty().unwrap());
 
-    fixture.decision.publish_archives().unwrap();
+    publish_archives_for_test(&mut fixture.decision).unwrap();
     fixture.assert_exact_archives();
     let published = tree_image(fixture.directory.path());
-    fixture.decision.publish_archives().unwrap();
+    publish_archives_for_test(&mut fixture.decision).unwrap();
     assert_eq!(tree_image(fixture.directory.path()), published);
     original.assert_retained(&fixture.decision);
     fixture.assert_unpublished();
@@ -590,7 +596,7 @@ fn missing_or_replaced_checkpoint_refuses_before_either_archive_changes() {
                 .unwrap();
         }
         assert!(matches!(
-            fixture.decision.publish_archives(),
+            publish_archives_for_test(&mut fixture.decision),
             Err(CarrierArchivePublicationError::Checkpoint(_))
         ));
         assert_eq!(tree_image(fixture.directory.path()), before);

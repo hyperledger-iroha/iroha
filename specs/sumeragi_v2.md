@@ -1001,12 +1001,28 @@ height, recomputes the whole plan, revalidates the restored State and audited bo
 the complete body-range preflight. Geometry changes and replay begin only from that freshly
 authenticated post-recovery image.
 
+The retained carrier publisher persists the canonical body, its original captured
+WSV checkpoint, and the manifest authenticated by the original verified decision
+before writing finality. Manifest publication binds its exact digest into that
+checkpoint. The manifest and each ancestor directory through the Kura root must
+be synced before publishing that digest. Retrying an existing finality record
+reauthenticates and syncs its exact file and held ancestors before granting a
+receipt; presence after a failed rename barrier is insufficient. Finality is the
+restart commit marker: every earlier cut is a sole pending tip, and every later
+cut has complete checkpoint-bound replay metadata.
+The publisher obtains its exact checkpoint writer receipt after manifest binding;
+a refusal retains the same execution journals and never hashes a later live State.
+
 Before any generic replay, WAL, or network ingress, startup persists the exact snapshot context in
 the immutable v2 context store and compares any first full-body artifact byte-for-byte with that
 context and PoP vector. The first full block extends the anchored hash and derives canonical ledger
-time as the maximum of `anchor_timestamp + committed_block_cadence` and every included transaction
-timestamp plus one millisecond. Zero, fractional-millisecond, or overflowing cadence geometry fails
-closed. This hash-only-parent profile is one-shot: after that block finalizes, every later context
+time as the maximum of `anchor_timestamp + committed_block_cadence` and every included timed
+Network input's creation timestamp plus one millisecond. The same rule applies with an ordinary
+parent: both ordinary inputs and the exact retained Native Decision inputs participate; sealed
+reveals contribute their signed transaction time. Admission controls and deferred inputs do not
+execute and cannot advance the clock. Candidate prefix fitting recomputes the floor before signing,
+and validation derives it independently from the signed carrier. Zero, fractional-millisecond, or
+overflowing cadence geometry and an unrepresentable input successor fail closed. This hash-only-parent profile is one-shot: after that block finalizes, every later context
 must carry the ordinary parent CommitQC and a snapshot anchor is rejected. A crash before the first
 finality sidecar can reopen only from the original anchor-height snapshot and the exact persisted
 context, safety-WAL decision, body receipt, and semantically replayed validation

@@ -1,3 +1,68 @@
+// Scalar callbacks exist only inside this cfg(test) fixture module. Production
+// dispatch always transfers the exact store-owned retained validator.
+use crate::sumeragi::v2_body_store::BodyValidationError;
+
+#[cfg(test)]
+impl DetachedDurableValidateExecution {
+    /// Execute the exact detached request through the scheduler-free body-store
+    /// validation boundary.
+    ///
+    /// The request is consumed once. A storage failure returns it intact for a
+    /// typed recovery decision; a successful storage call seals the request and
+    /// closed outcome together in one move-only token.
+    #[allow(clippy::result_large_err)]
+    fn execute<F, E>(
+        self,
+        body_store: &mut V2BodyStore,
+        validator: F,
+    ) -> Result<
+        ExecutedDurableValidateExecution,
+        (V2BodyStoreError, DetachedDurableValidateExecution),
+    >
+    where
+        F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
+        E: BodyValidationError,
+    {
+        let outcome = match body_store.execute_durable_validation(
+            self.durable_receipt.clone(),
+            self.expected_manifest_hash,
+            validator,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => return Err((error, self)),
+        };
+        self.seal_outcome(outcome)
+    }
+
+}
+
+#[cfg(test)]
+impl DurableValidateDispatch {
+    /// Execute the exact request after its claimed lifecycle row became an
+    /// external wait.
+    ///
+    /// A body-store error reconstructs and returns the complete dispatch,
+    /// including its exact wake authority, so retry cannot mint a second
+    /// request or wait token.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn execute<F, E>(
+        self,
+        body_store: &mut V2BodyStore,
+        validator: F,
+    ) -> Result<ExecutedDurableValidateDispatch, (V2BodyStoreError, Self)>
+    where
+        F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
+        E: BodyValidationError,
+    {
+        let Self { request, wake } = self;
+        match request.execute(body_store, validator) {
+            Ok(executed) => Ok(ExecutedDurableValidateDispatch { executed, wake }),
+            Err((error, request)) => Err((error, Self { request, wake })),
+        }
+    }
+
+}
+
 #[cfg(feature = "bls")]
 #[test]
 fn durable_validate_dispatch_moves_claim_to_current_external_wait_and_executes() {
@@ -4204,9 +4269,8 @@ fn native_source_validate_ordinary_completion_fixture(decided_recovery: bool, ba
             &keys,
             local_validator,
         );
-    // This batch exercises the production dispatch path. Retain the sole
-    // consumer of actual bounded actor queues so post_recoverable checks its
-    // wire, topology, FIFO and byte owners instead of a closed test handle.
+    // Keep a live bounded actor receiver during the batch so an unexpected
+    // recovery response is observable instead of disappearing into a test handle.
     let mut actor_admissions = batch.then(|| {
         let local_peer = fixture.verified.context().roster[local_validator as usize]
             .validator
@@ -4394,10 +4458,15 @@ fn native_source_validate_ordinary_completion_fixture(decided_recovery: bool, ba
         super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting
     ));
     if decided_recovery {
-        let native_state = std::sync::Arc::new(crate::state::State::new_for_testing(
-            crate::state::World::default(), std::sync::Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-        ));
+        let native_state = std::sync::Arc::new(
+            crate::state::State::new_with_chain_and_network_id_for_testing(
+                crate::state::World::default(),
+                std::sync::Arc::clone(&kura),
+                crate::query::store::LiveQueryStore::start_test(),
+                "v2-lane-work-display-name".into(),
+                fixture.verified.context().network_id,
+            ),
+        );
         let mut native = NativeSourceLifecycleProcessGuard(Some(
             crate::sumeragi::v2_runner::native_process::NativeRunnerProcess::new(
                 native_state, std::sync::Arc::clone(&output_guard), validator.clone(),
@@ -4551,7 +4620,6 @@ fn native_source_validate_ordinary_completion_fixture(decided_recovery: bool, ba
         } else {
             [(1, 1), (1, 0)]
         };
-        let mut admitted_output_posts = 0;
         for (expected_drained, remaining) in turns {
             let drained = launched.with_proposal_restart_fixture_for_test(|_, executor, services| {
                 let directive = executor.local_proposal_directive().expect("read actual executor Decision");
@@ -4571,17 +4639,11 @@ fn native_source_validate_ordinary_completion_fixture(decided_recovery: bool, ba
             assert_eq!(drained, expected_drained);
             assert_eq!(ingress.len(), remaining);
             if let Some(actor) = actor_admissions.as_mut() {
-                admitted_output_posts += actor.drain_posts(|post| {
-                    assert!(
-                        fixture
-                            .verified
-                            .context()
-                            .roster
-                            .iter()
-                            .any(|entry| entry.validator == post.peer_id),
-                        "recovery output must retain an exact committee target"
-                    );
-                });
+                assert_eq!(
+                    actor.drain_posts(|_| panic!("retired recovery ingress emitted actor output")),
+                    0,
+                    "Kura advert admission and volatile request retirement have no response"
+                );
             }
             assert_eq!(
                 ingress.state.lock().last_admission_ordinal,
@@ -4609,19 +4671,6 @@ fn native_source_validate_ordinary_completion_fixture(decided_recovery: bool, ba
                 "recovery cannot step the reducer or append safety work"
             );
             assert!(!output_guard.restart_required());
-        }
-        if batch {
-            assert!(
-                admitted_output_posts > 0,
-                "the batch must cross real actor admission and release its consumed output leases"
-            );
-            assert_eq!(
-                actor_admissions
-                    .as_mut()
-                    .expect("retain live actor owner")
-                    .drain_posts(|_| { panic!("the recovery turn left an unobserved actor post") }),
-                0
-            );
         }
         assert_eq!(
             keeper_kura
@@ -5217,7 +5266,10 @@ fn deferred_ordinary_apply_completion_pre_gate_fixture(
     };
     use std::sync::Arc;
 
-    let marker = 0xD8;
+    // This cold-runtime helper requires the remote certified-body Fetch path,
+    // as in its existing view-zero fixtures. Keep the local node out of the
+    // proposal-author role while testing the independent Apply retry boundary.
+    let marker = 0_u8;
     let (mut fixture, _body_directory, body_store, durable) =
         durable_validate_store_fixture_at_view(marker, 0);
     let AdapterEffect::ValidateBody {
@@ -5230,6 +5282,7 @@ fn deferred_ordinary_apply_completion_pre_gate_fixture(
     };
     let context = fixture.verified.context().clone();
     assert_eq!(context.roster.len(), 4);
+    assert_ne!(context.leader(round.view), 0, "cold fixture needs a remote author");
     assert_eq!(
         context.da_layout.encoding,
         wire::PayloadEncoding::ReedSolomon16

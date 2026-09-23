@@ -18,7 +18,7 @@ pub(super) fn collect_pending_public_lane_rewards<'a>(
             "upto_epoch precedes the current reward processing cursor; historical accrual is unavailable".into(),
         ));
     }
-    let mut totals: BTreeMap<AssetId, (Quantity, u64)> = BTreeMap::new();
+    let mut totals: BTreeMap<AssetId, (Quantity, Option<u64>)> = BTreeMap::new();
     for ((lane, account, asset), amount) in accruals {
         if *lane != lane_id || account != account_id || amount.is_zero() {
             continue;
@@ -26,12 +26,12 @@ pub(super) fn collect_pending_public_lane_rewards<'a>(
         if asset_filter.is_some_and(|filter| filter != asset) {
             continue;
         }
-        let Some(epoch) = processed_through_epoch else {
+        if processed_through_epoch.is_none() {
             return Err(conversion_error(
                 "retained reward accrual has no processed reward cursor".into(),
             ));
-        };
-        totals.insert(asset.clone(), (amount.clone(), epoch));
+        }
+        totals.insert(asset.clone(), (amount.clone(), None));
     }
     for (key, record) in rewards {
         let (lane, epoch) = key;
@@ -54,24 +54,24 @@ pub(super) fn collect_pending_public_lane_rewards<'a>(
         {
             let entry = totals
                 .entry(record.asset.clone())
-                .or_insert_with(|| (Quantity::zero(), *epoch));
+                .or_insert_with(|| (Quantity::zero(), None));
             entry.0 = entry
                 .0
                 .checked_add(&share.amount)
                 .map_err(|_| conversion_error("pending reward amount overflowed".into()))?;
-            entry.1 = entry.1.max(*epoch);
+            entry.1 = Some(entry.1.map_or(*epoch, |latest| latest.max(*epoch)));
         }
     }
     Ok(totals
         .into_iter()
         .filter(|(_, (amount, _))| !amount.is_zero())
         .map(
-            |(asset, (amount, pending_through_epoch))| PublicLanePendingReward {
+            |(asset, (amount, latest_unprocessed_epoch))| PublicLanePendingReward {
                 lane_id,
                 account: account_id.clone(),
                 asset,
                 processed_through_epoch,
-                pending_through_epoch,
+                latest_unprocessed_epoch,
                 amount,
             },
         )
@@ -139,7 +139,7 @@ mod tests {
                 account: recipient.clone(),
                 asset: asset.clone(),
                 processed_through_epoch: processed,
-                pending_through_epoch: 0,
+                latest_unprocessed_epoch: Some(0),
                 amount: Quantity::from(2_u64),
             });
             let fields = value.as_object().unwrap();
@@ -205,7 +205,7 @@ mod tests {
             let row = projected.iter().find(|row| row.asset == asset).unwrap();
             assert_eq!(row.amount, Quantity::from(amount));
             assert_eq!(row.processed_through_epoch, Some(2));
-            assert_eq!(row.pending_through_epoch, epoch);
+            assert_eq!(row.latest_unprocessed_epoch, Some(epoch));
         }
         let filtered = collect_pending_public_lane_rewards(
             lane,
@@ -241,7 +241,11 @@ mod tests {
                 Quantity::from(amount)
             );
         }
-        assert!(at_cursor.iter().all(|row| row.pending_through_epoch == 2));
+        assert!(
+            at_cursor
+                .iter()
+                .all(|row| row.latest_unprocessed_epoch.is_none())
+        );
         assert!(
             collect_pending_public_lane_rewards(
                 lane,
@@ -298,7 +302,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rows[0].processed_through_epoch, Some(0));
-        assert_eq!(rows[0].pending_through_epoch, 0);
+        assert_eq!(rows[0].latest_unprocessed_epoch, None);
         accruals.insert((lane, recipient.clone(), asset), Quantity::zero());
         assert!(
             collect_pending_public_lane_rewards(

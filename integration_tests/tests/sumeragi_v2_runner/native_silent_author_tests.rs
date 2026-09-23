@@ -120,6 +120,11 @@ async fn native_silent_initial_author_finalizes_one_finite_input() -> Result<()>
     let builder = four_validator_npos_builder()
         .with_base_seed(context)
         .with_block_cadence(RESTART_BLOCK_CADENCE)
+        .with_config_layer(|layer| {
+            // The launcher strips environment overrides. Keep authenticated
+            // Native rejection diagnostics in the retained outage evidence.
+            layer.write(["logger", "filter"], "iroha_core::sumeragi=debug,irohad=debug");
+        })
         .with_sync_timeout(OUTAGE_BOUND);
     let network = sandbox::start_network_async_or_skip(builder, context)
         .await?

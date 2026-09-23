@@ -245,20 +245,19 @@ fn retained_governance_fixture(
         .kagemusha_mint_finality
         .authority_generation
         .bind_network_id(network)
-        .unwrap();
+        .expect("bind the signed genesis authority to its finalized network");
     let kagemusha_mint_finality_authorization =
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(
             &kagemusha_mint_finality_authority,
             u64::MAX,
-        )
-        .unwrap();
+        );
     let context = crate::sumeragi::v2_context::build_genesis_height_context(
         crate::sumeragi::v2_context::GenesisContextInputs {
             network_id: network,
             election: crate::sumeragi::v2_context::FrozenElectionInputs {
                 epoch: 0,
-                kagemusha_mint_finality_authorization,
                 kagemusha_mint_finality_authority,
+                kagemusha_mint_finality_authorization,
                 epoch_end_height: u64::MAX,
                 mode: ConsensusMode::Permissioned,
                 roster,

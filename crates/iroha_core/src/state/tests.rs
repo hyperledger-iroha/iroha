@@ -194,14 +194,33 @@ fn configure_pre_genesis_nexus_fixture(
     let chain_id = state.chain_id.clone();
     let network_id = state.network_id;
     let world = std::mem::take(&mut state.world);
-    *state = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+    let lane_manifests = rebind_lane_manifests_for_lifecycle(
+        state.lane_manifests.read().as_ref(),
+        &nexus.lane_catalog,
+        &nexus.governance,
+    )
+    .expect("preserve fixture evidence and cover every configured lane");
+    let lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
+    let kura = Kura::new_temporary_with_configured_lane_catalog(
+        &strict_kura_config_for_testing(PathBuf::new()),
+        &lane_config,
+        &nexus.lane_catalog,
+    )
+    .expect("open the fixture with its immutable configured catalog");
+    *state = State::try_new_with_chain_and_network_id(
         world,
-        nexus,
+        kura,
         LiveQueryStore::start_test(),
         chain_id,
         network_id,
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
     )
-    .0;
+    .expect("construct the fresh configured fixture before lane publication");
+    // Governed and private lane evidence must precede catalog publication.
+    state.install_lane_manifests(&lane_manifests);
+    state.install_pre_genesis_nexus_for_testing(nexus);
+    state.configure_test_runtime_defaults();
 }
 fn blank_test_state_from_kura(kura: &Arc<Kura>) -> State {
     State::new_for_testing(
@@ -4595,9 +4614,13 @@ state_test! { sync set_nexus_alias_relabel_preserves_merge_binding_identity
         }],
     )
     .expect("relabelled catalog");
-    state
-        .set_nexus(relabelled.clone())
-        .expect("pre-genesis display relabel remains admissible");
+    assert!(matches!(
+        state.set_nexus(relabelled.clone()),
+        Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ), "display metadata still belongs to the immutable configured catalog");
+    assert_eq!(state.nexus_snapshot().lane_catalog, original.lane_catalog);
+    // The merge binding excludes display metadata, even though the complete
+    // configured catalog cannot be rewritten through the runtime setter.
     let_row! { relabelled_incarnation = state .lane_incarnation(LaneId::SINGLE) .expect("relabelled lane incarnation") };
     let_row! { relabelled_activation_height = state.lane_incarnation_activation_heights_snapshot()[&LaneId::SINGLE].saturating_add(1) };
     let_row! { relabelled_binding = MergeLaneBinding { lane_id: LaneId::SINGLE, dataspace_id: DataSpaceId::UNIVERSAL, lane_config_hash: crate::merge::merge_lane_config_hash(&relabelled.lane_catalog.lanes()[0]), incarnation: relabelled_incarnation, activation_height: relabelled_activation_height, } };
@@ -4623,9 +4646,7 @@ state_test! { sync set_nexus_rejects_post_genesis_catalog_mutation_atomically
     let mut state = blank_test_state();
     let_row! { lane_one = LaneConfig { id: LaneId::new(1), alias: "lane-one".to_owned(), ..LaneConfig::default() } };
     let_row! { original = iroha_config::parameters::actual::Nexus { lane_catalog: LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane_one]) .expect("two-lane catalog"), ..Default::default() } };
-    state
-        .set_nexus(original.clone())
-        .expect("install genesis topology");
+    configure_pre_genesis_nexus_fixture(&mut state, original.clone());
     state.push_block_hash_for_testing(HashOf::from_untyped_unchecked(Hash::new(
         b"committed-post-genesis-height",
     )));
@@ -5729,23 +5750,24 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
     world
         .public_lane_reward_claims
         .insert((LaneId::SINGLE, validator.clone()), PublicLaneRewardClaimStateV1 { through_epoch: Some(6) });
+    let accrual_key = (LaneId::SINGLE, validator.clone(), reward_asset.clone());
+    world.public_lane_reward_accruals.insert(accrual_key.clone(), Quantity::from(3_u32));
+    world.public_lane_reward_reserves.insert(reward_asset.clone(), Quantity::from(80_u32));
     world.public_lane_rewards.insert(
         (LaneId::SINGLE, 6),
         PublicLaneRewardRecord {
             lane_id: LaneId::SINGLE,
             epoch: 6,
             asset: reward_asset.clone(),
-            total_reward: Quantity::from(23_u32),
+            total_reward: Quantity::from(3_u32),
             shares: vec![PublicLaneRewardShare {
                 account: validator.clone(),
                 role: PublicLaneRewardRole::Validator,
-                amount: Quantity::from(23_u32),
+                amount: Quantity::from(3_u32),
             }],
             metadata: Metadata::default(),
         },
     );
-    world.public_lane_reward_accruals.insert((LaneId::SINGLE, validator.clone(), reward_asset.clone()), Quantity::from(23_u32));
-    world.public_lane_reward_reserves.insert(reward_asset.clone(), Quantity::from(100_u32));
     world.public_lane_stake_custody.insert((LaneId::SINGLE, validator.clone()), (reward_asset.clone(), Quantity::from(1_400_u32)));
     world.public_lane_stake_reserves.insert(reward_asset.clone(), Quantity::from(1_400_u32));
     let state = State::new(world, kura, query_handle);
@@ -5758,11 +5780,13 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         let key = (LaneId::SINGLE, validator.clone(), staker.clone());
         let record = block.public_lane_stake_shares.get(&key).unwrap().clone();
         block.public_lane_stake_shares.insert(key, record);
+        let prior = block.public_lane_rewards.get(&(LaneId::SINGLE, 6)).unwrap().clone();
+        block.public_lane_rewards.insert((LaneId::SINGLE, 6), prior);
         let record = block.public_lane_rewards.get(&(LaneId::SINGLE, 7)).unwrap().clone();
         block.public_lane_rewards.insert((LaneId::SINGLE, 7), record);
         block.public_lane_reward_claims.insert((LaneId::SINGLE, validator.clone()), PublicLaneRewardClaimStateV1 { through_epoch: Some(6) });
-        block.public_lane_reward_accruals.insert((LaneId::SINGLE, validator.clone(), reward_asset.clone()), Quantity::from(23_u32));
-        block.public_lane_reward_reserves.insert(reward_asset.clone(), Quantity::from(100_u32));
+        block.public_lane_reward_accruals.insert(accrual_key.clone(), Quantity::from(3_u32));
+        block.public_lane_reward_reserves.insert(reward_asset.clone(), Quantity::from(80_u32));
         block.public_lane_stake_custody.insert((LaneId::SINGLE, validator.clone()), (reward_asset.clone(), Quantity::from(1_400_u32)));
         block.public_lane_stake_reserves.insert(reward_asset.clone(), Quantity::from(1_400_u32));
         block.space_directory_manifests.remove(UniversalAccountId::from_hash(Hash::new(b"absent snapshot manifest")));
@@ -5813,16 +5837,16 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
     );
     assert_eq!(
         view.public_lane_reward_claims()
-            .get(&(LaneId::SINGLE, validator.clone())),
+            .get(&(LaneId::SINGLE, validator)),
         Some(&PublicLaneRewardClaimStateV1 { through_epoch: Some(6) })
     );
     assert_eq!(
-        view.public_lane_reward_accruals().get(&(LaneId::SINGLE, validator, reward_asset.clone())),
-        Some(&Quantity::from(23_u32)),
-        "processed unpaid rewards retain their exact custody source"
+        view.public_lane_reward_accruals().get(&accrual_key),
+        Some(&Quantity::from(3_u32)),
+        "restoring the processing cursor must retain unpaid exact-source accruals",
     );
-    assert_eq!(view.public_lane_reward_reserves().get(&reward_asset), Some(&Quantity::from(100_u32)),
-        "reserve covers 77 unprocessed units plus 23 accrued unpaid units");
+    assert_eq!(view.public_lane_reward_reserves().get(&reward_asset), Some(&Quantity::from(80_u32)),
+        "reserve covers 77 unprocessed units plus 3 accrued unpaid units");
     assert!(
         view.public_lane_rewards()
             .get(&(LaneId::SINGLE, 8))
@@ -10347,12 +10371,10 @@ state_test! { sync signed_lane_lifecycle_rejects_stale_identical_replacement_inc
     let mut state = manual_lane_lifecycle_test_state(World::default());
     let_row! { lane = LaneConfig { id: LaneId::new(1), alias: "replaceable-manual-lane".to_owned(), ..LaneConfig::default() } };
     let_row! { catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane.clone()]) .expect("two-lane catalog is valid") };
-    state
-        .set_nexus(iroha_config::parameters::actual::Nexus {
-            lane_catalog: catalog.clone(),
-            ..Default::default()
-        })
-        .expect("install initial manual lane");
+    configure_pre_genesis_nexus_fixture(&mut state, iroha_config::parameters::actual::Nexus {
+        lane_catalog: catalog.clone(),
+        ..Default::default()
+    });
     let_row! { stale_incarnations = iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations( &catalog, &state.lane_incarnations_snapshot(), ) .expect("active incarnations are canonical") };
     let_row! { replacement = iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![lane], retire: vec![LaneId::new(1)], } };
     let_row! { stale_payload = iroha_data_model::nexus::LaneLifecycleParameterV1::new( &catalog, &stale_incarnations, replacement.clone(), ) .expect("replacement payload is canonical") };
@@ -15490,7 +15512,7 @@ fn autoscale_transition_rejects_same_block_economic_custody_for_retired_lane() {
     let_row! { reward_asset_definition = AssetDefinitionId::derive_from_components( DomainId::try_new("sameblockrewards", "universal").expect("reward asset domain"), "autoscale".parse().expect("reward asset name"), ) };
     let reward_asset = AssetId::new(reward_asset_definition, validator.clone());
     let_row! { retired_keys = ( (retired_lane_id, validator.clone(), retired_staker.clone()), (retired_lane_id, 7), (retired_lane_id, validator.clone()), ) };
-    let_row! { embedded_retired_keys = ( ( LaneId::SINGLE, validator.clone(), embedded_retired_staker.clone(), ), (LaneId::SINGLE, 9), ( LaneId::SINGLE, embedded_retired_staker.clone(), ), ) };
+    let_row! { embedded_retired_keys = ( ( LaneId::SINGLE, validator.clone(), embedded_retired_staker.clone(), ), (LaneId::SINGLE, 9), (LaneId::SINGLE, embedded_retired_staker.clone()), ) };
     let_row! { retained_keys = ( (LaneId::SINGLE, validator.clone(), retained_staker.clone()), (LaneId::SINGLE, 8), (LaneId::SINGLE, validator.clone()), ) };
     let_row! { stake_record = |lane_id: LaneId, staker: AccountId| PublicLaneStakeShare { lane_id, validator: validator.clone(), staker, bonded: iroha_primitives::numeric::Quantity::from(1_000_u32), pending_unbonds: BTreeMap::new(), metadata: Metadata::default(), } };
     let_row! { reward_record = |lane_id: LaneId, epoch: u64| PublicLaneRewardRecord { lane_id, epoch, asset: reward_asset.clone(), total_reward: iroha_primitives::numeric::Quantity::from(epoch.saturating_add(1)), shares: vec![PublicLaneRewardShare { account: validator.clone(), role: PublicLaneRewardRole::Validator, amount: iroha_primitives::numeric::Quantity::from(epoch.saturating_add(1)), }], metadata: Metadata::default(), } };
@@ -16591,7 +16613,7 @@ state_test! { sync autoscale_transition_prunes_retired_managed_lane_runtime_cach
     );
 }
 state_test! { sync autoscale_scale_in_rejects_same_block_pin_intents_for_retired_lane
-    let (mut state, kura) = blank_test_state_with_kura();
+    let mut state = blank_test_state();
     {
         let mut world = state.world.block();
         world.accounts.insert((*ALICE_ID).clone(), AccountValue::new(iroha_data_model::account::AccountDetails::default()));
@@ -16601,14 +16623,13 @@ state_test! { sync autoscale_scale_in_rejects_same_block_pin_intents_for_retired
     let retained_side_lane_id = LaneId::new(2);
     let_row! { retained_side_lane = LaneConfig { id: retained_side_lane_id, alias: "retained-side-lane".to_owned(), ..LaneConfig::default() } };
     let elastic_lane = autoscale_elastic_lane_config(retired_lane_id, DataSpaceId::UNIVERSAL, 1);
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![LaneConfig::default(), retained_side_lane],
-            1,
-            2,
-            200,
-        ))
-        .expect("apply autoscale test nexus config");
+    configure_pre_genesis_nexus_fixture(&mut state, autoscale_transition_test_nexus(
+        vec![LaneConfig::default(), retained_side_lane],
+        1,
+        2,
+        200,
+    ));
+    let kura = Arc::clone(&state.kura);
     seed_elastic_lane!(state, elastic_lane);
     install_certified_autoscale_drain_for_test(&state, retired_lane_id);
     let close = autoscale_signed_block_with_committed_fragments(None, 100, 0);
@@ -16791,7 +16812,7 @@ state_test! { sync autoscale_scale_in_rejects_same_block_pin_intents_for_retired
 }
 state_test! { sync autoscale_scale_in_hides_same_block_da_commitments_for_retired_lane
     use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
-    let (mut state, kura) = blank_test_state_with_kura();
+    let mut state = blank_test_state();
     let retired_lane_id = LaneId::new(1);
     let retained_side_lane_id = LaneId::new(2);
     let base_lane = LaneConfig::default();
@@ -16821,14 +16842,13 @@ state_test! { sync autoscale_scale_in_hides_same_block_da_commitments_for_retire
         ]),
     )));
     // Install privacy evidence before a canonical reader can project the split-replica lane.
-    state
-        .set_nexus(autoscale_transition_test_nexus(
-            vec![base_lane.clone(), retained_side_lane.clone()],
-            1,
-            2,
-            200,
-        ))
-        .expect("apply autoscale test nexus config");
+    configure_pre_genesis_nexus_fixture(&mut state, autoscale_transition_test_nexus(
+        vec![base_lane.clone(), retained_side_lane.clone()],
+        1,
+        2,
+        200,
+    ));
+    let kura = Arc::clone(&state.kura);
     seed_elastic_lane!(state, elastic_lane);
     install_certified_autoscale_drain_for_test(&state, retired_lane_id);
     let close = autoscale_signed_block_with_committed_fragments(None, 100, 0);
@@ -21171,7 +21191,13 @@ state_test! { sync set_nexus_rejects_external_autoscale_managed_lane
         .insert(AUTOSCALE_META_MANAGED.to_owned(), "false".to_owned());
     let_row! { lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane]).expect("lane catalog") };
     let_row! { nexus = iroha_config::parameters::actual::Nexus { lane_catalog, ..iroha_config::parameters::actual::Nexus::default() } };
-    let_row! { err = state .set_nexus(nexus) .expect_err("external config must not use reserved autoscale metadata") };
+    assert!(matches!(
+        state.set_nexus(nexus.clone()),
+        Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ));
+    let configured_catalog = state.nexus_snapshot().configured_lane_catalog;
+    // Validate the semantic restriction independently of the earlier immutable-baseline guard.
+    let_row! { err = state .set_nexus_with_configured_lane_catalog(nexus, configured_catalog, None) .expect_err("external config must not use reserved autoscale metadata") };
     assert!(matches!(
         err,
         LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(1)
@@ -21185,7 +21211,13 @@ state_test! { sync set_nexus_rejects_external_autoscale_created_height_marker
         .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "42".to_owned());
     let_row! { lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane]).expect("lane catalog") };
     let_row! { nexus = iroha_config::parameters::actual::Nexus { lane_catalog, ..iroha_config::parameters::actual::Nexus::default() } };
-    let_row! { err = state .set_nexus(nexus) .expect_err("external config must not use autoscale marker metadata") };
+    assert!(matches!(
+        state.set_nexus(nexus.clone()),
+        Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ));
+    let configured_catalog = state.nexus_snapshot().configured_lane_catalog;
+    // Validate the semantic restriction independently of the earlier immutable-baseline guard.
+    let_row! { err = state .set_nexus_with_configured_lane_catalog(nexus, configured_catalog, None) .expect_err("external config must not use autoscale marker metadata") };
     assert!(matches!(
         err,
         LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(1)
@@ -21198,7 +21230,13 @@ state_test! { sync set_nexus_rejects_external_valid_autoscale_managed_lane
     let_row! { lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane]).expect("lane catalog") };
     let_row! { mut nexus = iroha_config::parameters::actual::Nexus { lane_catalog, ..iroha_config::parameters::actual::Nexus::default() } };
     nexus.autoscale.enabled = true;
-    let_row! { err = state .set_nexus(nexus) .expect_err("external config must not inject well-formed autoscale-owned lanes") };
+    assert!(matches!(
+        state.set_nexus(nexus.clone()),
+        Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ));
+    let configured_catalog = state.nexus_snapshot().configured_lane_catalog;
+    // Validate the semantic restriction independently of the earlier immutable-baseline guard.
+    let_row! { err = state .set_nexus_with_configured_lane_catalog(nexus, configured_catalog, None) .expect_err("external config must not inject well-formed autoscale-owned lanes") };
     assert!(matches!(
         err,
         LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(1)
@@ -21214,7 +21252,13 @@ state_test! { sync set_nexus_rejects_manual_lane_inside_active_autoscale_range
     let_row! { lane_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "manual-elastic-range".to_owned(), ..LaneConfig::default() }, ], ) .expect("lane catalog") };
     let_row! { mut nexus = iroha_config::parameters::actual::Nexus { lane_catalog, ..iroha_config::parameters::actual::Nexus::default() } };
     nexus.autoscale.enabled = true;
-    let_row! { err = state .set_nexus(nexus) .expect_err("config swaps must reserve autoscale elastic ids") };
+    assert!(matches!(
+        state.set_nexus(nexus.clone()),
+        Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ));
+    let configured_catalog = state.nexus_snapshot().configured_lane_catalog;
+    // Validate the semantic restriction independently of the earlier immutable-baseline guard.
+    let_row! { err = state .set_nexus_with_configured_lane_catalog(nexus, configured_catalog, None) .expect_err("config swaps must reserve autoscale elastic ids") };
     assert!(matches!(
         err,
         LaneLifecycleError::ReservedAutoscaleElasticLaneId {
@@ -21278,7 +21322,13 @@ state_test! { sync set_nexus_rejects_external_autoscale_managed_lane_replacement
         .expect("test setup may add internal autoscale lane");
     let_row! { replacement = LaneConfig { id: LaneId::new(1), alias: "manual-replacement".to_string(), ..LaneConfig::default() } };
     let_row! { nexus = iroha_config::parameters::actual::Nexus { lane_catalog: LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), replacement]) .expect("lane catalog"), ..iroha_config::parameters::actual::Nexus::default() } };
-    let_row! { err = state .set_nexus(nexus) .expect_err("external config swap must not replace autoscale-owned lanes") };
+    assert!(matches!(
+        state.set_nexus(nexus.clone()),
+        Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ));
+    let configured_catalog = state.nexus_snapshot().configured_lane_catalog;
+    // Validate the semantic restriction independently of the earlier immutable-baseline guard.
+    let_row! { err = state .set_nexus_with_configured_lane_catalog(nexus, configured_catalog, None) .expect_err("external config swap must not replace autoscale-owned lanes") };
     assert!(matches!(
         err,
         LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(1)
@@ -21404,7 +21454,13 @@ state_test! { sync set_nexus_rejects_default_lane_claiming_autoscale_ownership
     let mut state = blank_test_state();
     let default_lane = autoscale_elastic_lane_config(LaneId::SINGLE, DataSpaceId::UNIVERSAL, 2);
     let_row! { nexus = iroha_config::parameters::actual::Nexus { autoscale: iroha_config::parameters::actual::Autoscale { enabled: true, min_lane_id: nonzero!(1_u32), max_lane_id_exclusive: nonzero!(3_u32), ..Default::default() }, lane_catalog: LaneCatalog::new(nonzero!(1_u32), vec![default_lane]).expect("lane catalog"), ..iroha_config::parameters::actual::Nexus::default() } };
-    let_row! { err = state .set_nexus(nexus) .expect_err("default lane must not claim autoscale ownership") };
+    assert!(matches!(
+        state.set_nexus(nexus.clone()),
+        Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ));
+    let configured_catalog = state.nexus_snapshot().configured_lane_catalog;
+    // Validate the semantic restriction independently of the earlier immutable-baseline guard.
+    let_row! { err = state .set_nexus_with_configured_lane_catalog(nexus, configured_catalog, None) .expect_err("default lane must not claim autoscale ownership") };
     assert!(matches!(
         err,
         LaneLifecycleError::ReservedAutoscaleManagedLane(lane) if lane == LaneId::SINGLE
@@ -21523,7 +21579,13 @@ state_test! { sync set_nexus_rejects_external_autoscale_managed_lane_mutation
     mutated.lane_catalog =
         LaneCatalog::new(mutated.lane_catalog.lane_count(), lanes).expect("lane catalog");
     mutated.lane_config = RuntimeLaneConfig::from_catalog(&mutated.lane_catalog);
-    let_row! { err = state .set_nexus(mutated) .expect_err("external config swap must not mutate autoscale-owned lanes") };
+    assert!(matches!(
+        state.set_nexus(mutated.clone()),
+        Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ));
+    let configured_catalog = state.nexus_snapshot().configured_lane_catalog;
+    // Validate the semantic restriction independently of the earlier immutable-baseline guard.
+    let_row! { err = state .set_nexus_with_configured_lane_catalog(mutated, configured_catalog, None) .expect_err("external config swap must not mutate autoscale-owned lanes") };
     assert!(matches!(
         err,
         LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(1)
@@ -21597,9 +21659,7 @@ state_test! { sync set_nexus_prunes_lane_relay_emergency_overrides_for_removed_l
     let mut state = blank_test_state();
     let removed = LaneId::new(1);
     let_row! { initial_nexus = iroha_config::parameters::actual::Nexus { dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata { id: DataSpaceId::UNIVERSAL, alias: "universal".to_string(), description: None, fault_tolerance: 1, }]) .expect("dataspace catalog"), lane_catalog: LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), dataspace_id: DataSpaceId::UNIVERSAL, alias: "historical".to_string(), ..LaneConfig::default() }, ], ) .expect("lane catalog"), ..iroha_config::parameters::actual::Nexus::default() } };
-    state
-        .set_nexus(initial_nexus)
-        .expect("set initial nexus config");
+    configure_pre_genesis_nexus_fixture(&mut state, initial_nexus);
     let mut wb = state.world.block();
     wb.lane_relay_emergency_validators.insert(
         removed,
@@ -21619,10 +21679,12 @@ state_test! { sync set_nexus_prunes_lane_relay_emergency_overrides_for_removed_l
             .is_some(),
         "test setup should install removed-lane override"
     );
-    let_row! { updated_nexus = iroha_config::parameters::actual::Nexus { dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata { id: DataSpaceId::UNIVERSAL, alias: "universal".to_string(), description: None, fault_tolerance: 1, }]) .expect("dataspace catalog"), lane_catalog: LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]) .expect("lane catalog"), ..iroha_config::parameters::actual::Nexus::default() } };
     state
-        .set_nexus(updated_nexus)
-        .expect("set updated nexus config");
+        .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: vec![removed],
+        })
+        .expect("retire lane through its authoritative lifecycle");
     assert!(
         state
             .world
@@ -21630,7 +21692,7 @@ state_test! { sync set_nexus_prunes_lane_relay_emergency_overrides_for_removed_l
             .view()
             .get(&removed)
             .is_none(),
-        "removed lane override must be pruned by set_nexus"
+        "removed lane override must be pruned by lifecycle retirement"
     );
 }
 state_test! { sync apply_lane_lifecycle_prunes_stale_lane_relay_emergency_overrides
@@ -21681,22 +21743,22 @@ state_test! { sync apply_lane_lifecycle_prunes_stale_lane_relay_emergency_overri
 state_test! { sync set_nexus_recreation_preserves_lineage_across_snapshot_and_accepts_first_merge
     let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
     crate::sumeragi::status::reset_nexus_economics_for_tests();
-    let (mut state, kura) = blank_test_state_with_kura();
+    let mut state = blank_test_state();
     let_row! { lane_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "beta".to_string(), ..LaneConfig::default() }, ], ) .expect("two-lane catalog") };
     let_row! { two_lane_nexus = iroha_config::parameters::actual::Nexus { lane_catalog: lane_catalog.clone(), ..iroha_config::parameters::actual::Nexus::default() } };
     let recreated_lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
-    state
-        .set_nexus(two_lane_nexus)
-        .expect("configure initial two-lane nexus");
+    configure_pre_genesis_nexus_fixture(&mut state, two_lane_nexus);
+    let kura = Arc::clone(&state.kura);
     let_row! { historical_lane_incarnation = state .lane_incarnation(LaneId::new(1)) .expect("initial lane has an active incarnation") };
     let historical_lineage = state.lane_incarnation_lineage_snapshot()[&LaneId::new(1)];
     state
-        .set_nexus(iroha_config::parameters::actual::Nexus {
-            ..iroha_config::parameters::actual::Nexus::default()
+        .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: vec![LaneId::new(1)],
         })
         .expect("retire lane1 before simulating a restart and recreation");
     let retired_snapshot = norito::json::to_value(&state).expect("serialize retired state");
-    let_row! { mut restarted = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(retired_snapshot) .expect("restore retired state with retained incarnation lineage") };
+    let_row! { restarted = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(retired_snapshot) .expect("restore retired state with retained incarnation lineage") };
     assert_eq!(
         restarted.lane_incarnation_lineage_snapshot()[&LaneId::new(1)],
         historical_lineage,
@@ -21708,15 +21770,15 @@ state_test! { sync set_nexus_recreation_preserves_lineage_across_snapshot_and_ac
     record_public_lane_staking_status_for_test(LaneId::new(1), &stale_status_bonded);
     record_public_lane_staking_status_for_test(LaneId::SINGLE, &retained_status_bonded);
     restarted
-        .set_nexus(iroha_config::parameters::actual::Nexus {
-            lane_catalog,
-            ..iroha_config::parameters::actual::Nexus::default()
+        .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![lane_catalog.lanes()[1].clone()],
+            retire: Vec::new(),
         })
-        .expect("config swap recreates lane1");
+        .expect("lifecycle recreates lane1");
     let_row! { recreated_lane_incarnation = restarted .lane_incarnation(LaneId::new(1)) .expect("recreated lane has an active incarnation") };
     assert_ne!(
         recreated_lane_incarnation, historical_lane_incarnation,
-        "config recreation must not reuse the historical lane incarnation"
+        "lifecycle recreation must not reuse the historical lane incarnation"
     );
     let recreated_lineage = restarted.lane_incarnation_lineage_snapshot()[&LaneId::new(1)];
     assert_eq!(
@@ -21727,12 +21789,12 @@ state_test! { sync set_nexus_recreation_preserves_lineage_across_snapshot_and_ac
     assert_recreated_lane_da_cursors_accept_fresh_sequence(&restarted, LaneId::new(1));
     assert_public_lane_staking_status_absent(
         LaneId::new(1),
-        "set_nexus recreated lane must not inherit old operator staking status",
+        "lifecycle recreated lane must not inherit old operator staking status",
     );
     assert_public_lane_staking_status_bonded(
         LaneId::SINGLE,
         &retained_status_bonded,
-        "set_nexus recreated lane reset must preserve unrelated operator staking status",
+        "lifecycle recreated lane reset must preserve unrelated operator staking status",
     );
     assert_eq!(
         expected_next_merge_lane_height(
@@ -21742,7 +21804,7 @@ state_test! { sync set_nexus_recreation_preserves_lineage_across_snapshot_and_ac
             recreated_lane_incarnation,
         ),
         Some(1),
-        "set_nexus reset must reopen the recreated lane-local height namespace at one"
+        "lifecycle reset must reopen the recreated lane-local height namespace at one"
     );
     let commit_keypairs = configure_commit_topology(&restarted, 4);
     install_lane_manifest_registry_for_keypairs(
@@ -21764,12 +21826,12 @@ state_test! { sync set_nexus_recreation_preserves_lineage_across_snapshot_and_ac
                 && snapshot.lane_incarnation == recreated_lane_incarnation
                 && snapshot.lane_block_height == lane1_h1.block_height
         }),
-        "set_nexus recreation must admit the fresh lane-local height-one relay"
+        "lifecycle recreation must admit the fresh lane-local height-one relay"
     );
     let merge_qc = merge_qc_for_candidate(&restarted, &candidate, &commit_keypairs, &[0, 1, 2]);
     restarted
         .commit_merge_entry(merge_entry_from_candidate(candidate, merge_qc))
-        .expect("first recreated-lane merge entry commits after set_nexus recreation");
+        .expect("first recreated-lane merge entry commits after lifecycle recreation");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
 }
 fn asset_alias_catalog_retirement_fixture() -> (
@@ -24755,13 +24817,12 @@ state_test! { sync runtime_catalog_change_requires_lifecycle_and_prunes_verified
     let recreated_lane_id = LaneId::new(1);
     let_row! { lane1_config = LaneConfig { id: recreated_lane_id, alias: "set-nexus-verified-relay".to_string(), ..LaneConfig::default() } };
     let_row! { initial_catalog = LaneCatalog::new( nonzero!(2_u32), vec![LaneConfig::default(), lane1_config.clone()], ) .expect("initial lane catalog") };
-    state
-        .set_nexus(iroha_config::parameters::actual::Nexus {
-            lane_catalog: initial_catalog,
-            fees: state.nexus_snapshot().fees,
-            ..iroha_config::parameters::actual::Nexus::default()
-        })
-        .expect("seed lane through set_nexus");
+    let initial_nexus = iroha_config::parameters::actual::Nexus {
+        lane_catalog: initial_catalog,
+        fees: state.nexus_snapshot().fees,
+        ..iroha_config::parameters::actual::Nexus::default()
+    };
+    configure_pre_genesis_nexus_fixture(&mut state, initial_nexus);
     let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validator_keypairs);
     install_lane_manifest_registry(
@@ -28677,8 +28738,14 @@ state_test! { sync set_nexus_rejects_live_single_lane_stake_owner_reassignment
     prospective.staking.restricted_validator_mode =
         iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
 
+    assert!(matches!(
+        state.set_nexus(prospective.clone()),
+        Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ));
+    let configured_catalog = state.nexus_snapshot().configured_lane_catalog;
+    // Validate the semantic restriction independently of the earlier immutable-baseline guard.
     let err = state
-        .set_nexus(prospective)
+        .set_nexus_with_configured_lane_catalog(prospective, configured_catalog, None)
         .expect_err("assigning a different owner must not strand live SINGLE stake");
     assert!(matches!(
         err,
@@ -30738,9 +30805,7 @@ state_test! { sync record_lane_relay_builds_merge_candidate_from_active_lanes
     seed_consensus_keys_with_pops(&state, &validator_keypairs);
     let_row! { lane_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "beta".to_string(), dataspace_id: DataSpaceId::UNIVERSAL, ..LaneConfig::default() }, ], ) .expect("two-lane catalog") };
     let_row! { nexus = iroha_config::parameters::actual::Nexus { lane_catalog, ..iroha_config::parameters::actual::Nexus::default() } };
-    state
-        .set_nexus(nexus)
-        .expect("apply two-lane Nexus catalog");
+    configure_pre_genesis_nexus_fixture(&mut state, nexus);
     install_lane_manifest_registry(
         &state,
         &[
@@ -30834,9 +30899,7 @@ state_test! { sync merge_candidate_uses_max_view_change_index
     seed_consensus_keys_with_pops(&state, &validator_keypairs);
     let_row! { lane_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "beta".to_string(), dataspace_id: DataSpaceId::UNIVERSAL, ..LaneConfig::default() }, ], ) .expect("two-lane catalog") };
     let_row! { nexus = iroha_config::parameters::actual::Nexus { lane_catalog, ..iroha_config::parameters::actual::Nexus::default() } };
-    state
-        .set_nexus(nexus)
-        .expect("apply two-lane Nexus catalog");
+    configure_pre_genesis_nexus_fixture(&mut state, nexus);
     install_lane_manifest_registry(
         &state,
         &[
@@ -30866,9 +30929,7 @@ state_test! { sync merge_candidate_skips_unchanged_lane_after_previous_merge
     seed_consensus_keys_with_pops(&state, &validator_keypairs);
     let_row! { lane_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "beta".to_string(), dataspace_id: DataSpaceId::UNIVERSAL, ..LaneConfig::default() }, ], ) .expect("two-lane catalog") };
     let_row! { nexus = iroha_config::parameters::actual::Nexus { lane_catalog, ..iroha_config::parameters::actual::Nexus::default() } };
-    state
-        .set_nexus(nexus)
-        .expect("apply two-lane Nexus catalog");
+    configure_pre_genesis_nexus_fixture(&mut state, nexus);
     install_lane_manifest_registry(
         &state,
         &[
@@ -31294,13 +31355,11 @@ state_test! { sync missing_shard_cursor_blocks_touched_lane_when_da_bundle_prese
     let catalog = LaneCatalog::new(lane_count, vec![lane0, lane1.clone()]).expect("lane catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let (mut state, _kura) = blank_test_state_with_kura();
-    state
-        .set_nexus(iroha_config::parameters::actual::Nexus {
-            lane_catalog: catalog,
-            lane_config: lane_config.clone(),
-            ..Default::default()
-        })
-        .expect("apply Nexus catalog for commitment replay test");
+    configure_pre_genesis_nexus_fixture(&mut state, iroha_config::parameters::actual::Nexus {
+        lane_catalog: catalog,
+        lane_config: lane_config.clone(),
+        ..Default::default()
+    });
     let keypair = crate::state::checked_keypair();
     let_row! { bundle = DaCommitmentBundle::new(vec![DaCommitmentRecord::new( lane1.id, 1, 1, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), )]) };
     let_row! { new_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
@@ -46291,9 +46350,10 @@ state_test! { sync certified_snapshot_corruption_cannot_become_an_empty_lane
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let kura = Kura::blank_kura_for_testing();
     let mut state = blank_test_state_from_kura(&kura);
-    state.set_nexus(iroha_config::parameters::actual::Nexus {
+    configure_pre_genesis_nexus_fixture(&mut state, iroha_config::parameters::actual::Nexus {
         lane_catalog: catalog, lane_config: lane_config.clone(), ..Default::default()
-    }).expect("install authoritative lane geometry");
+    });
+    let kura = Arc::clone(&state.kura);
     assert!(state.certified_lane_block_tips_snapshot_cached().expect("empty tips").is_empty());
     let incarnation = state.lane_incarnation(lane_id).expect("active incarnation");
     let (session, pops) = sample_committed_lane_block_session_for_state_test(
@@ -46528,12 +46588,13 @@ fn genesis_merge_projection_state(lane_count: u32) -> (State, Vec<KeyPair>) {
         .collect();
     let catalog = LaneCatalog::new(NonZeroU32::new(lane_count).unwrap(), lanes)
         .expect("bounded one/four lane projection catalog");
-    state
-        .set_nexus(iroha_config::parameters::actual::Nexus {
+    configure_pre_genesis_nexus_fixture(
+        &mut state,
+        iroha_config::parameters::actual::Nexus {
             lane_catalog: catalog,
             ..Default::default()
-        })
-        .expect("install pre-genesis projection geometry");
+        },
+    );
     let (_, keys) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &keys);
     let lane_ids = (0..lane_count).map(LaneId::new).collect::<Vec<_>>();

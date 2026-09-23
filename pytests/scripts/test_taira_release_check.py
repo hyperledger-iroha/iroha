@@ -28,8 +28,41 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1552 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1716 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1572 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1736 + PLATFORM_REGRESSION_COUNT
+
+REWARD_ACCOUNTING_SOURCE_TESTS = {
+    'domain.rs': ('smartcontracts::isi::domain::tests::', (
+        'unregister_account_rejects_retained_reward_processing_cursor',
+        'unregister_account_rejects_when_account_is_reward_claim_asset_owner',
+        'unregister_asset_definition_ignores_mismatched_public_lane_reward_record',
+    )),
+    'multisig.rs': ('smartcontracts::isi::multisig::tests::', (
+        'rekey_public_lane_reward_cursors_and_unpaid_sources_preserve_scope_and_quantity',
+    )),
+    'staking_rewards.rs': ('smartcontracts::isi::staking::rewards::tests::', (
+        'outstanding_rewards_retains_processed_dust_in_its_exact_source',
+    )),
+    'staking_reward_tests.rs': ('smartcontracts::isi::staking::tests::', (
+        'reward_epoch_zero_is_claimable_once',
+        'reward_dust_accumulates_until_paid',
+        'reward_reserve_blocks_transfer_and_burn_but_releases_paid_rewards',
+        'reward_failed_payment_restores_claim_and_reserve',
+        'reward_obligation_audit_rejects_corrupt_record_keys',
+        'reward_claim_uses_recorded_custody_after_fee_policy_changes',
+        'reward_recording_excludes_bonded_custody_from_a_shared_fee_sink',
+        'reward_failed_second_asset_rolls_back_the_enclosing_transaction',
+    )),
+    'staking.rs': ('smartcontracts::isi::staking::tests::', (
+        'claim_rewards_transfers_and_marks_epoch',
+        'claim_rewards_defers_dust_without_marking_paid',
+        'claim_rewards_rejects_mismatched_reward_record_rows_without_releasing_reserves',
+        'claim_rewards_accepts_i105_fee_sink',
+    )),
+    'staking_custody_tests.rs': ('smartcontracts::isi::staking::tests::', (
+        'staking_custody_and_rewards_share_one_additive_reserve_floor',
+    )),
+}
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -74,6 +107,91 @@ def isolate_stage_fixture(stack, *, keep=()):
 
 
 class BeaconGateTests(unittest.TestCase):
+    def test_signed_monetary_authority_controls_are_source_bound_and_required(self):
+        source = SCRIPT.resolve().parents[1] / "crates/iroha_core/src/smartcontracts/isi"
+        self.assertIn('include!("staking_monetary_fixture_tests.rs");',
+                      (source / "staking.rs").read_text())
+        names = re.findall(r"#\[test\]\s*fn\s+(\w+)\s*\(",
+                           (source / "staking_monetary_fixture_tests.rs").read_text())
+        self.assertCountEqual(names, (
+            "registration_rejects_changed_signed_monetary_fields_without_custody_writes",
+            "reward_claim_rejects_changed_record_source_and_entitlement_without_payment",
+        ))
+        expected = ["smartcontracts::isi::staking::tests::" + name for name in names]
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("monetary_authority_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            self.assertCountEqual([name for _, names in selected_gate.CORE_MONETARY_AUTHORITY_STAGES
+                                   for name in names], expected)
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                stages = selected_gate.qualification_stages(scope)["core"]
+                selected = [name for _, names in stages for name in names]
+                startup = [name for _, names in selected_gate.CORE_ADMISSION_STARTUP_STAGES for name in names]
+                for regression in expected:
+                    with self.subTest(platform=platform, scope=scope, regression=regression):
+                        self.assertEqual(selected.count(regression), 1)
+                        self.assertEqual(startup.count(regression), 1)
+                        focused = selected_gate.focused_regression_stages(scope, ("core=" + regression,))
+                        self.assertEqual([name for _, names in focused["core"] for name in names], [regression])
+                        listing = "\n".join(name + ": test" for name in selected if name != regression)
+                        with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                            selected_gate.require_tests(listing, stages)
+
+    def test_reward_accounting_repairs_are_required_once_in_both_scopes(self):
+        required = [prefix + name for prefix, names in REWARD_ACCOUNTING_SOURCE_TESTS.values()
+                    for name in names]
+        self.assertEqual(len(required), 18)
+        self.assertEqual(len(set(required)), 18)
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("reward_accounting_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            registered = [name for _, names in selected_gate.CORE_REWARD_ACCOUNTING_STAGES
+                          for name in names]
+            self.assertEqual(registered, required)
+            startup = [name for _, names in selected_gate.CORE_ADMISSION_STARTUP_STAGES
+                       for name in names]
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                stages = selected_gate.qualification_stages(scope)["core"]
+                selected = [name for _, names in stages for name in names]
+                for regression in required:
+                    with self.subTest(platform=platform, scope=scope, regression=regression):
+                        self.assertEqual(startup.count(regression), 1)
+                        self.assertEqual(selected.count(regression), 1)
+                        focused = selected_gate.focused_regression_stages(scope, ("core=" + regression,))
+                        self.assertEqual(tuple(focused), ("core",))
+                        self.assertEqual([name for _, names in focused["core"] for name in names],
+                                         [regression])
+                        listing = "\n".join(name + ": test" for name in selected if name != regression)
+                        with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                            selected_gate.require_tests(listing, stages)
+
+    def test_reward_accounting_selectors_follow_actual_module_and_include_paths(self):
+        root = SCRIPT.resolve().parents[1] / "crates/iroha_core/src/smartcontracts/isi"
+        module = (root / "mod.rs").read_text()
+        for child in ("domain", "multisig", "staking"):
+            self.assertIn("pub mod " + child + ";", module)
+        staking = (root / "staking.rs").read_text()
+        self.assertRegex(staking, r'#\[path = "staking_rewards\.rs"\]\s*mod rewards;')
+        for child in ("staking_reward_tests.rs", "staking_custody_tests.rs"):
+            self.assertIn('include!("' + child + '");', staking)
+        for child in ("domain.rs", "multisig.rs", "staking.rs", "staking_rewards.rs"):
+            self.assertRegex((root / child).read_text(), r'#\[cfg\(test\)\]\s*mod tests\s*\{')
+        registered = [name for _, names in gate.CORE_REWARD_ACCOUNTING_STAGES for name in names]
+        expected = []
+        # This verifies selected names in their explicit source/module owners; it
+        # does not claim these eighteen exhaust every staking or account test.
+        for child, (prefix, names) in REWARD_ACCOUNTING_SOURCE_TESTS.items():
+            source = (root / child).read_text()
+            for name in names:
+                with self.subTest(source=child, test=name):
+                    self.assertEqual(len(re.findall(r"#\[test\]\s*fn\s+" + re.escape(name) + r"\s*\(", source)), 1)
+                    expected.append(prefix + name)
+        self.assertEqual(registered, expected)
+
     def test_current_runner_and_monetary_repairs_are_required_in_all_scopes(self):
         required = {'core': ['sumeragi::v2_lane_work::tests::queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes',
           'sumeragi::v2_lane_work::tests::queue_plan_leader_stages_exact_handoff_idempotently',
@@ -2490,11 +2608,11 @@ class FocusedPrequalificationTests(unittest.TestCase):
                     focused_regressions=requested, environment=self.env, lock_fds=(91,))
             self.assertEqual(self.metadata.call_args_list, compile.call_args_list)
             self.assertEqual(compile.call_args_list[0].kwargs["harnesses"], portable)
-            self.assertEqual(compile.call_args_list[1].kwargs["harnesses"], ("config", "core", "network", "cli"))
+            self.assertEqual(compile.call_args_list[1].kwargs["harnesses"], ("config", "data-model", "core", "network", "cli"))
             self.assertIs(compile.call_args_list[0].args[1], compile.call_args_list[1].args[1])
             self.assertTrue(all(call.kwargs["lock_fds"] == (91,) for call in compile.call_args_list))
             first_exit = events.index(("exit", portable))
-            self.assertGreater(events.index(("metadata", ("config", "core", "network", "cli"))), first_exit)
+            self.assertGreater(events.index(("metadata", ("config", "data-model", "core", "network", "cli"))), first_exit)
             self.assertEqual(executed[:2], [(name, names[name]) for name in portable])
             mandatory = [("config", name) for _, tests in gate.CONFIG_STAGES for name in tests]
             self.assertEqual(executed[2:2 + len(mandatory)], mandatory)
@@ -2505,7 +2623,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             self.assertEqual(len(executed), len(set(executed)))
             checkpoint.assert_not_called()
             self.assertIn("portable diagnostic Cargo graph: mv-admitted-map, concread", output.getvalue())
-            self.assertIn("remaining diagnostic Cargo graph: config, core, network, cli", output.getvalue())
+            self.assertIn("remaining diagnostic Cargo graph: config, data-model, core, network, cli", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertFalse(active)
         self.metadata.side_effect = None
@@ -2616,6 +2734,27 @@ class FocusedPrequalificationTests(unittest.TestCase):
         focused = gate.focused_regression_stages("basic", ("core=" + self.core,))
         self.assertEqual([name for _, names in focused["core"] for name in names], [self.core])
 
+    def test_core_only_and_core_model_focus_keep_one_compile_graph(self):
+        model = gate.MODEL_MONETARY_CODEC_STAGES[0][1][0]
+        graphs = []
+        for requested, expected_runtime in (
+            (("core=" + self.core,), {"core"}),
+            (("core=" + self.core, "data-model=" + model), {"core", "data-model"}),
+        ):
+            copies = FixtureCopies({name: name for name in gate.HARNESS_TARGETS})
+            with patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
+                 patch.object(gate, "run_config_checks"), \
+                 patch.object(gate, "run_stages") as runtime, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                gate.run_prequalification(Path("/mutable"), focused_regressions=requested,
+                                          environment=self.env, lock_fds=())
+            self.metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
+            self.assertTrue(compile.call_args.kwargs["normal_core_library_probe"])
+            self.metadata.reset_mock()
+            graphs.append(compile.call_args.kwargs["harnesses"])
+            self.assertEqual({call.args[0] for call in runtime.call_args_list}, expected_runtime)
+        self.assertEqual(graphs, [("config", "data-model", "core")] * 2)
+
     def test_prequalification_checks_only_requested_harnesses_while_qualification_keeps_complete_graph(self):
         for scope in gate.QUALIFICATION_SCOPES:
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
@@ -2636,8 +2775,9 @@ class FocusedPrequalificationTests(unittest.TestCase):
                     focused_regressions=("core=" + self.core,), environment=self.env, lock_fds=(91,))
             compile.assert_called_once()
             self.metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
+            self.assertTrue(compile.call_args.kwargs["normal_core_library_probe"])
             self.metadata.reset_mock()
-            self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "core"))
+            self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "data-model", "core"))
             self.assertEqual(compile.call_args.kwargs["lock_fds"], (91,))
             self.assertIn("network", complete_graph, "immutable qualification still compiles network")
             self.assertIn("proof-flows", complete_graph, "immutable qualification keeps its full graph")
@@ -2707,7 +2847,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
                                       environment=self.env, lock_fds=())
         self.assertEqual([call.args[0] for call in run.call_args_list], ["config", "core"])
         self.assertEqual([test for _, tests in run.call_args_list[1].args[3] for test in tests], [selected])
-        self.assertEqual(release.call_args_list, [unittest.mock.call("config"), unittest.mock.call("core")])
+        self.assertEqual(release.call_args_list, [unittest.mock.call("config"), unittest.mock.call("data-model"), unittest.mock.call("core")])
         network.assert_not_called()
 
     def test_pending_kura_failure_stops_all_remaining_focused_execution(self):
@@ -2755,7 +2895,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
                     environment=self.env, lock_fds=())
         self.assertEqual([call.args[0] for call in run.call_args_list],
                          ["/copies/config", "/copies/core", "/copies/core", "/copies/cli"])
-        self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "core", "network", "cli"))
+        self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "data-model", "core", "network", "cli"))
         self.assertEqual(failed.exception.failures, ("/copies/core failed", "/copies/cli failed"))
         self.assertEqual([call.kwargs for call in run.call_args_list], [{}, {}, {}, {"batch": True}])
         network.assert_not_called()
@@ -2814,6 +2954,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
                     "core=" + self.core,), environment=self.env, lock_fds=(91,))
         self.assertEqual(order, ["metadata", "build"])
         self.assertEqual(self.metadata.call_args, compile.call_args)
+        self.assertTrue(compile.call_args.kwargs["normal_core_library_probe"])
         config.assert_not_called()
         run.assert_not_called()
         network.assert_not_called()
@@ -4228,6 +4369,25 @@ class NativeTestBatchBuildTests(unittest.TestCase):
                     gate.compile_test_harnesses(Path("/frozen"), self.env, harnesses=names)
                 spawn.assert_not_called()
 
+    def test_core_probe_codegen_keeps_the_metadata_feature_without_building_the_example(self):
+        names = ("config", "data-model", "core")
+        with patch.object(gate, "_build_harnesses") as build:
+            gate.compile_test_harnesses(Path("/frozen"), self.env, harnesses=names,
+                                        lock_fds=(77,), normal_core_library_probe=True)
+        command = build.call_args.args[1]
+        self.assertEqual(command, [
+            "/fixed/cargo", "--config", "/frozen/.cargo/config.toml", "test",
+            "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
+            "-p", "iroha_config", "-p", "iroha_data_model", "-p", "iroha_core",
+            "--test", "taira_config_contracts", "--lib",
+            "--features", "iroha_core/iroha-core-tests", "--no-run",
+            "--message-format=json-render-diagnostics",
+        ])
+        self.assertNotIn("--example", command)
+        self.assertIs(build.call_args.args[2], self.env)
+        self.assertEqual(build.call_args.args[3], names)
+        self.assertEqual(build.call_args.args[4], (77,))
+
     def test_metadata_and_codegen_report_implicit_targets_without_selecting_their_artifacts(self):
         names = ("config", "core", "network")
         events = [CargoBuildProgressTests.event(gate.HARNESS_TARGETS[name][1],
@@ -4363,6 +4523,71 @@ class NativeTestMetadataCheckTests(unittest.TestCase):
             isolate.assert_not_called()
             self.assertIn("full harness compilation remains required", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
+
+    @staticmethod
+    def probe_artifact(name, kind, *, test=False, features=None):
+        if features is None:
+            features = ["iroha-core-tests"] if name == "iroha_core" and kind == "lib" else []
+        return json.dumps({"reason": "compiler-artifact", "target": {
+            "name": name, "kind": [kind]}, "profile": {"test": test},
+            "features": features,
+            "executable": None, "filenames": ["/warm/metadata.rmeta"]}) + "\n"
+
+    def test_core_only_probe_checks_normal_library_in_one_warm_metadata_graph(self):
+        names = ("config", "data-model", "core")
+        lines = "".join(self.artifact(name) for name in names)
+        lines += self.probe_artifact("iroha_core", "lib")
+        lines += self.probe_artifact(gate.CORE_NORMAL_LIBRARY_PROBE_EXAMPLE, "example")
+        output = io.StringIO()
+        with patch.object(gate.subprocess, "Popen", return_value=self.process(lines)) as spawn, \
+             contextlib.redirect_stdout(output):
+            gate.check_test_harnesses(Path("/frozen"), self.env, harnesses=names,
+                                      lock_fds=(77, 88), normal_core_library_probe=True)
+        self.assertEqual(spawn.call_count, 1)
+        self.assertEqual(spawn.call_args.args[0], [
+            "/fixed/cargo", "--config", "/frozen/.cargo/config.toml", "check",
+            "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
+            "-p", "iroha_config", "-p", "iroha_data_model", "-p", "iroha_core",
+            "--test", "taira_config_contracts", "--lib", "--example", "race_prover",
+            "--features", "iroha_core/iroha-core-tests", "--profile", "test",
+            "--message-format=json-render-diagnostics",
+        ])
+        self.assertIs(spawn.call_args.kwargs["env"], self.env)
+        self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
+        for forbidden in ("--tests", "--all-targets", "--target-dir", "--jobs", "-j"):
+            self.assertNotIn(forbidden, spawn.call_args.args[0])
+        self.assertIn("normal Core library checked", output.getvalue())
+
+    def test_core_only_probe_requires_normal_library_and_exact_example_artifacts(self):
+        names = ("config", "data-model", "core")
+        selected = "".join(self.artifact(name) for name in names)
+        normal = self.probe_artifact("iroha_core", "lib")
+        example = self.probe_artifact(gate.CORE_NORMAL_LIBRARY_PROBE_EXAMPLE, "example")
+        cases = (
+            (example, "omitted normal Core library"),
+            (self.artifact("core") + example, "omitted normal Core library"),
+            (self.probe_artifact("iroha_core", "bin") + example, "omitted normal Core library"),
+            (self.probe_artifact("iroha_core", "lib", features=[]) + example,
+             "normal Core library omitted fixture feature"),
+            (normal, "omitted Core library probe example"),
+            (normal + self.probe_artifact(gate.CORE_NORMAL_LIBRARY_PROBE_EXAMPLE, "bin"),
+             "omitted Core library probe example"),
+        )
+        for observations, message in cases:
+            with self.subTest(message=message, observations=observations), \
+                 patch.object(gate.subprocess, "Popen",
+                              return_value=self.process(selected + observations)), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(gate.CheckError, message):
+                    gate.check_test_harnesses(Path("/frozen"), self.env, harnesses=names,
+                                              normal_core_library_probe=True)
+
+    def test_core_only_probe_requires_core_selection_before_cargo(self):
+        with patch.object(gate.subprocess, "Popen") as spawn:
+            with self.assertRaisesRegex(gate.CheckError, "requires the Core harness"):
+                gate.check_test_harnesses(Path("/frozen"), self.env, harnesses=("config",),
+                                          normal_core_library_probe=True)
+        spawn.assert_not_called()
 
     def test_metadata_requires_every_selected_test_target_not_normal_library_artifacts(self):
         names = ("core", "cli", "network")

@@ -100,6 +100,7 @@ impl OpeningResources {
             retransmit_interval: self.retransmit_interval,
             held: Vec::new(),
             retired: std::collections::VecDeque::new(),
+            retirement_cleanup: None,
             completion: None,
             effect_limit: self.effect_limit,
             failed: false,

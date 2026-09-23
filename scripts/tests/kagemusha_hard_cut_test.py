@@ -292,6 +292,13 @@ class KagemushaHardCutTests(unittest.TestCase):
             self.assertIsNotNone(_retired_identity(payload))
         retired_route = b"/v1/" + _reversed("line", "off") + b"/readiness"
         self.assertIsNotNone(_retired_identity(retired_route))
+        registration_suffix = b"/assets/{asset_definition_id}/registration"
+        self.assertIsNotNone(
+            _retired_identity(b"/v1/" + _reversed("line", "off") + registration_suffix)
+        )
+        self.assertIsNone(
+            _retired_identity(b"/v1/assets/definitions/{asset}/registration")
+        )
         allowed_route = b"/v1/" + b"kagemusha/readiness"
         self.assertIsNone(_retired_identity(b"KAGEMUSHA kgm1: " + allowed_route))
 

@@ -2,6 +2,9 @@
 use super::super::super::{EdgeAdmittedReleaseV1, ValidatorAdmittedReleaseV1};
 use super::*;
 
+#[path = "taira_public_reset_dispatcher_runtime_capture.rs"]
+pub(in super::super::super) mod capture;
+
 /// Derive a transition plan without replacing controllers, services, or ledger state.
 #[derive(clap::Args, Debug)]
 pub(in super::super::super) struct PrepareDispatcherTransition {
