@@ -36,13 +36,8 @@ impl std::fmt::Debug for CarrierArchivePublicationError {
     }
 }
 
-impl<Admission, BindingAdmission>
-    DecisionBoundCarrierJournals<
-        Admission,
-        BindingAdmission,
-        DetachedCarrierComponents,
-        KuraWsvCheckpointReceipt,
-    >
+impl<Admission>
+    DecisionBoundCarrierJournals<Admission, DetachedCarrierComponents, KuraWsvCheckpointReceipt>
 {
     /// Authenticate and publish the original captures in provider/reputation order.
     ///

@@ -3,6 +3,8 @@
 
 use super::*;
 use iroha_core::zk::{kagemusha_v1_recursion::*, kagemusha_v1_state::*};
+#[cfg(unix)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{result::Result, sync::Mutex};
 
 fn lane(fixture: &Fixture) -> KagemushaLaneIdV1 {
@@ -450,6 +452,7 @@ struct InterruptedApplet {
     template: KagemushaHardwareTransactionSubjectV1,
     key: SigningKey,
     committed: Mutex<Option<([u8; 32], KagemushaHardwareTransactionV1, Vec<u8>)>>,
+    calls: AtomicUsize,
 }
 
 #[cfg(unix)]
@@ -459,6 +462,7 @@ impl KagemushaHardwareTransactionTransportV1 for InterruptedApplet {
         id: [u8; 32],
         transaction: &KagemushaHardwareTransactionV1,
     ) -> Result<Vec<u8>, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         let mut committed = self.committed.lock().unwrap();
         if let Some((original_id, original, bytes)) = &*committed {
             if *original_id != id || original != transaction {
@@ -476,6 +480,104 @@ impl KagemushaHardwareTransactionTransportV1 for InterruptedApplet {
 
 #[cfg(unix)]
 #[test]
+fn hardware_journal_rejects_invalid_intent_before_wal_or_device_changes() {
+    let fixture = Fixture::new();
+    let transaction = KagemushaHardwareTransactionV1::DurabilityAnchor(anchor(&fixture));
+    let applet = Arc::new(InterruptedApplet {
+        template: subject(&fixture, transaction.clone()),
+        key: fixture.device.clone(),
+        committed: Mutex::new(None),
+        calls: AtomicUsize::new(0),
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("transactions");
+    let mut journal = KagemushaHardwareTransactionJournalV1::create_new(
+        &path,
+        verifier(&fixture),
+        applet.clone(),
+    )
+    .unwrap();
+    let initial = journal.recovery_prefix().unwrap();
+    assert!(journal.commit_or_recover([0; 32], transaction).is_err());
+    let mut malformed = anchor(&fixture);
+    malformed.version = 2;
+    assert!(
+        journal
+            .commit_or_recover(
+                [74; 32],
+                KagemushaHardwareTransactionV1::DurabilityAnchor(malformed),
+            )
+            .is_err()
+    );
+    let mut checkpoint = auxiliary_transactions(&fixture).pop().unwrap();
+    if let KagemushaHardwareTransactionV1::RecoveryCheckpoint(value) = &mut checkpoint {
+        value.operation_id = [75; 32];
+    }
+    assert!(journal.commit_or_recover([74; 32], checkpoint).is_err());
+    let prefix = KagemushaRecoveryJournalPrefixV1 {
+        byte_len: 128,
+        sequence: 1,
+        head: [25; 32],
+    };
+    let observation = KagemushaHardwareTransactionV1::CurrentCheckpoint {
+        statement: anchor(&fixture),
+        journals: KagemushaRecoveryJournalsV1 {
+            coordinator: prefix,
+            responses: prefix,
+            response_history_root: [26; 32],
+            retirement_transition_id: [27; 32],
+        },
+        challenge: [74; 32],
+    };
+    // Even a structurally valid observation is never a durable retryable operation.
+    observation.validate().unwrap();
+    assert!(journal.commit_or_recover([74; 32], observation).is_err());
+    assert_eq!(journal.recovery_prefix().unwrap(), initial);
+    assert!(applet.committed.lock().unwrap().is_none());
+    assert_eq!(applet.calls.load(Ordering::SeqCst), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn hardware_journal_rejects_descriptor_replacement_before_pending_retry() {
+    let fixture = Fixture::new();
+    let transaction = KagemushaHardwareTransactionV1::DurabilityAnchor(anchor(&fixture));
+    let applet = Arc::new(InterruptedApplet {
+        template: subject(&fixture, transaction.clone()),
+        key: fixture.device.clone(),
+        committed: Mutex::new(None),
+        calls: AtomicUsize::new(0),
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("transactions");
+    let mut journal = KagemushaHardwareTransactionJournalV1::create_new(
+        &path,
+        verifier(&fixture),
+        applet.clone(),
+    )
+    .unwrap();
+    assert!(
+        journal
+            .commit_or_recover([74; 32], transaction.clone())
+            .is_err()
+    );
+    let original = applet.committed.lock().unwrap().as_ref().unwrap().2.clone();
+    assert_eq!(applet.calls.load(Ordering::SeqCst), 1);
+    let wal = path.join("hardware-transactions.norito.wal");
+    let replacement = path.join("copied-wal");
+    std::fs::copy(&wal, &replacement).unwrap();
+    std::fs::rename(&replacement, &wal).unwrap();
+    assert!(journal.commit_or_recover([74; 32], transaction).is_err());
+    assert!(journal.recovery_prefix().is_err());
+    assert_eq!(applet.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        applet.committed.lock().unwrap().as_ref().unwrap().2,
+        original
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn hardware_journal_recovers_commit_loss_and_exact_exposed_bytes() {
     let fixture = Fixture::new();
     let transaction = KagemushaHardwareTransactionV1::DurabilityAnchor(anchor(&fixture));
@@ -483,6 +585,7 @@ fn hardware_journal_recovers_commit_loss_and_exact_exposed_bytes() {
         template: subject(&fixture, transaction.clone()),
         key: fixture.device.clone(),
         committed: Mutex::new(None),
+        calls: AtomicUsize::new(0),
     });
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("transactions");
@@ -499,6 +602,7 @@ fn hardware_journal_recovers_commit_loss_and_exact_exposed_bytes() {
     assert!(prepared.byte_len > initial.byte_len);
     assert_eq!(prepared.sequence, initial.sequence + 1);
     let expected = applet.committed.lock().unwrap().as_ref().unwrap().2.clone();
+    assert_eq!(applet.calls.load(Ordering::SeqCst), 1);
     drop(journal);
     let mut journal = KagemushaHardwareTransactionJournalV1::open_existing(
         &path,
@@ -511,6 +615,7 @@ fn hardware_journal_recovers_commit_loss_and_exact_exposed_bytes() {
         expected
     );
     let completed = journal.recovery_prefix().unwrap();
+    assert_eq!(applet.calls.load(Ordering::SeqCst), 2);
     assert_eq!(completed.sequence, prepared.sequence + 1);
     assert_eq!(
         journal.commit_or_recover(id, transaction.clone()).unwrap(),
@@ -529,12 +634,16 @@ fn hardware_journal_recovers_commit_loss_and_exact_exposed_bytes() {
     );
     assert_eq!(journal.recovery_prefix().unwrap(), completed);
     drop(journal);
-    let mut journal =
-        KagemushaHardwareTransactionJournalV1::open_existing(&path, verifier(&fixture), applet)
-            .unwrap();
+    let mut journal = KagemushaHardwareTransactionJournalV1::open_existing(
+        &path,
+        verifier(&fixture),
+        applet.clone(),
+    )
+    .unwrap();
     assert_eq!(
         journal.commit_or_recover(id, transaction).unwrap(),
         expected
     );
     assert_eq!(journal.recovery_prefix().unwrap(), completed);
+    assert_eq!(applet.calls.load(Ordering::SeqCst), 2);
 }

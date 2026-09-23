@@ -37,7 +37,9 @@ Metadata retains its canonical sequence-of-tuples binary layout, duplicate-key
 rejection, decode-allocation accounting and streaming serializer. Its owner tests
 include a separate allocation-tracking executable.
 
-JSON object-key and `mv` storage-key implementations live with the owned types.
+JSON object-key and `norito::json::JsonKeyCodec` implementations live with the
+owned types. The production model depends on the codec, not the MV storage
+engine; real storage round trips retain MV only as a development dependency.
 The `ffi_export` and `transparent_api` features forward the existing opaque FFI
 and model-macro behavior. Metadata's shared opaque-handle operations use the
 `iroha_model_base` symbol prefix; the aggregate composition point owns the single

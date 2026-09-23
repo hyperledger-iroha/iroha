@@ -77,3 +77,11 @@ where
         &self.metadata
     }
 }
+
+// TODO: connect the original authenticated key owner before stored proof admission.
+#[allow(dead_code)]
+pub(crate) mod reads;
+
+// TODO: connect the original authenticated consuming key owner before proof admission.
+#[allow(dead_code)]
+pub(crate) mod snapshot;

@@ -90,6 +90,9 @@ mod compact_prover_resources;
 mod compact_public_api;
 #[path = "backend/compact_public_batch.rs"]
 mod compact_public_batch;
+#[cfg(test)]
+#[path = "backend/compact_public_columns.rs"]
+mod compact_public_columns;
 #[path = "backend/compact_public_transfer.rs"]
 mod compact_public_transfer;
 #[cfg(test)]
@@ -109,12 +112,33 @@ mod compact_v1;
 #[path = "backend/compact_value_domain.rs"]
 mod compact_value_domain;
 #[cfg(test)]
+#[path = "backend/deep_binding.rs"]
+mod deep_binding;
+#[cfg(test)]
+#[path = "backend/deep_composition.rs"]
+mod deep_composition;
+#[cfg(test)]
+#[path = "backend/deep_engine.rs"]
+mod deep_engine;
+#[cfg(test)]
+#[path = "backend/deep_geometry.rs"]
+mod deep_geometry;
+#[cfg(test)]
+#[path = "backend/deep_polynomial.rs"]
+mod deep_polynomial;
+#[cfg(test)]
+#[path = "backend/deep_proof.rs"]
+mod deep_proof;
+#[cfg(test)]
 #[path = "backend/extension_trace.rs"]
 mod extension_trace;
 #[path = "backend/fixed_domain.rs"]
 mod fixed_domain;
 #[path = "backend/fixed_schedule.rs"]
 mod fixed_schedule;
+#[cfg(test)]
+#[path = "backend/fri_fold.rs"]
+mod fri_fold;
 #[path = "backend/fri_openings.rs"]
 mod fri_openings;
 #[path = "backend/merkle_multiproof.rs"]

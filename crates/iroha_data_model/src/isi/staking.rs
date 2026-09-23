@@ -1,8 +1,10 @@
+//! Stake-backed public-lane validator admission, custody, and rewards.
 use super::*;
 use crate::{
-    account::AccountId, asset::AssetId, block::consensus::Evidence, nexus::PublicLaneRewardShare,
+    account::AccountId, asset::AssetId, block::consensus::Evidence,
+    nexus::{PublicLaneRewardShare, PublicLaneMonetaryPlanV1, PublicLaneRewardClaimPlanV1},
 };
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, SignatureOf};
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::LaneId;
@@ -28,6 +30,7 @@ impl ActivatePublicLaneValidator {
 }
 isi! {
     /// Request graceful exit for a validator and release its slot.
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::staking::ExitPublicLaneValidator")]
     pub struct ExitPublicLaneValidator {
         /// Lane that the validator targets.
@@ -55,8 +58,71 @@ isi! {
         pub initial_stake: Quantity,
         /// Metadata documenting commission, jurisdiction flags, telemetry ids, etc.
         pub metadata: Metadata,
+        /// Signed exact transfer, custody effect, and current-state precondition.
+        pub monetary_plan: PublicLaneMonetaryPlanV1,
     }
 }
+/// Domain-separated consent from a fresh consensus peer to its stake-owning account.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::isi::staking::PublicLaneCandidateAuthorization")]
+pub struct PublicLaneCandidateAuthorization {
+    /// Protocol domain separating this signature from every other signed message.
+    domain: String,
+    /// Genesis-derived identity of the network admitting the candidate.
+    pub network_id: crate::NetworkId,
+    /// Exact validator identity, lane, peer, stake, and metadata authorized by the peer.
+    pub registration: RegisterPublicLaneValidator,
+    /// Exact planned eligibility boundary; consent cannot authorize a later tenure.
+    pub activation_height: u64,
+}
+impl PublicLaneCandidateAuthorization {
+    /// Build the exact message that a candidate consensus key must sign.
+    #[must_use]
+    pub fn new(
+        network_id: crate::NetworkId,
+        registration: RegisterPublicLaneValidator,
+        activation_height: u64,
+    ) -> Self {
+        Self {
+            domain: "iroha.staking.public_lane_candidate.v1".to_owned(),
+            network_id,
+            registration,
+            activation_height,
+        }
+    }
+}
+isi! {
+    /// Atomically admit a fresh consensus peer and escrow its owner's validator stake.
+    ///
+    /// Admission schedules eligibility after key activation and the next unfrozen election;
+    /// it never grants membership of the current committee.
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+    #[norito_schema(name = "iroha_data_model::isi::staking::RegisterPublicLaneCandidate")]
+    pub struct RegisterPublicLaneCandidate {
+        /// Exact registration consented to by the transaction account and consensus peer.
+        pub registration: RegisterPublicLaneValidator,
+        /// Expected election boundary, signed by the peer and recomputed at admission.
+        pub activation_height: u64,
+        /// BLS-normal proof of possession for the fresh peer identity.
+        pub proof_of_possession: Vec<u8>,
+        /// Peer signature over the network-bound candidate authorization.
+        pub peer_signature: SignatureOf<PublicLaneCandidateAuthorization>,
+    }
+}
+impl crate::seal::Instruction for RegisterPublicLaneCandidate {}
 impl RegisterPublicLaneValidator {
     /// Build a public-lane validator registration instruction.
     #[must_use]
@@ -67,6 +133,7 @@ impl RegisterPublicLaneValidator {
         stake_account: AccountId,
         initial_stake: Quantity,
         metadata: Metadata,
+        monetary_plan: PublicLaneMonetaryPlanV1,
     ) -> Self {
         Self {
             lane_id,
@@ -75,6 +142,61 @@ impl RegisterPublicLaneValidator {
             stake_account,
             initial_stake,
             metadata,
+            monetary_plan,
+        }
+    }
+}
+/// Domain-separated peer consent to a pending validator's replacement binding.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::isi::staking::PublicLanePeerBindingAuthorization")]
+pub struct PublicLanePeerBindingAuthorization {
+    /// Protocol domain separating peer rebinding from initial registration.
+    domain: String,
+    /// Genesis-derived network identity.
+    pub network_id: crate::NetworkId,
+    /// Lane containing the pending validator.
+    pub lane_id: LaneId,
+    /// Account that owns validator stake and authority.
+    pub validator: AccountId,
+    /// Replacement consensus peer consenting to the binding.
+    pub peer_id: PeerId,
+    /// Pending validator tenure to which this consent is restricted.
+    pub activation_height: u64,
+    /// Existing peer binding replaced by this consent.
+    pub previous_peer_id: PeerId,
+}
+impl PublicLanePeerBindingAuthorization {
+    /// Construct the canonical replacement peer's consent message.
+    #[must_use]
+    pub fn new(
+        network_id: crate::NetworkId,
+        lane_id: LaneId,
+        validator: AccountId,
+        peer_id: PeerId,
+        activation_height: u64,
+        previous_peer_id: PeerId,
+    ) -> Self {
+        Self {
+            domain: "iroha.staking.public_lane_peer_binding.v1".to_owned(),
+            network_id,
+            lane_id,
+            validator,
+            peer_id,
+            activation_height,
+            previous_peer_id,
         }
     }
 }
@@ -89,6 +211,8 @@ isi! {
         pub validator: AccountId,
         /// Replacement peer identity that signs consensus messages for the lane.
         pub peer_id: PeerId,
+        /// Replacement peer consent; absent only for its own account signatory or peer administrators.
+        pub peer_signature: Option<SignatureOf<PublicLanePeerBindingAuthorization>>,
     }
 }
 impl RebindPublicLaneValidatorPeer {
@@ -99,11 +223,22 @@ impl RebindPublicLaneValidatorPeer {
             lane_id,
             validator,
             peer_id,
+            peer_signature: None,
         }
+    }
+    /// Attach network-bound consent from the replacement consensus peer.
+    #[must_use]
+    pub fn with_peer_signature(
+        mut self,
+        signature: SignatureOf<PublicLanePeerBindingAuthorization>,
+    ) -> Self {
+        self.peer_signature = Some(signature);
+        self
     }
 }
 isi! {
     /// Bond additional stake for an existing validator (self or delegator supplied).
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::staking::BondPublicLaneStake")]
     pub struct BondPublicLaneStake {
         /// Lane identifier.
@@ -116,7 +251,61 @@ isi! {
         pub amount: Quantity,
         /// Optional metadata captured for dashboards/audit trails.
         pub metadata: Metadata,
+        /// Signed exact transfer, custody effect, and current-state precondition.
+        pub monetary_plan: PublicLaneMonetaryPlanV1,
     }
+}
+
+/// Construct a complete exact monetary plan for codec and visitor tests only.
+#[cfg(test)]
+pub(crate) fn monetary_plan_fixture(
+    source: &AccountId,
+    destination: &AccountId,
+    amount: u64,
+    precondition: crate::nexus::PublicLaneMonetaryPreconditionV1,
+) -> PublicLaneMonetaryPlanV1 {
+    let definition = crate::asset::AssetDefinitionId::from_uuid_bytes([
+        1, 2, 3, 4, 5, 6, 0x47, 8, 0x89, 10, 11, 12, 13, 14, 15, 16,
+    ])
+    .expect("monetary fixture UUIDv4");
+    let plan = PublicLaneMonetaryPlanV1 {
+        network_scope: crate::nexus::PublicLaneMonetaryScopeV1::Network(
+            crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                Hash::new(b"staking-monetary-codec-fixture"),
+            )),
+        ),
+        valid_until_height: 64,
+        source_asset: AssetId::new(definition.clone(), source.clone()),
+        destination_asset: AssetId::new(definition, destination.clone()),
+        amount: Quantity::from(amount),
+        precondition,
+    };
+    assert!(
+        plan.has_canonical_shape(),
+        "canonical monetary codec fixture"
+    );
+    plan
+}
+
+/// Supply an explicit registration precondition to codec and constructor tests.
+#[cfg(test)]
+pub(crate) fn registration_plan_fixture(
+    staker: &AccountId,
+    amount: u64,
+) -> PublicLaneMonetaryPlanV1 {
+    let custody =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x7A; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("monetary fixture custody key");
+    monetary_plan_fixture(
+        staker,
+        &AccountId::new(custody.public_key().clone()),
+        amount,
+        crate::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+            crate::nexus::PublicLaneRegistrationPreconditionV1 {
+                activation_height: 1,
+            },
+        ),
+    )
 }
 #[cfg(test)]
 mod tests {
@@ -134,6 +323,124 @@ mod tests {
         let key_pair = KeyPair::try_from_seed(vec![0x22; 32], Algorithm::Ed25519)
             .expect("derive checked staking fixture peer keypair");
         PeerId::new(key_pair.public_key().clone())
+    }
+    fn candidate_fixture() -> (RegisterPublicLaneCandidate, crate::NetworkId) {
+        let network_id = crate::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"candidate-network")),
+        );
+        let key = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::BlsNormal)
+            .expect("BLS candidate key");
+        let mut monetary_plan = registration_plan_fixture(&sample_account(), 1000);
+        monetary_plan.network_scope = crate::nexus::PublicLaneMonetaryScopeV1::Network(network_id);
+        monetary_plan.precondition = crate::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+            crate::nexus::PublicLaneRegistrationPreconditionV1 {
+                activation_height: 13,
+            },
+        );
+        let registration = RegisterPublicLaneValidator::new(
+            LaneId::SINGLE,
+            sample_account(),
+            PeerId::new(key.public_key().clone()),
+            sample_account(),
+            Quantity::from(1000_u64),
+            Metadata::default(),
+            monetary_plan,
+        );
+        let authorization =
+            PublicLaneCandidateAuthorization::new(network_id, registration.clone(), 13);
+        (
+            RegisterPublicLaneCandidate {
+                registration,
+                activation_height: 13,
+                proof_of_possession: iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("PoP"),
+                peer_signature: SignatureOf::try_new(key.private_key(), &authorization)
+                    .expect("peer consent"),
+            },
+            network_id,
+        )
+    }
+    #[test]
+    fn candidate_consent_binds_network_owner_lane_and_amount() {
+        let (candidate, network) = candidate_fixture();
+        let payload = PublicLaneCandidateAuthorization::new(
+            network,
+            candidate.registration.clone(),
+            candidate.activation_height,
+        );
+        candidate
+            .peer_signature
+            .verify(candidate.registration.peer_id.public_key(), &payload)
+            .expect("valid consent");
+        let mut alternatives = vec![payload.clone(); 6];
+        alternatives[0].network_id = crate::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"other-network")),
+        );
+        alternatives[1].registration.validator =
+            AccountId::new(sample_peer_id().public_key().clone());
+        alternatives[2].registration.lane_id = LaneId::new(7);
+        alternatives[3].registration.initial_stake = Quantity::from(999_u64);
+        alternatives[4].activation_height += 1;
+        alternatives[5].registration.monetary_plan.amount = Quantity::from(999_u64);
+        for changed in alternatives {
+            assert!(
+                candidate
+                    .peer_signature
+                    .verify(candidate.registration.peer_id.public_key(), &changed)
+                    .is_err()
+            );
+        }
+    }
+    #[test]
+    fn candidate_instruction_roundtrips_through_canonical_registry() {
+        let (candidate, _) = candidate_fixture();
+        crate::isi::test_support::assert_slice_roundtrip(candidate.clone());
+        let registry = crate::isi::InstructionRegistry::new()
+            .register_with_id_slice::<RegisterPublicLaneCandidate>(
+                "iroha.staking.register_public_lane_candidate",
+            );
+        crate::isi::test_support::assert_registry_decodes(
+            &registry,
+            "iroha.staking.register_public_lane_candidate",
+            candidate.clone(),
+        );
+        let json = norito::json::to_json(&candidate).expect("candidate JSON");
+        let decoded: RegisterPublicLaneCandidate =
+            norito::json::from_str(&json).expect("candidate decode");
+        assert_eq!(candidate, decoded);
+    }
+    #[test]
+    #[ignore = "explicit maintenance command prints canonical changed staking frame fixtures"]
+    fn print_staking_admission_record_fixture_rows() {
+        let (candidate, network_id) = candidate_fixture();
+        let rebind = RebindPublicLaneValidatorPeer::new(
+            candidate.registration.lane_id,
+            candidate.registration.validator.clone(),
+            candidate.registration.peer_id.clone(),
+        );
+        let peer_key =
+            KeyPair::try_from_seed(vec![0x31; 32], Algorithm::BlsNormal).expect("fixture peer");
+        let consent = PublicLanePeerBindingAuthorization::new(
+            network_id,
+            rebind.lane_id,
+            rebind.validator.clone(),
+            rebind.peer_id.clone(),
+            13,
+            sample_peer_id(),
+        );
+        let signed_rebind = rebind.clone().with_peer_signature(
+            SignatureOf::try_new(peer_key.private_key(), &consent)
+                .expect("fixture rebind signature"),
+        );
+        let rows = vec![
+            crate::isi::generated_record_identity_tests::capture(candidate),
+            crate::isi::generated_record_identity_tests::capture(rebind),
+            crate::isi::generated_record_identity_tests::capture(signed_rebind),
+        ];
+        println!(
+            "STAKING_ADMISSION_FIXTURE_ROWS={}",
+            norito::json::to_json(&rows).expect("fixture rows")
+        );
     }
     #[test]
     fn activate_public_lane_validator_new_sets_fields() {
@@ -154,6 +461,7 @@ mod tests {
             validator.clone(),
             Quantity::from(10_u64),
             metadata.clone(),
+            registration_plan_fixture(&validator, 10),
         );
         assert_eq!(*instruction.lane_id(), LaneId::SINGLE);
         assert_eq!(instruction.validator(), &validator);
@@ -161,6 +469,10 @@ mod tests {
         assert_eq!(instruction.stake_account(), &validator);
         assert_eq!(instruction.initial_stake(), &Quantity::from(10_u64));
         assert_eq!(instruction.metadata(), &metadata);
+        assert_eq!(
+            instruction.monetary_plan(),
+            &registration_plan_fixture(&validator, 10)
+        );
     }
     #[test]
     fn rebind_public_lane_validator_peer_new_sets_fields() {
@@ -175,6 +487,7 @@ mod tests {
 }
 isi! {
     /// Schedule stake withdrawal for a validator or delegator.
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::staking::SchedulePublicLaneUnbond")]
     pub struct SchedulePublicLaneUnbond {
         /// Lane identifier.
@@ -193,6 +506,7 @@ isi! {
 }
 isi! {
     /// Finalise a previously scheduled stake withdrawal once the unlock timer expires.
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::staking::FinalizePublicLaneUnbond")]
     pub struct FinalizePublicLaneUnbond {
         /// Lane identifier.
@@ -203,6 +517,8 @@ isi! {
         pub staker: AccountId,
         /// Identifier of the withdrawal request that is being completed.
         pub request_id: Hash,
+        /// Signed exact transfer, custody effect, and current-state precondition.
+        pub monetary_plan: PublicLaneMonetaryPlanV1,
     }
 }
 isi! {
@@ -223,6 +539,8 @@ isi! {
         pub reason_code: String,
         /// Metadata documenting evidence digests, governance proposal ids, etc.
         pub metadata: Metadata,
+        /// Signed exact transfer, custody effect, and current-state precondition.
+        pub monetary_plan: PublicLaneMonetaryPlanV1,
     }
 }
 isi! {
@@ -235,6 +553,7 @@ isi! {
 }
 isi! {
     /// Record a reward distribution for a public lane epoch.
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::staking::RecordPublicLaneRewards")]
     pub struct RecordPublicLaneRewards {
         /// Lane identifier.
@@ -252,15 +571,16 @@ isi! {
     }
 }
 isi! {
-    /// Claim pending public-lane rewards for an account up to an optional epoch (inclusive).
+    /// Process a bounded signed reward prefix and pay exact accrued entitlements.
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::staking::ClaimPublicLaneRewards")]
     pub struct ClaimPublicLaneRewards {
         /// Lane identifier.
         pub lane_id: LaneId,
         /// Account receiving the rewards.
         pub account: AccountId,
-        /// Upper bound for epochs to claim (inclusive). If omitted, claims all available epochs.
-        pub upto_epoch: Option<u64>,
+        /// Exact bounded reward records, retained accruals, and payments authorized by the recipient.
+        pub claim_plan: PublicLaneRewardClaimPlanV1,
     }
 }
 impl crate::seal::Instruction for RegisterPublicLaneValidator {}
@@ -276,6 +596,43 @@ impl crate::seal::Instruction for RecordPublicLaneRewards {}
 impl crate::seal::Instruction for ClaimPublicLaneRewards {}
 fn staking_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
+}
+impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPublicLaneCandidate {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = staking_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+        let mut offset = 0usize;
+        let registration = super::decode_aos_canonical_field::<RegisterPublicLaneValidator>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let activation_height = super::decode_aos_canonical_field::<u64>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let proof_of_possession = super::decode_aos_canonical_field::<Vec<u8>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let peer_signature = super::decode_aos_canonical_field::<
+            SignatureOf<PublicLaneCandidateAuthorization>,
+        >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                registration,
+                activation_height,
+                proof_of_possession,
+                peer_signature,
+            },
+            offset,
+        ))
+    }
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPublicLaneValidator {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -308,6 +665,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPublicLaneValidator {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let monetary_plan = super::decode_aos_canonical_field::<PublicLaneMonetaryPlanV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -320,6 +681,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPublicLaneValidator {
                 stake_account,
                 initial_stake,
                 metadata,
+                monetary_plan,
             },
             offset,
         ))
@@ -344,6 +706,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RebindPublicLaneValidatorPeer {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let peer_signature = super::decode_aos_canonical_field::<
+            Option<SignatureOf<PublicLanePeerBindingAuthorization>>,
+        >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -353,6 +718,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RebindPublicLaneValidatorPeer {
                 lane_id,
                 validator,
                 peer_id,
+                peer_signature,
             },
             offset,
         ))
@@ -459,6 +825,7 @@ mod slice_tests {
         stake_account: AccountId,
         initial_stake: Numeric,
         metadata: Metadata,
+        monetary_plan: PublicLaneMonetaryPlanV1,
     }
     #[derive(norito::codec::Encode)]
     struct ForgedBondPublicLaneStake {
@@ -467,6 +834,7 @@ mod slice_tests {
         staker: AccountId,
         amount: Numeric,
         metadata: Metadata,
+        monetary_plan: PublicLaneMonetaryPlanV1,
     }
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -491,10 +859,10 @@ mod slice_tests {
         let network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
         );
-        let mint_finality_roster = crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+        let mint_finality_roster = crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
             version: crate::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
-            epoch: 0,
+            generation: 0,
             validators: roster
                 .iter()
                 .enumerate()
@@ -511,17 +879,15 @@ mod slice_tests {
                 })
                 .collect(),
         };
-        let mint_finality_epoch_id = mint_finality_roster
-            .finality_epoch_id()
-            .expect("valid fixture mint-finality roster");
+        let mint_finality_authorization = crate::block::consensus_v2::test_kagemusha_genesis_authorization(&mint_finality_roster, 2);
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
-            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
-            epoch_end_height: 1,
+            kagemusha_mint_finality_authorization: mint_finality_authorization,
+            kagemusha_mint_finality_authority: mint_finality_roster,
+            epoch_end_height: 2,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: None,
@@ -540,6 +906,7 @@ mod slice_tests {
             },
             leader_seed: [0xA5; 32],
         };
+        context.validate().expect("canonical non-boundary evidence fixture");
         let round = ConsensusRound {
             context_id: context.id(),
             height: context.height,
@@ -575,11 +942,13 @@ mod slice_tests {
             stake_account: account(0x13),
             initial_stake: Quantity::from(10_u64),
             metadata: Metadata::default(),
+            monetary_plan: registration_plan_fixture(&account(0x13), 10),
         });
         assert_slice_roundtrip(RebindPublicLaneValidatorPeer {
             lane_id: LaneId::SINGLE,
             validator: account(0x11),
             peer_id: peer(0x14),
+            peer_signature: None,
         });
         assert_slice_roundtrip(ActivatePublicLaneValidator {
             lane_id: LaneId::SINGLE,
@@ -622,6 +991,7 @@ mod slice_tests {
                 stake_account: account(0x13),
                 initial_stake: Quantity::from(10_u64),
                 metadata: Metadata::default(),
+                monetary_plan: registration_plan_fixture(&account(0x13), 10),
             },
         );
         assert_registry_decodes(
@@ -631,6 +1001,7 @@ mod slice_tests {
                 lane_id: LaneId::SINGLE,
                 validator: account(0x11),
                 peer_id: peer(0x14),
+                peer_signature: None,
             },
         );
         assert_registry_decodes(
@@ -669,30 +1040,54 @@ mod slice_tests {
     }
     #[test]
     fn negative_numeric_payloads_cannot_decode_as_staking_instructions() {
-        let forged_registration = ForgedRegisterPublicLaneValidator {
+        let mut forged_registration = ForgedRegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
             validator: account(0x31),
             peer_id: peer(0x32),
             stake_account: account(0x33),
             initial_stake: Numeric::new(-1_i32, 0),
             metadata: Metadata::default(),
+            monetary_plan: registration_plan_fixture(&account(0x33), 1),
         };
         let encoded = norito::codec::Encode::encode(&forged_registration);
         assert!(
             RegisterPublicLaneValidator::decode_from_slice(&encoded).is_err(),
             "a negative signed payload must not decode as validator initial stake"
         );
-        let forged_bond = ForgedBondPublicLaneStake {
+        forged_registration.initial_stake = Numeric::new(1_i32, 0);
+        let positive = norito::codec::Encode::encode(&forged_registration);
+        assert!(
+            RegisterPublicLaneValidator::decode_from_slice(&positive).is_ok(),
+            "the same complete payload with positive stake must decode"
+        );
+        let mut forged_bond = ForgedBondPublicLaneStake {
             lane_id: LaneId::SINGLE,
             validator: account(0x34),
             staker: account(0x35),
             amount: Numeric::new(-1_i32, 0),
             metadata: Metadata::default(),
+            monetary_plan: monetary_plan_fixture(
+                &account(0x35),
+                &account(0x34),
+                1,
+                crate::nexus::PublicLaneMonetaryPreconditionV1::Bond(
+                    crate::nexus::PublicLaneBondPreconditionV1 {
+                        activation_height: 1,
+                        peer_id: peer(0x36),
+                    },
+                ),
+            ),
         };
         let encoded = norito::codec::Encode::encode(&forged_bond);
         assert!(
             BondPublicLaneStake::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as bonded stake"
+        );
+        forged_bond.amount = Numeric::new(1_i32, 0);
+        let positive = norito::codec::Encode::encode(&forged_bond);
+        assert!(
+            BondPublicLaneStake::decode(&mut positive.as_slice()).is_ok(),
+            "the same complete payload with positive bonded stake must decode"
         );
     }
     #[test]
@@ -705,6 +1100,17 @@ mod slice_tests {
             staker: account(0x42),
             amount: Quantity::from(10_u64),
             metadata: Metadata::default(),
+            monetary_plan: monetary_plan_fixture(
+                &account(0x42),
+                &account(0x41),
+                10,
+                crate::nexus::PublicLaneMonetaryPreconditionV1::Bond(
+                    crate::nexus::PublicLaneBondPreconditionV1 {
+                        activation_height: 1,
+                        peer_id: peer(0x43),
+                    },
+                ),
+            ),
         };
         let flags =
             header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
@@ -723,7 +1129,7 @@ mod slice_tests {
         let mut lane_len = None;
         {
             let _guard = DecodeFlagsGuard::enter(flags);
-            for field in 0..5 {
+            for field in 0..6 {
                 if payload[0] & (1 << field) == 0 {
                     continue;
                 }
@@ -797,9 +1203,10 @@ mod json_tests {
             LaneId::new(1),
             validator.clone(),
             peer_id,
-            stake_account,
+            stake_account.clone(),
             Quantity::from(42u32),
             Metadata::default(),
+            super::registration_plan_fixture(&stake_account, 42),
         );
         let encoded = to_value(&isi).expect("encode RegisterPublicLaneValidator");
         let decoded: RegisterPublicLaneValidator =

@@ -148,7 +148,16 @@ impl Oracle {
 /// canonical body. State reuse changes physical work, never those input bytes.
 #[derive(Clone, Debug)]
 pub(super) struct Context {
+    profile: FramingProfile,
     prefix: Arc<AbsorbedPrefix>,
+}
+
+// A closed internal profile selector preserves the single canonical framing owner.
+#[derive(Clone, Copy, Debug)]
+enum FramingProfile {
+    Current,
+    #[cfg(test)]
+    Deep,
 }
 
 #[derive(Debug)]
@@ -174,33 +183,111 @@ struct PrefixFrame {
     context: Vec<u8>,
 }
 
-#[derive(Clone, Debug, NoritoSerialize, norito::NoritoSchema)]
-#[norito_schema(
-    name = "fastpq_prover::backend::compact_v1::Frame",
-    frame = "fastpq_prover::compact_v1::BodyV1"
-)]
-struct Frame {
+// These payload-only views preserve Vec<Vec<u8>> bytes without owning copies.
+// The protocol has exactly one leaf/predecessor field or two child/tape-root fields.
+/// Borrowed canonical body fields shared by the closed internal protocol owners.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum BodyFields<'a> {
+    /// One complete leaf or predecessor.
+    One(&'a [u8]),
+    /// Two complete children, or a whole tape followed by its committed root.
+    Two(&'a [u8], &'a [u8]),
+}
+
+#[derive(Clone, Copy)]
+struct ByteField<'a>(&'a [u8]);
+
+impl norito::core::SerializePayload for ByteField<'_> {
+    fn serialize(
+        &self,
+        writer: &mut norito::core::Encoder<'_>,
+    ) -> std::result::Result<(), norito::core::Error> {
+        // Vec<u8>'s specialization writes a fixed u64 count and the raw bytes.
+        let length =
+            u64::try_from(self.0.len()).map_err(|_| norito::core::Error::LengthMismatch)?;
+        norito::core::write_seq_len(writer, length)?;
+        writer.write_all(self.0)?;
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.len().checked_add(8)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.len().checked_add(8)
+    }
+}
+
+impl norito::core::SerializePayload for BodyFields<'_> {
+    fn serialize(
+        &self,
+        writer: &mut norito::core::Encoder<'_>,
+    ) -> std::result::Result<(), norito::core::Error> {
+        // Use Norito's existing sequence owner for counts, element lengths and
+        // checked emission. Both variants are stack arrays of borrowed views.
+        match self {
+            Self::One(field) => norito::core::write_element_sequence::<ByteField<'_>, _>(
+                writer,
+                [ByteField(field)],
+                norito::core::max_archive_len(),
+            ),
+            Self::Two(first, second) => norito::core::write_element_sequence::<ByteField<'_>, _>(
+                writer,
+                [ByteField(first), ByteField(second)],
+                norito::core::max_archive_len(),
+            ),
+        }
+    }
+}
+
+/// The sole canonical typed body layout; schema identity does not change.
+#[derive(Clone, Debug, NoritoSerialize)]
+pub(super) struct Frame<'a> {
     kind: u8,
     oracle: u8,
     round: u8,
     level: u32,
     position: u32,
     output_bytes: u32,
-    fields: Vec<Vec<u8>>,
+    fields: BodyFields<'a>,
+}
+
+// A lifetime is only an ownership detail. Preserve both existing identities;
+// the schema derive would append its lifetime placeholder to the nominal name.
+impl norito::NoritoSchema for Frame<'_> {
+    fn nominal_name() -> String {
+        "fastpq_prover::backend::compact_v1::Frame".to_owned()
+    }
+
+    fn frame_name() -> String {
+        "fastpq_prover::compact_v1::BodyV1".to_owned()
+    }
 }
 
 impl Context {
     /// Canonically frame and absorb one bounded immutable complete context.
     pub(super) fn new(bytes: &[u8]) -> Result<Self> {
+        Self::with_profile(bytes, IDENTITY, FramingProfile::Current)
+    }
+
+    /// Construct only the fixed private DEEP profile, using the same frame owner.
+    #[cfg(test)]
+    pub(super) fn new_deep(bytes: &[u8]) -> Result<Self> {
+        Self::with_profile(bytes, super::deep_binding::IDENTITY, FramingProfile::Deep)
+    }
+
+    fn with_profile(bytes: &[u8], identity: &[u8], profile: FramingProfile) -> Result<Self> {
         if bytes.is_empty() || bytes.len() > MAX_CONTEXT_BYTES {
             return Err(CandidateError::Context);
         }
         let encoded = norito::encode_canonical(&PrefixFrame {
             version: 1,
-            identity: IDENTITY.to_vec(),
+            identity: identity.to_vec(),
             context: bytes.to_vec(),
         })?;
         Ok(Self {
+            profile,
             prefix: Arc::new(AbsorbedPrefix {
                 encoded: Arc::from(encoded),
                 states: core::array::from_fn(|_| OnceLock::new()),
@@ -235,7 +322,30 @@ impl Context {
         round: u8,
         level: u32,
     ) -> Result<&GoldilocksDigest384OwnedDomainPrefixV1> {
-        let slot = Self::cache_slot(role, phase, round, level)?;
+        let slot = match self.profile {
+            FramingProfile::Current => Self::cache_slot(role, phase, round, level)?,
+            #[cfg(test)]
+            FramingProfile::Deep => {
+                const LEVELS: usize = super::deep_geometry::LDE_ROWS.ilog2() as usize + 1;
+                const ROUNDS: usize = 10;
+                const _: () = assert!(ROUNDS * LEVELS + ROUNDS <= PREFIX_CACHE_SLOTS);
+                if role == H_ROLE
+                    && phase == H_PHASE
+                    && usize::from(round) < ROUNDS
+                    && (level as usize) < LEVELS
+                {
+                    usize::from(round) * LEVELS + level as usize
+                } else if role == G_ROLE
+                    && phase == G_PHASE
+                    && (1..=ROUNDS as u8).contains(&round)
+                    && level == 0
+                {
+                    ROUNDS * LEVELS + usize::from(round - 1)
+                } else {
+                    return Err(CandidateError::Tree);
+                }
+            }
+        };
         self.prefix.states[slot]
             .get_or_init(|| {
                 GoldilocksDigest384OwnedDomainPrefixV1::new(GoldilocksDigest384OwnedDomainV1 {
@@ -273,13 +383,31 @@ impl Context {
         if output.len() != round.tape_bytes() || output.len() % 48 != 0 {
             return Err(CandidateError::TapeLength);
         }
+        self.expand_blocks(round.0, body, output)
+    }
+
+    /// Expand the complete tape of one fixed private DEEP message.
+    #[cfg(test)]
+    pub(super) fn expand_deep(
+        &self,
+        round: super::deep_binding::Round,
+        body: &[u8],
+        output: &mut [u8],
+    ) -> Result<()> {
+        if !matches!(self.profile, FramingProfile::Deep) || output.len() != round.tape_bytes() {
+            return Err(CandidateError::TapeLength);
+        }
+        self.expand_blocks(round.ordinal(), body, output)
+    }
+
+    fn expand_blocks(&self, round: u8, body: &[u8], output: &mut [u8]) -> Result<()> {
         // All scheduled blocks are materialized, including unconsumed coordinates.
         // These are F_p^6 outputs, never uniform 384-bit strings.
         for (block, target) in output.chunks_exact_mut(48).enumerate() {
             let digest = self.digest(
                 b"compact-transcript",
                 b"whole-field-tape-block",
-                round.0,
+                round,
                 0,
                 block as u64,
                 body,
@@ -289,7 +417,8 @@ impl Context {
         Ok(())
     }
 
-    fn hash_frame(&self, frame: &Frame) -> Result<Digest> {
+    /// Hash a body through the sole canonical cached framing owner.
+    pub(super) fn hash_frame(&self, frame: &Frame<'_>) -> Result<Digest> {
         let encoded = norito::encode_canonical(frame)?;
         self.digest(
             b"compact-commitment",
@@ -301,7 +430,8 @@ impl Context {
         )
     }
 
-    fn frame(
+    /// Construct a body for a closed internal protocol owner.
+    pub(super) fn frame<'a>(
         &self,
         kind: u8,
         oracle: u8,
@@ -309,8 +439,8 @@ impl Context {
         level: u32,
         position: u32,
         output_bytes: usize,
-        fields: Vec<Vec<u8>>,
-    ) -> Frame {
+        fields: BodyFields<'a>,
+    ) -> Frame<'a> {
         Frame {
             kind,
             oracle,
@@ -342,7 +472,7 @@ impl Context {
             0,
             index,
             H_OUTPUT_BYTES,
-            vec![payload.to_vec()],
+            BodyFields::One(payload),
         ))
     }
 
@@ -371,11 +501,11 @@ impl Context {
             level,
             index,
             H_OUTPUT_BYTES,
-            vec![left.to_le_bytes().to_vec(), right.to_le_bytes().to_vec()],
+            BodyFields::Two(&left.to_le_bytes(), &right.to_le_bytes()),
         ))
     }
 
-    fn challenge_frame(&self, round: Round, predecessor: Digest) -> Frame {
+    fn challenge_frame<'a>(&self, round: Round, predecessor: &'a [u8; 48]) -> Frame<'a> {
         self.frame(
             4,
             0,
@@ -383,11 +513,16 @@ impl Context {
             0,
             0,
             round.tape_bytes(),
-            vec![predecessor.to_le_bytes().to_vec()],
+            BodyFields::One(predecessor),
         )
     }
 
-    fn chain_frame(&self, round: Round, tape: Vec<u8>, root: Digest) -> Result<Frame> {
+    fn chain_frame<'a>(
+        &self,
+        round: Round,
+        tape: &'a [u8],
+        root: &'a [u8; 48],
+    ) -> Result<Frame<'a>> {
         if round.0 == 22 {
             return Err(CandidateError::Phase);
         }
@@ -401,7 +536,7 @@ impl Context {
             0,
             0,
             H_OUTPUT_BYTES,
-            vec![tape, root.to_le_bytes().to_vec()],
+            BodyFields::Two(tape, root),
         ))
     }
 }
@@ -501,8 +636,11 @@ impl Transcript {
             return Err(CandidateError::Phase);
         };
         let prepared = (|| {
-            let encoded =
-                norito::encode_canonical(&self.context.challenge_frame(round, self.predecessor))?;
+            let encoded = norito::encode_canonical(
+                &self
+                    .context
+                    .challenge_frame(round, &self.predecessor.to_le_bytes()),
+            )?;
             let mut raw = vec![0; round.tape_bytes()];
             fill(&self.context, round, &encoded, &mut raw)?;
             let message = decode_message(round, &raw)?;
@@ -533,7 +671,8 @@ impl Transcript {
         else {
             unreachable!()
         };
-        let frame = self.context.chain_frame(round, raw, root)?;
+        let root_bytes = root.to_le_bytes();
+        let frame = self.context.chain_frame(round, &raw, &root_bytes)?;
         self.predecessor = self.context.hash_frame(&frame)?;
         self.phase = Phase::Ready(Round::new(round.0 + 1)?);
         Ok(())
@@ -551,6 +690,68 @@ mod tests {
             slot.copy_from_slice(&value.to_le_bytes());
         }
         output
+    }
+
+    #[test]
+    fn fixed_deep_profile_reuses_one_shot_framing_without_changing_current_profile() {
+        let current = Context::new(b"same statement bytes").unwrap();
+        let deep = Context::new_deep(b"same statement bytes").unwrap();
+        let expected_prefix = norito::encode_canonical(&PrefixFrame {
+            version: 1,
+            identity: super::super::deep_binding::IDENTITY.to_vec(),
+            context: b"same statement bytes".to_vec(),
+        })
+        .unwrap();
+        assert_eq!(deep.prefix.encoded.as_ref(), expected_prefix);
+        assert_ne!(deep.prefix.encoded, current.prefix.encoded);
+        for (role, phase, round, level) in [
+            (H_ROLE, H_PHASE, 0, 23),
+            (H_ROLE, H_PHASE, 9, 0),
+            (G_ROLE, G_PHASE, 1, 0),
+            (G_ROLE, G_PHASE, 10, 0),
+        ] {
+            let expected = hash_bytes_384_v1(
+                GoldilocksDigestDomainV1 {
+                    catalog: FASTPQ_CATALOG_V1.as_bytes(),
+                    protocol: FASTPQ_FINAL_V1.name.as_bytes(),
+                    profile: &expected_prefix,
+                    role,
+                    phase,
+                    level: u64::from(level),
+                    index: 7,
+                    counter: u64::from(round),
+                },
+                &[b"same body"],
+            )
+            .unwrap();
+            assert_eq!(
+                deep.digest(role, phase, round, level, 7, b"same body")
+                    .unwrap(),
+                expected
+            );
+        }
+        for (role, phase, round, level) in [
+            (H_ROLE, H_PHASE, 10, 0),
+            (H_ROLE, H_PHASE, 0, 24),
+            (G_ROLE, G_PHASE, 0, 0),
+            (G_ROLE, G_PHASE, 11, 0),
+            (G_ROLE, G_PHASE, 1, 1),
+            (H_ROLE, G_PHASE, 1, 0),
+        ] {
+            assert!(deep.cached_prefix(role, phase, round, level).is_err());
+        }
+        assert!(current.cached_prefix(H_ROLE, H_PHASE, 0, 23).is_err());
+        assert!(current.cached_prefix(G_ROLE, G_PHASE, 22, 0).is_ok());
+        assert!(deep.cached_prefix(G_ROLE, G_PHASE, 22, 0).is_err());
+        assert!(
+            current
+                .expand_deep(
+                    super::super::deep_binding::Round::new(1).unwrap(),
+                    b"",
+                    &mut [0; 48]
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -748,7 +949,7 @@ mod tests {
     #[test]
     fn typed_h_matches_the_canonical_one_shot_and_binds_full_context() {
         let context = Context::new(b"complete caller context").unwrap();
-        let frame = context.frame(1, 1, 0, 0, 7, 48, vec![vec![0; 342 * 8]]);
+        let frame = context.frame(1, 1, 0, 0, 7, 48, BodyFields::One(&[0; 342 * 8]));
         let body = norito::encode_canonical(&frame).unwrap();
         let expected = hash_bytes_384_v1(
             GoldilocksDigestDomainV1 {
@@ -790,8 +991,10 @@ mod tests {
     fn every_g_block_matches_the_exact_typed_frame_and_index() {
         let context = Context::new(b"complete caller context").unwrap();
         let round = Round(4);
-        let body =
-            norito::encode_canonical(&context.challenge_frame(round, Digest::default())).unwrap();
+        let body = norito::encode_canonical(
+            &context.challenge_frame(round, &Digest::default().to_le_bytes()),
+        )
+        .unwrap();
         let mut raw = vec![0; round.tape_bytes()];
         context.expand(round, &body, &mut raw).unwrap();
         for (index, bytes) in raw.chunks_exact(48).enumerate() {
@@ -828,10 +1031,10 @@ mod tests {
         let root = Digest::new([1; 6]).unwrap();
         assert_ne!(
             context
-                .hash_frame(&context.chain_frame(round, a, root).unwrap())
+                .hash_frame(&context.chain_frame(round, &a, &root.to_le_bytes()).unwrap())
                 .unwrap(),
             context
-                .hash_frame(&context.chain_frame(round, b, root).unwrap())
+                .hash_frame(&context.chain_frame(round, &b, &root.to_le_bytes()).unwrap())
                 .unwrap()
         );
     }
@@ -904,8 +1107,10 @@ mod tests {
         let statement=hex::decode("4e52543000002927e8b7bbf54c7a8c5ba0c9a3967f7d00b9000000000000008a36ae75d966e4b402232270726f66696c652d62696e64696e673a66697865642d63616e6469646174653a7631040000010004000008000456010000049b0300000801000000ffffffff08070000000000000008136edf57a368c4a904130000000846e98ea9f9690efd040800000004020000000411000000040400000004010000000477010000393100000000000000636f6d706c657465207075626c696320636f6e7465787420776974686f757420612070726976617465207769746e657373").unwrap();
         let context = Context::new(&statement).unwrap();
         let round = Round::new(1).unwrap();
-        let body =
-            norito::encode_canonical(&context.challenge_frame(round, Digest::default())).unwrap();
+        let body = norito::encode_canonical(
+            &context.challenge_frame(round, &Digest::default().to_le_bytes()),
+        )
+        .unwrap();
         let mut tape = vec![0; round.tape_bytes()];
         context.expand(round, &body, &mut tape).unwrap();
         assert_eq!(
@@ -920,5 +1125,292 @@ mod tests {
             hex::encode(transcript.predecessor().to_le_bytes()),
             "b75fac39358455b1f84f7ba13ed581d7cf1301afa5aac0509a285816c272f8882949a842e18415391f314053ac29a9c2"
         );
+    }
+
+    // Test-only copy of the owned field shape; never a production encoder or decoder.
+    #[derive(NoritoSerialize, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "fastpq_prover::backend::compact_v1::tests::OwnedBodyReference",
+        frame = "fastpq_prover::compact_v1::BodyV1"
+    )]
+    struct OwnedBodyReference {
+        kind: u8,
+        oracle: u8,
+        round: u8,
+        level: u32,
+        position: u32,
+        output_bytes: u32,
+        fields: Vec<Vec<u8>>,
+    }
+
+    fn owned_body_reference(frame: &Frame<'_>) -> OwnedBodyReference {
+        let fields = match frame.fields {
+            BodyFields::One(field) => vec![field.to_vec()],
+            BodyFields::Two(first, second) => vec![first.to_vec(), second.to_vec()],
+        };
+        OwnedBodyReference {
+            kind: frame.kind,
+            oracle: frame.oracle,
+            round: frame.round,
+            level: frame.level,
+            position: frame.position,
+            output_bytes: frame.output_bytes,
+            fields,
+        }
+    }
+
+    fn one_shot_owned_h(context: &Context, reference: &OwnedBodyReference) -> Digest {
+        let body = norito::encode_canonical(reference).unwrap();
+        hash_bytes_384_v1(
+            GoldilocksDigestDomainV1 {
+                catalog: FASTPQ_CATALOG_V1.as_bytes(),
+                protocol: FASTPQ_FINAL_V1.name.as_bytes(),
+                profile: &context.prefix.encoded,
+                role: b"compact-commitment",
+                phase: b"typed-h",
+                level: u64::from(reference.level),
+                index: u64::from(reference.position),
+                counter: u64::from(reference.round),
+            },
+            &[&body],
+        )
+        .unwrap()
+    }
+
+    fn valid_layouts() -> impl Iterator<Item = u8> {
+        (0..=norito::core::supported_header_flags())
+            .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
+    }
+
+    fn assert_owned_body_bytes(frame: &Frame<'_>) {
+        let owned = owned_body_reference(frame);
+        let expected = norito::encode_canonical(&owned).unwrap();
+        // Comparing the entire frame includes schema, flags, lengths and CRC64.
+        for flags in valid_layouts() {
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(norito::encode_canonical(frame).unwrap(), expected);
+            assert_eq!(norito::canonical_frame_len(frame).unwrap(), expected.len());
+        }
+    }
+
+    #[test]
+    fn borrowed_byte_fields_match_vector_payloads_for_all_layouts_and_boundaries() {
+        use norito::core::SerializePayload;
+        for flags in valid_layouts() {
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            for len in [0, 1, 7, 8, 48, 119, 120, 127, 128, 2736, 29_568] {
+                let bytes: Vec<u8> = (0..len).map(|index| index as u8).collect();
+                let byte_field = ByteField(&bytes);
+                let mut actual = Vec::new();
+                let mut expected = Vec::new();
+                norito::core::serialize_to_buffer(&byte_field, &mut actual).unwrap();
+                norito::core::serialize_to_buffer(&bytes, &mut expected).unwrap();
+                assert_eq!(actual, expected, "byte count {len}, flags {flags:#x}");
+                assert_eq!(byte_field.encoded_len_hint(), Some(expected.len()));
+                assert_eq!(byte_field.encoded_len_exact(), Some(expected.len()));
+                assert_eq!(
+                    norito::core::encoded_payload_len(&byte_field).unwrap(),
+                    expected.len()
+                );
+                for fields in [BodyFields::One(&bytes), BodyFields::Two(&bytes, b"second")] {
+                    let owned = match fields {
+                        BodyFields::One(first) => vec![first.to_vec()],
+                        BodyFields::Two(first, second) => vec![first.to_vec(), second.to_vec()],
+                    };
+                    actual.clear();
+                    expected.clear();
+                    norito::core::serialize_to_buffer(&fields, &mut actual).unwrap();
+                    norito::core::serialize_to_buffer(&owned, &mut expected).unwrap();
+                    assert_eq!(
+                        actual, expected,
+                        "field count, bytes {len}, flags {flags:#x}"
+                    );
+                    assert_eq!(
+                        norito::core::encoded_payload_len(&fields).unwrap(),
+                        expected.len()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn borrowed_body_frames_preserve_every_canonical_shape_and_identity() {
+        assert_eq!(
+            <Frame<'_> as norito::NoritoSchema>::nominal_name(),
+            "fastpq_prover::backend::compact_v1::Frame"
+        );
+        assert_eq!(
+            <Frame<'_> as norito::NoritoSchema>::frame_name(),
+            "fastpq_prover::compact_v1::BodyV1"
+        );
+        let context = Context::new(b"borrowed frame coverage").unwrap();
+        let left_digest = Digest::new([MODULUS - 1; 6]).unwrap();
+        let right_digest = Digest::new([1, 2, 3, 4, 5, 6]).unwrap();
+        let left = left_digest.to_le_bytes();
+        let right = right_digest.to_le_bytes();
+        // Independently declare expected coordinates and payload lengths rather
+        // than deriving them from the dispatcher's Oracle::shape implementation.
+        let oracles = [
+            (Oracle::Row, 1, 0, 524_288_u32, 342 * 8),
+            (Oracle::Mixed, 2, 0, 524_288, 32),
+            (Oracle::Quotient, 3, 0, 524_288, 32),
+        ]
+        .into_iter()
+        .chain((0..=17).map(|round| {
+            if round == 17 {
+                (Oracle::Fri(round), 4, round, 1, 128)
+            } else {
+                (Oracle::Fri(round), 4, round, 524_288 >> (round + 1), 64)
+            }
+        }));
+        for (oracle, role, round, leaves, bytes) in oracles {
+            let payload: Vec<u8> = (0..bytes / 8)
+                .flat_map(|column| {
+                    let word = if column == 0 {
+                        MODULUS - 1
+                    } else {
+                        column as u64
+                    };
+                    word.to_le_bytes()
+                })
+                .collect();
+            for position in [0, leaves - 1] {
+                let frame = context.frame(
+                    1,
+                    role,
+                    round,
+                    0,
+                    position,
+                    H_OUTPUT_BYTES,
+                    BodyFields::One(&payload),
+                );
+                let BodyFields::One(borrowed) = frame.fields else {
+                    unreachable!()
+                };
+                assert!(std::ptr::eq(borrowed, payload.as_slice()));
+                assert_owned_body_bytes(&frame);
+                let reference = OwnedBodyReference {
+                    kind: 1,
+                    oracle: role,
+                    round,
+                    level: 0,
+                    position,
+                    output_bytes: 48,
+                    fields: vec![payload.clone()],
+                };
+                assert_eq!(
+                    context.hash_leaf(oracle, position, &payload).unwrap(),
+                    one_shot_owned_h(&context, &reference),
+                    "leaf {oracle:?}, position {position}"
+                );
+            }
+            for level in [1, leaves.ilog2().max(1)] {
+                // Every nonterminal case uses unequal children, and the sole
+                // terminal parent uses the required duplicate child.
+                let second_digest = if leaves == 1 {
+                    left_digest
+                } else {
+                    right_digest
+                };
+                let second = second_digest.to_le_bytes();
+                for position in [0, (leaves >> level).max(1) - 1] {
+                    assert_owned_body_bytes(&context.frame(
+                        2,
+                        role,
+                        round,
+                        level,
+                        position,
+                        H_OUTPUT_BYTES,
+                        BodyFields::Two(&left, &second),
+                    ));
+                    let reference = OwnedBodyReference {
+                        kind: 2,
+                        oracle: role,
+                        round,
+                        level,
+                        position,
+                        output_bytes: 48,
+                        fields: vec![left.to_vec(), second.to_vec()],
+                    };
+                    assert_eq!(
+                        context
+                            .hash_parent(oracle, level, position, left_digest, second_digest)
+                            .unwrap(),
+                        one_shot_owned_h(&context, &reference),
+                        "parent {oracle:?}, level {level}, position {position}"
+                    );
+                }
+            }
+        }
+        for ordinal in 1..=22 {
+            let round = Round::new(ordinal).unwrap();
+            assert_owned_body_bytes(&context.challenge_frame(round, &left));
+            if ordinal < 22 {
+                let raw = tape(round, (0..round.tape_bytes() / 8).map(|index| index as u64));
+                assert_owned_body_bytes(&context.chain_frame(round, &raw, &right).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn borrowed_body_frame_matches_fixed_header_and_checksum_known_answer() {
+        // Independently encoded canonical BodyV1 request for round one's zero anchor.
+        let context = Context::new(b"frame KAT context").unwrap();
+        let predecessor = [0; 48];
+        let frame = context.challenge_frame(Round(1), &predecessor);
+        let expected = hex::decode("4e52543000009852866667ad6340eb539f01d0318999005700000000000000d7b9df9f0869d6bb02010401000101040000000004000000000430000000410100000000000000383000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap();
+        assert_eq!(expected.len(), 127);
+        assert_eq!(norito::encode_canonical(&frame).unwrap(), expected);
+    }
+
+    #[test]
+    fn borrowed_chain_retains_the_owned_pending_tape_until_commit() {
+        let context = Context::new(b"owned pending tape").unwrap();
+        let mut transcript = Transcript::new(context.clone());
+        let mut original_address = std::ptr::null();
+        transcript
+            .challenge_with(|_, _, _, output| {
+                original_address = output.as_ptr();
+                output.copy_from_slice(&tape(Round(1), [1, 2, 3, 4, 5, MODULUS - 1]));
+                Ok(())
+            })
+            .unwrap();
+        let root = Digest::new([7; 6]).unwrap();
+        let root_bytes = root.to_le_bytes();
+        let Phase::Pending { round, raw } = &transcript.phase else {
+            panic!("pending")
+        };
+        assert_eq!(raw.as_ptr(), original_address);
+        let frame = context.chain_frame(*round, raw, &root_bytes).unwrap();
+        let BodyFields::Two(borrowed, borrowed_root) = frame.fields else {
+            unreachable!()
+        };
+        assert!(std::ptr::eq(borrowed, raw.as_slice()));
+        assert!(std::ptr::eq(borrowed_root, root_bytes.as_slice()));
+        assert_owned_body_bytes(&frame);
+        let expected = context.hash_frame(&frame).unwrap();
+        transcript.commit(root).unwrap();
+        assert_eq!(transcript.predecessor(), expected);
+        assert_eq!(transcript.phase, Phase::Ready(Round(2)));
+    }
+
+    #[test]
+    fn borrowed_chain_rejects_wrong_tape_lengths_and_terminal_round() {
+        let context = Context::new(b"chain shape rejection").unwrap();
+        let root = [0; 48];
+        for ordinal in 1..22 {
+            let round = Round(ordinal);
+            for len in [0, round.tape_bytes() - 1, round.tape_bytes() + 1] {
+                assert!(matches!(
+                    context.chain_frame(round, &vec![0; len], &root),
+                    Err(CandidateError::TapeLength)
+                ));
+            }
+        }
+        assert!(matches!(
+            context.chain_frame(Round(22), &vec![0; Round(22).tape_bytes()], &root),
+            Err(CandidateError::Phase)
+        ));
     }
 }

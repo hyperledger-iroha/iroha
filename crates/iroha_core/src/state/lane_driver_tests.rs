@@ -4,6 +4,7 @@
 
 fn native_driver_limits_for_test() -> crate::sumeragi::v2_lane_driver::NativeLaneDriverLimits {
     crate::sumeragi::v2_lane_driver::NativeLaneDriverLimits {
+        voting_enabled: true,
         process: native_process_limits_for_test(),
         ingress: nonzero!(128_usize),
         outbound: nonzero!(32_usize),
@@ -669,5 +670,141 @@ state_test! { sync native_driver_source_recovery_rejoins_original_owner_after_fo
     assert_eq!(foreign_outstanding.len(), 1);
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap(), before);
     assert!(!guard.restart_required());
+    driver.shutdown().join().unwrap();
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_driver_observer_role_cannot_open_or_admit_voting_control
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        v2_lane_driver::{NativeLaneAdmission, NativeLaneDriver, NativeLaneInput},
+    };
+    let now = std::time::Instant::now();
+    let fixture = native_process_fixture(false, now);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let guard = ConsensusOutputGuard::isolated();
+    let mut limits = native_driver_limits_for_test();
+    limits.voting_enabled = false;
+    let mut driver = NativeLaneDriver::new(Arc::clone(&fixture.state), Arc::clone(&guard),
+        native_process_key(&fixture, lane, 0), limits).unwrap();
+    driver.poll(&observed, now).unwrap();
+    assert_eq!(driver.process().occupancy().instances, 0);
+    let input = NativeLaneInput::Control(native_driver_control_for_test(&fixture, lane, 1));
+    assert!(matches!(driver.admit(&observed, input), NativeLaneAdmission::Rejected { .. }));
+    assert!(driver.take_outbound().unwrap().is_none());
+    assert!(!guard.restart_required());
+    driver.shutdown().join().unwrap();
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_driver_owned_capacity_retry_retains_original_payload_and_fair_evidence
+    use crate::sumeragi::{
+        message::BlockMessage,
+        output_guard::ConsensusOutputGuard,
+        v2_lane_driver::{NativeLaneAdmission, NativeLaneDriver, NativeLaneInput,
+            NativeLaneOwnedAdmission, native_driver_owned_ingress_for_test},
+    };
+    use iroha_data_model::block::lane_consensus::LaneMessageV1;
+    let now = std::time::Instant::now();
+    let fixture = native_process_fixture(false, now);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let guard = ConsensusOutputGuard::isolated();
+    let mut limits = native_driver_limits_for_test();
+    limits.ingress = nonzero!(1_usize);
+    let mut driver = NativeLaneDriver::new(Arc::clone(&fixture.state), Arc::clone(&guard),
+        native_process_key(&fixture, lane, 0), limits).unwrap();
+    assert!(matches!(driver.admit(&observed,
+        NativeLaneInput::Control(native_driver_control_for_test(&fixture, lane, 1))),
+        NativeLaneAdmission::Accepted));
+    let original = native_driver_owned_ingress_for_test(
+        BlockMessage::NativeLane(native_driver_control_for_test(&fixture, lane, 2)),
+        lane.frozen().committee[2].clone());
+    let signature = match original.message() {
+        BlockMessage::NativeLane(envelope) => match &envelope.message {
+            LaneMessageV1::TimeoutVote(vote) => vote.share.signature.as_ptr(),
+            _ => panic!("fixture timeout vote"),
+        },
+        _ => panic!("fixture Native envelope"),
+    };
+    let evidence = original.ingress_ownership().unwrap();
+    let projection = evidence.process_local_projection_hash();
+    let ordinal = evidence.physical_admission_ordinal();
+    let mut retained = original;
+    for _ in 0..3 {
+        retained = match driver.admit_owned(retained).unwrap() {
+            NativeLaneOwnedAdmission::Retry(original) => original,
+            _ => panic!("full process must return the original physical occurrence"),
+        };
+        let evidence = retained.ingress_ownership().unwrap();
+        assert!(evidence.validate_exact());
+        assert_eq!(evidence.process_local_projection_hash(), projection);
+        assert_eq!(evidence.physical_admission_ordinal(), ordinal);
+        assert_eq!(evidence.runtime_lifecycle_ordinal(), None);
+        match retained.message() {
+            BlockMessage::NativeLane(envelope) => match &envelope.message {
+                LaneMessageV1::TimeoutVote(vote) => assert_eq!(vote.share.signature.as_ptr(), signature),
+                _ => panic!("original timeout vote"),
+            },
+            _ => panic!("original Native envelope"),
+        }
+    }
+    assert!(!guard.restart_required());
+    drop(retained);
+    driver.shutdown().join().unwrap();
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_driver_owned_rejection_returns_original_payload_without_poisoning_output
+    use crate::sumeragi::{
+        message::BlockMessage,
+        output_guard::ConsensusOutputGuard,
+        v2_lane_driver::{NativeLaneDriver, NativeLaneOwnedAdmission,
+            native_driver_owned_ingress_for_test},
+    };
+    let now = std::time::Instant::now();
+    let fixture = native_process_fixture(false, now);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let guard = ConsensusOutputGuard::isolated();
+    let mut limits = native_driver_limits_for_test();
+    limits.voting_enabled = false;
+    let mut driver = NativeLaneDriver::new(Arc::clone(&fixture.state), Arc::clone(&guard),
+        native_process_key(&fixture, lane, 0), limits).unwrap();
+    let inbound = native_driver_owned_ingress_for_test(
+        BlockMessage::NativeLane(native_driver_control_for_test(&fixture, lane, 1)),
+        lane.frozen().committee[1].clone());
+    let original = inbound.ingress_ownership().unwrap().process_local_projection_hash();
+    let rejected = match driver.admit_owned(inbound).unwrap() {
+        NativeLaneOwnedAdmission::Rejected { inbound, reason } => {
+            assert!(reason.contains("voting signer"));
+            inbound
+        }
+        _ => panic!("observer cannot admit voting control"),
+    };
+    assert_eq!(rejected.ingress_ownership().unwrap().process_local_projection_hash(), original);
+    assert!(!guard.restart_required());
+    driver.shutdown().join().unwrap();
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_driver_owned_ingress_without_original_fair_evidence_fails_closed
+    use crate::sumeragi::{
+        InboundBlockMessage, message::BlockMessage,
+        output_guard::ConsensusOutputGuard, v2_lane_driver::NativeLaneDriver,
+    };
+    let now = std::time::Instant::now();
+    let fixture = native_process_fixture(false, now);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let guard = ConsensusOutputGuard::isolated();
+    let mut driver = NativeLaneDriver::new(Arc::clone(&fixture.state), Arc::clone(&guard),
+        native_process_key(&fixture, lane, 0), native_driver_limits_for_test()).unwrap();
+    let unowned = InboundBlockMessage::from_authenticated_peer(
+        BlockMessage::NativeLane(native_driver_control_for_test(&fixture, lane, 1)),
+        lane.frozen().committee[1].clone());
+    assert!(driver.admit_owned(unowned).is_err());
+    assert!(guard.restart_required());
     driver.shutdown().join().unwrap();
 }

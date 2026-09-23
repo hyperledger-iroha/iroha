@@ -535,7 +535,7 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 101);
+  assert.equal(Object.keys(result.metafile.inputs).length, 102);
   assert.deepEqual(
     {
       eagerBytes: metrics.eagerBytes,
@@ -547,19 +547,19 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
       combinedLimitKb: metrics.combinedLimitKb,
     },
     {
-      eagerBytes: 438_380,
+      eagerBytes: 437_300,
       lazyBytes: [
-        { specifier: "./sumeragiTyped.js", bytes: 66_168 },
-        { specifier: "./smartContractDeploymentSubmit.js", bytes: 9_190 },
+        { specifier: "./sumeragiTyped.js", bytes: 66_172 },
+        { specifier: "./smartContractDeploymentSubmit.js", bytes: 8_652 },
       ],
-      combinedBytes: 513_738,
+      combinedBytes: 512_124,
       combinedLimitKb: 572,
     },
   );
   assert.equal(
     target.limitKb * 1024 - metrics.eagerBytes,
-    64_404,
-    "public browser aggregate must retain the measured 64,404-byte eager headroom",
+    65_484,
+    "public browser aggregate must retain the measured 65,484-byte eager headroom",
   );
   assert.ok(
     metrics.eagerBytes < 517_186,
@@ -618,10 +618,10 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 813_099, modules: 125 }],
-    ["transactionCodec.js (browser)", { bytes: 217_923, modules: 62 }],
-    ["nexusApp.js (browser)", { bytes: 227_026, modules: 71 }],
-    ["canonicalRequest.js (browser)", { bytes: 94_680, modules: 46 }],
+    ["toriiClient.js", { bytes: 815_761, modules: 127 }],
+    ["transactionCodec.js (browser)", { bytes: 216_285, modules: 63 }],
+    ["nexusApp.js (browser)", { bytes: 225_121, modules: 72 }],
+    ["canonicalRequest.js (browser)", { bytes: 92_163, modules: 46 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
@@ -685,17 +685,17 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
       );
       assert.equal(
         target.limitKb * 1024 - actual.bytes,
-        3_029,
-        "Torii hard ceiling must retain the measured 3,029-byte eager headroom",
+        367,
+        "Torii hard ceiling must retain the measured 367-byte eager headroom",
       );
       assert.deepEqual(
         splitMetrics.lazyChunks.map(({ specifier, bytes }) => ({ specifier, bytes })),
         [
-          { specifier: "./toriiOptional.js", bytes: 241_438 },
-          { specifier: "./sumeragiTyped.js", bytes: 65_899 },
+          { specifier: "./toriiOptional.js", bytes: 241_836 },
+          { specifier: "./sumeragiTyped.js", bytes: 65_896 },
         ],
       );
-      assert.equal(splitMetrics.combinedBytes, 1_120_436);
+      assert.equal(splitMetrics.combinedBytes, 1_123_493);
       assert.equal(splitMetrics.combinedLimitKb, 1_191);
       assert.equal(target.reviewedEagerBytes, 814_534);
       assert.equal(target.reviewedCombinedBytes, 1_214_544);

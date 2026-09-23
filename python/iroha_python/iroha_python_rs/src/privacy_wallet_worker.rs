@@ -2955,7 +2955,7 @@ mod tests {
             hex::encode(canonical_public_intent_digest(
                 CANONICAL_JINDO_PUBLIC_INTENT,
             )),
-            "7893b77f7d18db75312e626fa35d84ac97cd020dd460c3afb994849e415138cf"
+            "94b48efc270f5fe4b8c54a194df47771d4af52492fcb2488609bd22ef20bcc31"
         );
         validate_canonical_public_intent(CANONICAL_JINDO_PUBLIC_INTENT, &binding())
             .expect("canonical typed transport intent");

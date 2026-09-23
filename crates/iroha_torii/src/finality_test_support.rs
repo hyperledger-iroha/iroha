@@ -34,7 +34,7 @@ pub(crate) fn torii_proof_finality_for_block(
             encode_kagemusha_consensus_signature_envelope_v1,
         },
         isi::kagemusha_v1::{
-            KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalitySealBundleV1,
+            KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalitySealBundleV1,
         },
     };
     use norito::codec::Encode as _;
@@ -49,10 +49,10 @@ pub(crate) fn torii_proof_finality_for_block(
             power: 1,
         })
         .collect::<Vec<_>>();
-    let epoch = KagemushaMintFinalityEpochRosterV1 {
+    let epoch = KagemushaMintFinalityAuthorityGenerationV1 {
         version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch: 0,
+        generation: 0,
         validators: roster
             .iter()
             .enumerate()
@@ -85,8 +85,25 @@ pub(crate) fn torii_proof_finality_for_block(
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).unwrap(),
         roster,
-        kagemusha_mint_finality_epoch_id: epoch.finality_epoch_id().unwrap(),
-        kagemusha_mint_finality_epoch_roster: epoch,
+        kagemusha_mint_finality_authorization: {
+            let authority = &epoch;
+            let authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id: authority.network_id,
+                epoch: 0,
+                first_height: 1,
+                last_height: 100,
+                authority_generation: authority.generation,
+                authority_id: authority.authority_id().expect("fixture authority identity"),
+                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+                previous_authorization_id: [0; 32],
+                transition_id: [0; 32],
+                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+            };
+            authorization.validate_against_authority(authority).expect("complete genesis fixture authorization");
+            authorization
+        },
+        kagemusha_mint_finality_authority: epoch,
         nexus_amx_context_hash: Hash::new(b"Torii exact proof test context"),
         execution_policy_hash: Hash::new(b"Torii exact proof test execution policy"),
         da_layout: iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
@@ -145,7 +162,7 @@ pub(crate) fn torii_proof_finality_for_block(
         &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
     )
     .unwrap();
-    let epoch = &context.kagemusha_mint_finality_epoch_roster;
+    let epoch = &context.kagemusha_mint_finality_authority;
     qc.aggregate_signature = if let Some(message) =
         build_kagemusha_mint_finality_seal_message_v1(epoch, &context, &vote).unwrap()
     {

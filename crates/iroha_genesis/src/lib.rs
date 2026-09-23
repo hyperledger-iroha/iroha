@@ -130,7 +130,7 @@ fn deterministic_test_kagemusha_mint_finality_genesis_parameters_for(
     mut validator_ids: Vec<iroha_model_base::peer::PeerId>,
 ) -> KagemushaMintFinalityGenesisParametersV1 {
     use iroha_data_model::isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
         KagemushaMintFinalityValidatorKeysV1,
     };
 
@@ -176,12 +176,11 @@ fn deterministic_test_kagemusha_mint_finality_genesis_parameters_for(
         })
         .collect::<Vec<_>>();
     let parameters = KagemushaMintFinalityGenesisParametersV1 {
-        epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
-            epoch: 0,
+            generation: 0,
             validators,
         },
-        next_epoch_roster: None,
     };
     parameters
         .validate()
@@ -1513,6 +1512,11 @@ pub mod genesis_instructions_json {
             Some(Value::Null) | None => Metadata::default(),
             Some(value) => norito::json::value::from_value(value)?,
         };
+        let monetary_plan = norito::json::value::from_value(
+            fields
+                .remove("monetary_plan")
+                .ok_or_else(|| json::Error::missing_field("monetary_plan"))?,
+        )?;
         ensure_no_extra_fields(&fields)?;
         let register = RegisterPublicLaneValidator::new(
             lane_id,
@@ -1521,6 +1525,7 @@ pub mod genesis_instructions_json {
             stake_account,
             initial_stake,
             metadata,
+            monetary_plan,
         );
         Ok(Some(InstructionBox::from(register)))
     }
@@ -1987,6 +1992,10 @@ pub mod genesis_instructions_json {
             );
             let metadata = norito::json::value::to_value(register.metadata()).ok()?;
             fields.insert("metadata".to_string(), metadata);
+            fields.insert(
+                "monetary_plan".to_string(),
+                norito::json::value::to_value(register.monetary_plan()).ok()?,
+            );
             let mut outer = Map::new();
             outer.insert(
                 "RegisterPublicLaneValidator".to_string(),
@@ -2806,10 +2815,24 @@ pub mod genesis_instructions_json {
             assert_eq!(grant.object().name(), "CanSetParameters");
             assert_eq!(grant.object().payload(), &Json::default());
         }
+        fn genesis_registration_plan(
+            staker: &AccountId,
+        ) -> iroha_data_model::nexus::PublicLaneMonetaryPlanV1 {
+            let definition = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("staking", "universal").expect("fixture domain"),
+                "stake".parse().expect("fixture stake asset"),
+            );
+            iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                AssetId::new(definition.clone(), staker.clone()),
+                AssetId::new(definition, iroha_test_samples::BOB_ID.clone()),
+                Quantity::from(10_u64),
+            )
+        }
         #[test]
         fn deserialize_structured_instructions_supports_npos_bootstrap() {
             let validator_id = ALICE_ID.clone();
             let validator_peer_id = PeerId::from(validator_id.expect_single_signatory().clone());
+            let monetary_plan = genesis_registration_plan(&validator_id);
             let register = RegisterPublicLaneValidator::new(
                 LaneId::SINGLE,
                 validator_id.clone(),
@@ -2817,6 +2840,7 @@ pub mod genesis_instructions_json {
                 validator_id.clone(),
                 Quantity::from(10_u64),
                 Metadata::default(),
+                monetary_plan.clone(),
             );
             let activate = ActivatePublicLaneValidator::new(LaneId::SINGLE, validator_id.clone());
             let instructions: Vec<InstructionBox> = vec![
@@ -2840,6 +2864,8 @@ pub mod genesis_instructions_json {
                     assert_eq!(register.stake_account(), &validator_id);
                     assert_eq!(register.initial_stake(), &Quantity::from(10_u64));
                     assert!(register.metadata().is_empty());
+                    assert_eq!(register.monetary_plan(), &monetary_plan);
+                    assert!(register.monetary_plan().has_canonical_shape());
                 }
                 other => panic!("unexpected register validator instruction: {other:?}"),
             }
@@ -2857,6 +2883,7 @@ pub mod genesis_instructions_json {
         #[test]
         fn deserialize_npos_bootstrap_rejects_negative_initial_stake() {
             let validator_id = ALICE_ID.clone();
+            let monetary_plan = genesis_registration_plan(&validator_id);
             let register = RegisterPublicLaneValidator::new(
                 LaneId::SINGLE,
                 validator_id.clone(),
@@ -2864,6 +2891,7 @@ pub mod genesis_instructions_json {
                 validator_id,
                 Quantity::from(10_u64),
                 Metadata::default(),
+                monetary_plan.clone(),
             );
             let mut json_text = String::new();
             serialize(&[InstructionBox::from(register)], &mut json_text);
@@ -2874,6 +2902,34 @@ pub mod genesis_instructions_json {
             let error = from_value(&parsed).expect_err("negative initial stake must be rejected");
             assert!(
                 error.to_string().contains("invalid initial stake quantity"),
+                "unexpected error: {error}"
+            );
+        }
+        #[test]
+        fn deserialize_npos_bootstrap_requires_explicit_monetary_plan() {
+            let validator = ALICE_ID.clone();
+            let registration = RegisterPublicLaneValidator::new(
+                LaneId::SINGLE,
+                validator.clone(),
+                PeerId::from(validator.expect_single_signatory().clone()),
+                validator.clone(),
+                Quantity::from(10_u64),
+                Metadata::default(),
+                genesis_registration_plan(&validator),
+            );
+            let value = instruction_value(&InstructionBox::from(registration));
+            let Value::Object(mut envelope) = value else {
+                panic!("structured registration envelope");
+            };
+            let Some(Value::Object(mut fields)) = envelope.remove("RegisterPublicLaneValidator")
+            else {
+                panic!("registration fields");
+            };
+            assert!(fields.remove("monetary_plan").is_some());
+            let error = super::try_decode_register_public_lane_validator(Value::Object(fields))
+                .expect_err("no implicit staking custody plan is permitted");
+            assert!(
+                error.to_string().contains("monetary_plan"),
                 "unexpected error: {error}"
             );
         }
@@ -3448,14 +3504,16 @@ impl GenesisSourceTemplate {
 }
 
 impl RawGenesisTransaction {
-    /// Validate consensus-mode parameters and the signed mint-finality authority schedule.
+    /// Validate consensus-mode parameters and the signed generation-zero mint-finality authority.
     ///
     /// # Errors
     ///
-    /// Returns an error when NPoS parameters disagree with the consensus mode, are malformed, or
-    /// the optional epoch-one mint-finality roster is not present exactly at an NPoS height-one
-    /// epoch boundary.
+    /// Returns an error for malformed authority, incompatible or missing committed NPoS parameters,
+    /// or a height-one epoch boundary that cannot authenticate an installed pre-boundary beacon.
     pub fn validate_mode_specific_consensus_parameters(&self) -> Result<()> {
+        self.kagemusha_mint_finality.validate().map_err(|error| {
+            eyre!("invalid KAGEMUSHA mint-finality genesis parameters: {error}")
+        })?;
         let parameters = self.effective_parameters()?;
         let npos_parameter = parameters
             .custom()
@@ -3466,28 +3524,18 @@ impl RawGenesisTransaction {
                     .ok_or_else(|| eyre!("genesis carries malformed `sumeragi_npos_parameters`"))
             })
             .transpose()?;
-        let has_next_roster = self.kagemusha_mint_finality.next_epoch_roster.is_some();
         match (self.consensus_mode, npos_parameters) {
             (SumeragiConsensusMode::Permissioned, Some(_)) => Err(eyre!(
                 "permissioned genesis must omit `sumeragi_npos_parameters`"
-            )),
-            (SumeragiConsensusMode::Permissioned, None) if has_next_roster => Err(eyre!(
-                "`kagemusha_mint_finality.next_epoch_roster` must be null for permissioned genesis"
             )),
             (SumeragiConsensusMode::Permissioned, None) => Ok(()),
             (SumeragiConsensusMode::Npos, None) => Err(eyre!(
                 "NPoS genesis requires `sumeragi_npos_parameters`; node-local election defaults are not signed inputs"
             )),
             (SumeragiConsensusMode::Npos, Some(parameters)) => {
-                let height_one_is_epoch_boundary = parameters.epoch_length_blocks().get() == 1;
-                if height_one_is_epoch_boundary != has_next_roster {
-                    let requirement = if height_one_is_epoch_boundary {
-                        "must be present when NPoS `epoch_length_blocks` is 1"
-                    } else {
-                        "must be null unless NPoS `epoch_length_blocks` is 1"
-                    };
+                if parameters.epoch_length_blocks().get() == 1 {
                     return Err(eyre!(
-                        "`kagemusha_mint_finality.next_epoch_roster` {requirement}"
+                        "NPoS genesis cannot end its epoch at height one: successor authorization requires an authenticated installed beacon in committed pre-boundary state"
                     ));
                 }
                 Ok(())
@@ -3826,7 +3874,7 @@ impl RawGenesisTransaction {
     pub fn transactions(&self) -> &[RawGenesisTx] {
         &self.transactions
     }
-    /// Validate that the signed epoch-zero KAGEMUSHA authority names the
+    /// Validate that the signed generation-zero KAGEMUSHA authority names the
     /// exact canonical validator topology which will enter genesis.
     ///
     /// The Pasta proof keys are separately provisioned and must never be
@@ -3839,7 +3887,7 @@ impl RawGenesisTransaction {
     ///
     /// Returns an error when the topology is not an exact supported `3f + 1`
     /// committee, repeats a peer, or differs from the ordered validator
-    /// identities in the epoch-zero authority template.
+    /// identities in the generation-zero authority template.
     pub fn validate_kagemusha_mint_finality_topology(&self) -> Result<()> {
         self.kagemusha_mint_finality.validate().map_err(|error| {
             eyre!("invalid signed KAGEMUSHA mint-finality genesis parameters: {error}")
@@ -3862,7 +3910,7 @@ impl RawGenesisTransaction {
                 "genesis topology repeats a validator identity; provision one canonical entry per validator"
             ));
         }
-        let authority = &self.kagemusha_mint_finality.epoch_roster.validators;
+        let authority = &self.kagemusha_mint_finality.authority_generation.validators;
         if authority.len() != topology.len()
             || authority
                 .iter()
@@ -3870,7 +3918,7 @@ impl RawGenesisTransaction {
                 .any(|(keys, peer)| &keys.validator != peer)
         {
             return Err(eyre!(
-                "genesis KAGEMUSHA mint-finality epoch-zero authority differs from the canonical validator topology; provision `kagemusha_mint_finality` with independently generated Pasta keys for this exact topology before signing"
+                "genesis KAGEMUSHA mint-finality generation-zero authority differs from the canonical validator topology; provision `kagemusha_mint_finality` with independently generated Pasta keys for this exact topology before signing"
             ));
         }
         Ok(())
@@ -5127,14 +5175,12 @@ mod tests {
     }
 
     #[test]
-    fn direct_signing_rejects_mint_finality_schedule_mismatches() {
+    fn direct_signing_rejects_nonzero_generation_and_height_one_epoch_boundary() {
         let genesis_key_pair = checked_genesis_fixture_keypair();
         let mut authority = deterministic_test_kagemusha_mint_finality_genesis_parameters();
-        let mut next_epoch_roster = authority.epoch_roster.clone();
-        next_epoch_roster.epoch = 1;
-        authority.next_epoch_roster = Some(next_epoch_roster);
+        authority.authority_generation.generation = 1;
         let permissioned = GenesisBuilder::new_without_executor(
-            ChainId::from("permissioned-successor-authority"),
+            ChainId::from("permissioned-nonzero-genesis-generation"),
             PathBuf::from("."),
         )
         .set_topology(deterministic_test_genesis_topology_entries())
@@ -5142,15 +5188,19 @@ mod tests {
         .with_kagemusha_mint_finality_genesis_parameters(authority);
         let error = permissioned
             .build_and_sign(&genesis_key_pair)
-            .expect_err("permissioned direct signing must reject an epoch-one authority");
-        assert!(error.to_string().contains("must be null for permissioned"));
+            .expect_err("direct signing requires generation-zero genesis authority");
+        assert!(
+            error
+                .to_string()
+                .contains("mint_finality.genesis.authority_generation")
+        );
 
         let mut npos_parameters = SumeragiNposParameters::default();
         npos_parameters.epoch_length_blocks = NonZeroU64::new(1).expect("non-zero epoch length");
         npos_parameters.evidence_horizon_blocks = 1;
         npos_parameters.slashing_delay_blocks = 1;
         let npos = GenesisBuilder::new_without_executor(
-            ChainId::from("npos-missing-successor-authority"),
+            ChainId::from("npos-height-one-epoch-boundary"),
             PathBuf::from("."),
         )
         .append_parameter(Parameter::Custom(npos_parameters.into_custom_parameter()))
@@ -5159,8 +5209,12 @@ mod tests {
         .with_consensus_mode(SumeragiConsensusMode::Npos);
         let error = npos
             .build_and_sign(&genesis_key_pair)
-            .expect_err("height-one NPoS boundary must reject a missing epoch-one authority");
-        assert!(error.to_string().contains("must be present"));
+            .expect_err("height-one boundary has no committed installed beacon");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot end its epoch at height one")
+        );
     }
 
     #[test]

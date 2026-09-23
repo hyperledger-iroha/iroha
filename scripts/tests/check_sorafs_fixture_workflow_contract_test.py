@@ -91,7 +91,7 @@ SDK_FIXTURE_READERS = {
         "File.Exists(path)",
         "return File.ReadAllBytes(path);",
     ),
-    "javascript/iroha_js/test/cancelAssetLockV1.test.js": (
+    "javascript/iroha_js/test/sorafsNativeSuites/cancelAssetLockV1.js": (
         "requiredFixtureNames.map",
         "fs.readFileSync(path.join(fixtureRoot, name))",
         "all eight appeal-finance CancelAssetLock fixtures are mandatory",
@@ -127,7 +127,7 @@ STRICT_NATIVE_PROFILE_MARKERS = {
         "SoraFsReferenceValidators.IsAppealFinanceAvailable()",
         '"ABI-23 appeal-finance reference bridge is required."',
     ),
-    "javascript/iroha_js/test/helpers/native.js": (
+    "javascript/iroha_js/test/helpers/nativeRequirements.js": (
         "registerNativeRequirementFailure(",
         "throw createError();",
         'error.code = "ERR_IROHA_NATIVE_TEST_REQUIREMENT"',
@@ -172,6 +172,10 @@ MATERIAL_CLOSURE_PATHS_BY_WORKFLOW = {
         "integration_tests/tests/native_escrow.rs",
     },
     "sorafs-orchestrator-sdk.yml": {
+        "scripts/sorafs_javascript_test_events.mjs",
+        "scripts/tests/sorafs_javascript_test_events_test.mjs",
+        "scripts/sorafs_javascript_child_files.mjs",
+        "scripts/tests/sorafs_javascript_child_files_test.mjs",
         "IrohaSwift/Package.swift",
         "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/NativeBridgeLoaderTests.swift",
@@ -280,6 +284,30 @@ def test_material_closure_files_are_routed_to_relevant_workflows(
         if not workflow_filter_covers(path, filters)
     )
     assert not uncovered, f"{workflow_name} omits closure triggers: {uncovered}"
+
+
+@pytest.mark.parametrize("workflow_name", ("sorafs-cli-release.yml", "sorafs-orchestrator-sdk.yml"))
+def test_javascript_event_owner_and_controls_have_explicit_workflow_triggers(workflow_name):
+    """Tool changes must trigger parity independently of the broad SDK path."""
+    filters = pull_request_paths(workflow_name)
+    from scripts import check_sorafs_release_automation as automation
+    for path in automation.SORAFS_JAVASCRIPT_CHILD_PATHS:
+        assert (REPO_ROOT / path).is_file()
+        assert path in filters and workflow_filter_covers(path, filters)
+        assert not workflow_filter_covers(path, filters - {path})
+
+
+def test_javascript_event_controls_execute_immediately_after_node24_setup():
+    """The tool suite is a mandatory step, not a marker or Node20 SDK unit test."""
+    from scripts import check_sorafs_release_automation as automation
+
+    relative = ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = read(relative)
+    assert not automation._javascript_child_controls_workflow_errors(relative, source)
+    command = automation.SORAFS_JAVASCRIPT_CHILD_COMMAND
+    changed = source.replace("        run: " + command, "        run: true", 1)
+    changed += "\n# " + command + "\n"
+    assert automation._javascript_child_controls_workflow_errors(relative, changed)
 
 
 def test_pure_orderbook_submit_suite_requires_its_orchestrator_trigger() -> None:
@@ -944,3 +972,72 @@ def test_python_cancel_builder_has_exact_archive_and_typed_two_argument_coverage
         "        ) -> Instruction:"
     )
     assert typed_builder in crypto
+
+
+@pytest.mark.parametrize("entrypoint,registration", [
+    ("cancelAssetLockV1", "registerCancelAssetLockV1Tests"),
+    ("sorafsAppealFinanceValidation", "registerSorafsAppealFinanceValidationTests"),
+    ("sorafsFixtureBundleValidation", "registerSorafsFixtureBundleValidationTests"),
+    ("sorafsOrderbookSubmission", "registerSorafsOrderbookSubmissionTests"),
+    ("sorafsOrchestrator.parity", "registerSorafsOrchestratorParityTests"),
+    ("sorafsPdpValidation", "registerSorafsPdpValidationTests"),
+])
+def test_javascript_sorafs_source_entrypoints_delegate_to_sole_assertion_owners(entrypoint, registration):
+    """Moved assertions remain reached by the original required profile files."""
+    base = "javascript/iroha_js/test/"
+    entry = read(base + entrypoint + ".test.js")
+    shared = read(base + "sorafsNativeSuites/" + entrypoint + ".js")
+    assert f'from "./sorafsNativeSuites/{entrypoint}.js"' in entry
+    assert entry.count(registration + "({") == 1
+    assert f"export function {registration}(context)" in shared
+    assert "../src/" not in shared
+    assert "helpers/native.js" not in shared
+    assert not re.search(r"\bskip\s*:|\.skip\s*(?:\(|=)", shared)
+    assert f'"{entrypoint}.test.js"' in read("javascript/iroha_js/scripts/run-test-profile.mjs")
+
+
+def test_javascript_eager_native_helper_binds_the_single_pure_failure_owner():
+    """Source convenience loading cannot replace the required pure gate."""
+    eager = read("javascript/iroha_js/test/helpers/native.js")
+    pure = read("javascript/iroha_js/test/helpers/nativeRequirements.js")
+    assert 'import { getNativeBinding } from "../../src/native.js"' in eager
+    assert 'import { createNativeTestHelper } from "./nativeRequirements.js"' in eager
+    assert eager.count("createNativeTestHelper(binding, bindingError)") == 1
+    assert "export function createNativeTestHelper(binding, bindingError)" in pure
+    assert "../src/" not in pure
+    assert "getNativeBinding" not in pure
+    assert not re.search(r"\bskip\s*:|\.skip\s*(?:\(|=)", pure)
+
+
+@pytest.mark.parametrize("mutation", ("original", "remove", "comment", "before_install", "conditional", "skip_structure", "filter", "duplicate"))
+def test_child_source_controls_follow_locked_npm_before_native_build(mutation):
+    """AST controls need the actual locked TypeScript dependency installation."""
+    from scripts import check_sorafs_release_automation as automation
+    source = read("ci/sdk_sorafs_orchestrator.sh")
+    command = automation.SORAFS_JAVASCRIPT_SOURCE_COMMAND + "\n"
+    assert source.count(command) == 1
+    changed = source
+    if mutation == "remove": changed = source.replace(command, "")
+    elif mutation == "comment": changed = source.replace(command, "    # " + command.lstrip())
+    elif mutation == "before_install": changed = source.replace("    npm ci\n" + command, command + "    npm ci\n")
+    elif mutation == "conditional": changed = source.replace(command, "    if false; then\n" + command + "    fi\n")
+    elif mutation == "skip_structure": changed = source.replace(' "${sdk_root}/test/sorafsNativeSuiteStructure.test.js"', "")
+    elif mutation == "filter": changed = source.replace(command, command.rstrip() + " --test-name-pattern absent\n")
+    elif mutation == "duplicate": changed = source.replace(command, command * 2)
+    errors = automation._javascript_child_source_controls_errors(changed)
+    assert bool(errors) == (mutation != "original")
+
+
+@pytest.mark.parametrize("mutation", ("original", "remove", "comment", "outside_batch", "duplicate"))
+def test_child_abi_controls_are_in_the_installed_pytest_batch(mutation):
+    """The Python-only source guard uses the existing scripts requirement owner."""
+    from scripts import check_sorafs_release_automation as automation
+    source = read("ci/check_sorafs_cli_release.sh")
+    line = "  " + automation.SORAFS_JAVASCRIPT_CHILD_ABI_TEST + " \\\n"
+    assert source.count(line) == 1
+    changed = source
+    if mutation == "remove": changed = source.replace(line, "")
+    elif mutation == "comment": changed = source.replace(line, "") + "\n# " + line.lstrip()
+    elif mutation == "outside_batch": changed = source.replace(line, "") + "\n" + line
+    elif mutation == "duplicate": changed = source.replace(line, line * 2)
+    assert bool(automation._javascript_child_abi_controls_errors(changed)) == (mutation != "original")

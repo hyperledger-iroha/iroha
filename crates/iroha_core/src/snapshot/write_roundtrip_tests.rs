@@ -874,7 +874,7 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
     }
     fn storage_blocks<K, V>(entries: impl IntoIterator<Item = (K, V)>) -> json::Value
     where
-        K: mv::Key + mv::json::JsonKeyCodec,
+        K: mv::Key + norito::json::JsonKeyCodec,
         V: mv::Value + json::JsonSerialize,
     {
         let storage: Storage<K, V> = entries.into_iter().collect();

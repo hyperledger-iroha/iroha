@@ -167,8 +167,9 @@ impl V2BodyStoreCapacity {
         })
     }
 
+    /// Construct actual bounded fixture geometry using the production checks.
     #[cfg(test)]
-    fn for_test(
+    pub(crate) fn for_test(
         max_body_entries: usize,
         max_body_frame_bytes: u64,
     ) -> Result<Self, V2BodyStoreError> {
@@ -1329,6 +1330,16 @@ pub(crate) enum LocalValidationRefusal {
         /// Original runner wake destination, also used for worker capacity.
         wake: std::task::Waker,
     },
+    /// The original candidate awaits its authenticated first-admission body.
+    #[error("proposal validation awaits Native first-admission source at execution {execution_index}")]
+    NativeSourceRecovery {
+        /// Original applying-carrier execution index.
+        execution_index: usize,
+        /// Exact authenticated historical source, shared without replacing its owner.
+        authenticated_source: Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+        /// Original service wake destination after authenticated source completion.
+        wake: std::task::Waker,
+    },
     /// Local evidence or configuration requires repair followed by Strict restart.
     #[error("proposal validation requires local recovery: {0}")]
     RecoveryRequired(String),
@@ -2449,19 +2460,19 @@ impl QuarantinedV2BodyStore {
     /// store before semantic replay is sealed.
     pub(in crate::sumeragi) fn into_revalidated_lifecycle_startup(
         mut self,
-        apply_service: &V2ApplyService,
-        context: &wire::HeightContext,
+        apply_service: V2ApplyService,
+        context: super::v2::VerifiedHeightContext,
         validation_authority: RecoveredValidationAuthority,
-    ) -> Result<RevalidatedV2BodyStore, V2ApplyError> {
-        if let Some(subject) = apply_service.recovered_finality_subject(context)? {
+    ) -> Result<(RevalidatedV2BodyStore, super::v2_apply::NativeApplyService), V2ApplyError> {
+        if let Some(subject) = apply_service.recovered_finality_subject(context.context())? {
             self.0.retain_recovered_markers_for_subject(subject)?;
         }
         self.0
             .retain_recovered_markers_for_authority(validation_authority)?;
-        self.0.revalidate_recovered_markers(|body| {
-            apply_service.revalidate_recovered_candidate(context, body)
-        })?;
-        self.0.into_revalidated_startup().map_err(Into::into)
+        let mut service = super::v2_apply::NativeApplyService::new(apply_service, &self.0, context)?;
+        service.revalidate_recovered_markers(&mut self.0)?;
+        let store = self.0.into_revalidated_startup()?;
+        Ok((store, service))
     }
 }
 impl RevalidatedV2BodyStore {

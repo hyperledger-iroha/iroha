@@ -150,11 +150,11 @@ pub(crate) fn app_with_indexed_sccp_message_for_test(
             power,
         })
         .collect::<Vec<_>>();
-    let kagemusha_mint_finality_epoch_roster =
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+    let kagemusha_mint_finality_authority =
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
             version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
             network_id: *app.state.network_id_ref(),
-            epoch: 0,
+            generation: 0,
             validators: roster.iter().enumerate().map(|(index, validator)| {
                 let seed = 0xA0_u8 + u8::try_from(index).expect("four-validator fixture index");
                 iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
@@ -162,9 +162,24 @@ pub(crate) fn app_with_indexed_sccp_message_for_test(
                 ).expect("derive paired-Pasta finality fixture keys")
             }).collect(),
         };
-    let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
-        .finality_epoch_id()
-        .expect("canonical finality roster identity");
+    let kagemusha_mint_finality_authorization = {
+            let authority = &kagemusha_mint_finality_authority;
+            let authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id: authority.network_id,
+                epoch: 0,
+                first_height: 1,
+                last_height: 10,
+                authority_generation: authority.generation,
+                authority_id: authority.authority_id().expect("fixture authority identity"),
+                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+                previous_authorization_id: [0; 32],
+                transition_id: [0; 32],
+                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+            };
+            authorization.validate_against_authority(authority).expect("complete genesis fixture authorization");
+            authorization
+        };
     let context = HeightContext {
         network_id: *app.state.network_id_ref(),
         protocol_version: PROTOCOL_VERSION,
@@ -177,8 +192,8 @@ pub(crate) fn app_with_indexed_sccp_message_for_test(
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid SCCP finality roster"),
         roster,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         nexus_amx_context_hash: Hash::new(b"Torii SCCP exact-v2 finality context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),

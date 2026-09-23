@@ -1444,3 +1444,9 @@ fn both_pasta_index_range_and_permutation_helpers_refuse_overflow_wrong_roots_an
     shape_helpers::<Fp>();
     shape_helpers::<Fq>();
 }
+
+#[path = "indexed_reads_tests.rs"]
+mod indexed_reads_tests;
+
+#[path = "indexed_snapshot_tests.rs"]
+mod indexed_snapshot_tests;

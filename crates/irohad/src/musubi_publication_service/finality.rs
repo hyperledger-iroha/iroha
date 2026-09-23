@@ -298,7 +298,7 @@ mod tests {
         domain::Domain,
         isi::{
             InstructionBox,
-            kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
+            kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1},
             musubi::RegisterMusubiArchiveV1,
         },
         musubi::{
@@ -619,7 +619,7 @@ mod tests {
         parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
     ) -> SignedBlock {
         use iroha_data_model::isi::kagemusha_v1::{
-            KagemushaMintFinalityEpochRosterTemplateV1, KagemushaMintFinalityGenesisParametersV1,
+            KagemushaMintFinalityAuthorityGenerationTemplateV1, KagemushaMintFinalityGenesisParametersV1,
         };
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
 
@@ -651,12 +651,11 @@ mod tests {
             .with_sumeragi_v2_context_parameters(parameters)
             .with_kagemusha_mint_finality_genesis_parameters(
                 KagemushaMintFinalityGenesisParametersV1 {
-                    epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+                    authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                         version: KAGEMUSHA_CHAIN_VERSION_V1,
-                        epoch: 0,
+                        generation: 0,
                         validators,
                     },
-                    next_epoch_roster: None,
                 },
             )
             .build_raw()
@@ -684,10 +683,10 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let kagemusha_mint_finality_epoch_roster = KagemushaMintFinalityEpochRosterV1 {
+        let kagemusha_mint_finality_authority = KagemushaMintFinalityAuthorityGenerationV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
                 network_id,
-                epoch: 0,
+                generation: 0,
                 validators: roster
                     .iter()
                     .enumerate()
@@ -705,12 +704,27 @@ mod tests {
                     })
                     .collect(),
             };
-        kagemusha_mint_finality_epoch_roster
+        kagemusha_mint_finality_authority
             .validate()
             .expect("Musubi finality Pasta authority must be canonical");
-        let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
-            .finality_epoch_id()
-            .expect("derive Musubi finality Pasta authority identifier");
+        let kagemusha_mint_finality_authorization = {
+            let authority = &kagemusha_mint_finality_authority;
+            let authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id: authority.network_id,
+                epoch: 0,
+                first_height: 1,
+                last_height: 100,
+                authority_generation: authority.generation,
+                authority_id: authority.authority_id().expect("fixture authority identity"),
+                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+                previous_authorization_id: [0; 32],
+                transition_id: [0; 32],
+                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+            };
+            authorization.validate_against_authority(authority).expect("complete genesis fixture authorization");
+            authorization
+        };
         let height = block.header().height().get();
         let context = HeightContext {
             network_id,
@@ -724,8 +738,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid finality fixture quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"Musubi finality fixture Nexus context"),
             execution_policy_hash: Hash::new(b"Musubi finality fixture execution policy"),
             da_layout: DataAvailabilityLayout {

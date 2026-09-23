@@ -5660,6 +5660,15 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
     let mismatched_lane = LaneId::new(99);
     let_row! { stake_asset_definition = AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").expect("stake asset domain"), "stake".parse().expect("stake asset name"), ) };
     let reward_asset = AssetId::new(stake_asset_definition, validator.clone());
+    for account in [validator.clone(), staker.clone()] {
+        let (id, value) = Account::new(account.clone()).build(&account).into_key_value();
+        world.accounts.insert(id, value);
+    }
+    world = reward_reserves::registered_custody_world_for_test(
+        world,
+        &reward_asset,
+        Quantity::from(1_477_u64),
+    );
     let request_id = Hash::new("unbond-request");
     world.public_lane_validators.insert(
         (LaneId::SINGLE, validator.clone()),
@@ -5739,6 +5748,9 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
     world
         .public_lane_reward_claims
         .insert((LaneId::SINGLE, validator.clone(), reward_asset.clone()), 6);
+    world.public_lane_reward_reserves.insert(reward_asset.clone(), Quantity::from(77_u32));
+    world.public_lane_stake_custody.insert((LaneId::SINGLE, validator.clone()), (reward_asset.clone(), Quantity::from(1_400_u32)));
+    world.public_lane_stake_reserves.insert(reward_asset.clone(), Quantity::from(1_400_u32));
     let state = State::new(world, kura, query_handle);
     // Preserve actual touched-key preimages for every formerly current-only store.
     {
@@ -5752,6 +5764,9 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         let record = block.public_lane_rewards.get(&(LaneId::SINGLE, 7)).unwrap().clone();
         block.public_lane_rewards.insert((LaneId::SINGLE, 7), record);
         block.public_lane_reward_claims.insert((LaneId::SINGLE, validator.clone(), reward_asset.clone()), 6);
+        block.public_lane_reward_reserves.insert(reward_asset.clone(), Quantity::from(77_u32));
+        block.public_lane_stake_custody.insert((LaneId::SINGLE, validator.clone()), (reward_asset.clone(), Quantity::from(1_400_u32)));
+        block.public_lane_stake_reserves.insert(reward_asset.clone(), Quantity::from(1_400_u32));
         block.space_directory_manifests.remove(UniversalAccountId::from_hash(Hash::new(b"absent snapshot manifest")));
         block.commit();
     }
@@ -5759,7 +5774,7 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
     let_row! { seed = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value.clone()) .expect("deserialize state") };
     let roundtrip = norito::json::to_value(&restored).unwrap();
-    for field in ["public_lane_validators", "public_lane_stake_shares", "public_lane_rewards", "public_lane_reward_claims", "space_directory_manifests"] {
+    for field in ["public_lane_validators", "public_lane_stake_shares", "public_lane_rewards", "public_lane_reward_claims", "public_lane_reward_reserves", "public_lane_stake_custody", "public_lane_stake_reserves", "space_directory_manifests"] {
         assert_eq!(roundtrip.as_object().unwrap().get(field), json_value.as_object().unwrap().get(field),
             "{field} retains its exact current entries, preimages and absence markers");
         assert!(!json_value.as_object().unwrap().get(field).unwrap().as_object().unwrap()
@@ -10462,6 +10477,7 @@ include!("native_lane_recorded_execution_tests.rs");
 include!("native_lane_economic_relay_tests.rs");
 include!("native_lane_control_execution_tests.rs");
 include!("native_lane_preparation_tests.rs");
+include!("native_lane_service_preparation_tests.rs");
 include!("lane_instance_tests.rs");
 include!("lane_instance_body_tests.rs");
 include!("lane_instance_persistence_tests.rs");
@@ -20799,6 +20815,139 @@ state_test! { sync emergency_fast_restored_config_rejects_dataspace_catalog_repl
             if message.contains("dataspace catalog")
     ));
 }
+state_test! { sync emergency_fast_restored_config_preserves_staking_owner_and_custody
+    for pending_only in [false, true] {
+        let (validator, keypair) = bls_account_in("emergency-staking");
+        let custody_asset = AssetId::new(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("retained", "universal").unwrap(),
+                "stake".parse().unwrap(),
+            ),
+            validator.clone(),
+        );
+        let mut world = World::default();
+        let (id, account) = Account::new(validator.clone())
+            .build(&validator)
+            .into_key_value();
+        world.accounts.insert(id, account);
+        world = reward_reserves::registered_custody_world_for_test(
+            world,
+            &custody_asset,
+            Quantity::from(100_u64),
+        );
+        {
+            let mut parameters = world.parameters.block();
+            parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                SumeragiNposParameters {
+                    evidence_horizon_blocks: 1,
+                    slashing_delay_blocks: 1,
+                    ..SumeragiNposParameters::default()
+                }
+                .into_custom_parameter(),
+            ));
+            parameters.commit();
+        }
+        let mut state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing_in_emergency_fast_mode(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus_runtime_restored_from_snapshot = true;
+        insert_active_public_lane_validator_for_test(
+            &state,
+            LaneId::SINGLE,
+            &validator,
+            &keypair,
+            100,
+        );
+        {
+            let mut world = state.world.block();
+            world.public_lane_stake_custody.insert(
+                (LaneId::SINGLE, validator.clone()),
+                (custody_asset.clone(), Quantity::from(100_u64)),
+            );
+            world
+                .public_lane_stake_reserves
+                .insert(custody_asset.clone(), Quantity::from(100_u64));
+            if pending_only {
+                let record = world
+                    .public_lane_validators
+                    .get_mut(&(LaneId::SINGLE, validator.clone()))
+                    .unwrap();
+                record.total_stake = Quantity::zero();
+                record.self_stake = Quantity::zero();
+                record.status = PublicLaneValidatorStatus::Exited;
+                record.deactivation_height = Some(0);
+                let share = world
+                    .public_lane_stake_shares
+                    .get_mut(&(LaneId::SINGLE, validator.clone(), validator.clone()))
+                    .unwrap();
+                share.bonded = Quantity::zero();
+                let request_id = Hash::new(b"retained emergency pending unbond");
+                share.pending_unbonds.insert(
+                    request_id,
+                    PublicLaneUnbonding {
+                        request_id,
+                        amount: Quantity::from(100_u64),
+                        release_at_ms: 1000,
+                        slashable_through_height: 1,
+                        liability_release_height: 3,
+                    },
+                );
+            }
+            world.commit();
+        }
+        let before = state.nexus_snapshot();
+        let mut changed_owner = before.clone();
+        changed_owner.staking.public_validator_mode =
+            iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
+        let error = state
+            .set_nexus_from_config(changed_owner)
+            .expect_err("Fast recovery cannot remove a retained staking owner");
+        assert!(
+            matches!(error, LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == LaneId::SINGLE && reason == LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON)
+        );
+        assert_eq!(
+            state.nexus_snapshot().staking.public_validator_mode,
+            before.staking.public_validator_mode
+        );
+        assert_eq!(
+            state
+                .world
+                .public_lane_stake_reserves
+                .view()
+                .get(&custody_asset),
+            Some(&Quantity::from(100_u64))
+        );
+
+        let mut recoverable = before;
+        recoverable.staking.stake_escrow_account_id = BOB_ID.to_string();
+        state.set_nexus_from_config(recoverable)
+            .expect("Fast recovery may update local selectors while pinned custody retains its exact source");
+        assert_eq!(
+            state
+                .world
+                .public_lane_stake_custody
+                .view()
+                .get(&(LaneId::SINGLE, validator)),
+            Some(&(custody_asset, Quantity::from(100_u64)))
+        );
+    }
+    let mut empty = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing_in_emergency_fast_mode(),
+        LiveQueryStore::start_test(),
+    );
+    empty.nexus_runtime_restored_from_snapshot = true;
+    let mut no_liability = empty.nexus_snapshot();
+    no_liability.staking.public_validator_mode =
+        iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
+    empty
+        .set_nexus_from_config(no_liability)
+        .expect("Fast recovery may change a staking owner after all liabilities drain");
+}
+
 state_test! { sync restored_runtime_geometry_is_recovered_before_later_catalog_replay
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let_row! { configured = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "snapshot-lane".to_owned(), ..LaneConfig::default() }, ], ) .expect("configured snapshot catalog") };
@@ -26069,14 +26218,10 @@ fn finalize_lane_relay_batch_for_state_test(
     let_row! { mut validators = validator_keypairs .iter() .map(|keypair| (PeerId::new(keypair.public_key().clone()), keypair)) .collect::<Vec<_>>() };
     validators.sort_by(|left, right| left.0.cmp(&right.0));
     let_row! { roster = validators .iter() .map(|(validator, _)| wire::ValidatorPower { validator: validator.clone(), power: 1, }) .collect::<Vec<_>>() };
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-            *state.network_id_ref(),
-            0,
-            &roster,
-        );
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(*state.network_id_ref(), height.saturating_add(100), &roster);
     let_row! { snapshot_bootstrap = (height > 1).then(|| { let parent_height = NonZeroUsize::new(usize::try_from(height - 1).expect("relay parent height fits usize")) .expect("relay parent height is non-zero"); let parent = state .kura .get_block(parent_height) .expect("non-genesis relay finality requires a canonical parent"); wire::SnapshotBootstrapAnchor { snapshot_height: height - 1, snapshot_block_hash: parent.hash(), snapshot_block_creation_time_ms: parent.header().creation_time_ms, snapshot_state_hash: Hash::new(b"state-test-relay-snapshot-state"), } }) };
-    let_row! { context = wire::HeightContext { network_id: *state.network_id_ref(), protocol_version: wire::PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: height.saturating_add(100), next_epoch_snapshot: None, mode: wire::ConsensusMode::Permissioned, parent_commit_qc: None, snapshot_bootstrap, quorum: wire::DualQuorum::from_roster(&roster).expect("valid relay finality quorum"), roster, kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state-test-relay-nexus-amx-context"), execution_policy_hash: Hash::new(b"state-test-relay-execution-policy"), da_layout: wire::recommended_data_availability_layout(), leader_seed: [0x5A; 32], } };
+    let_row! { context = wire::HeightContext { network_id: *state.network_id_ref(), protocol_version: wire::PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: height.saturating_add(100), next_epoch_snapshot: None, mode: wire::ConsensusMode::Permissioned, parent_commit_qc: None, snapshot_bootstrap, quorum: wire::DualQuorum::from_roster(&roster).expect("valid relay finality quorum"), roster, kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority, nexus_amx_context_hash: Hash::new(b"state-test-relay-nexus-amx-context"), execution_policy_hash: Hash::new(b"state-test-relay-execution-policy"), da_layout: wire::recommended_data_availability_layout(), leader_seed: [0x5A; 32], } };
     let_row! { subject = wire::BlockSubject { parent_block_hash: block.header().prev_block_hash(), block_hash: block.hash(), payload_hash: block .canonical_proposal_wire_hash() .expect("encode relay finality proposal"), } };
     let_row! { executed_block_wire_len = u64::try_from( block .canonical_wire() .expect("encode relay finality carrier") .as_framed() .len(), ) .expect("relay finality carrier length fits u64") };
     let_row! { mut execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier( Hash::new([0xBC; 4]), Hash::new([0xAB; 4]), Hash::new(b"state-test-relay-ordinary-writes"), executed_block_wire_len, block .executed_block_wire_hash() .expect("encode relay finality carrier"), ) };

@@ -463,3 +463,139 @@ def test_confidential_java_migration_rejects_missing_groups_and_duplicate_owners
     errors = []
     native_selection_guard._check_jvm_confidential_owner_closure(tmp_path, consumers, errors)
     assert errors == ["original " + name + " Java assertions must use canonical Kotlin capabilities"]
+
+
+JS_NODE_FLOOR_INPUTS = (
+    "javascript/iroha_js/package.json",
+    "javascript/iroha_js/package-lock.json",
+    "javascript/iroha_js/scripts/check-node-engine.mjs",
+    "javascript/iroha_js/scripts/node-engine-contract.mjs",
+    "javascript/iroha_js/test/nodeEngineContract.test.js",
+)
+
+
+def test_javascript_selected_node_floor_is_ordered_before_native_build(native_selection_guard):
+    gate = read("ci/check_privacy_js_sdk.sh")
+    errors = []
+    native_selection_guard._check_javascript_node_floor_gate(gate, errors)
+    assert errors == []
+    assert gate.count('"${NODE_BIN}" scripts/check-node-engine.mjs') == 1
+    assert '[[ "${version}" == v20.* ]]' in gate
+    assert '  v20.*) ;;' in gate
+    assert gate.index('  v20.*) ;;') < gate.index('"${NODE_BIN}" scripts/check-node-engine.mjs')
+    assert gate.index('"${NODE_BIN}" scripts/check-node-engine.mjs') < gate.index('"${NODE_BIN}" scripts/build-native.mjs')
+    guard_source = read("ci/check_privacy_sdk_guard.sh")
+    assert '_check_javascript_node_floor_gate(read("ci/check_privacy_js_sdk.sh", overrides), errors)' in guard_source
+    for path in JS_NODE_FLOOR_INPUTS:
+        assert f'        "{path}",' in guard_source
+
+
+@pytest.mark.parametrize("mutation", ("remove", "comment", "duplicate", "after-build", "conditional", "other-node", "major-relaxed"))
+def test_javascript_node_floor_source_contract_rejects_unexecuted_or_late_check(native_selection_guard, mutation):
+    gate = read("ci/check_privacy_js_sdk.sh")
+    call = '"${NODE_BIN}" scripts/check-node-engine.mjs\n'
+    assert gate.count(call) == 1
+    if mutation == "remove":
+        changed = gate.replace(call, "")
+    elif mutation == "comment":
+        changed = gate.replace(call, "# " + call)
+    elif mutation == "duplicate":
+        changed = gate.replace(call, call + call)
+    elif mutation == "after-build":
+        changed = gate.replace(call, "").replace('"${NODE_BIN}" scripts/build-native.mjs\n', '"${NODE_BIN}" scripts/build-native.mjs\n' + call)
+    elif mutation == "conditional":
+        changed = gate.replace(call, "if false; then\n" + call + "fi\n")
+    elif mutation == "other-node":
+        changed = gate.replace(call, "node scripts/check-node-engine.mjs\n")
+    else:
+        changed = gate.replace('  v20.*) ;;', '  v*) ;;')
+    errors = []
+    native_selection_guard._check_javascript_node_floor_gate(changed, errors)
+    assert errors == ["privacy JavaScript gate must check the selected Node floor exactly once after major20 and before native build"]
+
+
+def test_javascript_node_floor_metadata_and_checker_changes_trigger_privacy_gate(native_selection_guard):
+    workflow = native_selection_guard.parse_workflow(read(".github/workflows/pr_privacy_sdk_guard.yml"))
+    errors = []
+    native_selection_guard._check_workflow_trigger_paths(workflow, JS_NODE_FLOOR_INPUTS, errors)
+    assert errors == []
+    for path in JS_NODE_FLOOR_INPUTS:
+        source = read(".github/workflows/pr_privacy_sdk_guard.yml")
+        line = f'      - "{path}"\n'
+        assert source.count(line) == 1
+        changed = native_selection_guard.parse_workflow(source.replace(line, ""))
+        errors = []
+        native_selection_guard._check_workflow_trigger_paths(changed, JS_NODE_FLOOR_INPUTS, errors)
+        assert errors == ["privacy workflow pull_request/push paths must include " + path]
+
+
+@pytest.mark.parametrize("selected_version,remove_floor", (("20.18.9", False), ("18.20.8", False), ("22.0.0", False), ("20.18.9", True)))
+def test_javascript_post_lock_boundary_refuses_synthetic_unsupported_runtime_before_native_build(tmp_path, selected_version, remove_floor):
+    """Execute the exact post-lock Node boundary with a negative tool observation.
+
+    This is not a run on the injected Node version or proof of Cargo admission.
+    The unmodified checker executes; a native-command sentinel never builds.
+    The removal control proves refusal does not come from unrelated setup.
+    """
+    import json
+    import os
+    import shlex
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    assert node is not None, "a real Node executable is required for this negative fixture"
+    node = str(Path(node).resolve(strict=True))
+    repository = tmp_path / "repository"
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for relative in JS_NODE_FLOOR_INPUTS[:4]:
+        destination = repository / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, destination)
+    source = read("ci/check_privacy_js_sdk.sh")
+    start_marker = 'cd "${ROOT_DIR}/javascript/iroha_js"\n'
+    end_marker = 'NATIVE_ARTIFACT="${IROHA_JS_NATIVE_DIR}/iroha_js_host.node"\n'
+    assert source.count(start_marker) == source.count(end_marker) == 1
+    start = source.index(start_marker)
+    end = source.index(end_marker, start)
+    boundary = source[start:end]
+    call = '"${NODE_BIN}" scripts/check-node-engine.mjs\n'
+    assert boundary.count(call) == 1
+    if remove_floor:
+        boundary = boundary.replace(call, "")
+    observations = tmp_path / "negative-tool-observations.jsonl"
+    preload = tools / "negative-version-observation.mjs"
+    preload.write_text('Object.defineProperty(process.versions, "node", { value: ' + json.dumps(selected_version) + ' });\n')
+    driver = tools / "selected-node.py"
+    driver.write_text("\n".join((
+        "import json, os, pathlib, sys",
+        f"observation = pathlib.Path({str(observations)!r})",
+        "with observation.open('a') as stream: stream.write(json.dumps(sys.argv[1:]) + '\\n')",
+        f"if sys.argv[1:] == ['--version']: print('v' + {selected_version!r}); raise SystemExit(0)",
+        "if sys.argv[1:] == ['scripts/check-node-engine.mjs']:",
+        f"    os.execv({node!r}, [{node!r}, '--import', {str(preload)!r}, *sys.argv[1:]])",
+        "print('negative fixture native-build sentinel: no native operation executed', file=sys.stderr)",
+        "raise SystemExit(97)",
+    )) + "\n")
+    selected_node = tools / "selected-node"
+    selected_node.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' -I ' + shlex.quote(str(driver)) + ' "$@"\n')
+    selected_node.chmod(0o700)
+    result = subprocess.run(["/bin/bash", "-euo", "pipefail", "-c", boundary], cwd=ROOT, env={
+        **os.environ, "TMPDIR": str(tmp_path), "ROOT_DIR": str(repository),
+        "NODE_BIN": str(selected_node), "PYTHONDONTWRITEBYTECODE": "1", "NODE_OPTIONS": "",
+    }, capture_output=True, text=True, timeout=30)
+    observed = [json.loads(line) for line in observations.read_text().splitlines()]
+    assert result.returncode != 0
+    if remove_floor:
+        assert result.returncode == 97
+        assert observed == [["--version"], ["scripts/build-native.mjs"]]
+        assert "negative fixture native-build sentinel" in result.stderr
+    elif selected_version.startswith("20."):
+        assert observed == [["--version"], ["scripts/check-node-engine.mjs"]]
+        assert "[node-engine] current Node 20.18.9 is below SDK >=20.19.0" in result.stderr
+        assert "native-build sentinel" not in result.stderr
+    else:
+        assert observed == [["--version"]]
+        assert f"require Node 20; got v{selected_version}" in result.stderr
+        assert "native-build sentinel" not in result.stderr

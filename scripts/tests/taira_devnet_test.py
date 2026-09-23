@@ -991,7 +991,10 @@ class FakeRuntime:
             "git",
             "diff",
             "--binary",
+            "--full-index",
+            "--no-color",
             "--no-ext-diff",
+            "--no-textconv",
             "HEAD",
             "--",
             ".",
@@ -2030,7 +2033,10 @@ class TairaDevnetTests(unittest.TestCase):
             "git",
             "diff",
             "--binary",
+            "--full-index",
+            "--no-color",
             "--no-ext-diff",
+            "--no-textconv",
             "HEAD",
             "--",
             ".",
@@ -2099,8 +2105,8 @@ class TairaDevnetTests(unittest.TestCase):
             return real_fstat(descriptor)
 
         with mock.patch.object(module.os, "fstat", side_effect=replace_after_open):
-            with self.assertRaises(module.DevnetError):
-                module._untracked_source_content(source, metadata)
+            with self.assertRaises(module.source_observation.SourceObservationError):
+                module.source_observation.untracked_source_content(source, metadata)
 
     def test_source_observation_converts_vanished_untracked_path_to_devnet_error(
         self,
@@ -2139,8 +2145,8 @@ class TairaDevnetTests(unittest.TestCase):
                 side_effect=lstat_surrogate,
             ),
             mock.patch.object(
-                module,
-                "_untracked_source_content",
+                module.source_observation,
+                "untracked_source_content",
                 return_value=(b"file", b"\x9a" * 32),
             ) as content,
         ):

@@ -45,20 +45,53 @@ build or release qualification time.
 and native environment into its request. Resume revalidates those identities.
 The native selection is independent of the explicitly pinned Zig shipping tools.
 
+For a diagnostic that must survive its launching terminal or tool session, supply a
+fresh absolute session path (it must not already exist):
+
+    python3 scripts/taira_release.py check \
+      --session-dir /absolute/private/check-20260922
+    python3 scripts/taira_release.py check-status \
+      --session-dir /absolute/private/check-20260922
+
+`check` returns after starting a detached worker. The worker runs the same check
+and owns `check.log`, a canonical `request.json`, `started.json`, and a final
+`result.json` in a new 0700 directory. Records are 0400 and the log is 0600. The
+request records diagnostic options, not the inherited environment or credentials.
+`--focus-regression`, `--native-check-scope`, `--native-linker` and the existing
+warm-lane selection work the same way in background mode.
+
+`check-status` prints compact JSON and starts no work. `request_path` points to
+the immutable full request, and `focused_regression_count` reports the number of
+explicit selectors (zero for an unfocused check); the selector list is not repeated.
+Exit status is 0 for `passed`, 2 for `running`, and 1 for `failed` or `incomplete`.
+Running means the worker or an inherited child still holds the session lock. A missing final result after all
+holders exit means incomplete, including worker interruption; a recorded PID
+never decides status. The existing Cargo lane lock remains inherited throughout
+native work. No status command kills, restarts or resumes a process. Inspect the
+log before explicitly starting a fresh session after failure or interruption.
+These records are mutable-source diagnostics; `prepare` does not accept or reuse
+them as immutable release qualification.
+
 Before signing an immutable release, use an exact focused diagnostic in the same
 warm development lane:
 
     python3 scripts/taira_release.py check \
       --focus-regression core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay
 
-Repeat `--focus-regression HARNESS=EXACT_TEST` for more selected regressions. The
-diagnostic compiles configuration and the requested native harnesses together,
-runs mandatory configuration checks first, then only the named tests. Names must already belong
+Repeat `--focus-regression HARNESS=EXACT_TEST` for more selected regressions. Requested
+`mv`, `mv-ebr`, `mv-map`, `mv-admitted-map` and `concread` tests compile and run
+first, before configuration or the larger Core/CLI graphs. The runner finishes
+and releases those copied executables before compiling configuration and the
+remaining requested harnesses. Mandatory configuration checks gate that second
+phase and remain required even for a portable-only diagnostic. Names must already belong
 to the chosen `--native-check-scope`; unknown or repeated selections fail before
 Cargo starts. Independent failures are aggregated; dependent network tests run
 only after those checks pass. This mutable-source diagnostic writes no release
-qualification checkpoint. `prepare` has no focus option and still requires its
-complete immutable gate. Omit the option to run the normal development gate.
+qualification checkpoint. Each phase reports its own Cargo feature graph; an
+early pass does not qualify the later graph. `prepare` has no focus option and
+still requires its complete immutable gate. Omit the option to run the normal
+development gate. Reuse the same warm target across both phases; earlier failure
+feedback does not imply a shorter total build when Cargo feature sets differ.
 
 The CLI regression selection runs as one serial native test process, using exact
 test names. This reuses immutable genesis fixtures instead of rebuilding them in

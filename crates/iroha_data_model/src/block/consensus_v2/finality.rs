@@ -9,7 +9,7 @@ use super::{
     PROTOCOL_VERSION, QuorumCertificate, ValidationError, ValidatorPower, Vote,
 };
 use crate::block::BlockHeader;
-use crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1;
+use crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1;
 use core::fmt;
 use iroha_crypto::{Algorithm, HashOf};
 use iroha_schema::IntoSchema;
@@ -44,10 +44,11 @@ pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
 pub struct FinalizedNextEpochSnapshot {
     /// Epoch immediately following the artifact's height context epoch.
     pub epoch: u64,
-    /// Canonical identifier of the separately provisioned paired-Pasta roster for this epoch.
-    pub kagemusha_mint_finality_epoch_id: [u8; 32],
-    /// Complete paired-Pasta public roster authenticated by the old epoch's boundary `CommitQC`.
-    pub kagemusha_mint_finality_epoch_roster: KagemushaMintFinalityEpochRosterV1,
+    /// Complete next scheduling authorization certified by the incumbent boundary quorum.
+    pub kagemusha_mint_finality_authorization:
+        crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+    /// Complete paired-Pasta generation selected by the next scheduling authorization.
+    pub kagemusha_mint_finality_authority: KagemushaMintFinalityAuthorityGenerationV1,
     /// Last height governed by the next epoch.
     pub epoch_end_height: Height,
     /// Genesis-selected consensus mode used to select the committee.
@@ -70,24 +71,25 @@ impl FinalizedNextEpochSnapshot {
         if self.epoch != expected_epoch {
             return Err(ValidationError::InvalidNextEpoch);
         }
-        if self.kagemusha_mint_finality_epoch_id == [0; 32] {
-            return Err(ValidationError::InvalidKagemushaMintFinalityEpochId);
+        let authority = &self.kagemusha_mint_finality_authority;
+        let authorization = &self.kagemusha_mint_finality_authorization;
+        if authorization.validate_against_authority(authority).is_err()
+            || authorization
+                .validate_successor(&context.kagemusha_mint_finality_authorization)
+                .is_err()
+            || authorization.epoch != self.epoch
+            || authorization.last_height != self.epoch_end_height
+        {
+            return Err(ValidationError::InvalidKagemushaMintFinalityAuthorization);
         }
-        let mint_roster = &self.kagemusha_mint_finality_epoch_roster;
-        if mint_roster.validate().is_err()
-            || (
-                mint_roster.network_id,
-                mint_roster.epoch,
-                mint_roster.validators.len(),
-            ) != (context.network_id, self.epoch, self.roster.len())
-            || mint_roster
+        if authority.validators.len() != self.roster.len()
+            || authority
                 .validators
                 .iter()
                 .zip(&self.roster)
                 .any(|(mint, consensus)| mint.validator != consensus.validator)
-            || mint_roster.finality_epoch_id().ok() != Some(self.kagemusha_mint_finality_epoch_id)
         {
-            return Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster);
+            return Err(ValidationError::InvalidKagemushaMintFinalityAuthorityGeneration);
         }
         let successor_height = context
             .height
@@ -770,47 +772,24 @@ mod tests {
             })
             .collect()
     }
-    fn mint_finality_roster(
+    fn mint_finality_authority(
         network_id: NetworkId,
-        epoch: u64,
+        generation: u64,
         roster: &[ValidatorPower],
-    ) -> KagemushaMintFinalityEpochRosterV1 {
-        use crate::isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityValidatorKeysV1,
-        };
-
-        KagemushaMintFinalityEpochRosterV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id,
-            epoch,
-            validators: roster
-                .iter()
-                .enumerate()
-                .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
-                    validator: validator.validator.clone(),
-                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
-                        32],
-                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
-                        32],
-                })
-                .collect(),
-        }
+    ) -> KagemushaMintFinalityAuthorityGenerationV1 {
+        super::super::test_kagemusha_mint_finality_authority(network_id, generation, roster)
     }
     fn context() -> HeightContext {
         let roster = roster();
         let network_id = network_id(0xA1);
-        let current_mint_finality_roster = mint_finality_roster(network_id, 7, &roster);
-        let mint_finality_epoch_id = current_mint_finality_roster
-            .finality_epoch_id()
-            .expect("valid fixture mint-finality roster");
-        let next_mint_finality_roster = mint_finality_roster(network_id, 8, &roster);
-        let next_mint_finality_epoch_id = next_mint_finality_roster
-            .finality_epoch_id()
-            .expect("valid next-epoch fixture mint-finality roster");
+        let current_mint_finality_roster = mint_finality_authority(network_id, 0, &roster);
+        let mint_finality_authorization = super::super::test_kagemusha_genesis_authorization(&current_mint_finality_roster, 1);
+        let next_mint_finality_roster = current_mint_finality_roster.clone();
+        let next_mint_finality_authorization = super::super::test_kagemusha_successor_authorization(&mint_finality_authorization, &next_mint_finality_roster, 9);
         let next_epoch_snapshot = FinalizedNextEpochSnapshot {
-            epoch: 8,
-            kagemusha_mint_finality_epoch_id: next_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: next_mint_finality_roster,
+            epoch: 1,
+            kagemusha_mint_finality_authorization: next_mint_finality_authorization,
+            kagemusha_mint_finality_authority: next_mint_finality_roster,
             epoch_end_height: 9,
             mode: ConsensusMode::Permissioned,
             roster: roster.clone(),
@@ -822,9 +801,9 @@ mod tests {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
-            epoch: 7,
-            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: current_mint_finality_roster,
+            epoch: 0,
+            kagemusha_mint_finality_authorization: mint_finality_authorization,
+            kagemusha_mint_finality_authority: current_mint_finality_roster,
             epoch_end_height: 1,
             next_epoch_snapshot: Some(next_epoch_snapshot),
             mode: ConsensusMode::Permissioned,
@@ -1045,6 +1024,7 @@ mod tests {
         );
         let mut premature = artifact();
         premature.height_context.epoch_end_height = premature.height + 1;
+        premature.height_context.kagemusha_mint_finality_authorization.last_height = premature.height + 1;
         assert_eq!(
             premature.validate(),
             Err(V2FinalityValidationError::InvalidHeightContext(
@@ -1115,6 +1095,7 @@ mod tests {
             .leader_seed[0] ^= 0x80;
         let mut forged_roster = canonical.clone();
         let network_id = forged_roster.height_context.network_id;
+        let previous_authorization = forged_roster.height_context.kagemusha_mint_finality_authorization;
         let snapshot = forged_roster
             .height_context
             .next_epoch_snapshot
@@ -1127,12 +1108,12 @@ mod tests {
             .roster
             .sort_by(|left, right| left.validator.cmp(&right.validator));
         snapshot.quorum = DualQuorum::from_roster(&snapshot.roster).expect("mutated valid roster");
-        snapshot.kagemusha_mint_finality_epoch_roster =
-            mint_finality_roster(network_id, snapshot.epoch, &snapshot.roster);
-        snapshot.kagemusha_mint_finality_epoch_id = snapshot
-            .kagemusha_mint_finality_epoch_roster
-            .finality_epoch_id()
-            .expect("mutated paired-Pasta roster remains valid");
+        snapshot.kagemusha_mint_finality_authority = mint_finality_authority(
+            network_id, previous_authorization.authority_generation + 1, &snapshot.roster,
+        );
+        snapshot.kagemusha_mint_finality_authorization = super::super::test_kagemusha_successor_authorization(
+            &previous_authorization, &snapshot.kagemusha_mint_finality_authority, snapshot.epoch_end_height,
+        );
         for forged in [forged_seed, forged_roster] {
             forged
                 .height_context
@@ -1166,20 +1147,20 @@ mod tests {
         for coordinate in 0..3 {
             let mut changed = context();
             match coordinate {
-                0 => changed.kagemusha_mint_finality_epoch_roster.network_id = network_id(0xB1),
-                1 => changed.kagemusha_mint_finality_epoch_roster.epoch += 1,
+                0 => changed.kagemusha_mint_finality_authority.network_id = network_id(0xB1),
+                1 => changed.kagemusha_mint_finality_authority.generation += 1,
                 2 => {
                     changed.roster = seven_validator_roster();
                     changed.quorum = DualQuorum::from_roster(&changed.roster).unwrap();
-                    changed.kagemusha_mint_finality_epoch_roster = mint_finality_roster(
+                    changed.kagemusha_mint_finality_authority = mint_finality_authority(
                         changed.network_id,
-                        changed.epoch,
+                        0,
                         &changed.roster[..4],
                     );
                 }
                 _ => unreachable!(),
             }
-            let mint = &changed.kagemusha_mint_finality_epoch_roster;
+            let mint = &changed.kagemusha_mint_finality_authority;
             mint.validate().expect("independently valid mint roster");
             assert!(
                 mint.validators
@@ -1187,10 +1168,14 @@ mod tests {
                     .zip(&changed.roster)
                     .all(|(mint, consensus)| mint.validator == consensus.validator)
             );
-            changed.kagemusha_mint_finality_epoch_id = mint.finality_epoch_id().unwrap();
+            changed.kagemusha_mint_finality_authorization.authority_id = mint.authority_id().unwrap();
             assert_eq!(
                 changed.validate(),
-                Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster),
+                Err(if coordinate < 2 {
+                    ValidationError::InvalidKagemushaMintFinalityAuthorization
+                } else {
+                    ValidationError::InvalidKagemushaMintFinalityAuthorityGeneration
+                }),
                 "coordinate {coordinate} must be bound independently of the digest and zipped prefix"
             );
         }
@@ -1206,21 +1191,25 @@ mod tests {
         for coordinate in 0..3 {
             let mut changed = baseline.clone();
             match coordinate {
-                0 => changed.kagemusha_mint_finality_epoch_roster.network_id = network_id(0xB1),
-                1 => changed.kagemusha_mint_finality_epoch_roster.epoch += 1,
+                0 => changed.kagemusha_mint_finality_authority.network_id = network_id(0xB1),
+                1 => changed.kagemusha_mint_finality_authority.generation += 1,
                 2 => {
                     changed.roster = seven_validator_roster();
                     changed.quorum = DualQuorum::from_roster(&changed.roster).unwrap();
                     changed.validator_set_pops = vec![vec![0xC2]; changed.roster.len()];
-                    changed.kagemusha_mint_finality_epoch_roster = mint_finality_roster(
+                    changed.kagemusha_mint_finality_authority = mint_finality_authority(
                         context.network_id,
-                        changed.epoch,
+                        1,
                         &changed.roster[..4],
                     );
+                    // Admit an explicit next generation so only the roster-length binding fails.
+                    changed.kagemusha_mint_finality_authorization.authority_generation = 1;
+                    changed.kagemusha_mint_finality_authorization.decision = crate::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate;
+                    changed.kagemusha_mint_finality_authorization.transition_id = [0xB3; 32];
                 }
                 _ => unreachable!(),
             }
-            let mint = &changed.kagemusha_mint_finality_epoch_roster;
+            let mint = &changed.kagemusha_mint_finality_authority;
             mint.validate()
                 .expect("independently valid successor mint roster");
             assert!(
@@ -1229,10 +1218,18 @@ mod tests {
                     .zip(&changed.roster)
                     .all(|(mint, consensus)| mint.validator == consensus.validator)
             );
-            changed.kagemusha_mint_finality_epoch_id = mint.finality_epoch_id().unwrap();
+            changed.kagemusha_mint_finality_authorization.authority_id = mint.authority_id().unwrap();
+            if coordinate == 2 {
+                changed.kagemusha_mint_finality_authorization.validate_against_authority(mint).expect("valid independent authority binding");
+                changed.kagemusha_mint_finality_authorization.validate_successor(&context.kagemusha_mint_finality_authorization).expect("valid activation isolates roster length");
+            }
             assert_eq!(
                 changed.validate_against(&context),
-                Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster),
+                Err(if coordinate < 2 {
+                    ValidationError::InvalidKagemushaMintFinalityAuthorization
+                } else {
+                    ValidationError::InvalidKagemushaMintFinalityAuthorityGeneration
+                }),
                 "coordinate {coordinate}"
             );
         }
@@ -1241,7 +1238,7 @@ mod tests {
     #[test]
     fn mint_roster_binding_preserves_validation_precedence() {
         let mut context = context();
-        context.kagemusha_mint_finality_epoch_roster.network_id = network_id(0xB1);
+        context.kagemusha_mint_finality_authority.network_id = network_id(0xB1);
         context.protocol_version = PROTOCOL_VERSION + 1;
         assert_eq!(
             context.validate(),
@@ -1251,7 +1248,7 @@ mod tests {
             })
         );
         let mut snapshot = context.next_epoch_snapshot.clone().unwrap();
-        snapshot.kagemusha_mint_finality_epoch_roster.network_id = network_id(0xB1);
+        snapshot.kagemusha_mint_finality_authority.network_id = network_id(0xB1);
         snapshot.epoch += 1;
         assert_eq!(
             snapshot.validate_against(&context),
@@ -1261,7 +1258,7 @@ mod tests {
         snapshot.mode = ConsensusMode::Npos;
         assert_eq!(
             snapshot.validate_against(&context),
-            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
+            Err(ValidationError::InvalidKagemushaMintFinalityAuthorization)
         );
     }
 }

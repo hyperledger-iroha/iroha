@@ -80,7 +80,7 @@ This group runs immediately after configuration and MV ownership checks in both
 scopes. Any failure stops qualification before other startup groups, shipping binary builds
 or network execution; it reuses the same compiled harness and runs each case once.
 
-Both scopes first run 56 selected MV ownership checks after configuration and
+Both scopes run their selected MV ownership checks after configuration and
 before PendingKura: finite allocation credits, exact release/poison wakes, charged
 Cell generations, original map/undo retention, actual epoch reclamation and
 strict allocation-free map handoff/publication. These run once from the same
@@ -88,9 +88,15 @@ immutable copied artifacts and enter the exact independent-pass census. A failur
 stops later Core runtime checks, shipping builds and network qualification; a
 changed MV artifact or selector cannot reuse an earlier checkpoint. The runner
 still compiles its complete native feature graph first. For a cheaper development
-check before that full compilation, existing `--focus-regression` selections can
-target `mv`, `mv-ebr` and `mv-map` plus mandatory configuration. That result remains
-a diagnostic, with no release qualification or independent-checkpoint credit.
+check before that full compilation, `--focus-regression` runs selected `mv`,
+`mv-ebr`, `mv-map`, `mv-admitted-map` and `concread` tests in an earlier build
+phase. Any failure stops before configuration and heavier harness compilation.
+After portable tests and their copied executables finish, the same coordinated
+warm lane builds mandatory configuration and any remaining selected harnesses.
+Configuration must still pass before the overall diagnostic succeeds, including
+portable-only requests. Each phase reports its own feature graph; these results
+provide no release qualification or independent-checkpoint credit. Immutable
+qualification continues to compile and test its complete graph.
 
 Both scopes also require the signed stopped-predecessor controls: strict state
 decoding, retained directory identity across archive/restore, complete process
@@ -584,3 +590,16 @@ exits, including failure. Unchanged counts mean no new completed artifacts have
 been observed; they do not imply a stalled compiler. Shipping binaries retain their separate
 feature graph, excluding test-only fixtures; shared source changes can require
 both graphs to rebuild in the same warm target directory.
+
+### Mutable focused source changes
+
+Focused development diagnostics observe Git HEAD, the binary tracked diff and
+content hashes of nonignored untracked files before work begins. They recheck that
+observation before each subsequent source-check, metadata, codegen, configuration,
+focused-runtime and network phase, and before final success. A change stops the
+diagnostic at that boundary; a running child finishes normally, and no child is
+killed or restarted. Start a new explicit check against the intended source.
+Unchanged tracked files are represented by Git HEAD and its diff, rather than
+rehashing the entire tree. This is a race detector, not proof of the source consumed
+by Cargo; it provides no release qualification. Immutable `prepare` retains its
+existing authenticated source and complete gates.

@@ -1,6 +1,6 @@
 # FASTPQ production readiness
 
-Updated: 2026-09-12. **Production qualification is unavailable.** The selected
+Updated: 2026-09-22. **Production qualification is unavailable.** The selected
 completion target is succinct verification from bounded authenticated openings.
 A successful local test, feature build, arithmetic calculation, or benchmark
 manifest is not a release qualification decision.
@@ -47,6 +47,35 @@ merged-source complete producer and release resource qualification remain
 required. The fixed-column synthetic AIR exercises framing and openings, not
 release semantics.
 
+The [September 22 parallel-verifier checks](../docs/history/2026-09-22/fastpq-parallel-verification.md)
+pass 49 focused Linux tests, including irregular depth-19 frontiers across the
+serial/parallel threshold, producer admission and the public verification API.
+FASTPQ source stayed unchanged through that build and execution; concurrent
+Halo2 changes prevent a frozen dependency-closure claim. Complete proof execution
+and release performance qualification are separate from those focused checks.
+
+The applied fixed-width row codec separately passes five new byte/canonicality/
+allocation/equivalence tests and 30 resource, producer, API and corrected boundary
+checks. The shared-opening selection subsequently passed 29 tests with no failures
+and one full-transfer diagnostic ignored; its controller's incorrect expected count
+is recorded separately. The new-layout ordinary artifact passes self-verification
+and independent verification at 7,479,589 bytes, 750 AIR evaluations and two
+terminal checks. AXT also passes at 7,496,970 bytes, and the separate captured-artifact
+positive and rejection controls pass. Both artifacts exceed production limits;
+the same September 22 record retains the initial compiler and test failures.
+
+The borrowed hash-body framing also passes 37 focused checks, including exact
+wire/hash equivalence, typed binding, the fixed-row codec and the public API.
+It removes temporary field vectors and digest copies while retaining the same
+canonical BodyV1 bytes. The full-producer follow-up has completed both ordinary and AXT proving and
+independent verification; neither scoped timing establishes a latency improvement.
+
+The cached Goldilocks reduction now matches the existing unsigned Metal field
+fold. Its full dependency-free primitive harness passes 68 tests with one timing
+diagnostic ignored, including exact canonical-hash parity. A scoped complete-hash
+comparison improved both tested payload sizes; dependent-prover and release
+performance results remain outstanding in the September 22 record.
+
 The fixed geometry has 65,536 rows, 342 columns, 923 slots, 375 unique queries,
 17 binary folds and four terminal values. The 22-message transcript expands 931
 six-word blocks, including the complete fixed 401-candidate query tape. Its
@@ -55,10 +84,15 @@ SHAKE experiment. Earlier proof digests, counts and timing measurements below
 are explicitly prior-snapshot diagnostics and cannot qualify this implementation.
 Compilation is also distinct from complete proof execution and external review.
 
+The fixed row codec stores exactly 342 canonical little-endian u64 cells per
+row, without per-cell lengths or a row-vector count. At 750 opened rows this
+removes 262,501 framed bytes; it changes no authenticated value or mathematical
+profile. The sole fixed-row schema rejects prior variable-row frames.
+
 The current DTO requires at least 1,050,000 raw bytes for its 375 complete rows
 and mixed/quotient pairs, before any framing, indices, roots or FRI openings.
 This exceeds the 512 KiB compact proof target and 1 MiB AXT ceiling. The producer
-requires its fixed valid-shape upper bound of 4,279,877 framed bytes per segment,
+requires its fixed valid-shape upper bound of 4,017,376 framed bytes per segment,
 with a separate 7,791,716-byte internal repeated-opening bound. The replay
 defaults are a different resource policy and cannot admit this offline profile.
 Explicit offline budgets provide no production qualification. The internally
@@ -72,6 +106,12 @@ independent cryptographic qualification, hardware/resource measurements and
 four-validator rollout/recovery remain unfinished. Production consumers, schemas,
 fixtures and SDKs must change together after those obligations are met. No
 production profile, limit or admission registry is activated by this slice.
+
+The replacement protocol's public-column reconstruction, 606-component DEEP
+arithmetic and radix-2/4/8/16 folding now pass 21 new real-crate tests, alongside
+37 existing framing/profile/codec/API regressions. These private test-registered
+owners are not yet a complete smaller proof format or production verifier. The
+September 22 record binds the executable and subsequent registration correction.
 
 ## Completion goals
 

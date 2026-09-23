@@ -16,9 +16,14 @@ required. Failed attempt directories and logs remain intact.
 The persistent compiler cache starts through a descriptor-isolated version probe
 before Cargo inherits the build locks; existing cache contents are preserved.
 For a mutable-source prequalification diagnostic, check accepts repeatable
---focus-regression HARNESS=EXACT_TEST: check and compile mandatory configuration
-and only explicitly selected harnesses, then run their exact tests. It writes
-no qualification checkpoint and cannot be selected by prepare.
+--focus-regression HARNESS=EXACT_TEST: run selected portable ownership tests first,
+then mandatory configuration and remaining selected harnesses in the same warm
+lane. Both phases must pass. Optional --session-dir creates a fresh private
+background diagnostic with durable request/log/result records; check-status reads
+its inherited flock and completion record after the launching terminal exits.
+Status includes the immutable request path and explicit focus count, not the selector list.
+No session is resumed or restarted automatically. It writes no qualification checkpoint and cannot
+be selected by prepare.
 Development checks default to LLVM 18 on Linux, requiring /usr/bin/clang-18 and
 /usr/bin/ld.lld-18 before compilation; missing tools fail without fallback.
 Install clang-18 and lld-18 with the platform package manager, or explicitly select
@@ -1069,7 +1074,8 @@ def cargo_lane(root: Path, target_dir: Path, role: str):
 
 def development_check(root: Path, target: Path | None, inherited: dict[str, str],
                       *, native_check_scope: str = "basic", focused_regressions=None,
-                      native_linker: str | None = None) -> None:
+                      native_linker: str | None = None,
+                      lock_fds: tuple[int, ...] = ()) -> None:
     # Mutable-source diagnostics intentionally use the checkout gate. Preparation
     # never imports this module and authenticates its captured gate separately.
     import taira_release_check as gate
@@ -1087,14 +1093,176 @@ def development_check(root: Path, target: Path | None, inherited: dict[str, str]
             native = development_linker_environment(
                 native, default_development_linker() if native_linker is None else native_linker)
             if focused_regressions is None:
-                gate.run_checks(root, environment=native, lock_fds=(lock_fd,),
+                gate.run_checks(root, environment=native, lock_fds=(*lock_fds, lock_fd),
                                 qualification_scope=native_check_scope)
             else:
                 gate.run_prequalification(root, focused_regressions=focused_regressions,
-                                          environment=native, lock_fds=(lock_fd,),
+                                          environment=native, lock_fds=(*lock_fds, lock_fd),
                                           qualification_scope=native_check_scope)
     except gate.CheckError as error:
         raise PrepareError(str(error)) from error
+
+
+CHECK_SESSION_SCHEMA = "taira.development-check.v1"
+
+
+def check_session_directory(path: Path) -> Path:
+    path = real_path(path)
+    info = path.stat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+            and stat.S_IMODE(info.st_mode) == 0o700,
+            "check session must remain an owner-private 0700 directory")
+    return path
+
+
+def check_session_lock_identity(session: Path, fd: int) -> None:
+    opened, named = os.fstat(fd), (session / "session.lock").lstat()
+    require(stat.S_ISREG(opened.st_mode) and opened.st_uid == os.geteuid()
+            and opened.st_nlink == 1 and stat.S_IMODE(opened.st_mode) == 0o600
+            and (opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino),
+            "check session lock custody changed")
+
+
+def check_request(session: Path) -> dict[str, object]:
+    request = read_record(session / "request.json")
+    require(set(request) == {"schema", "session_id", "repo_root", "target_dir",
+                            "native_check_scope", "native_linker", "focused_regressions",
+                            "incremental", "created_ns"}
+            and request["schema"] == CHECK_SESSION_SCHEMA
+            and isinstance(request["session_id"], str)
+            and re.fullmatch(r"[0-9a-f]{32}", request["session_id"])
+            and request["native_check_scope"] in ("basic", "full")
+            and request["native_linker"] in ("system", "llvm")
+            and request["incremental"] in ("0", "1")
+            and type(request["created_ns"]) is int,
+            "invalid development check request")
+    for field in ("repo_root", "target_dir"):
+        require(isinstance(request[field], str), "invalid check request path")
+        real_path(Path(request[field]))
+    focused = request["focused_regressions"]
+    require(focused is None or (isinstance(focused, list) and focused
+                               and all(isinstance(item, str) for item in focused)),
+            "invalid focused development check request")
+    return request
+
+
+def development_check_status(session: Path) -> dict[str, object]:
+    """Observe durable completion and inherited flock custody without trusting PIDs."""
+    session = check_session_directory(session)
+    request = check_request(session)
+    fd = os.open(session / "session.lock", os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        check_session_lock_identity(session, fd)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            active = False
+        except BlockingIOError:
+            active = True
+        result = None
+        if os.path.lexists(session / "result.json"):
+            result = read_record(session / "result.json")
+            require(result.get("schema") == CHECK_SESSION_SCHEMA
+                    and result.get("session_id") == request["session_id"]
+                    and type(result.get("exit_code")) is int
+                    and result["exit_code"] in (0, 1), "invalid development check result")
+        # A held descriptor can belong to the worker or its still-running Cargo
+        # descendant. Neither a stale PID nor a result published before final
+        # descriptor cleanup can authorize a terminal status.
+        state = "running" if active else (
+            "incomplete" if result is None else "passed" if result["exit_code"] == 0 else "failed")
+        return {"schema": CHECK_SESSION_SCHEMA, "session_id": request["session_id"],
+                "state": state, "request_path": str(session / "request.json"),
+                "focused_regression_count": len(request["focused_regressions"] or []),
+                "result": result, "log": str(session / "check.log"),
+                "release_qualified": False}
+    finally:
+        os.close(fd)
+
+
+def start_development_check(args: argparse.Namespace, inherited: dict[str, str]) -> Path:
+    """Detach one diagnostic; retain records and never restart an incomplete run."""
+    import taira_release_check as gate
+
+    root = real_path(args.repo_root)
+    target = development_target(root, args.target_dir, inherited)
+    focused = args.focus_regression
+    if focused is not None:
+        try:
+            gate.focused_regression_stages(args.native_check_scope, focused)
+        except gate.CheckError as error:
+            raise PrepareError(str(error)) from error
+    incremental = inherited.get("CARGO_INCREMENTAL", "1")
+    require(incremental in ("0", "1"), "native CARGO_INCREMENTAL must be 0 or 1")
+    session = create_fresh_directory(real_path(args.session_dir, exists=False), mode=0o700)
+    with preparation_lock(session) as session_fd:
+        request = {"schema": CHECK_SESSION_SCHEMA, "session_id": uuid.uuid4().hex,
+                   "repo_root": str(root), "target_dir": str(target),
+                   "native_check_scope": args.native_check_scope,
+                   "native_linker": args.native_linker,
+                   "focused_regressions": focused, "incremental": incremental,
+                   "created_ns": time.time_ns()}
+        write_record(session / "request.json", request)
+        with exclusive_output_fd(session / "check.log", mode=0o600) as log_fd:
+            # Only the standard sanitized build environment crosses this process
+            # boundary. No inherited environment record or credentials are saved.
+            environment = child_environment(inherited, target)
+            environment["CARGO_INCREMENTAL"] = incremental
+            try:
+                subprocess.Popen(
+                    [sys.executable, str(Path(__file__).resolve()), "_check-runner",
+                     "--session-dir", str(session), "--session-fd", str(session_fd)],
+                    cwd=root, env=environment, stdin=subprocess.DEVNULL,
+                    stdout=log_fd, stderr=log_fd, start_new_session=True,
+                    pass_fds=(session_fd,), umask=0o077,
+                )
+            except OSError as error:
+                os.write(log_fd, f"[taira-check] launch failed: {error}\n".encode("utf-8"))
+                os.fsync(log_fd)
+                write_record(session / "result.json", {
+                    "schema": CHECK_SESSION_SCHEMA, "session_id": request["session_id"],
+                    "exit_code": 1, "finished_ns": time.time_ns(),
+                    "error_type": type(error).__name__, "stage": "launch",
+                })
+                raise
+    return session
+
+
+def run_development_check_session(session: Path, session_fd: int) -> int:
+    """The sole detached child retains session custody through durable completion."""
+    session = check_session_directory(session)
+    check_session_lock_identity(session, session_fd)
+    # A fresh independent open must contend with the inherited open description.
+    # Do not re-lock an arbitrary supplied descriptor or trust a recorded PID.
+    require(development_check_status(session)["state"] == "running",
+            "check runner requires its inherited session lock")
+    try:
+        fcntl.flock(session_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        raise PrepareError("check runner descriptor does not own its inherited lock") from error
+    request = check_request(session)
+    write_record(session / "started.json", {
+        "schema": CHECK_SESSION_SCHEMA, "session_id": request["session_id"],
+        "pid": os.getpid(), "started_ns": time.time_ns(),
+    })
+    result = {"schema": CHECK_SESSION_SCHEMA, "session_id": request["session_id"],
+              "exit_code": 0, "error_type": None, "stage": "check"}
+    try:
+        development_check(
+            Path(request["repo_root"]), Path(request["target_dir"]),
+            dict(os.environ, CARGO_INCREMENTAL=request["incremental"]),
+            native_check_scope=request["native_check_scope"],
+            native_linker=request["native_linker"],
+            focused_regressions=request["focused_regressions"], lock_fds=(session_fd,),
+        )
+    except Exception as error:
+        result.update(exit_code=1, error_type=type(error).__name__)
+        print(f"[taira-check] FAIL: {error}", file=sys.stderr, flush=True)
+    result["finished_ns"] = time.time_ns()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.fsync(sys.stdout.fileno())
+    write_record(session / "result.json", result)
+    return result["exit_code"]
 
 
 @contextlib.contextmanager
@@ -1330,10 +1498,12 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--native-check-scope", choices=("basic", "full"), default="basic",
                              help="basic Taira deployment checks (default), or full regression qualification")
         if name == "check":
+            command.add_argument("--session-dir", type=Path,
+                                 help="fresh private directory for a detached diagnostic; use check-status for its durable result")
             command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
                                  help="development only: LLVM 18 by default on Linux (clang-18/lld-18 required), system on macOS; explicit system selects the diagnostic fallback; changing selection rebuilds Cargo dependencies")
             command.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
-                                 help="development diagnostic: check and compile configuration plus explicitly selected harnesses; not qualification")
+                                 help="development diagnostic: run selected portable ownership targets first, then mandatory configuration and remaining explicit harnesses; not qualification")
         if name == "prepare":
             command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
                                  help="pinned native gate linker: LLVM 18 by default on Linux; system Apple ld on macOS; separate from shipping Zig")
@@ -1344,6 +1514,11 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--zig-sha256", required=True)
             command.add_argument("--cargo-zigbuild", type=Path, required=True, help="absolute real cargo-zigbuild executable")
             command.add_argument("--cargo-zigbuild-sha256", required=True)
+    status = commands.add_parser("check-status", help="read a background diagnostic without starting work")
+    status.add_argument("--session-dir", type=Path, required=True)
+    worker = commands.add_parser("_check-runner", help=argparse.SUPPRESS)
+    worker.add_argument("--session-dir", type=Path, required=True)
+    worker.add_argument("--session-fd", type=int, required=True)
     return result
 
 
@@ -1351,7 +1526,16 @@ def main() -> int:
     args = parser().parse_args()
     try:
         require(sys.platform in {"darwin", "linux"}, "Taira preparation requires macOS or Linux")
-        if args.command == "check":
+        if args.command == "_check-runner":
+            return run_development_check_session(args.session_dir, args.session_fd)
+        if args.command == "check-status":
+            status = development_check_status(args.session_dir)
+            print(canonical_json_bytes(status).decode("utf-8"), flush=True)
+            return {"passed": 0, "running": 2, "failed": 1, "incomplete": 1}[status["state"]]
+        if args.command == "check" and args.session_dir is not None:
+            session = start_development_check(args, dict(os.environ))
+            print(f"[taira-check] started diagnostic: {session}; inspect with check-status; not release-qualified", flush=True)
+        elif args.command == "check":
             options = {"native_check_scope": args.native_check_scope, "native_linker": args.native_linker}
             if args.focus_regression is not None:
                 options["focused_regressions"] = tuple(args.focus_regression)

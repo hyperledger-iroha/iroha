@@ -71,6 +71,7 @@ impl<'a, K: Key, V: Value, Admission, M: StorageMode<K, V>>
             predecessor,
             next,
             mode,
+            _acquisition_custody: _,
         } = block;
         let OriginalWriters { revert, blocks } = writers.into_original();
         let (blocks, revert, cleanup) = detach_pair_retaining(blocks, revert);

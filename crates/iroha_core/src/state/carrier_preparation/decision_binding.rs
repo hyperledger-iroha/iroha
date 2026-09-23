@@ -13,24 +13,9 @@ use iroha_data_model::{
     events::pipeline::{BlockEvent, BlockStatus, PipelineEventBox},
 };
 
-/// Borrowed original inputs for admission of the finality-binding work.
-///
-/// Admission covers the current canonical-resultless helper's SignedBlock clone,
-/// canonical proposal/result-bearing wire encoding overlap and validation temporaries. It is a local reservation, never consensus authority.
-pub(crate) struct CarrierDecisionBindingInputs<'owner> {
-    /// Exact result-bearing block retained from the sole execution.
-    pub(crate) block: &'owner SignedBlock,
-    /// Complete context used by that execution, not a newly resolved context.
-    pub(crate) context: &'owner HeightContext,
-    /// Execution-prefix commitment computed from its actual witness and outputs.
-    pub(crate) execution_prefix: ExecutionCommitment,
-    /// Already cryptographically verified decision to join to those inputs.
-    pub(crate) finality: &'owner V2FinalityArtifact,
-}
-
 /// Refusal of decision binding; no variant authorizes publication or reexecution.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CarrierDecisionBindingError<E> {
+pub(crate) enum CarrierDecisionBindingError {
     /// The verified decision belongs to another semantic frozen context identity.
     #[error("decision differs from the retained frozen height context")]
     Context,
@@ -40,9 +25,6 @@ pub(crate) enum CarrierDecisionBindingError<E> {
     /// An internal carrier owner lost its exact proposal header.
     #[error("retained carrier metadata differs from its validated proposal")]
     Header,
-    /// Local encoding/capture capacity was unavailable before binding work.
-    #[error("decision-binding resource admission failed")]
-    Admission(E),
     /// The canonical ValidBlock binding refused subject, wire or execution identity.
     #[error("verified decision cannot bind the retained block: {0}")]
     Block(Box<BlockValidationError>),
@@ -56,9 +38,9 @@ pub(crate) enum CarrierDecisionBindingError<E> {
 /// The caller can retry an appropriate verified artifact or abandon the owner.
 /// No original journal or artifact data is substituted or cloned. The binder
 /// clones only the verified artifact's Arc capability so refusal retains it.
-pub(crate) struct CarrierDecisionBindingRefusal<Admission, E> {
+pub(crate) struct CarrierDecisionBindingRefusal<Admission> {
     /// Binding failure, distinct from an execution or consensus rejection.
-    pub(crate) error: CarrierDecisionBindingError<E>,
+    pub(crate) error: CarrierDecisionBindingError,
     /// Original verified artifact, including on canonical block-binding refusal.
     pub(crate) finality: VerifiedV2FinalityArtifact,
     /// Every original journal, deferred effect and capture reservation.
@@ -75,14 +57,13 @@ pub(crate) enum PendingCarrierPublicationAuthorization {
 
 /// Actual journals whose sole validated block now retains verified global finality.
 ///
-/// This owner has no publication/reattach operation and does not implement
-/// StateBlockCommitAuthorization. All source seals remain held unchanged.
-/// TODO: consume this owner only after complete source/retirement/resource and
-/// exact Kura/Native durability authorization is retained by the State publisher.
+/// All source seals remain held unchanged. The consuming publisher joins the
+/// original State, Queue and durable Kura receipt before acquiring writers.
+/// Its retained admission covers concrete shells; nested payload allocation
+/// remains governed by the component's existing allocation policy.
 #[must_use = "a decided carrier must retain its journals until authorized publication or drop"]
 pub(crate) struct DecisionBoundCarrierJournals<
     Admission,
-    BindingAdmission,
     Components = super::DetachedCarrierComponents,
     Checkpoint = (),
 > {
@@ -90,9 +71,6 @@ pub(crate) struct DecisionBoundCarrierJournals<
     finality: VerifiedV2FinalityArtifact,
     committed_event: BlockEvent,
     journals: PreparedCarrierJournals<Admission, CommittedBlock, Components>,
-    // The transient encoding reservation may be released by a later concrete
-    // durability owner. Until then it outlives all binding/captured values.
-    _binding_admission: BindingAdmission,
 }
 
 /// The one original detached carrier through decision and durability attachment.
@@ -102,25 +80,46 @@ pub(crate) struct DecisionBoundCarrierJournals<
 /// candidate slot; it must never reconstruct a ValidBlock or execute again.
 /// Checkpoint attachment still grants no publication or retirement authority.
 #[must_use = "retain the current carrier phase until authorized publication or drop"]
-pub(crate) enum RetainedCarrier<Admission, BindingAdmission> {
+pub(crate) enum RetainedCarrier<Admission> {
     /// Original detached execution awaiting its original archive capture owners.
     Capturing(Box<super::StagedCarrierCapture<Admission>>),
     /// Actual detached execution, before an exact verified decision is joined.
     Validated(PreparedCarrierJournals<Admission>),
     /// The same journals after consuming their ValidBlock under verified finality.
-    Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>),
+    Decided(DecisionBoundCarrierJournals<Admission>),
     /// The same decided carrier with its actual checkpoint writer receipt.
     Checkpointed(
         DecisionBoundCarrierJournals<
             Admission,
-            BindingAdmission,
             super::DetachedCarrierComponents,
             crate::kura::KuraWsvCheckpointReceipt,
         >,
     ),
 }
 
-impl<Admission, BindingAdmission> RetainedCarrier<Admission, BindingAdmission> {
+impl<Admission> RetainedCarrier<Admission> {
+    /// Borrow the same immutable result-bearing block in every retained phase.
+    pub(crate) fn block(&self) -> &SignedBlock {
+        match self {
+            Self::Capturing(carrier) => carrier.journals.valid.as_ref(),
+            Self::Validated(journals) => journals.valid.as_ref(),
+            Self::Decided(carrier) => carrier.block(),
+            Self::Checkpointed(carrier) => carrier.block(),
+        }
+    }
+
+    /// Borrow the manifest captured from original execution without State rereads.
+    pub(crate) fn native_amx_manifest(
+        &self,
+    ) -> &crate::sumeragi::exec::NativeAmxApplicationManifestV1 {
+        match self {
+            Self::Capturing(carrier) => &carrier.journals.native_amx_manifest,
+            Self::Validated(journals) => &journals.native_amx_manifest,
+            Self::Decided(carrier) => &carrier.journals.native_amx_manifest,
+            Self::Checkpointed(carrier) => &carrier.journals.native_amx_manifest,
+        }
+    }
+
     /// Compare the original context and proposal in every retained phase.
     pub(crate) fn matches_validation_candidate(
         &self,
@@ -176,18 +175,15 @@ fn decision_has_retained_context_identity(
 impl<Admission> PreparedCarrierJournals<Admission> {
     /// Consume the actual validated lifecycle once under exact verified finality.
     ///
-    /// The callback is mandatory; this API supplies no permissive production
-    /// resource policy. It runs before any canonical wire recomputation. All
-    /// original journals and their reservation are returned on refusal. No
-    /// execution, current-State lookup, BLS re-verification or event delivery runs.
-    pub(crate) fn bind_decision<BindingAdmission, E>(
+    /// Every original journal and its retained shell reservation is returned on
+    /// refusal. Canonical block/wire temporaries use standard allocation and are
+    /// not included in that reservation. No execution, current-State lookup,
+    /// BLS re-verification or event delivery runs.
+    pub(crate) fn bind_decision(
         self,
         finality: VerifiedV2FinalityArtifact,
-        admit_binding: impl FnOnce(CarrierDecisionBindingInputs<'_>) -> Result<BindingAdmission, E>,
-    ) -> Result<
-        DecisionBoundCarrierJournals<Admission, BindingAdmission>,
-        CarrierDecisionBindingRefusal<Admission, E>,
-    > {
+    ) -> Result<DecisionBoundCarrierJournals<Admission>, CarrierDecisionBindingRefusal<Admission>>
+    {
         let fail = |journals, finality, error| CarrierDecisionBindingRefusal {
             error,
             finality,
@@ -199,28 +195,9 @@ impl<Admission> PreparedCarrierJournals<Admission> {
         if self.effects.header != self.valid.as_ref().header() {
             return Err(fail(self, finality, CarrierDecisionBindingError::Header));
         }
-        // Declare both reservations before decomposition: unwind must first drop
-        // any partially transitioned block and every detached component.
-        let binding_admission = match admit_binding(CarrierDecisionBindingInputs {
-            block: self.valid.as_ref(),
-            context: &self.context,
-            execution_prefix: self.execution_prefix,
-            finality: finality.artifact(),
-        }) {
-            Ok(admission) => admission,
-            Err(error) => {
-                return Err(fail(
-                    self,
-                    finality,
-                    CarrierDecisionBindingError::Admission(error),
-                ));
-            }
-        };
-        // Context hashing also encodes the complete semantic policy, so it is
-        // covered by binding admission. Parent CommitQC witnesses can differ
-        // between honest peers without changing the authenticated decision.
+        // Canonical binding uses standard transient allocations. The one retained
+        // carrier admission covers only its explicitly named shells and effects.
         if !decision_has_retained_context_identity(&self.context, &finality) {
-            drop(binding_admission);
             return Err(fail(self, finality, CarrierDecisionBindingError::Context));
         }
         let admission;
@@ -291,7 +268,7 @@ impl<Admission> PreparedCarrierJournals<Admission> {
                         // Even an internal adapter drift returns the exact block
                         // and journals. No committed event was delivered.
                         let journals = retain_journals!(ValidBlock::from(committed));
-                        drop(binding_admission);
+
                         return Err(fail(journals, finality, CarrierDecisionBindingError::Event));
                     }
                 };
@@ -300,12 +277,11 @@ impl<Admission> PreparedCarrierJournals<Admission> {
                     finality,
                     committed_event: event,
                     journals: retain_journals!(committed),
-                    _binding_admission: binding_admission,
                 })
             }
             Err((valid, error)) => {
                 let journals = retain_journals!(*valid);
-                drop(binding_admission);
+
                 Err(fail(
                     journals,
                     finality,
@@ -316,8 +292,8 @@ impl<Admission> PreparedCarrierJournals<Admission> {
     }
 }
 
-impl<Admission, BindingAdmission, Components, Checkpoint>
-    DecisionBoundCarrierJournals<Admission, BindingAdmission, Components, Checkpoint>
+impl<Admission, Components, Checkpoint>
+    DecisionBoundCarrierJournals<Admission, Components, Checkpoint>
 {
     /// Inspect the exact result-bearing block without exposing a mutable owner.
     pub(crate) fn block(&self) -> &SignedBlock {
@@ -335,7 +311,7 @@ impl<Admission, BindingAdmission, Components, Checkpoint>
     }
 }
 
-impl<Admission, BindingAdmission> DecisionBoundCarrierJournals<Admission, BindingAdmission> {
+impl<Admission> DecisionBoundCarrierJournals<Admission> {
     /// Retain the actual checkpoint writer receipt with the original decision.
     ///
     /// Attachment grants no authority. Its exact Kura, finality and captured
@@ -346,7 +322,6 @@ impl<Admission, BindingAdmission> DecisionBoundCarrierJournals<Admission, Bindin
         checkpoint: crate::kura::KuraWsvCheckpointReceipt,
     ) -> DecisionBoundCarrierJournals<
         Admission,
-        BindingAdmission,
         super::DetachedCarrierComponents,
         crate::kura::KuraWsvCheckpointReceipt,
     > {
@@ -355,21 +330,22 @@ impl<Admission, BindingAdmission> DecisionBoundCarrierJournals<Admission, Bindin
             finality,
             committed_event,
             journals,
-            _binding_admission,
         } = self;
         DecisionBoundCarrierJournals {
             checkpoint,
             finality,
             committed_event,
             journals,
-            _binding_admission,
         }
     }
 }
 
+#[path = "service_publication.rs"]
+mod service_publication;
+
 #[path = "physical_publication.rs"]
 mod physical_publication;
-pub(crate) use physical_publication::PublishedNativeApply;
+pub(crate) use physical_publication::{PublishedCarrier, PublishedNativeApply};
 
 #[path = "archive_publication.rs"]
 pub(crate) mod archive_publication;

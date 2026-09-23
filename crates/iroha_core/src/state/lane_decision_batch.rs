@@ -329,7 +329,7 @@ impl State {
             let controls = crate::block::ValidBlock::prepare_native_execution_controls(
                 &carrier, self, context,
             )
-            .map_err(|error| invalid(error.to_string()))?;
+            .map_err(|error| MergeLedgerCommitError::NativeControlValidation(Box::new(error)))?;
             let batch = self.prepare_lane_decision_batch(&groups)?;
             if &batch != expected {
                 return Err(invalid(
@@ -342,9 +342,9 @@ impl State {
                 |overlay| {
                     let recorder = crate::sumeragi::witness::begin_exec_witness_capture()
                         .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
-                    let context = controls
-                        .apply(overlay)
-                        .map_err(|error| invalid(error.to_string()))?;
+                    let context = controls.apply(overlay).map_err(|error| {
+                        MergeLedgerCommitError::NativeControlValidation(Box::new(error))
+                    })?;
                     Ok((recorder, context))
                 },
                 |overlay, results| overlay.seal_native_lane_decision_batch(results, batch),
@@ -354,11 +354,15 @@ impl State {
                         overlay,
                         &executions,
                     )
-                    .map_err(|error| invalid(error.to_string()))?;
+                    .map_err(|error| {
+                        MergeLedgerCommitError::NativeControlValidation(Box::new(error))
+                    })?;
                     crate::block::ValidBlock::finalize_native_execution_contexts(
                         &carrier, overlay, &context,
                     )
-                    .map_err(|error| invalid(error.to_string()))?;
+                    .map_err(|error| {
+                        MergeLedgerCommitError::NativeControlValidation(Box::new(error))
+                    })?;
                     overlay.capture_exec_witness().map_err(invalid)?;
                     overlay
                         .verify_execution_output_seal(&carrier)

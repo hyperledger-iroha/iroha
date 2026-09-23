@@ -390,7 +390,7 @@ fn rejected_completion_digest_ignores_diagnostic_display_text() {
 
 #[cfg(feature = "bls")]
 #[test]
-fn merge_sidecar_deferral_retains_dispatch_and_leaves_waiting_row_original() {
+fn obsolete_sidecar_outcome_is_refused_and_leaves_waiting_row_original() {
     let WaitingDurableValidateFixture {
         fixture,
         _directory,
@@ -413,18 +413,18 @@ fn merge_sidecar_deferral_retains_dispatch_and_leaves_waiting_row_original() {
         })
         .expect("execute exact deferred Validate dispatch");
 
-    let publication = coordinator
+    let (error, retained) = coordinator
         .complete_durable_validate_dispatch(&mut holder, executed)
-        .expect("retain exact merge-sidecar deferral");
-    let DurableValidateCompletionPublication::DeferredMergeSidecar(deferred) = publication else {
-        panic!("missing merge sidecar must not publish an executable carrier")
-    };
-    assert_eq!(deferred.missing_reference(), &reference);
-    assert_eq!(deferred.dispatch_for_test().wait_token_for_test(), wait);
-    assert_eq!(
-        deferred.dispatch_for_test().outcome().durable_body(),
-        &durable
-    );
+        .expect_err("obsolete sidecar outcome must not enter semantic publication");
+    assert!(matches!(
+        error,
+        DurableValidateCompletionPublicationError::Registry(
+            DurableValidateCompletionConversionError::InvalidOutcome
+        )
+    ));
+    assert_eq!(retained.outcome().missing_merge_sidecar(), Some(&reference));
+    assert_eq!(retained.wait_token_for_test(), wait);
+    assert_eq!(retained.outcome().durable_body(), &durable);
     assert_eq!(format!("{coordinator:?}"), coordinator_before);
     assert_eq!(format!("{:?}", holder.registry_for_test()), registry_before);
     assert_eq!(

@@ -3321,6 +3321,8 @@ pub mod nexus {
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
         pub const MAX_WSV_MEMORY_BYTES: Bytes = Bytes(8 * 1024 * 1024 * 1024);
+        /// Shared retained carrier shell/effects/descriptor allowance, not total RAM.
+        pub const RETAINED_CARRIER_SHELL_BYTES: usize = 256 * 1024 * 1024;
         /// Budget share for Kura block storage (basis points).
         pub const KURA_BLOCKS_BPS: u16 = 3_500;
         /// Budget share for tiered-state cold snapshots (basis points).
@@ -3449,9 +3451,9 @@ pub mod nexus {
         pub const STAKE_ESCROW_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
         /// Account that receives slashed stake (treasury/burn sink).
         pub const SLASH_SINK_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
-        /// Asset definition used for staking bonds.
+        /// Canonical XOR asset used by both staking and Nexus fees.
         pub fn stake_asset_id() -> String {
-            super::super::canonical_asset_definition_literal("nexus.universal", "xor")
+            super::fees::fee_asset_id()
         }
         /// Escrow account that custodies bonded stake.
         pub fn stake_escrow_account_id() -> String {

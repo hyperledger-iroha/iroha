@@ -58,24 +58,10 @@ impl ConcreteLifecycleWorkRegistry {
             request.expected_manifest_hash,
             dispatch.outcome(),
         );
-        if matches!(
-            outcome_kind,
-            DurableValidateOutcomeKind::Validated | DurableValidateOutcomeKind::Rejected
-        ) && replacement_digest.is_none_or(|digest| digest == request.incumbent_digest)
-        {
+        if replacement_digest.is_none_or(|digest| digest == request.incumbent_digest) {
             return Err((
                 DurableValidateCompletionPublicationError::Registry(
                     DurableValidateCompletionConversionError::InvalidReplacementDigest,
-                ),
-                dispatch,
-            ));
-        }
-        if outcome_kind == DurableValidateOutcomeKind::DeferredMergeSidecar
-            && replacement_digest.is_some()
-        {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidOutcome,
                 ),
                 dispatch,
             ));

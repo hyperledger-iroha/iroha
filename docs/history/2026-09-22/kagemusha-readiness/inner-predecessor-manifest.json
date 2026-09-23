@@ -1,0 +1,12 @@
+{
+  "description": "Exact guarded-P active/current readiness sections and status row superseded by the implemented guarded-inner/partial-validation update. Historical prose, not a runtime receipt.",
+  "original_files": {
+    "specs/kagemusha_v1_production_readiness.md": "758b3540afc795e890fdf4339e5bb6be3752e9aaa8b69c015644d76be33c8714",
+    "status.md": "b92580e9b43262afa44da6ff29589c3f5d2deeb8286cd04559d207f37bd76b16"
+  },
+  "sections": {
+    "inner-predecessor-active.md": "b55d6849e3a64da5ec478dd8c2de8e1418f22a3609c00d3748240a87e8e91512",
+    "inner-predecessor-validation.md": "c9f67e60c107ec7bfc557ae720939b5aa2635fea5d417cdadd97fbb1a07e1a98",
+    "inner-predecessor-status-row.md": "1ea7eaa195e22bc0107bd3d3398101ccbb781acb6e4435bfd320020e2d352a4e"
+  }
+}

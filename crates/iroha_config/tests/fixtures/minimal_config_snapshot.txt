@@ -809,6 +809,7 @@ Root {
             max_wsv_memory_bytes: Bytes(
                 8589934592,
             ),
+            retained_carrier_shell_bytes: 268435456,
             disk_budget_weights: NexusStorageWeights {
                 kura_blocks_bps: 3500,
                 wsv_snapshots_bps: 2000,

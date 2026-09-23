@@ -8151,6 +8151,14 @@ impl NetworkBuilder {
         }
         let npos_snapshot = npos_params_from_genesis(&genesis_isi, &genesis_post_topology_isi)
             .unwrap_or_else(|error| panic!("{error}"));
+        let xor_asset_id = npos_snapshot.as_ref().map_or_else(
+            || {
+                iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                    .parse::<AssetDefinitionId>()
+                    .expect("canonical fixture XOR asset")
+            },
+            |parameters| parameters.xor_asset_definition_id.clone(),
+        );
         match (consensus_mode, npos_snapshot) {
             (ConsensusMode::Npos, Some(_)) | (ConsensusMode::Permissioned, None) => {}
             (ConsensusMode::Npos, None) => {
@@ -8181,15 +8189,8 @@ impl NetworkBuilder {
         let ivm_domain = DomainId::try_new("ivm", "universal").expect("ivm domain");
         let universal_domain =
             DomainId::try_new("universal", "universal").expect("universal domain");
-        let stake_asset_id: AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                nexus_domain.clone(),
-                "xor".parse().expect("default stake asset name"),
-            );
-        let fee_asset_id: AssetDefinitionId =
-            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
-                .parse()
-                .expect("default nexus fee asset id");
+        let stake_asset_id = xor_asset_id.clone();
+        let fee_asset_id = xor_asset_id;
         let bootstrap_gas_keypair = checked_key_pair_from_seed(
             b"iroha_test_network::npos_bootstrap_gas_account".to_vec(),
             Algorithm::Ed25519,
@@ -8361,18 +8362,12 @@ impl NetworkBuilder {
                     gas_account_str,
                 );
             config_layers.push(bootstrap_layer);
+            // Staking and transaction fees consume the same genesis-selected XOR.
+            // These explicit allocations belong only to this isolated fixture network.
             let definition = AssetDefinition::new(
                 stake_asset_id.clone(),
-                "NPOS Stake".to_owned(),
-                NumericSpec::default(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .with_metadata(Metadata::default());
-            let fee_definition = AssetDefinition::new(
-                fee_asset_id.clone(),
-                "Nexus Fee".to_owned(),
-                NumericSpec::default(),
+                "XOR".to_owned(),
+                NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )
@@ -8384,7 +8379,6 @@ impl NetworkBuilder {
                 Register::domain(Domain::new(universal_domain)).into(),
                 Register::account(Account::new(gas_account_id.clone())).into(),
                 Register::asset_definition(definition).into(),
-                Register::asset_definition(fee_definition).into(),
             ];
             for peer in &peers {
                 let validator_id = peer.account_id();

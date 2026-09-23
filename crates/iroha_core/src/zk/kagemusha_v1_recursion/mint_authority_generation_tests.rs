@@ -47,7 +47,7 @@ fn synthetic_artifacts() -> KagemushaGeneratedMintAuthorityArtifactsV1 {
         release_id: [0x21; 32],
         eq_protocol_digest: [0x22; 32],
         ep_protocol_digest: [0x23; 32],
-        genesis_roster_id: [0x24; 32],
+        genesis_authorization_id: [0x24; 32],
     }
 }
 
@@ -110,7 +110,7 @@ fn mint_authority_artifact_bindings_cover_ten_distinct_roles_in_order() {
     assert_eq!(artifacts.release_id, [0x21; 32]);
     assert_eq!(artifacts.eq_protocol_digest, [0x22; 32]);
     assert_eq!(artifacts.ep_protocol_digest, [0x23; 32]);
-    assert_eq!(artifacts.genesis_roster_id, [0x24; 32]);
+    assert_eq!(artifacts.genesis_authorization_id, [0x24; 32]);
 }
 
 #[test]

@@ -3,8 +3,8 @@
 //! Physical durability is separate from source finality, current membership and
 //! Ready. A receipt binds an exact origin manifest, but no view/lock state lives
 //! here. Every valid origin reconstructs the same payload and RS16 codeword.
-//! TODO: connect receipts to the process-lived reducer's issued storage jobs;
-//! retire only after authenticated global terminal settlement and owner drain.
+//! Receipts settle only their process-lived reducer's issued storage jobs;
+//! retirement requires authenticated global terminal settlement and owner drain.
 
 use std::sync::Arc;
 

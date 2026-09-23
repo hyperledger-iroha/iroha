@@ -79,7 +79,6 @@ pub(in crate::sumeragi) struct PendingKuraProductionLifecycleV1 {
 #[must_use = "prepared pending Kura lane recovery must activate or shut down"]
 pub(in crate::sumeragi) struct PreparedPendingKuraLaneRecoveryV1 {
     installed: crate::sumeragi::v2::InstalledPendingKuraApplyV1,
-    lane_work: V2LaneWorkAdapter,
     launched: LaunchedProductionLifecycleV1,
 }
 
@@ -96,7 +95,6 @@ pub(in crate::sumeragi) struct PendingKuraActivatedProductionLifecycleV1 {
     // Retain the exact applied tip until readiness and ingress retire.
     installed: crate::sumeragi::v2::InstalledPendingKuraApplyV1,
     // The exact activated lane adapter cannot separate while ingress is live.
-    lane_work: V2LaneWorkAdapter,
     launched: LaunchedProductionLifecycleV1,
 }
 
@@ -260,48 +258,24 @@ impl PendingKuraProductionLifecycleV1 {
         Ok(progress)
     }
 
-    /// Construct and authenticate lane recovery after the local Apply completes.
-    ///
-    /// The consuming result owns the adapter only after it proves that it
-    /// shares this exact context, State, Kura, output guard, output handoff,
-    /// and Queue, and after its one-shot startup activation succeeds.
-    #[allow(dead_code, clippy::type_complexity)]
+    /// Retain the exact completed interrupted-tip owner before no-clock activation.
     pub(in crate::sumeragi) fn prepare_lane_recovery<E>(
         mut self,
         runner: &mut crate::sumeragi::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
-        queue: &Arc<Queue>,
-        operation: impl FnOnce(
-            crate::sumeragi::v2_recovery::PendingKuraApply,
-            &mut V2EffectExecutor<SerializedV2Runtime>,
-            &mut ProductionV2Services,
-        ) -> Result<V2LaneWorkAdapter, E>,
     ) -> Result<PreparedPendingKuraLaneRecoveryV1, E>
     where
-        E: From<ProductionLifecyclePreActivationErrorV1>
-            + From<crate::sumeragi::v2_lane_work::V2LaneWorkError>,
+        E: From<ProductionLifecyclePreActivationErrorV1>,
     {
         let expected = self.installed.expected();
-        let queue = Arc::clone(queue);
-        let lane_work = self
-            .launched
-            .with_runner_setup(runner, |executor, services| {
+        self.launched
+            .with_runner_setup(runner, |_executor, services| {
                 if !services.matches_installed_pending_kura_tip(expected) {
                     return Err(E::from(
                         ProductionLifecyclePreActivationErrorV1::OwnershipMismatch,
                     ));
                 }
-                let mut lane_work = operation(expected, executor, services)?;
-                if !services.matches_lifecycle_lane_work(&lane_work) {
-                    return Err(E::from(
-                        ProductionLifecyclePreActivationErrorV1::OwnershipMismatch,
-                    ));
-                }
-                lane_work.install_lane_drain_queue(Arc::clone(&queue))?;
-                lane_work.activate_after_lane_drain_queue_install(&queue)?;
-                Ok(lane_work)
+                Ok(())
             })?;
-        // A replayed height-one projection is pre-Apply authority. The exact
-        // applied State/Kura tip above supersedes it before live lane work.
         let _ = self.installed.take_genesis();
         let Self {
             installed,
@@ -309,7 +283,6 @@ impl PendingKuraProductionLifecycleV1 {
         } = self;
         Ok(PreparedPendingKuraLaneRecoveryV1 {
             installed,
-            lane_work,
             launched,
         })
     }
@@ -340,7 +313,6 @@ impl PreparedPendingKuraLaneRecoveryV1 {
         &mut self,
         runner: &mut crate::sumeragi::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
         operation: impl FnOnce(
-            &mut V2LaneWorkAdapter,
             &mut V2EffectExecutor<SerializedV2Runtime>,
             &mut ProductionV2Services,
         ) -> Result<R, E>,
@@ -348,11 +320,8 @@ impl PreparedPendingKuraLaneRecoveryV1 {
     where
         E: From<ProductionLifecyclePreActivationErrorV1>,
     {
-        let lane_work = &mut self.lane_work;
         self.launched
-            .with_runner_setup(runner, |executor, services| {
-                operation(lane_work, executor, services)
-            })
+            .with_runner_setup(runner, |executor, services| operation(executor, services))
     }
 
     /// Open the exact ingress for an already-applied tip without clocks/status.
@@ -367,7 +336,6 @@ impl PreparedPendingKuraLaneRecoveryV1 {
         let Self {
             mut launched,
             installed,
-            lane_work,
         } = self;
         let pending_ready = launched.pending_kura_apply_replay.is_none()
             && launched.recovered_local_proposal_attempt.is_none()
@@ -420,7 +388,6 @@ impl PreparedPendingKuraLaneRecoveryV1 {
         Ok(PendingKuraActivatedProductionLifecycleV1 {
             runner_activation,
             installed,
-            lane_work,
             launched,
         })
     }
@@ -433,14 +400,12 @@ impl PreparedPendingKuraLaneRecoveryV1 {
     ) -> Result<(), ProductionLifecycleShutdownErrorV1> {
         let Self {
             installed,
-            lane_work,
             launched,
         } = self;
         let output_guard = launched.services.lifecycle_output_guard();
         let operation = output_guard.begin_fail_stop_operation();
         let runner_retirement =
             runner.retire_unpublished(&launched.leader_wire_ingress_binding.ingress);
-        drop(lane_work);
         drop(installed);
         launched.finish_clean_shutdown(operation, runner_retirement)
     }
@@ -467,10 +432,6 @@ impl PendingKuraActivatedProductionLifecycleV1 {
                 .launched
                 .services
                 .matches_installed_pending_kura_tip(self.installed.expected())
-            && self
-                .launched
-                .services
-                .matches_lifecycle_lane_work(&self.lane_work)
             && self
                 .launched
                 .owner
@@ -526,14 +487,9 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         operation: impl FnOnce(
             &mut V2EffectExecutor<SerializedV2Runtime>,
             &mut ProductionV2Services,
-            &mut V2LaneWorkAdapter,
         ) -> R,
     ) -> R {
-        operation(
-            &mut self.launched.executor,
-            &mut self.launched.services,
-            &mut self.lane_work,
-        )
+        operation(&mut self.launched.executor, &mut self.launched.services)
     }
 
     /// Close new physical ingress while retaining this interrupted-tip
@@ -603,14 +559,12 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         let Self {
             launched,
             installed,
-            lane_work,
             runner_activation,
         } = self;
         let output_guard = launched.services.lifecycle_output_guard();
         let operation = output_guard.begin_fail_stop_operation();
         let runner_retirement =
             runner_activation.retire(&launched.leader_wire_ingress_binding.ingress);
-        drop(lane_work);
         drop(installed);
         launched.finish_clean_shutdown(operation, runner_retirement)
     }
@@ -620,10 +574,8 @@ impl PendingKuraActivatedProductionLifecycleV1 {
     pub(in crate::sumeragi) fn into_finalized_rollover(
         mut self,
         _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
-    ) -> Result<
-        (FinalizedProductionLifecycleRolloverV1, V2LaneWorkAdapter),
-        ProductionLifecycleFinalizationErrorV1,
-    > {
+    ) -> Result<FinalizedProductionLifecycleRolloverV1, ProductionLifecycleFinalizationErrorV1>
+    {
         if !self.locally_ready_for_finalized_rollover() {
             return Err(ProductionLifecycleFinalizationErrorV1::NotReady);
         }
@@ -634,7 +586,6 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         let Self {
             mut launched,
             installed,
-            lane_work,
             runner_activation,
         } = self;
         runner_activation
@@ -685,16 +636,13 @@ impl PendingKuraActivatedProductionLifecycleV1 {
             .map_err(ProductionLifecycleFinalizationErrorV1::Adapter)?;
         operation.complete();
 
-        Ok((
-            FinalizedProductionLifecycleRolloverV1 {
-                owner,
-                services,
-                receipt,
-                artifact,
-                finalized_adapter: finalized,
-                retired_ingress,
-            },
-            lane_work,
-        ))
+        Ok(FinalizedProductionLifecycleRolloverV1 {
+            owner,
+            services,
+            receipt,
+            artifact,
+            finalized_adapter: finalized,
+            retired_ingress,
+        })
     }
 }

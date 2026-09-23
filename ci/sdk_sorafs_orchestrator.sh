@@ -497,6 +497,7 @@ run_javascript_parity() {
 
     cd "${sdk_root}"
     npm ci
+    "${node_binary}" --test "${REPO_ROOT}/scripts/tests/sorafs_javascript_child_contract_test.mjs" "${sdk_root}/test/sorafsNativeSuiteStructure.test.js"
     CARGO_BUILD_JOBS=1 \
       CARGO_INCREMENTAL=0 \
       CARGO_NET_OFFLINE=true \

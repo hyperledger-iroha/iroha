@@ -40,7 +40,7 @@ use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
+    isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
     soracloud::{
         SoracloudRuntimeProvenancePurposeV1, validate_soracloud_runtime_provenance_preimage_v1,
     },
@@ -526,19 +526,19 @@ fn load_inherited_key_pair() -> Result<KeyPair, TairaRuntimeSignerErrorV1> {
 fn bind_taira_mint_finality_authority(
     network_id: NetworkId,
     local_validator: &PeerId,
-    epoch: &KagemushaMintFinalityEpochRosterV1,
+    authority: &KagemushaMintFinalityAuthorityGenerationV1,
     seed: Zeroizing<[u8; 32]>,
 ) -> Result<KagemushaMintFinalityLocalAuthorityV1, String> {
-    if epoch.network_id != network_id {
+    if authority.network_id != network_id {
         return Err("Taira mint-finality roster does not match the configured network".to_owned());
     }
-    let validator_index = epoch
+    let validator_index = authority
         .validators
         .iter()
         .position(|entry| &entry.validator == local_validator)
         .and_then(|index| u32::try_from(index).ok())
         .ok_or_else(|| "Taira mint-finality roster has no exact local validator".to_owned())?;
-    KagemushaMintFinalityLocalAuthorityV1::new(Arc::new(epoch.clone()), seed, validator_index)
+    KagemushaMintFinalityLocalAuthorityV1::new(Arc::new(authority.clone()), seed, validator_index)
         .map_err(|_| {
             "Taira mint-finality seed does not match its authenticated validator roster".to_owned()
         })
@@ -569,7 +569,7 @@ fn resolve_taira_mint_finality_runtime(
     let authority = bind_taira_mint_finality_authority(
         network_id,
         &config.common.peer.id,
-        &context.kagemusha_mint_finality_epoch_roster,
+        &context.kagemusha_mint_finality_authority,
         seed,
     )?;
     Ok(dependencies.with_kagemusha_mint_finality_authority(Arc::new(authority)))
@@ -1291,7 +1291,7 @@ mod tests {
         ));
     }
 
-    fn mint_runtime_roster() -> KagemushaMintFinalityEpochRosterV1 {
+    fn mint_runtime_roster() -> KagemushaMintFinalityAuthorityGenerationV1 {
         let mut peers = (1_u8..=4)
             .map(|index| {
                 PeerId::new(
@@ -1303,12 +1303,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
         peers.sort();
-        KagemushaMintFinalityEpochRosterV1 {
+        KagemushaMintFinalityAuthorityGenerationV1 {
             version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
             network_id: NetworkId::from_genesis_hash(
                 iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
                     iroha_crypto::Hash::new(b"Taira mint seed admission fixture"))),
-            epoch: 0,
+            generation: 0,
             validators: peers.into_iter().enumerate().map(|(index, validator)| {
                 iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &[0x70 + u8::try_from(index).expect("four validators"); 32], 0, validator)
@@ -1329,7 +1329,7 @@ mod tests {
         )
         .expect("bind exact runtime seed");
         assert_eq!(authority.signer().validator_index(), 1);
-        assert_eq!(authority.epoch(), &roster);
+        assert_eq!(authority.authority(), &roster);
         assert!(
             bind_taira_mint_finality_authority(
                 roster.network_id,
@@ -1363,13 +1363,13 @@ mod tests {
             )
             .is_err()
         );
-        let mut wrong_epoch = roster.clone();
-        wrong_epoch.epoch = 1;
+        let mut wrong_generation = roster.clone();
+        wrong_generation.generation = 1;
         assert!(
             bind_taira_mint_finality_authority(
                 roster.network_id,
                 local,
-                &wrong_epoch,
+                &wrong_generation,
                 Zeroizing::new([0x71; 32])
             )
             .is_err()

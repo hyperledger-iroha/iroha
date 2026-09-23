@@ -1260,6 +1260,23 @@ fn replace_account_id_in_public_lane(
     }
     let mut claim_updates = Vec::new();
     for (key, value) in state_transaction.world.public_lane_reward_claims.iter() {
+        let (lane_id, account_id) = key;
+        if account_id == old {
+            claim_updates.push((key.clone(), (*lane_id, new.clone()), *value));
+        }
+    }
+    for (old_key, new_key, value) in claim_updates {
+        state_transaction
+            .world
+            .public_lane_reward_claims
+            .remove(old_key);
+        state_transaction
+            .world
+            .public_lane_reward_claims
+            .insert(new_key, value);
+    }
+    let mut accrual_updates = Vec::new();
+    for (key, value) in state_transaction.world.public_lane_reward_accruals.iter() {
         let (lane_id, account_id, asset_id) = key;
         let mut updated = false;
         let updated_account = if account_id == old {
@@ -1273,22 +1290,100 @@ fn replace_account_id_in_public_lane(
             updated = true;
         }
         if updated {
-            claim_updates.push((
+            accrual_updates.push((
                 key.clone(),
                 (lane_id.clone(), updated_account, updated_asset),
-                *value,
+                value.clone(),
             ));
         }
     }
-    for (old_key, new_key, value) in claim_updates {
+    for (old_key, new_key, value) in accrual_updates {
         state_transaction
             .world
-            .public_lane_reward_claims
+            .public_lane_reward_accruals
             .remove(old_key);
         state_transaction
             .world
-            .public_lane_reward_claims
+            .public_lane_reward_accruals
             .insert(new_key, value);
+    }
+    let reserve_updates = state_transaction
+        .world
+        .public_lane_reward_reserves
+        .iter()
+        .filter(|(asset, _)| asset.account() == old)
+        .map(|(asset, amount)| {
+            (
+                asset.clone(),
+                replace_account_id_in_asset_id(asset, old, new),
+                amount.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for (old_asset, new_asset, amount) in reserve_updates {
+        state_transaction
+            .world
+            .public_lane_reward_reserves
+            .remove(old_asset);
+        state_transaction
+            .world
+            .public_lane_reward_reserves
+            .insert(new_asset, amount);
+    }
+    let custody_updates = state_transaction
+        .world
+        .public_lane_stake_custody
+        .iter()
+        .filter(|((_, validator), (asset, _))| validator == old || asset.account() == old)
+        .map(|(key, (asset, amount))| {
+            let new_key = (
+                key.0,
+                if &key.1 == old {
+                    new.clone()
+                } else {
+                    key.1.clone()
+                },
+            );
+            (
+                key.clone(),
+                new_key,
+                replace_account_id_in_asset_id(asset, old, new),
+                amount.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for (old_key, new_key, asset, amount) in custody_updates {
+        state_transaction
+            .world
+            .public_lane_stake_custody
+            .remove(old_key);
+        state_transaction
+            .world
+            .public_lane_stake_custody
+            .insert(new_key, (asset, amount));
+    }
+    let stake_reserve_updates = state_transaction
+        .world
+        .public_lane_stake_reserves
+        .iter()
+        .filter(|(asset, _)| asset.account() == old)
+        .map(|(asset, amount)| {
+            (
+                asset.clone(),
+                replace_account_id_in_asset_id(asset, old, new),
+                amount.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for (old_asset, new_asset, amount) in stake_reserve_updates {
+        state_transaction
+            .world
+            .public_lane_stake_reserves
+            .remove(old_asset);
+        state_transaction
+            .world
+            .public_lane_stake_reserves
+            .insert(new_asset, amount);
     }
 }
 fn replace_account_id_in_repo_agreements(
@@ -5202,6 +5297,168 @@ mod tests {
         }
     }
     #[test]
+    fn rekey_public_lane_staking_custody_preserves_shared_asset_sums_and_scopes() {
+        tx!(
+            state,
+            block,
+            tx,
+            World::new(),
+            "multisig-rekey-stake-custody"
+        );
+        let old = new_account_id(&checked_keypair());
+        let new = new_account_id(&checked_keypair());
+        let other = new_account_id(&checked_keypair());
+        let definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("custody", "universal").unwrap(),
+            "stake".parse().unwrap(),
+        );
+        let global = AssetId::new(definition.clone(), old.clone());
+        let scoped = AssetId::with_scope(
+            definition.clone(),
+            old.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(
+                iroha_model_base::topology::DataSpaceId::new(7),
+            ),
+        );
+        let external = AssetId::new(definition, other.clone());
+        for (lane, validator, asset, amount) in [
+            (1, old.clone(), global.clone(), 3_u32),
+            (2, other.clone(), global.clone(), 4_u32),
+            (3, other.clone(), scoped.clone(), 5_u32),
+            (4, old.clone(), external.clone(), 6_u32),
+        ] {
+            tx.world.public_lane_stake_custody.insert(
+                (iroha_model_base::topology::LaneId::new(lane), validator),
+                (asset, Quantity::from(amount)),
+            );
+        }
+        for (asset, amount) in [
+            (global.clone(), 7_u32),
+            (scoped.clone(), 5),
+            (external.clone(), 6),
+        ] {
+            tx.world
+                .public_lane_stake_reserves
+                .insert(asset, Quantity::from(amount));
+        }
+        replace_account_id_in_public_lane(&mut tx, &old, &new);
+        let expected_reserves = BTreeMap::from([
+            (
+                replace_account_id_in_asset_id(&global, &old, &new),
+                Quantity::from(7_u32),
+            ),
+            (
+                replace_account_id_in_asset_id(&scoped, &old, &new),
+                Quantity::from(5_u32),
+            ),
+            (external.clone(), Quantity::from(6_u32)),
+        ]);
+        assert!(
+            tx.world
+                .public_lane_stake_reserves
+                .iter()
+                .eq(expected_reserves.iter())
+        );
+        let mut actual_sums = BTreeMap::<AssetId, Quantity>::new();
+        for ((_, validator), (asset, amount)) in tx.world.public_lane_stake_custody.iter() {
+            assert_ne!(validator, &old);
+            assert_ne!(asset.account(), &old);
+            let sum = actual_sums
+                .entry(asset.clone())
+                .or_insert_with(Quantity::zero);
+            *sum = sum.checked_add(amount).unwrap();
+        }
+        assert_eq!(actual_sums, expected_reserves);
+        assert_eq!(
+            tx.world
+                .public_lane_stake_custody
+                .get(&(iroha_model_base::topology::LaneId::new(4), new,)),
+            Some(&(external, Quantity::from(6_u32)))
+        );
+    }
+    #[test]
+    fn rekey_public_lane_reward_cursors_and_unpaid_sources_preserve_scope_and_quantity() {
+        tx!(
+            state,
+            block,
+            tx,
+            World::new(),
+            "multisig-rekey-reward-accrual"
+        );
+        let old = new_account_id(&checked_keypair());
+        let new = new_account_id(&checked_keypair());
+        let other = new_account_id(&checked_keypair());
+        let lane = iroha_model_base::topology::LaneId::SINGLE;
+        let definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("rewards", "universal").unwrap(),
+            "fee".parse().unwrap(),
+        );
+        let old_source = AssetId::with_scope(
+            definition.clone(),
+            old.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(
+                iroha_model_base::topology::DataSpaceId::new(7),
+            ),
+        );
+        let new_source = AssetId::with_scope(
+            definition.clone(),
+            new.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(
+                iroha_model_base::topology::DataSpaceId::new(7),
+            ),
+        );
+        let external = AssetId::new(definition, other.clone());
+        let cursor = iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(3),
+        };
+        for recipient in [&old, &other] {
+            tx.world
+                .public_lane_reward_claims
+                .insert((lane, recipient.clone()), cursor);
+        }
+        for (recipient, source, amount) in [
+            (old.clone(), old_source.clone(), 2_u32),
+            (other.clone(), old_source.clone(), 3),
+            (old.clone(), external.clone(), 4),
+            (other.clone(), external.clone(), 5),
+        ] {
+            tx.world
+                .public_lane_reward_accruals
+                .insert((lane, recipient, source), Quantity::from(amount));
+        }
+        replace_account_id_in_public_lane(&mut tx, &old, &new);
+        assert_eq!(
+            tx.world.public_lane_reward_claims.get(&(lane, old.clone())),
+            None
+        );
+        assert_eq!(
+            tx.world.public_lane_reward_claims.get(&(lane, new.clone())),
+            Some(&cursor)
+        );
+        assert_eq!(
+            tx.world
+                .public_lane_reward_claims
+                .get(&(lane, other.clone())),
+            Some(&cursor)
+        );
+        let expected = BTreeMap::from([
+            (
+                (lane, new.clone(), new_source.clone()),
+                Quantity::from(2_u32),
+            ),
+            ((lane, other.clone(), new_source), Quantity::from(3_u32)),
+            ((lane, new, external.clone()), Quantity::from(4_u32)),
+            ((lane, other, external), Quantity::from(5_u32)),
+        ]);
+        assert!(
+            tx.world
+                .public_lane_reward_accruals
+                .iter()
+                .eq(expected.iter())
+        );
+    }
+
+    #[test]
     fn rekey_public_lane_validators_ignores_mismatched_rows() {
         tx!(
             state,
@@ -5318,7 +5575,58 @@ mod tests {
                 metadata: Metadata::default(),
             },
         );
+        tx.world
+            .public_lane_reward_reserves
+            .insert(old_reward_asset.clone(), Quantity::from(5_u32));
+        tx.world.public_lane_stake_custody.insert(
+            (valid_lane, old_account.clone()),
+            (old_reward_asset.clone(), Quantity::from(3_u32)),
+        );
+        tx.world
+            .public_lane_stake_reserves
+            .insert(old_reward_asset.clone(), Quantity::from(3_u32));
         replace_account_id_in_public_lane(&mut tx, &old_account, &new_account);
+        let new_custody_asset =
+            replace_account_id_in_asset_id(&old_reward_asset, &old_account, &new_account);
+        assert!(
+            tx.world
+                .public_lane_stake_custody
+                .get(&(valid_lane, old_account.clone()))
+                .is_none()
+        );
+        assert_eq!(
+            tx.world
+                .public_lane_stake_custody
+                .get(&(valid_lane, new_account.clone())),
+            Some(&(new_custody_asset.clone(), Quantity::from(3_u32)))
+        );
+        assert!(
+            tx.world
+                .public_lane_stake_reserves
+                .get(&old_reward_asset)
+                .is_none()
+        );
+        assert_eq!(
+            tx.world.public_lane_stake_reserves.get(&new_custody_asset),
+            Some(&Quantity::from(3_u32))
+        );
+        assert!(
+            tx.world
+                .public_lane_reward_reserves
+                .get(&old_reward_asset)
+                .is_none()
+        );
+        assert_eq!(
+            tx.world
+                .public_lane_reward_reserves
+                .get(&replace_account_id_in_asset_id(
+                    &old_reward_asset,
+                    &old_account,
+                    &new_account
+                )),
+            Some(&Quantity::from(5_u32))
+        );
+
         assert!(
             tx.world
                 .public_lane_validators

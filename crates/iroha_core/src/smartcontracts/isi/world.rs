@@ -292,7 +292,6 @@ pub mod isi {
     use iroha_primitives::{
         json::Json,
         numeric::{Numeric, Quantity},
-        unique_vec::PushResult,
     };
     #[cfg(feature = "telemetry")]
     use iroha_torii_shared::status::GovernanceManifestActivation;
@@ -942,7 +941,7 @@ pub mod isi {
         }
         Ok(())
     }
-    fn has_exact_permission(
+    pub(crate) fn has_exact_permission(
         world: &WorldTransaction<'_, '_>,
         who: &AccountId,
         required: &Permission,
@@ -17009,7 +17008,7 @@ pub mod isi {
         }
     }
     #[allow(clippy::too_many_arguments)]
-    fn register_peer_identity_with_pop(
+    pub(crate) fn register_peer_identity_with_pop(
         peer_id: PeerId,
         pop: Vec<u8>,
         activation_at: Option<u64>,
@@ -17018,6 +17017,29 @@ pub mod isi {
         instruction_name: &'static str,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        if let Some(record) = prepare_peer_identity_with_pop(
+            peer_id.clone(),
+            pop,
+            activation_at,
+            expiry_at,
+            role,
+            instruction_name,
+            state_transaction,
+        )? {
+            commit_peer_identity_with_pop(peer_id, record, state_transaction);
+        }
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_peer_identity_with_pop(
+        peer_id: PeerId,
+        pop: Vec<u8>,
+        activation_at: Option<u64>,
+        expiry_at: Option<u64>,
+        role: ConsensusKeyRole,
+        instruction_name: &'static str,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Option<ConsensusKeyRecord>, Error> {
         // Every lane-consensus identity must support BLS batching.
         if state_transaction.pipeline.signature_batch_max_bls == 0 {
             iroha_logger::error!(
@@ -17063,7 +17085,7 @@ pub mod isi {
             )
         };
         let is_genesis = state_transaction._curr_block.is_genesis();
-        let world = &mut state_transaction.world;
+        let world = &state_transaction.world;
         let block_height = state_transaction._curr_block.height().get();
         let activation_expected = if is_genesis {
             block_height
@@ -17129,7 +17151,7 @@ pub mod isi {
                         instruction = instruction_name,
                         "exact duplicate peer registration during genesis; treating as no-op"
                     );
-                    return Ok(());
+                    return Ok(None);
                 }
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
@@ -17190,24 +17212,20 @@ pub mod isi {
             }
             return Err(err);
         }
-        if let PushResult::Duplicate(duplicate) = world.peers.push(peer_id.clone()) {
-            if is_genesis {
-                iroha_logger::debug!(
-                    %duplicate,
-                    instruction = instruction_name,
-                    "duplicate peer registration during genesis; treating as no-op"
-                );
-                return Ok(());
-            }
-            return Err(RepetitionError {
-                instruction: InstructionType::Register,
-                id: IdBox::PeerId(duplicate),
-            }
-            .into());
-        }
-        upsert_consensus_key(world, &lifecycle_record.id, lifecycle_record.clone());
+        Ok(Some(lifecycle_record))
+    }
+    /// Publish a peer identity whose exact record was prepared in this transaction.
+    pub(crate) fn commit_peer_identity_with_pop(
+        peer_id: PeerId,
+        record: ConsensusKeyRecord,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        // No instruction or trigger executes between preparation and commit.
+        // The preparation proved the peer absent and the identifier unoccupied.
+        let world = &mut state_transaction.world;
+        let _ = world.peers.push(peer_id.clone());
+        upsert_consensus_key(world, &record.id, record.clone());
         world.emit_events(Some(PeerEvent::Added(peer_id)));
-        Ok(())
     }
     /// Register a global-voter peer (BLS-normal with `PoP`).
     impl Execute for iroha_data_model::isi::register::RegisterPeerWithPop {
@@ -19942,6 +19960,31 @@ pub mod isi {
                 .get(&domain_id)
                 .cloned()
                 .unwrap_or_default();
+            // Pinned custody survives staking selector and alias changes. Protect it before
+            // domain teardown stages permission, endorsement or balance removals.
+            if let Some(asset) = state_transaction
+                .world
+                .public_lane_stake_custody
+                .iter()
+                .map(|(_, (asset, _))| asset)
+                .chain(
+                    state_transaction
+                        .world
+                        .public_lane_stake_reserves
+                        .iter()
+                        .map(|(asset, _)| asset),
+                )
+                .find(|asset| remove_asset_definitions.contains(asset.definition()))
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: asset definition {} is referenced by pinned public-lane staking custody; release all held stake first",
+                        asset.definition(),
+                    )
+                    .into(),
+                )
+                .into());
+            }
             // Domain teardown removes balances and definitions directly, so it
             // must preserve the same game reserves as individual unregistration.
             // Check the bounded domain index before staging any teardown writes.
@@ -20389,13 +20432,13 @@ pub mod isi {
                 }
                 if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
                     .world
-                    .public_lane_reward_claims
+                    .public_lane_reward_accruals
                     .iter()
                     .find(|((_, _, asset_id), _)| asset_id.definition() == asset_definition_id)
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has pending public-lane reward claim state (lane {lane_id}, account {claimant}, asset {asset_id}); claim or clear rewards first"
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has unpaid public-lane reward accrual state (lane {lane_id}, account {claimant}, asset {asset_id}); settle rewards first"
                         )
                         .into(),
                     )
@@ -20742,6 +20785,14 @@ pub mod isi {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             state_transaction.validate_execution_output_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
+                if crate::state::is_retired_kagemusha_mint_finality_parameter(custom.id()) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "retired KAGEMUSHA epoch-roster parameters cannot authorize authority transitions"
+                                .to_owned(),
+                        ),
+                    ));
+                }
                 if custom.id() == &iroha_data_model::nexus::NexusRuntimeCatalogV1::parameter_id() {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -21000,46 +21051,6 @@ pub mod isi {
                                                 previous.epoch_length_blocks,
                                                 npos.epoch_length_blocks,
                                             )),
-                                        ));
-                                    }
-                                }
-                            }
-                            if next.id()
-                                == &iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::parameter_id()
-                            {
-                                let staged = iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(&next)
-                                    .ok_or_else(|| {
-                                        InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(
-                                                "invalid Kagemusha V1 next mint-finality roster parameter"
-                                                    .to_owned(),
-                                            ),
-                                        )
-                                    })?;
-                                if let Some(previous_custom) = state_transaction
-                                    .world
-                                    .parameters
-                                    .get()
-                                    .custom()
-                                    .get(next.id())
-                                {
-                                    let previous = iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(previous_custom)
-                                        .ok_or_else(|| {
-                                            InstructionExecutionError::InvalidParameter(
-                                                InvalidParameterError::SmartContract(
-                                                    "installed Kagemusha V1 next mint-finality roster parameter is invalid"
-                                                        .to_owned(),
-                                                ),
-                                            )
-                                        })?;
-                                    if staged.roster.network_id != previous.roster.network_id
-                                        || staged.roster.epoch < previous.roster.epoch
-                                    {
-                                        return Err(InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(
-                                                "Kagemusha V1 next mint-finality roster cannot change network or roll back its epoch"
-                                                    .to_owned(),
-                                            ),
                                         ));
                                     }
                                 }
@@ -33293,6 +33304,49 @@ seiyaku GovernanceLifecycle {
                     .is_some()
             );
         });
+        world_test!(unregister_domain_preserves_pinned_staking_custody_after_config_change {
+            let state = blank_state();
+            let domain_id = DomainId::try_new("custody", "universal").unwrap();
+            state_transaction!(state, block, state_block, stx);
+            Register::domain(Domain::new(domain_id.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "register custody domain");
+            let definition = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "stake".parse().unwrap(),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                definition.clone(),
+                "stake",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "register pinned stake definition");
+            stx.nexus.staking.stake_asset_id = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("replacement", "universal").unwrap(),
+                "stake".parse().unwrap(),
+            ).to_string();
+            let key = (LaneId::SINGLE, ALICE_ID.clone());
+            let asset = AssetId::new(definition.clone(), ALICE_ID.clone());
+            stx.world.public_lane_stake_custody.insert(key.clone(), (asset.clone(), Quantity::one()));
+            for has_custody_row in [true, false] {
+                let reserves_before = stx.world.public_lane_stake_reserves.get(&asset).cloned();
+                let error = Unregister::domain(domain_id.clone())
+                    .expect_execute_err(&ALICE_ID, &mut stx, "pinned stake domain must remain registered");
+                assert_contains!(format!("{error:?}"), "pinned public-lane staking custody", "unexpected error: {error}");
+                assert!(stx.world.domains.get(&domain_id).is_some());
+                assert!(stx.world.asset_definitions.get(&definition).is_some());
+                assert_eq!(stx.world.public_lane_stake_reserves.get(&asset), reserves_before.as_ref());
+                if has_custody_row {
+                    stx.world.public_lane_stake_custody.remove(key.clone());
+                    stx.world.public_lane_stake_reserves.insert(asset.clone(), Quantity::one());
+                }
+            }
+            stx.world.public_lane_stake_reserves.remove(asset);
+            Unregister::domain(domain_id.clone())
+                .expect_execute(&ALICE_ID, &mut stx, "former custody domain may be removed after release");
+            assert!(stx.world.domains.get(&domain_id).is_none());
+            assert!(stx.world.asset_definitions.get(&definition).is_none());
+        });
         world_test!(unregister_domain_ignores_mismatched_public_lane_reward_record_for_domain_asset {
             let state = blank_state();
             let domain_id: DomainId =
@@ -33326,6 +33380,16 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                 },
             );
+            let accrual_key = (
+                LaneId::SINGLE, ALICE_ID.clone(), AssetId::new(reward_def.clone(), ALICE_ID.clone()),
+            );
+            stx.world.public_lane_reward_accruals.insert(accrual_key.clone(), Quantity::one());
+            let error = Unregister::domain(domain_id.clone())
+                .expect_execute_err(&ALICE_ID, &mut stx, "unpaid source must pin its asset-definition domain");
+            assert_contains!(format!("{error:?}"), "public-lane reward accrual state", "unexpected error: {error}");
+            assert!(stx.world.domains.get(&domain_id).is_some());
+            assert!(stx.world.asset_definitions.get(&reward_def).is_some());
+            stx.world.public_lane_reward_accruals.remove(accrual_key);
             Unregister::domain(domain_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "mismatched public-lane reward row must not block domain unregister");
             assert!(
@@ -33872,12 +33936,18 @@ seiyaku GovernanceLifecycle {
                 },
             );
             stx.world.public_lane_reward_claims.insert(
+                (LaneId::SINGLE, ALICE_ID.clone()),
+                iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+                    through_epoch: Some(1),
+                },
+            );
+            stx.world.public_lane_reward_accruals.insert(
                 (
                     LaneId::SINGLE,
                     ALICE_ID.clone(),
                     AssetId::new(reward_def, account_id.clone()),
                 ),
-                1,
+                iroha_primitives::numeric::Quantity::from(1_u32),
             );
             Unregister::domain(domain_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "domain unlink should preserve surviving account audit state");
@@ -39417,6 +39487,27 @@ seiyaku GovernanceLifecycle {
             let error = SetParameter::new(Parameter::Custom(rollback.into_custom_parameter()))
                 .expect_execute_err(&ALICE_ID, &mut stx, "retention target rollback must fail");
             assert_contains!(format!("{error:?}"), "target did not advance");
+        });
+        world_test!(set_parameter_rejects_retired_kagemusha_epoch_authority_before_state_changes {
+            blank_state_transaction!(state, block, state_block, stx);
+            let id: iroha_data_model::parameter::CustomParameterId =
+                "kagemusha_mint_finality_next_epoch_v1".parse().expect("retired ID fixture");
+            let before = stx.world.parameters.get().clone();
+            for payload in ["{}", "17", "{\"roster\":null}"] {
+                let payload: iroha_primitives::json::Json = payload.parse().expect("valid JSON fixture");
+                let custom = iroha_data_model::parameter::CustomParameter::new(id.clone(), payload);
+                let error = SetParameter::new(Parameter::Custom(custom)).expect_execute_err(
+                    &ALICE_ID, &mut stx, "retired authority payloads must be rejected before interpretation",
+                );
+                match error {
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                        assert_eq!(message, "retired KAGEMUSHA epoch-roster parameters cannot authorize authority transitions");
+                    }
+                    other => panic!("unexpected error: {other:?}"),
+                }
+                assert_eq!(stx.world.parameters.get(), &before);
+                assert!(!stx.world.parameters.get().custom().contains_key(&id));
+            }
         });
         world_test!(set_parameter_rejects_zero_npos_reconfig_fields {
             let state = blank_state();

@@ -605,7 +605,9 @@ pub mod json {
     use std::cell::Cell;
     use url::Url;
     mod exact_string;
+    mod key_codec;
     mod key_hash;
+    pub use key_codec::JsonKeyCodec;
     pub use super::{
         JsonDeserialize as Deserialize, JsonDeserialize, JsonSerialize as Serialize, JsonSerialize,
     };

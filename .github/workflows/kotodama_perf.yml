@@ -23,6 +23,7 @@ on:
       - "crates/iroha_cli/src/**"
       - "crates/iroha_js_host/src/**"
       - "javascript/iroha_js/**"
+      - "scripts/sorafs_javascript_native_cache.mjs"
       - "crates/irohad/src/soracloud_runtime.rs"
       - "scripts/check_kotodama_perf.py"
       - "scripts/check_kotodama_docs.py"

@@ -93,6 +93,14 @@ python3 -m pytest -q \
   scripts/tests/sorafs_java_consumer_artifact_test.py \
   scripts/tests/sorafs_java_dependency_origins_test.py \
   scripts/tests/sorafs_sdk_artifact_index_test.py \
+  scripts/tests/sorafs_javascript_archive_test.py \
+  scripts/tests/sorafs_javascript_archive_bounds_test.py \
+  scripts/tests/sorafs_javascript_dependencies_test.py \
+  scripts/tests/sorafs_javascript_package_source_test.py \
+  scripts/tests/sorafs_javascript_package_bounds_test.py \
+  scripts/tests/sorafs_javascript_installed_test.py \
+  scripts/tests/sorafs_javascript_qualification_source_test.py \
+  scripts/tests/sorafs_javascript_child_abi_contract_test.py \
   scripts/tests/python_wheel_byte_owner_test.py \
   scripts/tests/python_installed_content_owner_test.py \
   scripts/tests/python_zip_directory_admission_test.py \
@@ -155,6 +163,8 @@ python3 -m pytest -q \
   scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py \
   scripts/tests/release_profile_validation_test.py \
   scripts/tests/release_manifest_signing_test.py \
+  scripts/tests/release_output_parent_cleanup_test.py \
+  scripts/tests/release_output_transaction_cleanup_test.py \
   scripts/tests/generate_release_manifest_test.py \
   scripts/tests/generate_sorafs_cli_release_manifest_test.py \
   scripts/tests/publish_plan_test.py \

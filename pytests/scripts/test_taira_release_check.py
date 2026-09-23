@@ -30,8 +30,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1499 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1677 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1616 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1780 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -76,6 +76,209 @@ def isolate_stage_fixture(stack, *, keep=()):
 
 
 class BeaconGateTests(unittest.TestCase):
+    def test_current_runner_and_monetary_repairs_are_required_in_all_scopes(self):
+        required = {'core': ['sumeragi::v2_lane_work::tests::queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes',
+          'sumeragi::v2_lane_work::tests::queue_plan_leader_stages_exact_handoff_idempotently',
+          'sumeragi::v2_lane_work::tests::queue_plan_exact_marker_retains_certificate_until_transaction_application',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_corrupt',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_retires_future_after_current_source_incarnation_drifts',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_cursor_rotates_under_effect_pressure',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_new_inventory_preserves_prior_exact_transfers',
+          'sumeragi::v2_lane_work::tests::queue_plan_handoff_is_not_retired_by_unrelated_merge_broadcast_cleanup',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_retains_exact_outbound_until_original_acknowledgement',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_capacity_retry_preserves_transferred_inventory',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_view_change_rejects_old_occurrence_acknowledgement',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_leader_uses_original_persistence_and_selection',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_rejects_foreign_kura_without_replacing_original_sources',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_shared_fail_stop_guard_fences_output_and_ingress',
+          'sumeragi::v2_lane_work::tests::queue_plan_owner_same_context_rollover_preserves_original_occurrence',
+          'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_preserves_original_certificate_allocation',
+          'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_refusal_keeps_original_source',
+          'sumeragi::v2_lane_work::tests::queue_plan_runner_relay_uses_global_owner_without_old_lane_admission',
+          'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_rejects_foreign_service_before_source_transfer',
+          'sumeragi::v2_queue_plan_admission::tests::queue_plan_handoff_stale_generation_cannot_complete_a_new_destination',
+          'sumeragi::v2_runner::tests::queue_plan_batch_scans_once_and_reuses_exact_sources',
+          'sumeragi::v2_lane_work::tests::queued_successor_generation_hint_cancels_ranked_older_close_before_retry',
+          'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals',
+          'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons'],
+ 'data-model': ['isi::kagemusha_v1::epoch_binding_codec_tests::beacon_epoch_binding_roundtrips_both_variants_and_registers_payload_schema',
+                'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_decisions_roundtrip_all_discriminants_and_reject_untagged_json',
+                'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_authorization_binding_keeps_fixed_width_identity',
+                'nexus::staking::monetary_codec_tests::monetary_scope_roundtrips_both_variants_and_rejects_unknown_envelope_fields',
+                'nexus::staking::monetary_codec_tests::monetary_preconditions_roundtrip_complete_payloads_and_register_schema']}
+        for scope in gate.QUALIFICATION_SCOPES:
+            for harness, names in required.items():
+                stages = gate.qualification_stages(scope)[harness]
+                selected = [name for _, group in stages for name in group]
+                for name in names:
+                    with self.subTest(scope=scope, harness=harness, regression=name):
+                        self.assertEqual(selected.count(name), 1)
+                        focused = gate.focused_regression_stages(scope, (harness + "=" + name,))
+                        self.assertEqual([item for _, group in focused[harness] for item in group], [name])
+                        listing = "\n".join(item + ": test" for item in selected if item != name)
+                        with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                            gate.require_tests(listing, stages)
+
+    def test_native_connection_controls_are_required_and_focused(self):
+        required = (
+            'state::tests::native_candidate_uses_exact_decisions_and_canonical_recorded_execution',
+            'state::tests::native_candidate_fits_whole_priority_prefix_before_signing',
+            'state::tests::native_candidate_stale_observation_waits_without_signing_or_custody_loss',
+            'state::tests::native_candidate_controls_fit_without_displacing_or_duplicating_economic_input',
+            'state::tests::native_candidate_refuses_unsupported_carrier_controls_before_signing',
+            'state::tests::native_candidate_proof_rejects_foreign_state_and_network',
+            'state::tests::native_candidate_handoff_rejects_retired_merge_before_signing',
+            'state::tests::native_candidate_handoff_rejects_foreign_original_state',
+            'state::tests::native_candidate_partial_atomic_handoff_retains_waits_and_independent_work',
+            'sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback',
+            'state::tests::native_preparation_preserves_local_recorder_conflict',
+            'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_marker_failures_return_exact_wait_and_original_owner',
+            'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_capture_refusal_keeps_exact_wait_without_success_marker',
+            'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cache_and_reproposal_reuse_original_owner',
+            'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_foreign_store_returns_request_before_execution',
+            'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cached_scalar_receipt_cannot_replace_missing_owner',
+            'sumeragi::v2_apply::tests::archive_reservations::acquires_original_pair_without_execution',
+            'sumeragi::v2_apply::tests::archive_reservations::index_busy_wakes_original_runner',
+            'sumeragi::v2_apply::tests::archive_reservations::second_capture_refusal_releases_first',
+            'sumeragi::v2_apply::tests::archive_reservations::original_capture_drop_wakes_runner_and_preserves_old_wait',
+            'sumeragi::v2_apply::tests::archive_reservations::rejects_mismatch_before_acquisition',
+            'sumeragi::v2_apply::tests::archive_reservations::handoff_retains_owner_on_context_wire_and_service_mismatch',
+            'sumeragi::v2_apply::tests::archive_reservations::local_archive_failure_requires_recovery',
+            'query::archive_capture::tests::only_the_exact_original_gate_accepts_its_retained_owner',
+            'query::archive_capture::tests::observers_neither_own_nor_cancel_the_reservation',
+            'query::archive_capture::tests::release_before_wait_registration_cannot_be_missed',
+            'query::archive_capture::tests::active_wait_is_woken_by_the_actual_owner_drop',
+            'query::archive_capture::tests::old_wait_remains_released_while_a_new_owner_is_active',
+            'query::archive_capture::tests::move_to_another_worker_preserves_custody_without_retaining_the_archive',
+            'query::archive_capture::tests::concurrent_attempts_retain_exactly_one_original_owner',
+            'state::tests::native_service_preparation_single_preserves_original_sources_and_archives',
+            'state::tests::native_service_preparation_atomic_preserves_original_sources_and_archives',
+            'state::tests::native_service_preparation_index_busy_precedes_execution',
+            'state::tests::native_service_preparation_capture_busy_releases_partial_owner',
+            'state::tests::native_service_preparation_stale_source_skips_archives_and_execution',
+            'state::tests::native_service_preparation_foreign_source_and_body_are_rejected',
+            'state::tests::native_service_preparation_recorder_conflict_releases_archives',
+            'state::tests::native_service_single_body_store_retries_reuse_original_execution',
+            'state::tests::native_service_atomic_body_store_retries_reuse_original_execution',
+            'sumeragi::v2_apply::tests::native_preparation_errors::hash_admission_retains_original_release_and_runner_through_all_native_origins',
+            'sumeragi::v2_apply::tests::native_preparation_errors::native_controls_preserve_local_storage_failure_and_semantic_rejection',
+            'sumeragi::v2_apply::tests::native_preparation_errors::metadata_and_recorder_diagnostics_cannot_authorize_negative_markers',
+            'sumeragi::v2_apply::tests::native_preparation_errors::governed_native_batch_limit_remains_a_semantic_body_verdict',
+            'state::tests::native_preparation_single_retains_real_suffix_controls_and_unpublished_outputs',
+            'state::tests::native_preparation_atomic_retains_real_suffix_controls_and_unpublished_outputs',
+            'state::tests::native_preparation_single_authenticates_original_durable_sources_under_lease',
+            'state::tests::native_preparation_atomic_authenticates_original_durable_sources_under_lease',
+            'state::tests::native_preparation_rejects_signed_noncanonical_time',
+            'state::tests::native_preparation_rejects_signed_confidential_policy_substitution',
+            'state::tests::native_preparation_rejects_wrong_and_multiple_origin_signatures',
+            'state::tests::native_preparation_rejects_stale_source_without_execution_or_publication',
+            'state::tests::native_preparation_retained_prefix_does_not_authorize_raw_state_commit',
+            'state::tests::native_preparation_refreshes_source_after_actual_finalized_height_advance',
+            'state::tests::native_recorded_control_rejects_changed_opening_and_stale_verified_height',
+            'state::tests::native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon',
+        )
+        self.assertEqual(len(required), 55)
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("native_connection_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            connection = [name for _, names in selected_gate.CORE_NATIVE_CONNECTION_STAGES for name in names]
+            startup = [name for _, names in selected_gate.CORE_STARTUP_STAGES for name in names]
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                stages = selected_gate.qualification_stages(scope)["core"]
+                selected = [name for _, names in stages for name in names]
+                for regression in required:
+                    with self.subTest(platform=platform, scope=scope, regression=regression):
+                        self.assertEqual(connection.count(regression), 1)
+                        self.assertEqual(startup.count(regression), 1)
+                        self.assertEqual(selected.count(regression), 1)
+                        focused = selected_gate.focused_regression_stages(scope, ("core=" + regression,))
+                        self.assertEqual(tuple(focused), ("core",))
+                        self.assertEqual([name for _, names in focused["core"] for name in names], [regression])
+                        listing = "\n".join(name + ": test" for name in selected if name != regression)
+                        with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                            selected_gate.require_tests(listing, stages)
+
+    def test_native_connection_selectors_follow_actual_module_and_include_paths(self):
+        root = SCRIPT.resolve().parents[1] / "crates/iroha_core/src"
+        def source(path):
+            return (root / path).read_text()
+        # Includes contribute tests to the containing module, not their filename.
+        self.assertIn("mod tests;", source("state.rs"))
+        self.assertIn('include!("lane_process_tests.rs");', source("state/tests.rs"))
+        self.assertIn('include!("lane_driver_tests.rs");', source("state/lane_process_tests.rs"))
+        self.assertIn('include!("native_lane_candidate_tests.rs");', source("state/lane_driver_tests.rs"))
+        self.assertIn('include!("native_lane_preparation_tests.rs");', source("state/tests.rs"))
+        self.assertIn("pub(crate) mod v2_candidate;", source("sumeragi/mod.rs"))
+        self.assertIn("mod tests {", source("sumeragi/v2_candidate.rs"))
+        self.assertIn("pub(crate) mod v2_lifecycle_coordinator;", source("sumeragi/mod.rs"))
+        self.assertRegex(source("sumeragi/v2_lifecycle_coordinator.rs"),
+                         r'#\[path = "v2_lifecycle_work_registry\.rs"\]\s*(?:#\[[^\n]*\]\s*)*mod work_registry;')
+        registry = source("sumeragi/v2_lifecycle_work_registry.rs")
+        self.assertIn("mod tests {", registry)
+        self.assertIn('include!("tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs");', registry)
+        dispatch = source("sumeragi/tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs")
+        self.assertIn("mod retained_dispatch {", dispatch)
+        candidates = re.findall(r"state_test!\s*\{\s*sync\s+(native_candidate_\w+)",
+                                source("state/native_lane_candidate_tests.rs"))
+        self.assertEqual(len(candidates), 9)
+        dispatch_names = re.findall(r"#\[test\]\s*fn\s+(retained_dispatch_\w+)", dispatch)
+        self.assertEqual(len(dispatch_names), 5)
+        required = {"state::tests::" + name for name in candidates}
+        required.update("sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::" + name
+                        for name in dispatch_names)
+        for path, pattern, regression in (
+            ("sumeragi/v2_candidate.rs", r"#\[test\]\s*fn\s+native_source_wait_never_selects_ordinary_fallback\s*\(",
+             "sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback"),
+            ("state/native_lane_preparation_tests.rs", r"state_test!\s*\{\s*sync\s+native_preparation_preserves_local_recorder_conflict\b",
+             "state::tests::native_preparation_preserves_local_recorder_conflict"),
+        ):
+            self.assertRegex(source(path), pattern)
+            required.add(regression)
+        preparation_names = re.findall(r"state_test!\s*\{\s*sync\s+(native_preparation_\w+)",
+                                       source("state/native_lane_preparation_tests.rs"))
+        self.assertEqual(len(preparation_names), 11)
+        required.update("state::tests::" + name for name in preparation_names)
+        self.assertIn('include!("native_lane_control_execution_tests.rs");', source("state/tests.rs"))
+        control_source = source("state/native_lane_control_execution_tests.rs")
+        for name in (
+            "native_recorded_control_rejects_changed_opening_and_stale_verified_height",
+            "native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon",
+        ):
+            self.assertRegex(control_source, r"state_test!\s*\{\s*sync\s+" + name + r"\b")
+            required.add("state::tests::" + name)
+        self.assertIn('include!("native_lane_service_preparation_tests.rs");', source("state/tests.rs"))
+        service_names = re.findall(r"state_test!\s*\{\s*sync\s+(native_service_preparation_\w+)",
+                                   source("state/native_lane_service_preparation_tests.rs"))
+        self.assertEqual(len(service_names), 7)
+        required.update("state::tests::" + name for name in service_names)
+        self.assertRegex(source("sumeragi/v2_apply.rs"),
+                         r'#\[path = "v2_apply_tests\.rs"\]\s*mod tests;')
+        apply_tests = source("sumeragi/v2_apply_tests.rs")
+        for filename, module, count in (
+            ("archive_reservations_tests.rs", "archive_reservations", 7),
+            ("native_preparation_error_tests.rs", "native_preparation_errors", 4),
+        ):
+            self.assertIn('include!("v2_apply/' + filename + '");', apply_tests)
+            leaf = source("sumeragi/v2_apply/" + filename)
+            self.assertIn("mod " + module + " {", leaf)
+            names = re.findall(r"#\[test\]\s*fn\s+(\w+)", leaf)
+            self.assertEqual(len(names), count)
+            required.update("sumeragi::v2_apply::tests::" + module + "::" + name for name in names)
+        self.assertIn("mod archive_capture;", source("query/mod.rs"))
+        capture = source("query/archive_capture.rs")
+        self.assertIn("mod tests {", capture)
+        capture_names = re.findall(r"#\[(?:tokio::)?test\]\s*(?:async\s+)?fn\s+(\w+)", capture)
+        self.assertEqual(len(capture_names), 7)
+        required.update("query::archive_capture::tests::" + name for name in capture_names)
+        registered = {name for _, names in gate.CORE_NATIVE_CONNECTION_STAGES for name in names}
+        self.assertEqual(required - registered, set())
+
     def test_partial_publication_refusal_controls_are_required_in_both_scopes(self):
         required = ('queue::tests::lane_retirement_observer::refused_cut_retains_original_notifications_through_outer_fence', 'state::carrier_geometry_preparation::tests::queue_retirement_tests::route_refusal_retains_original_cut_cleanup_through_lifecycle', 'state::carrier_preparation::journals::decision_binding::physical_publication::tests::queue_publication_tests::state_fence_refusal_defers_callbacks_through_original_queue_and_kura', 'sumeragi::v2_apply::retirement_release_tests::autoscale_queue_scan_and_refusal_release_lifecycle_before_queue_wake')
         required += ('kura::publication_lease::tests::partial_kura_refusal_releases_every_acquired_fence_before_callbacks', 'kura::publication_lease::tests::full_and_partial_kura_abandonment_release_jointly_even_on_unwind', 'kura::publication_lease::tests::cold_kura_sidecar_wakes_after_joint_success_and_real_storage_refusal', 'kura::publication_lease::tests::repeated_cold_kura_lookups_retain_one_batch_through_outer_unwind', 'kura::publication_lease::tests::foreign_cold_batch_returns_original_guard_for_joint_cleanup', 'kura::tests::native_amx_live_custody_wrappers_unlock_together_before_callbacks')
@@ -500,7 +703,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                  "crates/mv/src/storage.rs", "crates/mv/src/storage/publication_tests.rs",
                  "crates/mv/src/storage/detached_tests.rs", "crates/mv/src/storage/touches.rs",
                  "crates/mv/src/storage/touches_tests.rs", "crates/mv/src/storage/admitted_tests.rs",
-                 "crates/mv/src/storage/fresh_pair_acquisition_tests.rs")
+                 "crates/mv/src/storage/fresh_pair_acquisition_tests.rs",
+                 "crates/mv/src/storage/scoped_acquisition_tests.rs")
         with tempfile.TemporaryDirectory() as temporary:
             copied = Path(temporary)
             for relative in paths:
@@ -553,7 +757,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "cell::aggregate_acquisition_tests::": 3,
             "storage::aggregate_acquisition_tests::": 2,
             "storage::detached_tests::": 10,
-            "storage::admitted_tests::": 18,
+            "storage::admitted_tests::": 24,
             "storage::touches::tests::": 6,
         }
         for platform in ("darwin", "linux"):
@@ -565,10 +769,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 92)
+                self.assertEqual(len(library), 98)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 92), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 71), ("concread", 151)):
+                for harness, count in (("mv", 98), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 71), ("concread", 151)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -2119,6 +2323,118 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 self.assertEqual(check.call_args.kwargs, {"native_check_scope": scope, "native_linker": "llvm" if sys.platform == "linux" else "system"})
 
 
+class MutableSourceObservationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=SCRIPT.resolve().parents[1] / "target")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.env = dict(os.environ)
+        self.git("init", "-b", "optimizations")
+        self.git("config", "user.name", "source observation fixture")
+        self.git("config", "user.email", "source-observation@example.invalid")
+        (self.root / ".gitignore").write_text("ignored/\n")
+        self.tracked = self.root / "tracked.bin"
+        self.tracked.write_bytes(b"\x00original\xff")
+        self.git("add", ".")
+        self.git("commit", "-m", "initial fixture")
+
+    def git(self, *args, input=None):
+        return subprocess.run(["git", "--no-replace-objects", *args], cwd=self.root,
+                              env=self.env, input=input, text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, check=True).stdout.strip()
+
+    def observe(self):
+        return gate.mutable_source_observation(self.root, self.env)
+
+    def assert_drift(self, before):
+        self.assertNotEqual(self.observe(), before)
+        with self.assertRaisesRegex(gate.CheckError, "source changed before fixture phase"):
+            gate.require_mutable_source_unchanged(self.root, self.env, before, "fixture phase")
+
+    def test_no_change_and_ignored_output_preserve_observation(self):
+        before = self.observe()
+        ignored = self.root / "ignored"
+        ignored.mkdir()
+        (ignored / "build.log").write_bytes(b"new output")
+        os.utime(self.tracked, None)
+        self.assertEqual(self.observe(), before)
+        gate.require_mutable_source_unchanged(self.root, self.env, before, "fixture phase")
+        self.assertEqual(before["cargo_source_consumption"], "not_proven")
+
+    def test_git_abbreviation_changes_preserve_observation_but_actual_edits_do_not(self):
+        # Text index lines use variable object abbreviations even with --binary;
+        # a binary-only fixture would already emit full hashes and miss the bug.
+        tracked_text = self.root / ".gitignore"
+        tracked_text.write_text("ignored/\nother-generated/\n")
+        self.git("config", "core.abbrev", "7")
+        abbreviated = self.git("diff", "--binary", "--no-ext-diff", "HEAD", "--", ".")
+        before = self.observe()
+        self.git("config", "core.abbrev", "40")
+        full = self.git("diff", "--binary", "--no-ext-diff", "HEAD", "--", ".")
+        self.assertNotEqual(abbreviated, full, "real Git must reproduce index-line presentation drift")
+        self.assertEqual(self.observe(), before)
+        self.git("config", "color.ui", "always")
+        self.assertEqual(self.observe(), before)
+        tracked_text.write_text("ignored/\nchanged-generated/\n")
+        self.assert_drift(before)
+
+    def test_tracked_binary_and_staged_edits_change_same_head_observation(self):
+        before = self.observe()
+        self.tracked.write_bytes(b"\x00modified\xfe")
+        self.assertEqual(self.observe()["git_head"], before["git_head"])
+        self.assert_drift(before)
+        self.git("add", "tracked.bin")
+        self.assert_drift(before)
+
+    def test_same_head_untracked_content_edit_is_detected_even_with_retained_mtime(self):
+        path = self.root / "new.rs"
+        path.write_bytes(b"fn first() {}")
+        before = self.observe()
+        metadata = path.stat()
+        path.write_bytes(b"fn other() {}")
+        os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+        self.assertEqual(self.observe()["git_head"], before["git_head"])
+        self.assert_drift(before)
+
+    def test_commit_and_merge_change_observation_even_with_identical_tree(self):
+        before = self.observe()
+        self.git("commit", "--allow-empty", "-m", "new commit same files")
+        self.assert_drift(before)
+        before_merge = self.observe()
+        parent = self.git("rev-parse", "HEAD")
+        tree = self.git("rev-parse", "HEAD^{tree}")
+        sibling = self.git("commit-tree", tree, "-p", parent, input="other parent\n")
+        merge = self.git("commit-tree", tree, "-p", parent, "-p", sibling, input="merge fixture\n")
+        self.git("update-ref", "HEAD", merge, parent)
+        self.assertEqual(len(self.git("rev-list", "--parents", "-n", "1", "HEAD").split()), 3)
+        self.assert_drift(before_merge)
+
+    def test_metadata_return_source_drift_prevents_following_codegen(self):
+        isolate_shipping_fixture(self)
+        env = dict(self.env, CARGO="/unused/cargo", CARGO_HOME="/isolated", CARGO_TARGET_DIR="/warm")
+        requests = ("concread=" + gate.CONCREAD_STAGES[0][1][0],
+                    "core=" + gate.CORE_PENDING_KURA_RECOVERY_STAGES[0][1][0])
+        for request in requests:
+            with self.subTest(request=request), contextlib.ExitStack() as stack:
+                for name in ("require_native_artifact_inspector", "require_network_fixture_prerequisites",
+                             "run_pure_fsm_checks", "run_lifecycle_source_checks"):
+                    stack.enter_context(patch.object(gate, name))
+                metadata = stack.enter_context(patch.object(gate, "check_test_harnesses",
+                    side_effect=lambda *args, **kwargs: self.tracked.write_bytes(
+                        self.tracked.read_bytes() + b"metadata returned\n")))
+                compile = stack.enter_context(patch.object(gate, "compile_test_harnesses"))
+                runtime = stack.enter_context(patch.object(gate, "run_stages"))
+                network = stack.enter_context(patch.object(gate, "run_network_checks"))
+                stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+                with self.assertRaisesRegex(gate.CheckError, "source changed before .*test codegen"):
+                    gate.run_prequalification(self.root, focused_regressions=(request,),
+                                              environment=env, lock_fds=())
+                metadata.assert_called_once()
+                compile.assert_not_called()
+                runtime.assert_not_called()
+                network.assert_not_called()
+
+
 class FocusedPrequalificationTests(unittest.TestCase):
     def setUp(self):
         isolate_shipping_fixture(self)
@@ -2130,9 +2446,10 @@ class FocusedPrequalificationTests(unittest.TestCase):
             mock = patch.object(gate, name)
             mock.start()
             self.addCleanup(mock.stop)
-        git = patch.object(gate.subprocess, "check_output", return_value="a" * 40 + "\n")
-        self.git = git.start()
-        self.addCleanup(git.stop)
+        source = patch.object(gate, "mutable_source_observation", return_value={
+            "git_head": "a" * 40, "observed_nonignored_worktree_sha256": "b" * 64})
+        self.source = source.start()
+        self.addCleanup(source.stop)
         metadata = patch.object(gate, "check_test_harnesses")
         self.metadata = metadata.start()
         self.addCleanup(metadata.stop)
@@ -2142,7 +2459,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             requested = tuple(harness + "=" + test for harness in gate.MV_OWNERSHIP_HARNESSES
                               for _, tests in selected[harness] for test in tests)
-            self.assertEqual(len(requested), 343)
+            self.assertEqual(len(requested), 349)
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
             with self.subTest(scope=scope), \
@@ -2154,21 +2471,190 @@ class FocusedPrequalificationTests(unittest.TestCase):
                  contextlib.redirect_stdout(output):
                 gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
                     focused_regressions=requested, environment=self.env, lock_fds=(91,))
-            compile.assert_called_once()
-            self.metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
+            self.assertEqual(compile.call_count, 2)
+            self.assertEqual(self.metadata.call_args_list, compile.call_args_list)
             self.metadata.reset_mock()
-            self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread"))
-            self.assertEqual(compile.call_args.kwargs["lock_fds"], (91,))
+            self.assertEqual([call.kwargs["harnesses"] for call in compile.call_args_list],
+                             [gate.MV_OWNERSHIP_HARNESSES, ("config",)])
+            self.assertTrue(all(call.kwargs["lock_fds"] == (91,) for call in compile.call_args_list))
+            self.assertIs(compile.call_args_list[0].args[1], compile.call_args_list[1].args[1])
             self.assertEqual([call.args[0] for call in run.call_args_list],
-                             ["/copies/" + name for name in ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")])
+                             ["/copies/" + name for name in ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config")])
             self.assertEqual([call.args[3] for call in run.call_args_list],
-                             [gate.CONFIG_STAGES, *[selected[name] for name in gate.MV_OWNERSHIP_HARNESSES]])
+                             [*[selected[name] for name in gate.MV_OWNERSHIP_HARNESSES], gate.CONFIG_STAGES])
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
-            self.assertIn("343 focused regressions", output.getvalue())
+            self.assertIn("349 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
+
+    def test_portable_phase_finishes_custody_before_remaining_graph_and_exact_tests_run_once(self):
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)
+            portable = ("mv-admitted-map", "concread")
+            names = {name: selected[name][0][1][0] for name in portable}
+            config_test = gate.CONFIG_STAGES[0][1][0]
+            recovery = gate.CORE_PENDING_KURA_RECOVERY_STAGES[0][1][0]
+            requested = tuple(name + "=" + names[name] for name in portable) + (
+                "config=" + config_test, "core=" + recovery, "core=" + self.core,
+                "cli=" + self.cli, "network=" + self.network)
+            events, executed, active = [], [], set()
+            outer = self
+            class OwnedCopies(FixtureCopies):
+                def __init__(self, selections):
+                    super().__init__({name: name for name in selections})
+                    self.selections = selections
+                def __enter__(self):
+                    outer.assertFalse(active)
+                    active.update(self.selections)
+                    events.append(("enter", self.selections))
+                    return self
+                def release(self, name):
+                    outer.assertIn(name, active)
+                    active.remove(name)
+                    events.append(("release", name))
+                def __exit__(self, *args):
+                    outer.assertFalse(active)
+                    events.append(("exit", self.selections))
+                    return False
+            def metadata(root, env, *, harnesses, lock_fds):
+                self.assertFalse(active, "earlier copies close before the next Cargo graph")
+                events.append(("metadata", harnesses))
+            def build(root, env, *, harnesses, lock_fds):
+                self.assertFalse(active)
+                events.append(("build", harnesses))
+                return OwnedCopies(harnesses)
+            def run(harness, root, env, stages, locks, **kwargs):
+                self.assertIn(harness, active)
+                self.assertEqual((root, locks), (Path("/warm"), (91,)))
+                executed.extend((harness, test) for _, tests in stages for test in tests)
+                events.append(("run", harness))
+            self.metadata.reset_mock()
+            self.metadata.side_effect = metadata
+            output = io.StringIO()
+            with self.subTest(scope=scope), \
+                 patch.object(gate, "compile_test_harnesses", side_effect=build) as compile, \
+                 patch.object(gate, "run_stages", side_effect=run), \
+                 patch.object(gate, "run_network_checks", side_effect=lambda *args, **kw:
+                              run(kw["harness"], args[1], args[2], kw["stages"], args[3])), \
+                 patch.object(gate, "independent_check_evidence") as checkpoint, \
+                 contextlib.redirect_stdout(output):
+                gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
+                    focused_regressions=requested, environment=self.env, lock_fds=(91,))
+            self.assertEqual(self.metadata.call_args_list, compile.call_args_list)
+            self.assertEqual(compile.call_args_list[0].kwargs["harnesses"], portable)
+            self.assertEqual(compile.call_args_list[1].kwargs["harnesses"], ("config", "core", "network", "cli"))
+            self.assertIs(compile.call_args_list[0].args[1], compile.call_args_list[1].args[1])
+            self.assertTrue(all(call.kwargs["lock_fds"] == (91,) for call in compile.call_args_list))
+            first_exit = events.index(("exit", portable))
+            self.assertGreater(events.index(("metadata", ("config", "core", "network", "cli"))), first_exit)
+            self.assertEqual(executed[:2], [(name, names[name]) for name in portable])
+            mandatory = [("config", name) for _, tests in gate.CONFIG_STAGES for name in tests]
+            self.assertEqual(executed[2:2 + len(mandatory)], mandatory)
+            self.assertEqual(executed[2 + len(mandatory)], ("core", recovery))
+            expected = [(name, names[name]) for name in portable] + mandatory + [
+                ("core", recovery), ("core", self.core), ("cli", self.cli), ("network", self.network)]
+            self.assertCountEqual(executed, expected)
+            self.assertEqual(len(executed), len(set(executed)))
+            checkpoint.assert_not_called()
+            self.assertIn("portable diagnostic Cargo graph: mv-admitted-map, concread", output.getvalue())
+            self.assertIn("remaining diagnostic Cargo graph: config, core, network, cli", output.getvalue())
+            self.assertIn("NOT release qualification", output.getvalue())
+            self.assertFalse(active)
+        self.metadata.side_effect = None
+
+    def test_portable_failures_stop_before_remaining_metadata_config_or_network(self):
+        selected = gate.qualification_stages("basic")["concread"][0][1][0]
+        for phase in ("metadata", "codegen", "custody", "missing-test", "runtime"):
+            for scope in gate.QUALIFICATION_SCOPES:
+                events = []
+                error = (gate.SelectedRegressionFailures(["portable failed"]) if phase == "runtime"
+                         else gate.CheckError("portable " + phase + " failure"))
+                outer = self
+                class OwnedCopies(FixtureCopies):
+                    def __exit__(self, *args):
+                        events.append("closed")
+                        return False
+                    def release(self, name):
+                        outer.assertEqual(name, "concread")
+                        events.append("released")
+                def metadata(*args, **kwargs):
+                    self.assertEqual(kwargs["harnesses"], ("concread",))
+                    if phase == "metadata":
+                        raise error
+                def build(*args, **kwargs):
+                    self.assertEqual(kwargs["harnesses"], ("concread",))
+                    if phase in {"codegen", "custody"}:
+                        raise error
+                    return OwnedCopies({"concread": "concread"})
+                self.metadata.reset_mock()
+                self.metadata.side_effect = metadata
+                output = io.StringIO()
+                with self.subTest(scope=scope, phase=phase), \
+                     patch.object(gate, "compile_test_harnesses", side_effect=build) as compile, \
+                     patch.object(gate, "run_stages", side_effect=error) as runtime, \
+                     patch.object(gate, "run_config_checks") as config, \
+                     patch.object(gate, "run_network_checks") as network, \
+                     patch.object(gate, "independent_check_evidence") as checkpoint, \
+                     contextlib.redirect_stdout(output):
+                    with self.assertRaises(type(error)):
+                        gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
+                            focused_regressions=("concread=" + selected, "core=" + self.core,
+                                                 "cli=" + self.cli, "network=" + self.network),
+                            environment=self.env, lock_fds=(91,))
+                self.metadata.assert_called_once()
+                self.assertEqual(compile.call_count, 0 if phase == "metadata" else 1)
+                self.assertEqual(runtime.call_count, int(phase in {"missing-test", "runtime"}))
+                if phase in {"missing-test", "runtime"}:
+                    self.assertIn("closed", events)
+                config.assert_not_called()
+                network.assert_not_called()
+                checkpoint.assert_not_called()
+                self.assertNotIn("diagnostic passed:", output.getvalue())
+        self.metadata.side_effect = None
+
+    def test_portable_success_cannot_skip_final_configuration_or_claim_overall_pass(self):
+        selected = gate.qualification_stages("basic")["mv"][0][1][0]
+        for scope in gate.QUALIFICATION_SCOPES:
+            output = io.StringIO()
+            copies = FixtureCopies({name: name for name in gate.HARNESS_TARGETS})
+            def runtime(harness, root, env, stages, locks, **kwargs):
+                if harness == "config":
+                    self.assertEqual(stages, gate.CONFIG_STAGES)
+                    raise gate.SelectedRegressionFailures(["mandatory final config failed"])
+                self.assertEqual(harness, "mv")
+                self.assertEqual([test for _, tests in stages for test in tests], [selected])
+            self.metadata.reset_mock()
+            with self.subTest(scope=scope), \
+                 patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
+                 patch.object(gate, "run_stages", side_effect=runtime) as run, \
+                 patch.object(gate, "run_network_checks") as network, \
+                 contextlib.redirect_stdout(output):
+                with self.assertRaises(gate.SelectedRegressionFailures):
+                    gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
+                        focused_regressions=("mv=" + selected,), environment=self.env, lock_fds=(91,))
+            self.assertEqual([call.kwargs["harnesses"] for call in compile.call_args_list], [("mv",), ("config",)])
+            self.assertEqual(self.metadata.call_args_list, compile.call_args_list)
+            self.assertEqual([call.args[0] for call in run.call_args_list], ["mv", "config"])
+            self.assertIn("mandatory configuration and remaining diagnostics pending", output.getvalue())
+            self.assertNotIn("[taira-prequalify] diagnostic passed:", output.getvalue())
+            network.assert_not_called()
+
+    def test_source_drift_after_portable_phase_stops_remaining_graph(self):
+        selected = gate.qualification_stages("basic")["concread"][0][1][0]
+        output = io.StringIO()
+        def changed_after_portable(*args, **kwargs):
+            self.source.return_value = {"git_head": "c" * 40}
+        with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("copy")) as compile, \
+             patch.object(gate, "run_stages", side_effect=changed_after_portable), \
+             contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(gate.CheckError, "source changed before remaining test metadata"):
+                gate.run_prequalification(Path("/mutable"), focused_regressions=("concread=" + selected,),
+                                          environment=self.env, lock_fds=(91,))
+        self.assertEqual(compile.call_count, 1)
+        self.metadata.assert_called_once()
+        self.assertNotIn("[taira-prequalify] diagnostic passed:", output.getvalue())
 
     def test_focus_requires_exact_distinct_current_scope_selections_before_tools(self):
         for requested in (None, (), "core=" + self.core, ("",), ("core=*",),
@@ -2179,7 +2665,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
                     gate.run_prequalification(Path("/mutable"), focused_regressions=requested,
                                               environment=self.env, lock_fds=())
                 compile.assert_not_called()
-        self.git.assert_not_called()
+        self.source.assert_not_called()
         self.metadata.assert_not_called()
         focused = gate.focused_regression_stages("basic", ("core=" + self.core,))
         self.assertEqual([name for _, names in focused["core"] for name in names], [self.core])
@@ -2818,6 +3304,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "TORII_LIFECYCLE_STAGES", ()))
             stack.enter_context(patch.object(gate, "TORII_STAGES", ()))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(patch.object(gate, "mutable_source_observation",
+                                             side_effect=AssertionError("immutable prepare must not inspect mutable source")))
             gate.run_checks(Path("/frozen"), qualification_scope="full", environment={"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}, source_commit="a" * 40, lock_fds=(77, 88))
         self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list], [Path("/warm"), Path("/warm")])
         self.assertNotIn("frozen", compile.call_args.kwargs)
@@ -5379,6 +5867,12 @@ class NativeTestOutputRetirementTests(unittest.TestCase):
 
 
 class BeaconFixturePrerequisiteTests(unittest.TestCase):
+    def setUp(self):
+        observation = patch.object(gate, "mutable_source_observation", side_effect=lambda root, env: {
+            "git_head": gate.subprocess.check_output(["git", "rev-parse", "HEAD"]).strip()})
+        observation.start()
+        self.addCleanup(observation.stop)
+
     env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
 
     def invoke(self, mode, scope, *, test=None, source_commit=None):
@@ -5517,6 +6011,12 @@ class BeaconFixturePrerequisiteTests(unittest.TestCase):
 
 
 class NativeArtifactInspectorPrerequisiteTests(unittest.TestCase):
+    def setUp(self):
+        observation = patch.object(gate, "mutable_source_observation", side_effect=lambda root, env: {
+            "git_head": gate.subprocess.check_output(["git", "rev-parse", "HEAD"]).strip()})
+        observation.start()
+        self.addCleanup(observation.stop)
+
     env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
 
     def invoke(self, mode, scope):

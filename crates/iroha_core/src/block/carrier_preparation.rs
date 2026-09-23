@@ -85,9 +85,14 @@ impl ValidBlock {
         .map_err(|(block, reason)| {
             (
                 block,
-                Box::new(Self::execution_context_error(format!(
-                    "carrier preparation: {reason}"
-                ))),
+                Box::new(match reason {
+                    crate::state::MergeLedgerCommitError::BlockHashAdmission(error) => {
+                        BlockValidationError::BlockHashAdmission(error)
+                    }
+                    error => BlockValidationError::LocalStorageRecoveryRequired {
+                        reason: format!("carrier preparation: {error}"),
+                    },
+                }),
             )
         })
     }
@@ -95,6 +100,23 @@ impl ValidBlock {
 
 // Exact source-owned Native preparation through the shared global checks.
 // This private path has no live admission, vote, or publication entry point.
+
+/// Preserve the producer of a Native preparation failure through service dispatch.
+/// Local storage and execution refusals must not become invalid-body markers
+/// merely because their diagnostic text crossed this preparation boundary.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NativeCandidatePreparationError {
+    /// The common global validator retains its local/deterministic distinction.
+    #[error("Native global preflight: {0}")]
+    Preflight(#[source] Box<BlockValidationError>),
+    /// Exact source execution retains its typed admission and observation errors.
+    #[error(transparent)]
+    Execution(#[from] crate::state::MergeLedgerCommitError),
+    /// An already executed owner could not complete local metadata preparation.
+    /// This is not evidence that the authenticated proposal is invalid.
+    #[error("Native carrier preparation requires recovery: {0}")]
+    Preparation(#[source] crate::state::MergeLedgerCommitError),
+}
 
 impl ValidBlock {
     /// Consume exact Native sources only after the common proposal preflight.
@@ -106,10 +128,9 @@ impl ValidBlock {
         genesis_account: &AccountId,
         time_source: &TimeSource,
         block_cadence: Duration,
-    ) -> Result<Option<crate::state::PreparedCarrier<'state>>, crate::state::MergeLedgerCommitError>
+    ) -> Result<Option<crate::state::PreparedCarrier<'state>>, NativeCandidatePreparationError>
     {
         use crate::state::MergeLedgerCommitError;
-        let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
         crate::sumeragi::witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         let Some((state, body, generation)) = source.preparation_input() else {
@@ -195,12 +216,16 @@ impl ValidBlock {
         if generation != state.state_view_generation() {
             return Ok(None);
         }
-        preflight.map_err(|error| invalid(format!("Native global preflight: {error}")))?;
+        preflight.map_err(|error| NativeCandidatePreparationError::Preflight(Box::new(error)))?;
         let body = body.clone();
         let Some(recorded) = source.record_execution(body, context)? else {
             return Ok(None);
         };
-        let (block, state, native) = recorded.into_preparation_parts().map_err(invalid)?;
+        let (block, state, native) = recorded.into_preparation_parts().map_err(|reason| {
+            NativeCandidatePreparationError::Preparation(
+                MergeLedgerCommitError::ExecutionBatchInvalid(reason),
+            )
+        })?;
         let context = Arc::new(native.context().context().clone());
         crate::state::PreparedCarrier::prepare(ValidatedCarrierPreparationInput {
             valid: Self::new_signatures_verified(block),
@@ -209,6 +234,6 @@ impl ValidBlock {
             native: Some(native),
         })
         .map(Some)
-        .map_err(|(_, reason)| invalid(format!("Native carrier preparation: {reason}")))
+        .map_err(|(_, reason)| NativeCandidatePreparationError::Preparation(reason))
     }
 }

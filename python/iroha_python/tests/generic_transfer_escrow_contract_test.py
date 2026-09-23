@@ -507,6 +507,9 @@ def test_public_query_helpers_reject_raw_network_bytes_before_native_dispatch(
             transaction_hash="11" * 32,
             authority="authority@payments",
             network_id=raw_network_id,
+            executed_block_wire=b"wire",
+            finality_bundle_chain_json="[]",
+            trusted_height_context_id="trusted-root",
             private_key=b"\x11" * 32,
         ),
     )
@@ -548,6 +551,9 @@ def test_public_query_helpers_reject_legacy_network_keyword_aliases(
             transaction_hash="11" * 32,
             authority="authority@payments",
             network_id=NETWORK_ID,
+            executed_block_wire=b"executed-wire",
+            finality_bundle_chain_json="[finality-bundle]",
+            trusted_height_context_id="trusted-root",
             private_key=b"\x11" * 32,
             **{retired_key: "retired"},
         ),
@@ -558,7 +564,7 @@ def test_public_query_helpers_reject_legacy_network_keyword_aliases(
     assert session.calls == []
 
 
-def test_verified_committed_transaction_uses_two_signed_native_queries(
+def test_verified_committed_transaction_joins_signed_query_to_required_finality_inputs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     transaction_hash = "11" * 32
@@ -577,26 +583,20 @@ def test_verified_committed_transaction_uses_two_signed_native_queries(
         query_network_ids.append(network_id)
         return b"transaction-query"
 
-    def block_query(
-        authority: str,
-        private_key: bytes,
-        network_id: FakeNetworkId,
-        requested_hash: str,
-    ) -> bytes:
-        query_network_ids.append(network_id)
-        return b"block-query"
-
     crypto.build_find_committed_transaction_query = transaction_query
-    crypto.committed_transaction_carrier_block_hash = (
-        lambda requested_hash, response: block_hash
-    )
-    crypto.build_find_block_by_hash_query = block_query
-    crypto.verify_committed_transaction_inclusion = (
-        lambda requested_hash, transaction_response, block_response: {
+    verification_inputs = []
+    def verify(requested_hash, transaction_response, executed_wire, **trust):
+        verification_inputs.append((requested_hash, transaction_response, executed_wire, trust))
+        return {
             "transaction_hash": transaction_hash,
             "block_hash": block_hash,
             "block_height": 7,
             "output_hash": output_hash,
+            "network_id": "trusted-network",
+            "height_context_id": "trusted-context",
+            "execution_commitment": {"executed_block_wire_len": 123},
+            "executed_block_wire_hash": "55" * 32,
+            "executed_block_wire_len": 123,
             "entrypoint_kind": "External",
             "authority": "authority@payments",
             "signer_public_key_hex": "44" * 32,
@@ -612,12 +612,12 @@ def test_verified_committed_transaction_uses_two_signed_native_queries(
                 "block_hash": block_hash,
             },
         }
-    )
+
+    crypto.verify_committed_transaction_inclusion = verify
     monkeypatch.setitem(sys.modules, f"{PURE_PACKAGE}.crypto", crypto)
     session = FakeSession(
         [
             _norito_response(b"transaction-response"),
-            _norito_response(b"block-response"),
         ]
     )
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
@@ -626,6 +626,9 @@ def test_verified_committed_transaction_uses_two_signed_native_queries(
         transaction_hash=transaction_hash,
         authority="authority@payments",
         network_id=NETWORK_ID,
+        executed_block_wire=b"executed-wire",
+        finality_bundle_chain_json="[finality-bundle]",
+        trusted_height_context_id="trusted-root",
         private_key_hex="44" * 32,
     )
 
@@ -643,9 +646,16 @@ def test_verified_committed_transaction_uses_two_signed_native_queries(
     assert verified.batch_outcomes == ()
     assert [call["data"] for call in session.calls] == [
         b"transaction-query",
-        b"block-query",
     ]
-    assert query_network_ids == [NETWORK_ID, NETWORK_ID]
+    assert query_network_ids == [NETWORK_ID]
+    assert verification_inputs == [(transaction_hash, b"transaction-response", b"executed-wire", {
+        "finality_bundle_chain_json": "[finality-bundle]",
+        "expected_network_id": NETWORK_ID,
+        "trusted_height_context_id": "trusted-root",
+    })]
+    assert verified.executed_block_wire_hash == "55" * 32
+    assert verified.executed_block_wire_len == 123
+    assert verified.height_context_id == "trusted-context"
     assert all(
         call["headers"]["Accept"] == "application/x-norito"
         for call in session.calls
@@ -658,6 +668,11 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
         "block_hash": "22" * 32,
         "block_height": 7,
         "output_hash": "33" * 32,
+        "network_id": "trusted-network",
+        "height_context_id": "trusted-context",
+        "execution_commitment": {"executed_block_wire_len": 123},
+        "executed_block_wire_hash": "55" * 32,
+        "executed_block_wire_len": 123,
         "entrypoint_kind": "External",
         "authority": "authority@payments",
         "signer_public_key_hex": "44" * 32,
@@ -940,3 +955,47 @@ def test_single_contract_call_is_the_local_batch_convenience_form() -> None:
     assert captured["private_key_hex"] is None
     assert "chain_id" not in captured
     assert result["tx_hashes"] == ["ab" * 32]
+
+
+def test_verified_committed_transaction_requires_explicit_trust_before_request() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    with pytest.raises(TypeError, match="required keyword-only"):
+        client.get_verified_committed_transaction(
+            transaction_hash="11" * 32, authority="authority@payments",
+            network_id=NETWORK_ID, private_key=b"\x11" * 32,
+        )
+
+
+def test_committed_output_crypto_wrapper_requires_and_forwards_exact_trust_inputs() -> None:
+    # Exercise the actual source wrapper without loading an older installed native ABI.
+    # Cryptographic acceptance is covered by the real-BLS native boundary tests.
+    import ast
+    from typing import Mapping
+
+    source = (PACKAGE_ROOT / "crypto.py").read_text()
+    node = next(item for item in ast.parse(source).body
+                if isinstance(item, ast.FunctionDef)
+                and item.name == "verify_committed_transaction_inclusion")
+    calls = []
+    native = types.SimpleNamespace(verify_committed_transaction_inclusion_json=
+        lambda *args: calls.append(args) or '{"output_hash":"verified"}')
+    contract = types.ModuleType("contract")
+    _install_network_id_contract(contract)
+    namespace = {"_crypto": native, "_require_network_id": contract._require_network_id,
+                 "NetworkId": FakeNetworkId, "Mapping": Mapping, "Any": Any, "json": json}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), "crypto.py", "exec"), namespace)
+    verify = namespace["verify_committed_transaction_inclusion"]
+    trust = dict(finality_bundle_chain_json="[exact-bundle]", expected_network_id=NETWORK_ID,
+                 trusted_height_context_id="trusted-root")
+    assert verify("transaction", b"response", b"wire", **trust) == {"output_hash": "verified"}
+    assert calls == [("transaction", b"response", b"wire", "[exact-bundle]", NETWORK_ID, "trusted-root")]
+    for response, wire in [(bytearray(b"response"), b"wire"), (b"response", memoryview(b"wire"))]:
+        with pytest.raises(TypeError, match="exact immutable bytes"):
+            verify("transaction", response, wire, **trust)
+    with pytest.raises(TypeError, match="expected_network_id must be a NetworkId"):
+        verify("transaction", b"response", b"wire", **{**trust, "expected_network_id": b"untrusted"})
+    with pytest.raises(ValueError, match="16 MiB"):
+        verify("transaction", b"response", b"wire", **{**trust, "finality_bundle_chain_json": " " * (16 * 1024 * 1024 + 1)})
+    with pytest.raises(TypeError, match="required keyword-only"):
+        verify("transaction", b"response", b"wire")
+    assert len(calls) == 1

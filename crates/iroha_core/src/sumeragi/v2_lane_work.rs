@@ -130,10 +130,7 @@ use crate::{
         RoutingPlan, canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
     },
-    state::{
-        PendingQueuePlanAdmissionDisposition, PendingQueuePlanAdmissionPersistenceOutcome, State,
-        WorldReadOnly,
-    },
+    state::{State, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
 #[cfg(test)]
@@ -2091,7 +2088,6 @@ impl HistoricalRecoveryIdentity {
     }
 }
 include!("v2_lane_work/canonical_executed_block_application_repair.rs");
-include!("v2_lane_work/queue_plan_admission_handoff.rs");
 /// Durable boundary at which an earlier-height recovery attempt is waiting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HistoricalRecoveryStage {
@@ -3307,8 +3303,6 @@ pub(crate) struct V2LaneWorkAdapter {
         BTreeMap<PeerId, CertifiedMergeSidecarGenerationHintV1>,
     committed_lane_output_cursor: usize,
     admitted_relays: BTreeSet<(LaneId, DataSpaceId, Hash, u64, Hash)>,
-    queue_plan_admission_handoff: QueuePlanAdmissionHandoffState,
-    queue_plan_admission_handoff_cursor: usize,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
     merge_claims: BTreeMap<(u64, u64, wire::ValidatorIndex), Hash>,
     #[cfg(test)]
@@ -4064,8 +4058,6 @@ impl V2LaneWorkAdapter {
             obsolete_merge_sidecar_generation_hints: BTreeMap::new(),
             committed_lane_output_cursor: 0,
             admitted_relays: BTreeSet::new(),
-            queue_plan_admission_handoff: QueuePlanAdmissionHandoffState::Unobserved,
-            queue_plan_admission_handoff_cursor: 0,
             merge_entries: BTreeMap::new(),
             merge_claims: BTreeMap::new(),
             #[cfg(test)]
@@ -11599,10 +11591,9 @@ impl V2LaneWorkAdapter {
             LaneRelayMessage::MergeSignature(signature) => {
                 self.accept_merge_signature(signature, active_view)
             }
-            LaneRelayMessage::QueuePlanAdmissionCertificate {
-                sender,
-                certificate,
-            } => self.accept_queue_plan_admission_certificate(sender, certificate, active_view),
+            LaneRelayMessage::QueuePlanAdmissionCertificate { .. } => {
+                return V2LaneIngressOutcome::Rejected;
+            }
             LaneRelayMessage::CertifiedMergeSidecar {
                 sender,
                 reply_route,
@@ -19317,16 +19308,6 @@ impl V2LaneWorkAdapter {
         }
         Ok(MergeRefreshOutcome::Ready)
     }
-    /// Reconcile Kura-durable QueuePlan admissions and hand each unsent exact
-    /// certificate to the current global leader.
-    pub(crate) fn refresh_pending_queue_plan_admission_handoffs(
-        &mut self,
-        active_view: wire::View,
-    ) -> Result<bool, V2LaneWorkError> {
-        let _ = self.reconcile_pending_queue_plan_admissions(active_view)?;
-        Ok(self.queue_plan_admission_handoff.is_enqueued())
-    }
-
     fn accept_merge_signature(
         &mut self,
         signature: MergeCommitteeSignature,
@@ -21761,12 +21742,12 @@ pub(super) mod tests {
                 power,
             })
             .collect::<Vec<_>>();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id,
-                context_epoch,
-                &roster,
-            );
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            if let Some(length) = npos_epoch_length {
+                crate::kagemusha_v1_test_fixtures::mint_finality_scheduled_authorization(network_id, context_epoch, length, &roster)
+            } else {
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, context_epoch_end_height, &roster)
+            };
         let mut context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -21814,8 +21795,8 @@ pub(super) mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: super::super::v2_recovery::committed_nexus_amx_context_hash(
                 state.as_ref(),
             )
@@ -21860,13 +21841,34 @@ pub(super) mod tests {
                         .saturating_mul(length)
                 });
                 (
-                    parent_context.kagemusha_mint_finality_epoch_id,
-                    parent_context.kagemusha_mint_finality_epoch_roster,
-                ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                    network_id,
-                    parent_context.epoch,
-                    &parent_context.roster,
-                );
+                    parent_context.kagemusha_mint_finality_authorization,
+                    parent_context.kagemusha_mint_finality_authority,
+                ) = if let Some(length) = npos_epoch_length {
+                    crate::kagemusha_v1_test_fixtures::mint_finality_scheduled_authorization(network_id, parent_context.epoch, length, &parent_context.roster)
+                } else {
+                    crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, parent_context.epoch_end_height, &parent_context.roster)
+                };
+                if block_height == parent_context.epoch_end_height {
+                    let length = npos_epoch_length.expect("only NPoS has a finite fixture boundary");
+                    let (authorization, authority) = crate::kagemusha_v1_test_fixtures::mint_finality_scheduled_authorization(
+                        network_id, parent_context.epoch + 1, length, &parent_context.roster,
+                    );
+                    authorization.validate_successor(&parent_context.kagemusha_mint_finality_authorization)
+                        .expect("durable parent authorizes its exact scheduled successor");
+                    parent_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+                        epoch: authorization.epoch,
+                        kagemusha_mint_finality_authorization: authorization,
+                        kagemusha_mint_finality_authority: authority,
+                        epoch_end_height: authorization.last_height,
+                        mode,
+                        roster: parent_context.roster.clone(),
+                        validator_set_pops: keys.iter().map(|key| {
+                            iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("fixture successor PoP")
+                        }).collect(),
+                        quorum: parent_context.quorum,
+                        leader_seed: parent_context.leader_seed,
+                    });
+                }
                 let signed_block: &SignedBlock = block.as_ref();
                 let finality = signed_finality_artifact(
                     &parent_context,
@@ -22741,13 +22743,9 @@ pub(super) mod tests {
                 wire::DualQuorum::from_roster(&successor.roster).expect("successor dual quorum");
         }
         (
-            successor.kagemusha_mint_finality_epoch_id,
-            successor.kagemusha_mint_finality_epoch_roster,
-        ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-            successor.network_id,
-            successor.epoch,
-            &successor.roster,
-        );
+            successor.kagemusha_mint_finality_authorization,
+            successor.kagemusha_mint_finality_authority,
+        ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(successor.network_id, successor.epoch, successor.epoch_end_height, &successor.roster);
         successor
             .validate()
             .expect("valid immediate successor context");
@@ -24485,7 +24483,7 @@ pub(super) mod tests {
     }
     #[test]
     fn queued_successor_generation_hint_cancels_ranked_older_close_before_retry() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
         let round = wire::ConsensusRound {
             context_id: adapter.context.id(),
             height: adapter.context.height,
@@ -24710,22 +24708,27 @@ pub(super) mod tests {
             adapter.obsolete_merge_sidecar_generation_hints.is_empty(),
             "the cancellation tombstone cannot exist before the runner consumes its relay owner"
         );
+        let mut queue_plan = queue_plan_owner_from_adapter(&adapter, &keys, 2);
         assert!(
             crate::sumeragi::v2_runner::drain_finalized_lane_relay_prefix_for_test(
                 &lane_relay_rx,
                 &mut adapter,
+                &mut queue_plan,
                 observed_round.view,
                 1,
-            ),
+            )
+            .expect("terminal exact relay prefix"),
             "the closed terminal relay prefix must consume its queued cancellation"
         );
         assert!(
             !crate::sumeragi::v2_runner::drain_finalized_lane_relay_prefix_for_test(
                 &lane_relay_rx,
                 &mut adapter,
+                &mut queue_plan,
                 observed_round.view,
                 1,
-            ),
+            )
+            .expect("terminal exact relay prefix"),
             "the admitted relay prefix is finite after shared ingress closure"
         );
         assert_eq!(adapter.obsolete_merge_sidecar_generation_hints.len(), 1);
@@ -29024,6 +29027,37 @@ pub(super) mod tests {
         let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
         commit_qc.aggregate_signature =
             iroha_crypto::bls_normal_aggregate_signatures(&signature_refs).expect(expectations[4]);
+        let vote = wire::Vote {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: commit_qc.execution_commitment.clone(),
+            signer: 0,
+            signature: Vec::new(),
+        };
+        let authority = &context.kagemusha_mint_finality_authority;
+        if let Some(message) = crate::zk::kagemusha_v1_recursion::build_kagemusha_mint_finality_seal_message_v1(
+            authority, context, &vote,
+        ).expect("derive fixture boundary mint authority statement") {
+            let seals = commit_qc.signers.iter().map(|index| {
+                let seed = 0xA0_u8.wrapping_add(u8::try_from(*index).expect("fixture signer index"));
+                let signer = crate::zk::kagemusha_v1_recursion::KagemushaMintFinalitySignerV1::from_seed(
+                    zeroize::Zeroizing::new([seed; 32]), *index, authority,
+                ).expect("exact fixture generation signer");
+                crate::zk::kagemusha_v1_recursion::sign_kagemusha_mint_finality_seal_v1(&signer, &message)
+                    .expect("paired fixture boundary signature")
+            }).collect();
+            let bundle = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySealBundleV1 { message, seals };
+            crate::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_seal_bundle_v1(
+                authority, context, &commit_qc, &bundle,
+            ).expect("exact quorum and authority of fixture boundary seals");
+            commit_qc.aggregate_signature = wire::encode_kagemusha_consensus_signature_envelope_v1(
+                wire::KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,
+                &commit_qc.aggregate_signature,
+                &norito::codec::Encode::encode(&bundle),
+            ).expect("encode both fixture finality certificates");
+        }
         let validator_set_pops = keys
             .iter()
             .map(|key| {
@@ -32475,5 +32509,6 @@ pub(super) mod tests {
     }
     include!("v2_lane_work/autonomous_retirement_and_merge_tests.rs");
     include!("v2_lane_work/queue_plan_admission_handoff_tests.rs");
+    include!("v2_lane_work/queue_plan_owner_tests.rs");
     include!("tests/v2_lane_work_ordinary_dispatch.rs");
 }

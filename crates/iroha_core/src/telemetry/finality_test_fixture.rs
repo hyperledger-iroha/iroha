@@ -24,12 +24,8 @@ impl SystemUnderTest {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                self.network_id,
-                0,
-                &roster,
-            );
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(self.network_id, u64::MAX, &roster);
         wire::HeightContext {
             network_id: self.network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -42,8 +38,8 @@ impl SystemUnderTest {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("exact four-validator quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"telemetry finality nexus context"),
             execution_policy_hash: Hash::new(b"telemetry finality execution policy"),
             da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,

@@ -42,7 +42,7 @@ test("package exposes no browser codec initialization or build path", () => {
   assert.equal(manifest.files.includes("browser-codec.d.ts"), false);
   assert.equal(Object.hasOwn(manifest.scripts, "build:wasm"), false);
   assert.equal(Object.hasOwn(manifest.scripts, "verify:browser-codec"), false);
-  assert.equal(manifest.scripts.prepack, "npm run build:dist");
+  assert.equal(manifest.scripts.prepack, "npm run check:node-engine && npm run build:dist");
   for (const retired of [
     "src/browserCodec.js", "src/browserCodecRuntime.js", "src/public/browserCodec.js",
     "browser-codec.d.ts", "scripts/build-wasm.py", "scripts/verify-browser-codec.mjs",

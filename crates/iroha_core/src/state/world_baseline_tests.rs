@@ -26,7 +26,7 @@ fn baseline_binds_untouched_and_snapshot_skipped_values_without_undo_history() {
     let block = second.block();
     let initial = WorldStateBaseline::capture_current(&block).unwrap();
     assert_ne!(plain.root(), initial.root());
-    assert_eq!(plain.fields, 287);
+    assert_eq!(plain.fields, 291);
     assert_eq!(initial.fields, plain.fields);
     assert_eq!(
         first.block().net_state_delta().unwrap(),

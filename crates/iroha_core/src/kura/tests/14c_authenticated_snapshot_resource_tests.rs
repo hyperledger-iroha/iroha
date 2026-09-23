@@ -86,8 +86,8 @@ fn signed_snapshot_physical_fixture() -> SignedSnapshotPhysicalFixture {
             power: 1,
         })
         .collect::<Vec<_>>();
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
@@ -108,8 +108,8 @@ fn signed_snapshot_physical_fixture() -> SignedSnapshotPhysicalFixture {
         parent_commit_qc: None,
         quorum: DualQuorum::from_roster(&roster).unwrap(),
         roster,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         nexus_amx_context_hash: crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
             &state,
         )

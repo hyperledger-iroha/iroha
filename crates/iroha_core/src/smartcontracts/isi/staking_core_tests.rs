@@ -152,6 +152,23 @@ fn seed_validator_consensus_key(
         seed_consensus_key_for_role_with_heights(stx, peer, role, status, activation_height, None);
     }
 }
+fn seed_participant_consensus_key(
+    stx: &mut StateTransaction<'_, '_>,
+    peer: &iroha_model_base::peer::PeerId,
+) {
+    // Peer-binding fixtures exercise an independent lane committee. They must
+    // not accidentally add a candidate to the global election pool.
+    clear_consensus_keys_for_peer(stx, peer);
+    let activation_height = stx.block_height();
+    seed_consensus_key_for_role_with_heights(
+        stx,
+        peer,
+        ConsensusKeyRole::Committee,
+        ConsensusKeyStatus::Active,
+        activation_height,
+        None,
+    );
+}
 fn seed_validator_consensus_key_with_heights(
     stx: &mut StateTransaction<'_, '_>,
     peer: &iroha_model_base::peer::PeerId,
@@ -271,6 +288,10 @@ fn configure_reward_fixture(
         .unwrap();
     let (sink, _) = gen_account_in("wonderland");
     let (validator, _) = gen_account_in("wonderland");
+    let (escrow, _) = gen_account_in("wonderland");
+    Register::account(Account::new(escrow.clone()))
+        .execute(&ALICE_ID, stx)
+        .unwrap();
     Register::account(Account::new(sink.clone()))
         .execute(&ALICE_ID, stx)
         .unwrap();
@@ -321,7 +342,7 @@ fn configure_reward_fixture(
     stx.nexus.staking.public_validator_mode =
         iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
     stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
-    stx.nexus.staking.stake_escrow_account_id = sink.to_string();
+    stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
     stx.nexus.staking.slash_sink_account_id = sink.to_string();
     register_peer_for_account(stx, &validator);
     RegisterPublicLaneValidator {

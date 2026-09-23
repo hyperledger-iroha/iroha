@@ -241,16 +241,23 @@ fn retained_governance_fixture(
     );
     let mut seed = b"sumeragi-v2:permissioned-leader-seed".to_vec();
     seed.extend_from_slice(&network.encode());
+    let kagemusha_mint_finality_authority = metadata
+        .kagemusha_mint_finality
+        .authority_generation
+        .bind_network_id(network)
+        .expect("bind signed genesis mint-finality authority to its network");
+    let kagemusha_mint_finality_authorization =
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(
+            &kagemusha_mint_finality_authority,
+            u64::MAX,
+        );
     let context = crate::sumeragi::v2_context::build_genesis_height_context(
         crate::sumeragi::v2_context::GenesisContextInputs {
             network_id: network,
             election: crate::sumeragi::v2_context::FrozenElectionInputs {
                 epoch: 0,
-                kagemusha_mint_finality_epoch_roster: metadata
-                    .kagemusha_mint_finality
-                    .epoch_roster
-                    .bind_network_id(network)
-                    .unwrap(),
+                kagemusha_mint_finality_authority,
+                kagemusha_mint_finality_authorization,
                 epoch_end_height: u64::MAX,
                 mode: ConsensusMode::Permissioned,
                 roster,

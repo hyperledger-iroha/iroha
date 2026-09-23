@@ -101,6 +101,13 @@ participate in the aggregate. Its pytest 9.0.3 requirement matches
 `scripts/requirements.txt`; the separate pytest 8.4.2 CI lock is not that input's
 authority. Existing reference assertions and wheel verification are unchanged.
 
+The [JavaScript original archive owner](javascript_original_archives_v1.md)
+now bounds actual npm gzip/ustar/PAX bytes and joins the nine original dependency
+tarballs to their exact candidate-lock locations and integrity values. This is
+a content prerequisite. Exact package/source projection, shared assertion
+owners and native cache identity observation are implemented separately; the
+installed native producer and its original-index adapter remain unimplemented.
+
 TODO: implement and review the other four concrete executed-package adapters,
 then connect this inventory to the existing signed aggregate, ReleaseManifest
 custody/completion verification and SF11 consumer derivation in one cutover.

@@ -586,13 +586,21 @@ def test_output_transaction_removes_partial_write_and_closes_descriptors(
         pytest.raises(signing.ReleaseManifestSignatureError, match="cannot publish"),
         transaction,
     ):
-        transaction.install(output, TEST_SIGNATURE, "signature output")
+        try:
+            transaction.install(output, TEST_SIGNATURE, "signature output")
+        finally:
+            # Capture before terminal cleanup detaches ownership; these checks
+            # must not become vacuous when the transaction correctly clears it.
+            created = tuple(transaction.created)
+            parents = tuple(transaction.parents.values())
     assert writes == 2
     assert not output.exists()
-    for _, descriptor, _ in transaction.created:
+    assert created and parents
+    assert transaction.created == [] and transaction.parents == {}
+    for _, descriptor, _ in created:
         with pytest.raises(OSError):
             os.fstat(descriptor)
-    for _, _, descriptors in transaction.parents.values():
+    for _, _, descriptors in parents:
         for descriptor in descriptors:
             with pytest.raises(OSError):
                 os.fstat(descriptor)

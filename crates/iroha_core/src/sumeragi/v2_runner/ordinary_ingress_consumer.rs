@@ -7,6 +7,7 @@
 //! cannot drift between ordinary lifecycle heights and other exact consumers.
 
 use super::*;
+use crate::sumeragi::v2_lane_driver::{NativeLaneDriver, NativeLaneOwnedAdmission};
 
 /// Authentication result for one current-height Certified-Serve carrier.
 ///
@@ -271,6 +272,123 @@ pub(in crate::sumeragi) fn settle_prepared_certified_serve_for_test(
     Ok(settlement)
 }
 
+/// Retry only the retained Native physical occurrence, independent of global height.
+/// The armed handoff stays owned by the caller when the process cannot admit it.
+pub(in crate::sumeragi) fn consume_prepared_native_ingress(
+    mut prepared: PreparedDequeuedV2IngressV1,
+    receiver: &FairV2Ingress,
+    native_lanes: &mut NativeLaneDriver,
+) -> Result<Option<PreparedDequeuedV2IngressV1>, V2RunnerError> {
+    if !prepared.matches_ingress(receiver)
+        || !native_lanes.matches_output_guard(&prepared.output_guard)
+    {
+        prepared.close_output_for_restart();
+        return Err(V2RunnerError::Service(
+            "Native retry changed its original ingress/output owner".into(),
+        ));
+    }
+    let initial_admission = prepared
+        .output_guard
+        .acquire()
+        .ok_or(V2RunnerError::RestartRequired)?;
+    drop(initial_admission);
+    let inbound = prepared.inbound.take().ok_or_else(|| {
+        V2RunnerError::Service("Native retry lost its original physical carrier".into())
+    })?;
+    match native_lanes
+        .admit_owned(inbound)
+        .map_err(V2RunnerError::Service)?
+    {
+        NativeLaneOwnedAdmission::Accepted => {}
+        NativeLaneOwnedAdmission::Retry(inbound) => {
+            prepared.inbound = Some(inbound);
+            return Ok(Some(prepared));
+        }
+        NativeLaneOwnedAdmission::Rejected { inbound, reason } => {
+            iroha_logger::debug!(%reason, sender = %inbound.sender(), "rejected authenticated Native ingress");
+            drop(inbound);
+        }
+    }
+    let output_guard = Arc::clone(&prepared.output_guard);
+    let final_admission = output_guard
+        .acquire()
+        .ok_or(V2RunnerError::RestartRequired)?;
+    prepared.complete();
+    drop(final_admission);
+    Ok(None)
+}
+
+/// Consume the exact historical source response selected by the Native process.
+/// All retained physical and leader-wire owners reach one volatile terminal.
+pub(in crate::sumeragi) fn consume_prepared_native_source_response(
+    mut prepared: PreparedDequeuedV2IngressV1,
+    receiver: &FairV2Ingress,
+    native: &mut native_process::NativeRunnerProcess,
+) -> Result<(), V2RunnerError> {
+    if !prepared.matches_ingress(receiver)
+        || !native
+            .driver_mut()
+            .matches_output_guard(&prepared.output_guard)
+    {
+        prepared.close_output_for_restart();
+        return Err(V2RunnerError::Service(
+            "Native source response changed its original ingress/output owner".into(),
+        ));
+    }
+    let output_guard = Arc::clone(&prepared.output_guard);
+    let permit = output_guard
+        .acquire()
+        .ok_or(V2RunnerError::RestartRequired)?;
+    drop(permit);
+    let mut inbound = prepared.inbound.take().ok_or_else(|| {
+        V2RunnerError::Service("Native source response lost its original physical carrier".into())
+    })?;
+    if !native.admits_source_response(inbound.message()) {
+        return Err(V2RunnerError::Service(
+            "Native source response changed its selected request".into(),
+        ));
+    }
+    let mut ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+        V2RunnerError::Service("Native source response lost fair-ingress ownership".into())
+    })?;
+    if !ownership.validate_exact()
+        || !ownership.matches_message(inbound.message())
+        || !ownership.matches_semantic_origin(inbound.sender())
+        || !ownership.matches_reply_routes(inbound.reply_routes())
+    {
+        return Err(V2RunnerError::Service(
+            "Native source response changed physical ownership".into(),
+        ));
+    }
+    receiver
+        .bind_leader_wire_runtime_ownership(&mut ownership)
+        .map_err(V2RunnerError::Service)?;
+    let (message, sender, _reply_routes) = inbound.into_message_sender_and_reply_routes();
+    let BlockMessage::V2(message) = message else {
+        return Err(V2RunnerError::Service(
+            "Native source response changed its selected family".into(),
+        ));
+    };
+    message
+        .validate_version()
+        .map_err(|error| V2RunnerError::Service(error.to_string()))?;
+    let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) = message.payload else {
+        return Err(V2RunnerError::Service(
+            "Native source response changed its selected payload".into(),
+        ));
+    };
+    // The process authenticates the exact request/source and classifies invalid
+    // remote responses as negative terminals; local invariant errors fail-stop.
+    native.accept_source_response(response, &sender)?;
+    let permit = output_guard
+        .acquire()
+        .ok_or(V2RunnerError::RestartRequired)?;
+    mark_leader_wire_volatile(receiver, &ownership)?;
+    prepared.complete();
+    drop(permit);
+    Ok(())
+}
+
 /// Consume one exact already-dequeued row through the established runner tail.
 ///
 /// This is the sole post-selection implementation used by the activated
@@ -285,14 +403,13 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
     receiver: &FairV2Ingress,
     executor: &mut V2EffectExecutor<SerializedV2Runtime>,
     services: &mut ProductionV2Services,
-    lane_work: &mut V2LaneWorkAdapter,
+    native: &mut native_process::NativeRunnerProcess,
     kura: &Kura,
     local_key: &KeyPair,
     block_sync_server: &mut V2BlockSyncServer,
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
     npos_beacon: &mut V2GlobalBeaconLifecycle,
-    lane_output_limit: usize,
 ) -> Result<ProductionPreparedOrdinaryIngressConsumptionV1, V2RunnerError> {
     let services_output_guard = services.lifecycle_output_guard();
     if !prepared.matches_output_guard(&services_output_guard) {
@@ -312,6 +429,14 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
         .ok_or(V2RunnerError::RestartRequired)?;
     drop(initial_admission);
 
+    if prepared
+        .inbound
+        .as_ref()
+        .is_some_and(|inbound| inbound.message().is_native_lane())
+    {
+        native.consume_native_ingress(prepared, receiver)?;
+        return Ok(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
+    }
     let mut inbound = prepared.inbound.take().ok_or_else(|| {
         V2RunnerError::Service("ordinary ingress handoff lost its exact carrier".to_owned())
     })?;
@@ -337,7 +462,7 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
     match inbound.message() {
         BlockMessage::NativeLane(_) | BlockMessage::NativeLaneDecision(_) => {
             return Err(V2RunnerError::Service(
-                "native lane ingress reached the inactive legacy consumer".to_owned(),
+                "Native ingress escaped its original process owner".to_owned(),
             ));
         }
         BlockMessage::KuraReplicaAdvert(_) => {
@@ -353,16 +478,7 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
         | BlockMessage::LaneBlockCertificate(_)
         | BlockMessage::LaneHistoricalRecoveryRequest(_)
         | BlockMessage::LaneHistoricalRecoveryResponse(_) => {
-            let _ = lane_work.accept_lane_message_with_ingress_ownership(
-                inbound,
-                executor.current_tag().view(),
-            )?;
-            let _ = service_historical_recovery_tick(lane_work, services)?;
-            // Transfer already-owned lane output before another expensive ingress
-            // or a retransmission cadence can overtake its first delivery attempt.
-            // Backpressure retains an exact source or worker owner; transfers still
-            // passes the ordinary ownership, capacity and output-guard checks.
-            dispatch_lane_work_effects(lane_work, services, lane_output_limit)?;
+            iroha_logger::debug!(sender = %inbound.sender(), "rejected retired lane protocol envelope");
             finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
         }
         BlockMessage::V2(_) => {}
@@ -594,15 +710,13 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
             }
         }
         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) => {
-            // This arm is reachable only for one authenticated response occurrence that
-            // lifecycle selection classified as non-selected or stale. Consume its exact
-            // move-only ingress owner once and terminate it without retaining a response
-            // carrier; a selected fetch response must instead complete through lifecycle.
-            iroha_logger::debug!(
-                request_hash = %response.request_hash,
-                active_height = executor.context().height,
-                "retired certified body response outside lifecycle selection"
-            );
+            if native.admits_source_response_hash(response.request_hash) {
+                native.accept_source_response(response, &sender)?;
+            } else {
+                iroha_logger::debug!(request_hash = %response.request_hash,
+                    active_height = executor.context().height,
+                    "retired certified body response outside lifecycle selection");
+            }
             mark_leader_wire_volatile(receiver, &ingress_ownership)?;
         }
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(request) => {

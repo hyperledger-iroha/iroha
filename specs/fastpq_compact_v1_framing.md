@@ -77,9 +77,19 @@ ordered fields:
 4. `level: u32`: zero for leaves/chain/tape; one-based for parents.
 5. `position: u32`: exact leaf/parent position; zero for chain/tape.
 6. `output_bytes: u32`: 48 for H, the exact whole-tape length for G.
-7. `fields: Vec<Vec<u8>>`: one complete canonical leaf payload; two separately
+7. `fields` uses the `Vec<Vec<u8>>` wire layout: one complete canonical leaf payload; two separately
    ordered full child digests; complete pending tape then next root; or the full
    predecessor digest, respectively.
+
+The in-memory `Frame` borrows these one or two fields through `BodyFields`.
+A payload-only byte view emits the same fixed-width byte count and raw bytes as
+`Vec<u8>`; Norito's existing sequence writer owns the enclosing count and element
+lengths. The canonical frame encoder continues to own the header, fixed schema
+identity, flags and checksum. Leaf bytes and stack digest bytes are borrowed;
+`Transcript` still owns the complete pending tape until its chain hash finishes.
+This removes field-copy allocations without changing the wire layout, logical
+hash input or hash arithmetic. The encoded frame allocation and hashing costs
+remain; no speedup or resource qualification follows from this source change.
 
 Rows, mixed values and quotients have 524,288 leaves. FRI round `r<17` has
 `524,288 >> (r+1)` pair leaves. Round 17 has one four-value leaf and a parent
@@ -134,6 +144,12 @@ for empty/multiple fields, both rate positions, full-width coordinates, 256 KiB
 context and concurrent reuse. Compact tests compare every G block with an
 independent one-shot call, exact H/body framing, canonical suffixes, fixed cache
 geometry, late query candidates, permanent abort and terminal singleton behavior.
+Borrowed-field tests compare the byte and sequence payloads with owned vectors
+under every valid layout, and complete canonical bodies for all tree and message
+shapes against a test-only owned reference, including ambient flag isolation and
+fixed body bytes. Actual leaf and parent dispatch is compared with one-shot H
+over independently built reference bodies for every oracle, first/last positions,
+shallow/root levels, unequal children and the terminal duplicate-child parent.
 An independently calculated complete-context dummy/first-chain known answer
 checks framing and outputs. These are source tests; a compilation or test
 result must retain its actual source/binary/command evidence separately.

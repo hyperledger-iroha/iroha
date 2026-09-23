@@ -3000,7 +3000,7 @@ fn pre_timeout_physical_local_validate_completion_fixture(
             fixture.verified.context(),
             super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
             |runner| {
-                let ready = match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+                let ready = match launched.drive_completion_pre_gate(runner) {
                     super::super::ProductionLifecycleCompletionPreGateV1::Ready(ready) => ready,
                     super::super::ProductionLifecycleCompletionPreGateV1::Ordinary(runner) => {
                         drop(runner);
@@ -3090,7 +3090,7 @@ fn pre_timeout_physical_local_validate_completion_fixture(
                 super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
                     fixture.verified.context(),
                     super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
-                    |runner| match launched.drive_completion_pre_gate(runner, lane_work) {
+                    |runner| match launched.drive_completion_pre_gate(runner) {
                         Gate::Selected(selection) => selection,
                         _ => panic!("retained local Validate must own the Completion turn"),
                     },
@@ -3253,7 +3253,7 @@ fn pre_timeout_physical_local_validate_completion_fixture(
         super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
             fixture.verified.context(),
             super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
-            |runner| match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+            |runner| match launched.drive_completion_pre_gate(runner) {
                 super::super::ProductionLifecycleCompletionPreGateV1::Selected(selected) => {
                     selected
                 }
@@ -3299,7 +3299,7 @@ fn pre_timeout_physical_local_validate_completion_fixture(
         super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
             fixture.verified.context(),
             super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
-            |runner| match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+            |runner| match launched.drive_completion_pre_gate(runner) {
                 super::super::ProductionLifecycleCompletionPreGateV1::Selected(selected) => {
                     selected
                 }
@@ -3786,7 +3786,6 @@ fn local_proposal_intent_live_wal_sign_fixture() {
                 let ready = match launched
                     .drive_completion_pre_gate_with_ready_proposal_sign_preemption(
                         runner,
-                        &mut lane_work,
                         &permit,
                     ) {
                     super::super::ProductionLifecycleCompletionPreGateV1::Ready(ready) => ready,
@@ -3930,13 +3929,29 @@ include!("v2_lifecycle_work_registry_validate_apply_cases.rs");
 include!("v2_lifecycle_work_registry_validate_completion_cases.rs");
 
 #[cfg(feature = "bls")]
+struct NativeSourceLifecycleProcessGuard(Option<crate::sumeragi::v2_runner::native_process::NativeRunnerProcess>);
+#[cfg(feature = "bls")]
+impl std::ops::Deref for NativeSourceLifecycleProcessGuard {
+    type Target = crate::sumeragi::v2_runner::native_process::NativeRunnerProcess;
+    fn deref(&self) -> &Self::Target { self.0.as_ref().unwrap() }
+}
+#[cfg(feature = "bls")]
+impl std::ops::DerefMut for NativeSourceLifecycleProcessGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target { self.0.as_mut().unwrap() }
+}
+#[cfg(feature = "bls")]
+impl Drop for NativeSourceLifecycleProcessGuard {
+    fn drop(&mut self) { if let Some(native) = self.0.take() { let _ = native.shutdown().join(); } }
+}
+
+#[cfg(feature = "bls")]
 #[test]
-fn registered_deferred_validate_passes_ordinary_completion_without_releasing_wait() {
+fn native_source_validate_passes_ordinary_completion_without_releasing_wait() {
     let handle = std::thread::Builder::new()
-        .name("registered-sidecar-ordinary-completion".to_owned())
+        .name("native-source-ordinary-completion".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(false, false))
-        .expect("spawn registered-sidecar Completion fixture");
+        .spawn(|| native_source_validate_ordinary_completion_fixture(false, false))
+        .expect("spawn native-source Completion fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }
@@ -3944,12 +3959,12 @@ fn registered_deferred_validate_passes_ordinary_completion_without_releasing_wai
 
 #[cfg(feature = "bls")]
 #[test]
-fn registered_deferred_validate_decision_drains_recovery_prefix_without_releasing_wait() {
+fn native_source_validate_decision_drains_recovery_prefix_without_releasing_wait() {
     let handle = std::thread::Builder::new()
-        .name("registered-sidecar-decided-recovery".to_owned())
+        .name("native-source-decided-recovery".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(true, false))
-        .expect("spawn registered-sidecar decided recovery fixture");
+        .spawn(|| native_source_validate_ordinary_completion_fixture(true, false))
+        .expect("spawn native-source decided recovery fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }
@@ -3957,12 +3972,12 @@ fn registered_deferred_validate_decision_drains_recovery_prefix_without_releasin
 
 #[cfg(feature = "bls")]
 #[test]
-fn registered_deferred_validate_decision_drains_recovery_batch_without_releasing_wait() {
+fn native_source_validate_decision_drains_recovery_batch_without_releasing_wait() {
     let handle = std::thread::Builder::new()
-        .name("registered-sidecar-decided-recovery-batch".to_owned())
+        .name("native-source-decided-recovery-batch".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(true, true))
-        .expect("spawn registered-sidecar decided recovery batch fixture");
+        .spawn(|| native_source_validate_ordinary_completion_fixture(true, true))
+        .expect("spawn native-source decided recovery batch fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }
@@ -3970,10 +3985,15 @@ fn registered_deferred_validate_decision_drains_recovery_batch_without_releasing
 
 #[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
-fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bool, batch: bool) {
+fn native_source_validate_ordinary_completion_fixture(decided_recovery: bool, batch: bool) {
     let marker = 0xDF;
-    let (mut lane_work, keys, verified, reference, kura) =
+    let (old_fixture_adapter, keys, verified, _old_reference, kura) =
         crate::sumeragi::v2_lane_work::tests::missing_lifecycle_sidecar_fixture_for_test();
+    // Reuse only the real authenticated global predecessor fixture. Native is
+    // the sole active process in this test; the old fixture adapter never runs.
+    drop(old_fixture_adapter);
+    let authenticated_source = crate::state::State::authenticated_native_source_for_lifecycle_test();
+
     let context = verified.context();
     let parent = context
         .parent_commit_qc
@@ -4016,13 +4036,13 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
     let (mut fixture, _body_directory, body_store, durable) =
         durable_validate_store_fixture_from_fixture(fixture, None);
     let AdapterEffect::ValidateBody { tag, .. } = &fixture.effect else {
-        unreachable!("local registered-sidecar fixture retains one Validate effect")
+        unreachable!("local native-source fixture retains one Validate effect")
     };
     let tag = *tag;
     let validate_ordinal = fixture.lease.ordinal();
     let coordinator = ready_durable_validate_coordinator(&[&fixture]);
     let registry = take_dispatch_registry(&mut fixture);
-    let owner_directory = TempDir::new().expect("temporary registered-sidecar lifecycle owner");
+    let owner_directory = TempDir::new().expect("temporary native-source lifecycle owner");
     let (mut owner, runtime_ordinal_authority) =
         super::super::ProductionLifecycleOwnerV1::ready_validate_completion_owner_for_test(
             fixture.verified.clone(),
@@ -4036,12 +4056,12 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             runtime_ordinal_authority,
         );
 
-    let runtime_directory = TempDir::new().expect("temporary registered-sidecar safety WAL");
+    let runtime_directory = TempDir::new().expect("temporary native-source safety WAL");
     let local_validator = fixture.verified.context().leader(0);
     let fingerprints = AdapterFingerprints {
-        node: Hash::new(b"registered-sidecar sidecar Validate node"),
-        build: Hash::new(b"registered-sidecar sidecar Validate build"),
-        config: Hash::new(b"registered-sidecar sidecar Validate config"),
+        node: Hash::new(b"native-source Native source Validate node"),
+        build: Hash::new(b"native-source Native source Validate build"),
+        config: Hash::new(b"native-source Native source Validate config"),
     };
     let wal_owner = fingerprints.node.into();
     let (mut adapter, startup) = SumeragiV2Adapter::open(
@@ -4054,10 +4074,10 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
         DeferredAdmissionOrdinalSource::new(
             validate_ordinal
                 .checked_add(1)
-                .expect("sidecar Validate successor ordinal remains representable"),
+                .expect("Native source Validate successor ordinal remains representable"),
         ),
     )
-    .expect("open registered-sidecar sidecar Validate adapter");
+    .expect("open native-source Native source Validate adapter");
     assert!(startup.is_empty());
     if decided_recovery {
         let mut proposal = wire::Proposal {
@@ -4173,7 +4193,7 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
             lifecycle_ordinals.clone(),
         )
-        .expect("wrap registered-sidecar sidecar Validate adapter");
+        .expect("wrap native-source Native source Validate adapter");
     assert!(startup.is_empty());
 
     let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
@@ -4222,8 +4242,8 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             super::super::ProductionLifecycleLiveClockActivationPermitV1::for_test(),
             started,
         )
-        .expect("arm registered-sidecar sidecar Validate clocks after service construction");
-    let binding_directory = TempDir::new().expect("temporary registered-sidecar ingress binding");
+        .expect("arm native-source Native source Validate clocks after service construction");
+    let binding_directory = TempDir::new().expect("temporary native-source ingress binding");
     let validator = fixture.verified.context().roster[signer].validator.clone();
     let ingress = if decided_recovery {
         super::super::LaunchedProductionLifecycleV1::prepare_registered_validate_recovery_ingress_for_test(
@@ -4245,14 +4265,14 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             fixture.verified.context(),
             super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
             |runner| {
-                let ready = match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+                let ready = match launched.drive_completion_pre_gate(runner) {
                     super::super::ProductionLifecycleCompletionPreGateV1::Ready(ready) => ready,
                     super::super::ProductionLifecycleCompletionPreGateV1::Ordinary(runner) => {
                         drop(runner);
-                        panic!("Ready sidecar Validate unexpectedly passed through Completion")
+                        panic!("Ready Native source Validate unexpectedly passed through Completion")
                     }
                     super::super::ProductionLifecycleCompletionPreGateV1::Selected(_) => {
-                        panic!("Ready sidecar Validate selected a parked completion")
+                        panic!("Ready Native source Validate selected a parked completion")
                     }
                 };
                 match launched.drive_ready_completion_turn(ready) {
@@ -4260,13 +4280,13 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
                         super::super::ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(
                             result,
                         ),
-                    ) => result.expect("dispatch the genuine sidecar Validate worker"),
+                    ) => result.expect("dispatch the genuine Native source Validate worker"),
                     super::super::ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
                         drop(runner);
-                        panic!("Ready sidecar Validate unexpectedly passed through Ready dispatch")
+                        panic!("Ready Native source Validate unexpectedly passed through Ready dispatch")
                     }
                     super::super::ProductionLifecycleCompletionTurnV1::Selected(_) => {
-                        panic!("Ready sidecar Validate selected the wrong Completion class")
+                        panic!("Ready Native source Validate selected the wrong Completion class")
                     }
                 }
             },
@@ -4285,8 +4305,12 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
     planner_io.activate_one_lifecycle_validate();
     assert_eq!(
         planner_io.execute_held_lifecycle_validate_result_fixture(
-            Err(DetachedValidationError::MissingMergeSidecar(
-                reference.clone()
+            Err::<wire::ExecutionCommitment, _>(crate::sumeragi::v2_apply::V2ApplyError::LocalValidation(
+                crate::sumeragi::v2_body_store::LocalValidationRefusal::NativeSourceRecovery {
+                    execution_index: 0,
+                    authenticated_source: std::sync::Arc::clone(&authenticated_source),
+                    wake: std::task::Waker::noop().clone(),
+                },
             )),
             std::sync::Arc::clone(&output_guard),
         ),
@@ -4294,12 +4318,12 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
         "the durable worker executes the real body and retains its exact missing dependency"
     );
     let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, planner_io);
-    for registered in [false, true] {
+    for _ in 0..2 {
         let (selection, after) =
             super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
                 fixture.verified.context(),
                 super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
-                |runner| match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+                |runner| match launched.drive_completion_pre_gate(runner) {
                     super::super::ProductionLifecycleCompletionPreGateV1::Selected(selected) => {
                         selected
                     }
@@ -4317,35 +4341,24 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             after,
             super::super::v2_runner::LifecycleRunnerRankTarget::Runtime
         );
-        assert!(if registered {
-            matches!(selection, super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting)
-        } else {
-            matches!(
-                selection,
-                super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateDeferred
-            )
-        });
+        assert!(matches!(selection,
+            super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting));
         assert_eq!(
-            launched
-                .producer_claim_projection()
-                .expect("deferred Validate retains one owner"),
-            if registered {
-                super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
-            } else {
-                super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingCompletion
-            },
+            launched.producer_claim_projection().expect("original source wait owns the barrier"),
+            super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingNativeSource,
         );
     }
-    let registration_before = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
-        load_registration_for_test(&owner.coordinator)
-            .expect("read durable sidecar registration")
-            .expect("the missing exact reference remains registered")
+    let assert_original_source = |services: &crate::sumeragi::v2_worker::ProductionV2Services| {
+        let (retained_subject, execution_index, source) = services.native_source_requirement()
+            .expect("the exact original authenticated source remains owned");
+        assert_eq!(retained_subject, subject);
+        assert_eq!(execution_index, 0);
+        assert!(std::sync::Arc::ptr_eq(&source, &authenticated_source));
+    };
+    launched.with_proposal_restart_fixture_for_test(|owner, _, services| {
+        assert_original_source(services);
+        assert!(matches!(owner.coordinator.records[&validate_ordinal].state, LifecycleState::Waiting(_)));
     });
-    assert_eq!(registration_before.reference(), &reference);
-    assert_eq!(
-        registration_before.dispatch_key().lifecycle_ordinal(),
-        validate_ordinal
-    );
     let retained_before = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
         (
             format!("{:?}", owner.coordinator),
@@ -4364,7 +4377,7 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
     let (waiting, _) = super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
         fixture.verified.context(),
         super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
-        |runner| match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+        |runner| match launched.drive_completion_pre_gate(runner) {
             super::super::ProductionLifecycleCompletionPreGateV1::Selected(selected) => selected,
             super::super::ProductionLifecycleCompletionPreGateV1::Ordinary(runner) => {
                 drop(runner);
@@ -4378,9 +4391,22 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
     );
     assert!(matches!(
         waiting,
-        super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting
+        super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting
     ));
     if decided_recovery {
+        let native_state = std::sync::Arc::new(crate::state::State::new_for_testing(
+            crate::state::World::default(), std::sync::Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+        ));
+        let mut native = NativeSourceLifecycleProcessGuard(Some(
+            crate::sumeragi::v2_runner::native_process::NativeRunnerProcess::new(
+                native_state, std::sync::Arc::clone(&output_guard), validator.clone(),
+                keys[signer].clone(), true,
+                &SumeragiV2Adapter::native_source_lifecycle_config_for_test(),
+                32 * 1024 * 1024, std::time::Duration::from_secs(10),
+                std::time::Duration::from_secs(1),
+            ).expect("open actual finite Native custody for historical ingress"),
+        ));
         let ingress = launched.registered_validate_ingress_for_test();
         ingress
             .open()
@@ -4487,13 +4513,8 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             "Runtime and ingress retain the same actor-global ordinal source"
         );
         let retained_after_admission =
-            launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
-                assert_eq!(
-                    load_registration_for_test(&owner.coordinator)
-                        .expect("read durable wait after ingress admission")
-                        .as_ref(),
-                    Some(&registration_before)
-                );
+            launched.with_proposal_restart_fixture_for_test(|owner, _, services| {
+                assert_original_source(services);
                 (
                     format!("{:?}", owner.coordinator),
                     format!("{:?}", owner.registry.registry_for_test()),
@@ -4501,14 +4522,14 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             });
         assert_eq!(
             retained_after_admission.1, retained_before.1,
-            "ingress admission cannot mutate the registered private work registry"
+            "ingress admission cannot mutate the retained original private work registry"
         );
         let claim = launched
             .producer_claim_projection()
-            .expect("derive the retained sidecar barrier");
+            .expect("derive the retained Native-source barrier");
         assert!(
             claim
-                .decided_validate_sidecar_recovery_permit(false)
+                .decided_native_source_recovery_permit(false)
                 .is_none()
         );
         let local_signer = keys[signer].clone();
@@ -4535,15 +4556,15 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             let drained = launched.with_proposal_restart_fixture_for_test(|_, executor, services| {
                 let directive = executor.local_proposal_directive().expect("read actual executor Decision");
                 assert_eq!(directive.decided_subject(), Some(subject));
-                let _permit = claim.decided_validate_sidecar_recovery_permit(directive.decided_subject().is_some())
-                    .expect("only actual Decision opens the registered-wait recovery seam");
+                let _permit = claim.decided_native_source_recovery_permit(directive.decided_subject().is_some())
+                    .expect("only actual Decision opens the Native-source wait recovery seam");
                 if batch {
                     crate::sumeragi::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_batch_for_test(
-                        &ingress, executor, services, &mut lane_work, kura.as_ref(), &mut block_sync, 2,
+                        &ingress, executor, &mut native, services, kura.as_ref(), &mut block_sync, 2,
                     ).expect("service the bounded authenticated recovery burst")
                 } else {
                     usize::from(crate::sumeragi::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_for_test(
-                        &ingress, executor, services, &mut lane_work, kura.as_ref(), &mut block_sync,
+                        &ingress, executor, &mut native, services, kura.as_ref(), &mut block_sync,
                     ).expect("retire exactly one authenticated recovery occurrence"))
                 }
             });
@@ -4566,14 +4587,9 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
                 ingress.state.lock().last_admission_ordinal,
                 admitted_high_water
             );
-            assert_eq!(claim, super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar);
-            let retained_after = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
-                assert_eq!(
-                    load_registration_for_test(&owner.coordinator)
-                        .expect("read exact durable wait")
-                        .as_ref(),
-                    Some(&registration_before)
-                );
+            assert_eq!(claim, super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingNativeSource);
+            let retained_after = launched.with_proposal_restart_fixture_for_test(|owner, _, services| {
+                assert_original_source(services);
                 (
                     format!("{:?}", owner.coordinator),
                     format!("{:?}", owner.registry.registry_for_test()),
@@ -4581,7 +4597,7 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             });
             assert_eq!(
                 retained_after, retained_after_admission,
-                "recovery cannot mutate registered private work"
+                "recovery cannot mutate retained original private work"
             );
             assert_eq!(
                 launched.runtime_queue_snapshot_for_ready_sign_test(started),
@@ -4615,6 +4631,14 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
         );
         return;
     }
+    launched.with_proposal_restart_fixture_for_test(|_, executor, services| {
+        let cut = services.prepare_completion_runtime_cut(executor.remaining_completion_capacity() != 0).unwrap();
+        let crate::sumeragi::v2_worker::V2CompletionRuntimeCutDecisionV1::Runtime(cut) = cut else {
+            panic!("the transferred local wait must not remain in the physical Completion prefix");
+        };
+        executor.step_pacemaker_after_completion_runtime_cut(cut, services).unwrap();
+        assert_original_source(services);
+    });
     for _ in 0..2 {
         launched
             .planner
@@ -4623,10 +4647,15 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             .publish_auxiliary_completion_fixture();
     }
     for remaining in [1, 0] {
+        launched.with_proposal_restart_fixture_for_test(|_, executor, services| {
+            assert!(matches!(services.prepare_completion_runtime_cut(
+                executor.remaining_completion_capacity() != 0,
+            ).unwrap(), crate::sumeragi::v2_worker::V2CompletionRuntimeCutDecisionV1::RetryCompletion));
+        });
         let (drained, after) = super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
             fixture.verified.context(),
             super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
-            |runner| match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+            |runner| match launched.drive_completion_pre_gate(runner) {
                 super::super::ProductionLifecycleCompletionPreGateV1::Ordinary(runner) => {
                     let drained = launched
                         .drain_ordinary_completion_head_for_ready_sign_test()
@@ -4635,8 +4664,8 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
                     drained
                 }
                 super::super::ProductionLifecycleCompletionPreGateV1::Selected(selected) => {
-                    assert!(!matches!(selected, super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting),
-                        "a registered missing-sidecar wait must not starve an ordinary physical Completion head");
+                    assert!(!matches!(selected, super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting),
+                        "a retained Native-source wait must not starve an ordinary physical Completion head");
                     panic!("the unchanged registration selected unexpected lifecycle work");
                 }
                 super::super::ProductionLifecycleCompletionPreGateV1::Ready(ready) => {
@@ -4659,10 +4688,7 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             .expect("owned planner")
             .lifecycle_validate_io_snapshot();
         assert_eq!(physical.completion_owners(), retained_physical + remaining);
-        let registration_after = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
-            load_registration_for_test(&owner.coordinator).expect("read still-durable registration")
-        });
-        assert_eq!(registration_after.as_ref(), Some(&registration_before));
+        launched.with_proposal_restart_fixture_for_test(|_, _, services| assert_original_source(services));
         let retained_after = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
             (
                 format!("{:?}", owner.coordinator),
@@ -4806,5 +4832,356 @@ fn local_validate_turn_driver_retains_queue_wait_and_recovery_quarantine() {
         .expect("spawn local Validate ownership regression");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+mod retained_dispatch {
+    use super::*;
+    use crate::sumeragi::{
+        v2_apply::validation_custody::{
+            CarrierCustodyError, CarrierValidator, RetainedBodyValidationService,
+            test_support::TrackedOwner,
+        },
+        v2_body_store::{
+            LocalValidationRefusal, fail_next_marker_directory_sync, fail_next_marker_file_sync,
+        },
+    };
+    use mv::allocation::AllocationBudget;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    // These owners test dispatch custody only; actual State phase transitions and
+    // publication remain covered by the retained physical-publication fixtures.
+    struct Producer {
+        commitment: wire::ExecutionCommitment,
+        ready: bool,
+        calls: Arc<AtomicUsize>,
+        resumes: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl CarrierValidator for Producer {
+        type Owner = TrackedOwner;
+        type Error = LocalValidationRefusal;
+
+        fn prepare(
+            &mut self,
+            context: &wire::HeightContext,
+            body: &SignedBlock,
+        ) -> Result<Self::Owner, Self::Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let owner = TrackedOwner::new(context, body, self.commitment, Arc::clone(&self.drops));
+            Ok(if self.ready {
+                owner
+            } else {
+                owner.into_incomplete()
+            })
+        }
+
+        fn resume(
+            &mut self,
+            owner: Self::Owner,
+        ) -> Result<Self::Owner, (Self::Owner, LocalValidationRefusal)> {
+            self.resumes.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.ready, "ready owners must not enter capture again");
+            Err((
+                owner,
+                LocalValidationRefusal::RecoveryRequired(
+                    "dispatch fixture retains unfinished capture".to_owned(),
+                ),
+            ))
+        }
+    }
+
+    fn service(
+        store: &V2BodyStore,
+        durable: &DurableBodyReceipt,
+        ready: bool,
+    ) -> (
+        RetainedBodyValidationService<Producer>,
+        [Arc<AtomicUsize>; 3],
+    ) {
+        let counts = std::array::from_fn(|_| Arc::new(AtomicUsize::new(0)));
+        let budget = AllocationBudget::new(
+            store
+                .retained_validation_descriptor_bytes::<Producer>()
+                .unwrap(),
+        );
+        let service = store
+            .retained_validation_service(
+                Producer {
+                    commitment: ValidatedBodyReceipt::for_test(durable.clone())
+                        .execution_commitment(),
+                    ready,
+                    calls: Arc::clone(&counts[0]),
+                    resumes: Arc::clone(&counts[1]),
+                    drops: Arc::clone(&counts[2]),
+                },
+                &budget,
+            )
+            .unwrap();
+        (service, counts)
+    }
+
+    fn counts(values: &[Arc<AtomicUsize>; 3]) -> [usize; 3] {
+        std::array::from_fn(|index| values[index].load(Ordering::SeqCst))
+    }
+
+    #[test]
+    fn retained_dispatch_marker_failures_return_exact_wait_and_original_owner() {
+        let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xC0);
+        let mut coordinator = claimed_durable_validate_coordinator(&fixture);
+        let mut holder = take_dispatch_registry(&mut fixture);
+        let registry_before = format!("{:?}", holder.registry_for_test());
+        let mut dispatch = coordinator
+            .begin_durable_validate_dispatch(&mut holder, fixture.lease.clone(), &fixture.verified)
+            .unwrap();
+        let wait = dispatch.wait_token_for_test();
+        let (mut service, observed) = service(&store, &durable, true);
+        let mut allocation = None;
+        let faults: [fn(); 2] = [
+            fail_next_marker_file_sync,
+            fail_next_marker_directory_sync,
+        ];
+        for fault in faults {
+            fault();
+            let (error, returned) = dispatch
+                .execute_retained(&mut store, &mut service)
+                .expect_err("marker durability refusal must return the exact dispatch");
+            assert!(matches!(error, V2BodyStoreError::Io { .. }));
+            assert_eq!(returned.wait_token_for_test(), wait);
+            let actual = service
+                .owner_for_test(durable.subject())
+                .unwrap()
+                .allocation();
+            assert_eq!(*allocation.get_or_insert(actual), actual);
+            assert_eq!(counts(&observed), [1, 0, 0]);
+            assert_eq!(service.marker_counts_for_test(), (1, 0));
+            assert!(store.validated_recovery_catalog().is_empty());
+            assert!(store.rejected_recovery_catalog().is_empty());
+            assert!(matches!(
+                service.select(&ValidatedBodyReceipt::for_test(durable.clone())),
+                Err(CarrierCustodyError::Unconfirmed)
+            ));
+            dispatch = returned;
+        }
+        let executed = dispatch.execute_retained(&mut store, &mut service).unwrap();
+        assert_eq!(executed.wait_token_for_test(), wait);
+        assert_eq!(executed.outcome().durable_body(), &durable);
+        let receipt = executed.outcome().validated_receipt().unwrap().clone();
+        assert_eq!(service.marker_counts_for_test(), (0, 1));
+        drop(executed);
+        assert_eq!(counts(&observed), [1, 0, 0]);
+        drop(service.select(&receipt).unwrap());
+        assert_eq!(
+            service
+                .owner_for_test(durable.subject())
+                .unwrap()
+                .allocation(),
+            allocation.unwrap()
+        );
+        assert_eq!(format!("{:?}", holder.registry_for_test()), registry_before);
+        assert_eq!(
+            coordinator.records[&fixture.lease.ordinal()].state,
+            LifecycleState::Waiting(wait)
+        );
+        drop(service);
+        assert_eq!(counts(&observed), [1, 0, 1]);
+    }
+
+    #[test]
+    fn retained_dispatch_capture_refusal_keeps_exact_wait_without_success_marker() {
+        let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xC1);
+        let mut coordinator = claimed_durable_validate_coordinator(&fixture);
+        let mut holder = take_dispatch_registry(&mut fixture);
+        let mut dispatch = coordinator
+            .begin_durable_validate_dispatch(&mut holder, fixture.lease.clone(), &fixture.verified)
+            .unwrap();
+        let wait = dispatch.wait_token_for_test();
+        let (mut service, observed) = service(&store, &durable, false);
+        let mut allocation = None;
+        for attempts in 1..=2 {
+            let (error, returned) = dispatch
+                .execute_retained(&mut store, &mut service)
+                .expect_err("unfinished original capture must retain a retryable request");
+            assert!(matches!(
+                error,
+                V2BodyStoreError::LocalValidation(LocalValidationRefusal::RecoveryRequired(_))
+            ));
+            assert_eq!(returned.wait_token_for_test(), wait);
+            let actual = service
+                .owner_for_test(durable.subject())
+                .unwrap()
+                .allocation();
+            assert_eq!(*allocation.get_or_insert(actual), actual);
+            assert_eq!(counts(&observed), [1, attempts, 0]);
+            assert_eq!(service.marker_counts_for_test(), (0, 0));
+            assert!(store.validated_recovery_catalog().is_empty());
+            assert!(store.rejected_recovery_catalog().is_empty());
+            dispatch = returned;
+        }
+        drop(dispatch);
+        assert_eq!(counts(&observed), [1, 2, 0]);
+        assert_eq!(
+            coordinator.records[&fixture.lease.ordinal()].state,
+            LifecycleState::Waiting(wait)
+        );
+        drop(service);
+        assert_eq!(counts(&observed), [1, 2, 1]);
+    }
+
+    #[test]
+    fn retained_dispatch_cache_and_reproposal_reuse_original_owner() {
+        let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xC2);
+        let (mut service, observed) = service(&store, &durable, true);
+        let receipt = store
+            .execute_retained_durable_validation(
+                durable.clone(),
+                durable.manifest_hash(),
+                &mut service,
+            )
+            .unwrap()
+            .into_validated_receipt()
+            .unwrap();
+        let allocation = service
+            .owner_for_test(durable.subject())
+            .unwrap()
+            .allocation();
+        let mut coordinator = claimed_durable_validate_coordinator(&fixture);
+        let mut holder = take_dispatch_registry(&mut fixture);
+        let dispatch = coordinator
+            .begin_durable_validate_dispatch(&mut holder, fixture.lease.clone(), &fixture.verified)
+            .unwrap();
+        let wait = dispatch.wait_token_for_test();
+        let cached = dispatch.execute_retained(&mut store, &mut service).unwrap();
+        assert_eq!(cached.wait_token_for_test(), wait);
+        assert_eq!(cached.outcome().validated_receipt(), Some(&receipt));
+        let later_manifest = encode_payload(
+            fixture.verified.context(),
+            wire::ConsensusRound {
+                view: 7,
+                ..durable.round()
+            },
+            durable.subject(),
+            &fixture.canonical_wire,
+        )
+        .unwrap()
+        .manifest()
+        .clone();
+        let later_fixture = durable_validate_fixture_from_material(
+            0xC3,
+            fixture.verified.clone(),
+            later_manifest,
+            fixture.canonical_wire.clone(),
+        );
+        let (mut later_fixture, later_durable) = persist_durable_validate_fixture_into_store(
+            later_fixture,
+            &mut store,
+            Some(receipt.execution_commitment()),
+        );
+        assert_eq!(later_durable.subject(), durable.subject());
+        assert_ne!(later_durable.round(), durable.round());
+        let mut later_coordinator = claimed_durable_validate_coordinator(&later_fixture);
+        let mut later_holder = take_dispatch_registry(&mut later_fixture);
+        let dispatch = later_coordinator
+            .begin_durable_validate_dispatch(
+                &mut later_holder,
+                later_fixture.lease.clone(),
+                &later_fixture.verified,
+            )
+            .unwrap();
+        let later_wait = dispatch.wait_token_for_test();
+        let later = dispatch.execute_retained(&mut store, &mut service).unwrap();
+        assert_eq!(later.wait_token_for_test(), later_wait);
+        assert_eq!(later.outcome().durable_body(), &later_durable);
+        assert_eq!(
+            later
+                .outcome()
+                .validated_receipt()
+                .unwrap()
+                .execution_commitment(),
+            receipt.execution_commitment()
+        );
+        assert_eq!(
+            service
+                .owner_for_test(durable.subject())
+                .unwrap()
+                .allocation(),
+            allocation
+        );
+        assert_eq!(service.marker_counts_for_test(), (0, 2));
+        assert_eq!(counts(&observed), [1, 0, 0]);
+        drop(cached);
+        drop(later);
+        drop(service.select(&receipt).unwrap());
+        assert_eq!(counts(&observed), [1, 0, 0]);
+    }
+
+    #[test]
+    fn retained_dispatch_foreign_store_returns_request_before_execution() {
+        let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xC4);
+        let mut coordinator = claimed_durable_validate_coordinator(&fixture);
+        let mut holder = take_dispatch_registry(&mut fixture);
+        let dispatch = coordinator
+            .begin_durable_validate_dispatch(&mut holder, fixture.lease.clone(), &fixture.verified)
+            .unwrap();
+        let wait = dispatch.wait_token_for_test();
+        let (mut service, observed) = service(&store, &durable, true);
+        let foreign_directory = TempDir::new().unwrap();
+        let mut foreign_store =
+            V2BodyStore::open(foreign_directory.path(), fixture.verified.context().clone())
+                .unwrap();
+        let (error, dispatch) = dispatch
+            .execute_retained(&mut foreign_store, &mut service)
+            .expect_err("same context cannot replace the service's original open store");
+        assert!(matches!(
+            error,
+            V2BodyStoreError::CarrierCustody(CarrierCustodyError::Identity)
+        ));
+        assert_eq!(dispatch.wait_token_for_test(), wait);
+        assert_eq!(counts(&observed), [0, 0, 0]);
+        assert_eq!(service.marker_counts_for_test(), (0, 0));
+        let executed = dispatch.execute_retained(&mut store, &mut service).unwrap();
+        assert_eq!(executed.wait_token_for_test(), wait);
+        assert_eq!(executed.outcome().durable_body(), &durable);
+        assert_eq!(counts(&observed), [1, 0, 0]);
+    }
+
+    #[test]
+    fn retained_dispatch_cached_scalar_receipt_cannot_replace_missing_owner() {
+        let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xC5);
+        let commitment = ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
+        let cached = store
+            .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
+                Ok::<_, DetachedValidationError>(commitment)
+            })
+            .unwrap()
+            .into_validated_receipt()
+            .expect("the scalar cache fixture must contain a successful validation");
+        assert_eq!(cached.durable(), &durable);
+        let mut coordinator = claimed_durable_validate_coordinator(&fixture);
+        let mut holder = take_dispatch_registry(&mut fixture);
+        let dispatch = coordinator
+            .begin_durable_validate_dispatch(&mut holder, fixture.lease.clone(), &fixture.verified)
+            .unwrap();
+        let wait = dispatch.wait_token_for_test();
+        let (mut service, observed) = service(&store, &durable, true);
+        let (error, dispatch) = dispatch
+            .execute_retained(&mut store, &mut service)
+            .expect_err("a marker without its executed carrier must fail closed");
+        assert!(matches!(
+            error,
+            V2BodyStoreError::CarrierCustody(CarrierCustodyError::MissingOwner)
+        ));
+        assert_eq!(dispatch.wait_token_for_test(), wait);
+        assert_eq!(counts(&observed), [0, 0, 0]);
+        assert_eq!(service.marker_counts_for_test(), (0, 0));
+        assert_eq!(
+            coordinator.records[&fixture.lease.ordinal()].state,
+            LifecycleState::Waiting(wait)
+        );
     }
 }

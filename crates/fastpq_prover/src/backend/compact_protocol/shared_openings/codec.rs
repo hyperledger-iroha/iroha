@@ -95,10 +95,11 @@ fn decode_limits_with_allocation(
     // Account for every Vec in SharedProof and its nested row/round tables.
     // The three scalar roots and fixed [Fp4; 2]/[u64; 4] arrays have no dynamic
     // count headers; their field bodies still consume the allocation budget.
+    // Fixed native row arrays have no nested sequence counts. The outer row
+    // Vec charges size_of::<SharedRow>() for every retained complete row.
     let mut budget = SequenceBudget::default();
     budget.include(layers, 1)?; // fri_roots
     budget.include(rows, 1)?;
-    budget.include(geometry.schema.width, rows)?;
     budget.include(queries, 1)?;
     budget.frontier(geometry.lde_rows, rows)?;
     budget.frontier(geometry.lde_rows, queries)?;
@@ -227,7 +228,7 @@ mod tests {
     use super::*;
 
     // Full 375-query frames use the same explicit diagnostic policy as the
-    // complete-transfer tests. The 32 MiB baseline remains a rejection control.
+    // complete-transfer tests. Check the 32 MiB baseline against measured charges.
     const FIXTURE_ALLOCATION_CHARGES: usize = 64 * 1024 * 1024;
 
     fn diagnostic_limits() -> VerifyLimits {
@@ -288,6 +289,25 @@ mod tests {
         unreachable!()
     }
 
+    fn replace_field(bytes: &[u8], index: usize, replacement: &[u8]) -> Vec<u8> {
+        let old = field(bytes, index);
+        let prefix = if index == 0 {
+            0
+        } else {
+            field(bytes, index - 1).end
+        };
+        let mut changed = bytes[..prefix].to_vec();
+        norito::core::write_len_with_flags(
+            &mut changed,
+            replacement.len() as u64,
+            norito::core::default_encode_flags(),
+        )
+        .unwrap();
+        changed.extend_from_slice(replacement);
+        changed.extend_from_slice(&bytes[old.end..]);
+        changed
+    }
+
     fn first_element(bytes: &[u8]) -> Range<usize> {
         let (count, prefix) = norito::core::inspect_seq_len_slice(bytes).unwrap();
         assert!(count > 0);
@@ -302,11 +322,6 @@ mod tests {
         let bytes = encode(proof);
         let limits = diagnostic_limits();
         let expected = verify_shared(&relation, proof, limits).unwrap();
-        assert!(matches!(
-            decode_bounded(&relation, &bytes, limits, MAX_DECODE_ALLOCATION_CHARGES),
-            Err(Error::Encode(norito::Error::TotalAllocationExceeded { limit, .. }))
-                if limit == MAX_DECODE_ALLOCATION_CHARGES as u64
-        ));
         assert_eq!(
             decode_and_verify_with_allocation(
                 &relation,
@@ -332,6 +347,15 @@ mod tests {
         assert_eq!(&decoded.unwrap(), proof);
         assert!(usage.total_elements() <= budget.max_total_elements());
         assert!(usage.total_allocated_bytes() < FIXTURE_ALLOCATION_CHARGES);
+        let baseline = decode_bounded(&relation, &bytes, limits, MAX_DECODE_ALLOCATION_CHARGES);
+        if usage.total_allocated_bytes() > MAX_DECODE_ALLOCATION_CHARGES {
+            assert!(
+                matches!(baseline, Err(Error::Encode(norito::Error::TotalAllocationExceeded { limit, .. }))
+                if limit == MAX_DECODE_ALLOCATION_CHARGES as u64)
+            );
+        } else {
+            assert_eq!(&baseline.unwrap(), proof);
+        }
         eprintln!(
             "full_geometry_fixture_bytes={}; allocation_charges={}; diagnostic_allocation_limit={}; default_allocation_limit={}",
             bytes.len(),
@@ -394,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn every_top_level_count_and_nested_row_count_bomb_is_bounded() {
+    fn every_top_level_and_nested_round_count_bomb_is_bounded() {
         let relation = air();
         let original = bare(&fixture().shared);
         let geometry = Geometry::new(&relation).unwrap();
@@ -421,16 +445,6 @@ mod tests {
             assert!(usage.total_elements() <= budget.max_total_elements());
             assert!(usage.total_allocated_bytes() <= budget.max_total_allocated_bytes());
         }
-        let mut payload = original;
-        let rows = field(&payload, 4);
-        let row = first_element(&payload[rows.clone()]);
-        let values = field(&payload[rows.start + row.start..rows.start + row.end], 1);
-        let count = rows.start + row.start + values.start;
-        payload[count..count + 8].copy_from_slice(&u64::MAX.to_le_bytes());
-        assert!(matches!(
-            assert_before_transcript(&frame(&payload), diagnostic_limits()),
-            Error::Encode(norito::Error::SequenceLengthExceeded { .. })
-        ));
         for nested in 0..2 {
             let mut payload = bare(&fixture().shared);
             let rounds = field(&payload, 9);
@@ -467,15 +481,9 @@ mod tests {
             FIXTURE_ALLOCATION_CHARGES,
         )
         .unwrap();
-        let mut proof = fixture().shared.clone();
-        let count = budget.max_total_elements() / budget.max_sequence_elements() + 1;
-        proof.rows = (0..count)
-            .map(|index| SharedRow {
-                index: index as u32,
-                values: vec![0; budget.max_sequence_elements()],
-            })
-            .collect();
-        assert!(proof.rows.len() <= budget.max_sequence_elements());
+        let mut proof = largest_shape(&geometry);
+        proof.queries.push(proof.queries[0].clone());
+        assert!(proof.queries.len() <= budget.max_sequence_elements());
         let bytes = encode(&proof);
         assert!(bytes.len() < diagnostic_limits().max_proof_bytes);
         assert!(matches!(
@@ -603,20 +611,25 @@ mod tests {
     #[test]
     fn exact_dimensions_and_noncanonical_fields_reject_before_transcript() {
         let baseline = &fixture().shared;
-        let mut width = baseline.clone();
-        width.rows[0].values.push(0);
-        let bytes = encode(&width);
-        // The uniform ceiling deliberately permits this small malformed row.
-        assert!(
-            decode_bounded(
-                &air(),
-                &bytes,
-                diagnostic_limits(),
-                FIXTURE_ALLOCATION_CHARGES
-            )
-            .is_ok()
-        );
-        assert_before_transcript(&bytes, diagnostic_limits());
+        let payload = bare(baseline);
+        let rows = field(&payload, 4);
+        let row = first_element(&payload[rows.clone()]);
+        let row_body = &payload[rows.start + row.start..rows.start + row.end];
+        let values = field(row_body, 1);
+        for length in [RowValues::BYTES - 8, RowValues::BYTES + 8] {
+            let mut malformed = row_body[values.clone()].to_vec();
+            malformed.resize(length, 0);
+            let changed_row = replace_field(row_body, 1, &malformed);
+            let rows_body = &payload[rows.clone()];
+            let mut changed_rows = rows_body[..8].to_vec();
+            changed_rows.extend(replace_field(&rows_body[8..], 0, &changed_row));
+            let changed = replace_field(&payload, 4, &changed_rows);
+            let error = assert_before_transcript(&frame(&changed), diagnostic_limits());
+            assert!(matches!(
+                error,
+                Error::Encode(norito::Error::LengthMismatch)
+            ));
+        }
         let mut base = baseline.clone();
         base.rows[0].values[0] = GOLDILOCKS_MODULUS;
         assert_before_transcript(&encode(&base), diagnostic_limits());
@@ -677,7 +690,7 @@ mod tests {
             rows: (0..rows)
                 .map(|index| SharedRow {
                     index: index as u32,
-                    values: vec![0; geometry.schema.width],
+                    values: RowValues::zero(),
                 })
                 .collect(),
             queries: (0..queries)
@@ -716,7 +729,7 @@ mod tests {
         let geometry = Geometry::new(&relation).unwrap();
         let proof = largest_shape(&geometry);
         let bytes = encode(&proof);
-        assert_eq!(bytes.len(), 6_713_525);
+        assert_eq!(bytes.len(), 6_451_024);
         assert!(bytes.len() > VerifyLimits::default().max_proof_bytes);
         let budget = decode_limits_with_allocation(
             &relation,
@@ -727,21 +740,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(budget.max_sequence_elements(), 14_250);
-        assert_eq!(budget.max_total_elements(), 344_631);
+        assert_eq!(budget.max_total_elements(), 88_131);
         assert_eq!(budget.max_total_allocated_bytes(), 32 * 1024 * 1024);
         assert_eq!(budget.max_nesting_depth(), 16);
-        // This loose shape exceeds the unchanged 32 MiB default allocation
-        // policy. Keep that rejection explicit before isolating element counts.
-        assert!(matches!(
-            decode_bounded(&relation, &bytes, diagnostic_limits(), MAX_DECODE_ALLOCATION_CHARGES),
-            Err(Error::Encode(norito::Error::TotalAllocationExceeded {
-                attempted,
-                limit,
-            })) if limit == MAX_DECODE_ALLOCATION_CHARGES as u64 && attempted > limit
-        ));
-        // The separate largest-shape diagnostic measures about 52.3 MiB of
-        // cumulative charges. This explicit 64 MiB test scope only permits
-        // structural decoding; the dummy roots do not make a valid proof.
+        // This explicit scope only permits structural decoding; dummy roots
+        // do not make a valid proof. Test the unchanged baseline against the
+        // measured fixed-row codec cost rather than historical Vec-row charges.
         let element_budget = decode_limits_with_allocation(
             &relation,
             &geometry,
@@ -754,9 +758,22 @@ mod tests {
             norito::decode_canonical_with_limits::<SharedProof>(&bytes, element_budget)
         });
         assert_eq!(decoded.unwrap(), proof);
-        assert_eq!(usage.total_elements(), 344_631);
-        assert!(usage.total_allocated_bytes() > MAX_DECODE_ALLOCATION_CHARGES);
+        assert_eq!(usage.total_elements(), 88_131);
         assert!(usage.total_allocated_bytes() < element_budget.max_total_allocated_bytes());
+        let baseline = decode_bounded(
+            &relation,
+            &bytes,
+            diagnostic_limits(),
+            MAX_DECODE_ALLOCATION_CHARGES,
+        );
+        if usage.total_allocated_bytes() > MAX_DECODE_ALLOCATION_CHARGES {
+            assert!(
+                matches!(baseline, Err(Error::Encode(norito::Error::TotalAllocationExceeded { limit, .. }))
+                if limit == MAX_DECODE_ALLOCATION_CHARGES as u64)
+            );
+        } else {
+            assert_eq!(baseline.unwrap(), proof);
+        }
         assert_eq!(
             preflight_shared(&relation, &proof, diagnostic_limits(), &geometry).unwrap(),
             bytes.len()
@@ -815,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn final_shared_schema_preserves_exact_payload_and_rejects_both_retired_frames() {
+    fn fixed_row_shared_schema_rejects_all_prior_frames() {
         let shape_policy = VerifyLimits {
             max_proof_bytes: 8 * 1024 * 1024,
             ..candidate_limits()
@@ -861,6 +878,14 @@ mod tests {
         let _canonical =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let (payload, _) = norito::codec::encode_with_header_flags(&expected);
+        let mut previous_variable_rows = bytes.clone();
+        previous_variable_rows[6..22].copy_from_slice(&norito::core::schema_hash_for_name(
+            "fastpq_prover::compact_v1::SharedProofV1",
+        ));
+        assert!(matches!(
+            norito::decode_canonical::<SharedProof>(&previous_variable_rows),
+            Err(norito::Error::SchemaMismatch)
+        ));
         let old_prototype = RetiredPrototype {
             row_root: expected.row_root.clone(),
             mixed_root: expected.mixed_root.clone(),
@@ -981,8 +1006,9 @@ mod tests {
         .unwrap();
         assert_eq!(budget.max_total_allocated_bytes(), 123456);
         assert_eq!(budget.max_sequence_elements(), 750 * 19);
-        assert!(budget.max_total_elements() > 750 * 342);
-        assert!(budget.max_total_elements() < 375_000);
+        // Complete row scalars are inline arrays; only the outer rows and
+        // remaining dynamic opening tables consume sequence-element charges.
+        assert_eq!(budget.max_total_elements(), 88_131);
     }
 
     #[test]
@@ -1072,7 +1098,7 @@ mod tests {
         let proof = largest_shape(&geometry);
         let bytes = norito::encode_canonical(&proof).unwrap();
         // The 9,270 Fp4 values each use the canonical 32-byte carrier.
-        assert_eq!(bytes.len(), 6_713_525);
+        assert_eq!(bytes.len(), 6_451_024);
         assert!(bytes.len() > candidate_limits().max_proof_bytes);
         let limits = VerifyLimits {
             max_proof_bytes: 8 * 1024 * 1024,

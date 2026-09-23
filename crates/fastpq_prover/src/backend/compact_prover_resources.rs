@@ -186,13 +186,13 @@ mod tests {
 
     #[test]
     fn exact_policy_boundary_is_inclusive() {
-        let actual = segment_charge(256 * 1024, 4_279_877).unwrap();
+        let actual = segment_charge(256 * 1024, 4_017_376).unwrap();
         assert_eq!(
-            check_segment_charge(256 * 1024, 4_279_877, actual).unwrap(),
+            check_segment_charge(256 * 1024, 4_017_376, actual).unwrap(),
             actual
         );
         assert!(matches!(
-            check_segment_charge(256 * 1024, 4_279_877, actual - 1),
+            check_segment_charge(256 * 1024, 4_017_376, actual - 1),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_compact_prover_segment_charge_bytes",
                 actual: measured,

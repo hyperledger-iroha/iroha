@@ -805,17 +805,7 @@ mod tests {
             },
             |next| next.epoch,
         );
-        let mint_roster = mint_finality_roster(network_id, epoch, &roster);
-        let context = HeightContext {
-            network_id,
-            protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
-            height,
-            epoch,
-            kagemusha_mint_finality_epoch_id: mint_roster
-                .finality_epoch_id()
-                .expect("fixture paired-Pasta roster id"),
-            kagemusha_mint_finality_epoch_roster: mint_roster,
-            epoch_end_height: snapshot.map_or_else(
+        let epoch_end_height = snapshot.map_or_else(
                 || {
                     previous.map_or(1_000_000, |parent| {
                         parent
@@ -826,7 +816,42 @@ mod tests {
                     })
                 },
                 |next| next.epoch_end_height,
-            ),
+            );
+        let (mint_authorization, mint_authority) = if let Some(next) = snapshot {
+            (next.kagemusha_mint_finality_authorization, next.kagemusha_mint_finality_authority.clone())
+        } else if let Some(parent) = previous {
+            let context = &parent.finality.finality_artifact.height_context;
+            (context.kagemusha_mint_finality_authorization, context.kagemusha_mint_finality_authority.clone())
+        } else {
+            let authority = mint_finality_authority(network_id, 0, &roster);
+            let authorization = {
+            let authority = &authority;
+            let authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id: authority.network_id,
+                epoch: 0,
+                first_height: 1,
+                last_height: epoch_end_height,
+                authority_generation: authority.generation,
+                authority_id: authority.authority_id().expect("fixture authority identity"),
+                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+                previous_authorization_id: [0; 32],
+                transition_id: [0; 32],
+                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+            };
+            authorization.validate_against_authority(authority).expect("complete genesis fixture authorization");
+            authorization
+        };
+            (authorization, authority)
+        };
+        let context = HeightContext {
+            network_id,
+            protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+            height,
+            epoch,
+            kagemusha_mint_finality_authorization: mint_authorization,
+            kagemusha_mint_finality_authority: mint_authority,
+            epoch_end_height,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: previous
@@ -867,19 +892,19 @@ mod tests {
             .expect("fixture finality matches block header");
         (artifact, keys)
     }
-    fn mint_finality_roster(
+    fn mint_finality_authority(
         network_id: NetworkId,
-        epoch: u64,
+        generation: u64,
         roster: &[ValidatorPower],
-    ) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+    ) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
         use iroha_data_model::isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
             KagemushaMintFinalityValidatorKeysV1,
         };
-        KagemushaMintFinalityEpochRosterV1 {
+        KagemushaMintFinalityAuthorityGenerationV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
-            epoch,
+            generation,
             validators: roster
                 .iter()
                 .enumerate()
@@ -896,12 +921,30 @@ mod tests {
         let artifact = &mut fixture.finality.finality_artifact;
         let mut context = artifact.height_context.clone();
         let next_roster =
-            mint_finality_roster(context.network_id, context.epoch + 1, &context.roster);
+            mint_finality_authority(context.network_id, context.kagemusha_mint_finality_authority.generation + 1, &context.roster);
         context.epoch_end_height = context.height;
+        context.kagemusha_mint_finality_authorization.last_height = context.height;
+        let next_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+            version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id: context.network_id,
+            epoch: context.epoch + 1,
+            first_height: context.height + 1,
+            last_height: 1_000_000,
+            authority_generation: next_roster.generation,
+            authority_id: next_roster.authority_id().expect("next generation identity"),
+            beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Installed(iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                session_id: [0x71; 32], transcript_hash: [0x72; 32],
+            }),
+            previous_authorization_id: context.kagemusha_mint_finality_authorization.authorization_id().expect("current boundary authorization"),
+            transition_id: [0x73; 32],
+            decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+        };
+        next_authorization.validate_against_authority(&next_roster).expect("next generation binding");
+        next_authorization.validate_successor(&context.kagemusha_mint_finality_authorization).expect("contiguous boundary transition");
         context.next_epoch_snapshot = Some(FinalizedNextEpochSnapshot {
             epoch: context.epoch + 1,
-            kagemusha_mint_finality_epoch_id: next_roster.finality_epoch_id().unwrap(),
-            kagemusha_mint_finality_epoch_roster: next_roster,
+            kagemusha_mint_finality_authorization: next_authorization,
+            kagemusha_mint_finality_authority: next_roster,
             epoch_end_height: 1_000_000,
             mode: context.mode,
             roster: context.roster.clone(),

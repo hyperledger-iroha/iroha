@@ -20,8 +20,9 @@ use iroha_data_model::{
         native_amx_application_manifest_empty_root,
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
-        KagemushaMintFinalityValidatorKeysV1,
+        BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityValidatorKeysV1,
     },
     merge::MergeLedgerEntry,
 };
@@ -41,15 +42,15 @@ fn network_id(seed: u8) -> NetworkId {
         )),
     )
 }
-fn mint_finality_roster(
+fn mint_finality_authority(
     network_id: NetworkId,
-    epoch: u64,
+    generation: u64,
     roster: &[ValidatorPower],
-) -> KagemushaMintFinalityEpochRosterV1 {
-    KagemushaMintFinalityEpochRosterV1 {
+) -> KagemushaMintFinalityAuthorityGenerationV1 {
+    KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch,
+        generation,
         validators: roster
             .iter()
             .enumerate()
@@ -60,6 +61,29 @@ fn mint_finality_roster(
             })
             .collect(),
     }
+}
+
+fn mint_finality_genesis_authorization(
+    authority: &KagemushaMintFinalityAuthorityGenerationV1,
+    last_height: u64,
+) -> KagemushaMintFinalityEpochAuthorizationV1 {
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id: authority.network_id,
+        epoch: 0,
+        first_height: 1,
+        last_height,
+        authority_generation: authority.generation,
+        authority_id: authority.authority_id().expect("valid fixture authority"),
+        beacon: BeaconEpochBindingV1::Bootstrap,
+        previous_authorization_id: [0; 32],
+        transition_id: [0; 32],
+        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+    };
+    authorization
+        .validate_against_authority(authority)
+        .expect("valid fixture genesis authorization");
+    authorization
 }
 fn context() -> HeightContext {
     let mut peers = (1..=4).map(peer).collect::<Vec<_>>();
@@ -72,17 +96,16 @@ fn context() -> HeightContext {
         })
         .collect::<Vec<_>>();
     let network_id = network_id(0x71);
-    let mint_finality_roster = mint_finality_roster(network_id, 2, &roster);
-    let mint_finality_epoch_id = mint_finality_roster
-        .finality_epoch_id()
-        .expect("valid fixture mint-finality roster");
+    let mint_finality_authority = mint_finality_authority(network_id, 0, &roster);
+    let mint_finality_authorization =
+        mint_finality_genesis_authorization(&mint_finality_authority, 100);
     HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
         height: 1,
-        epoch: 2,
-        kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+        epoch: 0,
+        kagemusha_mint_finality_authorization: mint_finality_authorization,
+        kagemusha_mint_finality_authority: mint_finality_authority,
         epoch_end_height: 100,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,

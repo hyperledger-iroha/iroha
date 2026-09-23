@@ -40,13 +40,9 @@ fn remote_only_carrier_validates_retained_network_and_state_before_waiting() {
             context.network_id =
                 crate::sumeragi::synthetic_network_id("foreign-remote-only-carrier");
             (
-                context.kagemusha_mint_finality_epoch_id,
-                context.kagemusha_mint_finality_epoch_roster,
-            ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                context.network_id,
-                context.epoch,
-                &context.roster,
-            );
+                context.kagemusha_mint_finality_authorization,
+                context.kagemusha_mint_finality_authority,
+            ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(context.network_id, context.epoch, context.epoch_end_height, &context.roster);
             let foreign = verified_finality_for_context(&context, &keys, &block);
             adapter
                 .kura

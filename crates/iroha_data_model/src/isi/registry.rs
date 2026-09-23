@@ -221,6 +221,16 @@ mod tests {
         }
     }
     #[test]
+    fn default_registry_registers_signed_public_lane_candidate() {
+        let registry = default();
+        let type_name = std::any::type_name::<crate::isi::staking::RegisterPublicLaneCandidate>();
+        assert_eq!(
+            registry.wire_id(type_name),
+            Some("iroha.staking.register_public_lane_candidate")
+        );
+        assert!(!registry.contains(type_name));
+    }
+    #[test]
     fn default_registry_registers_public_lane_validator() {
         let registry = default();
         let type_name = std::any::type_name::<crate::isi::staking::RegisterPublicLaneValidator>();
@@ -402,9 +412,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "b23594ddd1af13bcff35b00094e081e2fee641f00aa6a8f9e864e7cf69c4555b";
+            "da2a94f1e81c7b7e18ad85b19c43d18da70531347f46054a507830b86d2b790e";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "7c1c329cd99879566b505f456f52b902db13db09d50ea17960477ea7b30e8855";
+            "69b34c7c0f84edd3514b9cf318a5df3c76ed6822a17a279cfffdab34ee61456e";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -1369,7 +1379,22 @@ mod tests {
         assert_default_registry_decodes(crate::isi::staking::ClaimPublicLaneRewards {
             lane_id: iroha_model_base::topology::LaneId::SINGLE,
             account: account(0xA4),
-            upto_epoch: Some(9),
+            claim_plan: crate::nexus::staking::PublicLaneRewardClaimPlanV1 {
+                network_scope: crate::nexus::staking::PublicLaneMonetaryScopeV1::Network(
+                    crate::NetworkId::from_genesis_hash(
+                        iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+                            iroha_crypto::Hash::new(b"registry reward claim network"),
+                        ),
+                    ),
+                ),
+                valid_until_height: 10,
+                expected_state: None,
+                records: vec![crate::nexus::staking::PublicLaneRewardRecordRefV1 {
+                    epoch: 9,
+                    record_hash: iroha_crypto::Hash::new(b"registry reward record"),
+                }],
+                sources: Vec::new(),
+            },
         });
     }
     #[test]

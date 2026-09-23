@@ -1812,6 +1812,127 @@ async fn signed_query_authorization_denies_foreign_restricted_account_without_ex
             .any(|route| route.dataspace_id == restricted_dataspace)
     );
 }
+
+#[tokio::test]
+async fn signed_query_authorization_exact_account_grant_reads_only_its_restricted_target() {
+    let target = checked_torii_test_account_id(0xb1, "derive delegated-read target fixture key");
+    let authority =
+        checked_torii_test_account_id(0xb2, "derive delegated-read authority fixture key");
+    let other = checked_torii_test_account_id(0xb3, "derive delegated-read unrelated fixture key");
+    let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::exact-account-private-read"));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_target_and_caller_bound_to_dataspace(
+            &target,
+            &authority,
+            uaid,
+            DataSpaceId::new(10),
+        ),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
+    let requests = [
+        request_for_test(
+            &authority,
+            iroha_data_model::query::QueryRequest::Singular(
+                iroha_data_model::query::account::prelude::FindAccountById::new(target.clone())
+                    .into(),
+            ),
+        ),
+        request_for_test(
+            &authority,
+            iroha_data_model::query::QueryRequest::Singular(
+                iroha_data_model::query::asset::prelude::FindAssetById::new(
+                    iroha_data_model::asset::AssetId::with_scope(
+                        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                            DomainId::try_new("boi", "is2").expect("DS owning domain"),
+                            "DS".parse().expect("DS asset name"),
+                        ),
+                        target.clone(),
+                        iroha_data_model::asset::AssetBalanceScope::Dataspace(restricted_dataspace),
+                    ),
+                )
+                .into(),
+            ),
+        ),
+        request_for_test(
+            &authority,
+            iroha_data_model::query::QueryRequest::Start(
+                build_find_assets_by_account_query_for_test(target.clone()),
+            ),
+        ),
+    ];
+    let other_permission: Permission =
+        iroha_executor_data_model::permission::query::CanReadAccountData { account: other }.into();
+    grant_account_permission_for_test(&app, &authority, other_permission);
+    for request in &requests {
+        let scope = super::signed_query_scope_for_app(app.as_ref(), request);
+        assert!(
+            super::torii_authorized_signed_query_routes(app.as_ref(), request, &scope).is_err(),
+            "a different account grant must not open this target's private route"
+        );
+    }
+    let permission: Permission = iroha_executor_data_model::permission::query::CanReadAccountData {
+        account: target.clone(),
+    }
+    .into();
+    grant_account_permission_for_test(&app, &authority, permission.clone());
+    for request in &requests {
+        let scope = super::signed_query_scope_for_app(app.as_ref(), request);
+        let routes = super::torii_authorized_signed_query_routes(app.as_ref(), request, &scope)
+            .expect("exact account read permission must apply to private account data");
+        assert!(
+            routes
+                .iter()
+                .any(|route| route.dataspace_id == restricted_dataspace)
+        );
+    }
+    for query in [
+        iroha_data_model::query::QueryRequest::Start(build_find_transactions_query_for_test()),
+        iroha_data_model::query::QueryRequest::Singular(
+            iroha_data_model::query::account::prelude::FindAccountByAlias::new(
+                iroha_data_model::account::AccountAlias::domainless(
+                    "private".parse().expect("alias label"),
+                    restricted_dataspace,
+                ),
+            )
+            .into(),
+        ),
+    ] {
+        let request = request_for_test(&authority, query);
+        let scope = super::signed_query_scope_for_app(app.as_ref(), &request);
+        assert!(
+            super::torii_authorized_signed_query_routes(app.as_ref(), &request, &scope).is_err(),
+            "account permission must not authorize history or alias reads"
+        );
+    }
+    let next_height = app
+        .state
+        .latest_block_header_fast()
+        .map_or(1, |header| header.height().get() + 1);
+    let mut block = app.state.block(BlockHeader::new(
+        NonZeroU64::new(next_height).expect("height"),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut tx = block.transaction();
+    assert!(
+        tx.world_mut_for_testing()
+            .remove_account_permission(&authority, &permission)
+    );
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit exact account read revocation");
+    for request in &requests {
+        let scope = super::signed_query_scope_for_app(app.as_ref(), request);
+        assert!(
+            super::torii_authorized_signed_query_routes(app.as_ref(), request, &scope).is_err(),
+            "a retained signed query must not keep revoked account access"
+        );
+    }
+}
 #[tokio::test]
 async fn signed_alias_query_requires_exact_alias_permission_not_broad_read_access() {
     let authority = checked_torii_test_account_id(0xfa, "derive alias query authority fixture key");

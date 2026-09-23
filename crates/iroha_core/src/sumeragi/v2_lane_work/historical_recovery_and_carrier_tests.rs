@@ -2560,13 +2560,9 @@ fn finalized_sidecar_server_fixture_with_lane_committee(
         }
     }
     (
-        finality_context.kagemusha_mint_finality_epoch_id,
-        finality_context.kagemusha_mint_finality_epoch_roster,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-        finality_context.network_id,
-        finality_context.epoch,
-        &finality_context.roster,
-    );
+        finality_context.kagemusha_mint_finality_authorization,
+        finality_context.kagemusha_mint_finality_authority,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(finality_context.network_id, finality_context.epoch, finality_context.epoch_end_height, &finality_context.roster);
     let finality = verified_finality_for_context(&finality_context, &finality_keys, &block);
     if !matches!(finality_kind, HistoricalSidecarFinality::Missing) {
         let _ = adapter
@@ -3398,13 +3394,9 @@ fn disjoint_current_roster_requester_receives_exact_historical_sidecar_chunk() {
     fixture.adapter.context.quorum = wire::DualQuorum::from_roster(&fixture.adapter.context.roster)
         .expect("disjoint successor has valid equal-vote geometry");
     (
-        fixture.adapter.context.kagemusha_mint_finality_epoch_id,
-        fixture.adapter.context.kagemusha_mint_finality_epoch_roster,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-        fixture.adapter.context.network_id,
-        fixture.adapter.context.epoch,
-        &fixture.adapter.context.roster,
-    );
+        fixture.adapter.context.kagemusha_mint_finality_authorization,
+        fixture.adapter.context.kagemusha_mint_finality_authority,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(fixture.adapter.context.network_id, fixture.adapter.context.epoch, fixture.adapter.context.epoch_end_height, &fixture.adapter.context.roster);
     fixture
         .adapter
         .context
@@ -3481,13 +3473,9 @@ fn disjoint_successor_roster_serves_only_exact_historical_requester() {
     fixture.adapter.context.quorum = wire::DualQuorum::from_roster(&fixture.adapter.context.roster)
         .expect("disjoint successor has valid equal-vote geometry");
     (
-        fixture.adapter.context.kagemusha_mint_finality_epoch_id,
-        fixture.adapter.context.kagemusha_mint_finality_epoch_roster,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-        fixture.adapter.context.network_id,
-        fixture.adapter.context.epoch,
-        &fixture.adapter.context.roster,
-    );
+        fixture.adapter.context.kagemusha_mint_finality_authorization,
+        fixture.adapter.context.kagemusha_mint_finality_authority,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(fixture.adapter.context.network_id, fixture.adapter.context.epoch, fixture.adapter.context.epoch_end_height, &fixture.adapter.context.roster);
     fixture
         .adapter
         .context

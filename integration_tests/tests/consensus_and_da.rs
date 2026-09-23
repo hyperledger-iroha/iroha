@@ -10,6 +10,8 @@ mod sumeragi_kagami_localnet;
 mod sumeragi_localnet_smoke;
 #[path = "sumeragi_lock_convergence.rs"]
 mod sumeragi_lock_convergence;
+#[path = "sumeragi_npos_candidate.rs"]
+mod sumeragi_npos_candidate;
 #[path = "sumeragi_npos_happy_path.rs"]
 mod sumeragi_npos_happy_path;
 #[path = "sumeragi_npos_liveness.rs"]

@@ -1,6 +1,7 @@
 //! Python bindings exposing a growing subset of the Iroha SDK surface.
 #![deny(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)] // PyO3 generates historical wrappers that require this on edition 2024
+mod committed_transaction_verification;
 mod connect_key_bindings;
 #[cfg(test)]
 mod crypto_admission_tests;
@@ -5559,6 +5560,50 @@ mod tests {
             assert!(error.to_string().contains("inspection-only"));
         });
         assert!(builder.privacy_capability_manifest.is_none());
+    }
+    #[test]
+    fn faucet_claim_hash_matches_canonical_payload_and_binds_all_three_fields() {
+        ensure_python();
+        use norito::codec::Encode as _;
+        let account = taira_i105_from_seed(0x74);
+        let claim = PythonAccountFaucetClaimV1 {
+            account_id: account.clone(),
+            pow_anchor_height: 7,
+            pow_nonce_hex: "00ff".into(),
+        };
+        let encoded = claim.encode();
+        let expected =
+            Hash::new_from_chunks(&[b"iroha:accounts:faucet:claim:v1\0", encoded.as_slice()]);
+        let actual = account_faucet_claim_hash_v1_py(&account, 7, "00ff").unwrap();
+        assert_eq!(actual, hex_encode(expected.as_ref()));
+        for (other_account, height, nonce) in [
+            (taira_i105_from_seed(0x75), 7, "00ff"),
+            (account.clone(), 8, "00ff"),
+            (account.clone(), 7, "00fe"),
+        ] {
+            assert_ne!(
+                account_faucet_claim_hash_v1_py(&other_account, height, nonce).unwrap(),
+                actual
+            );
+        }
+    }
+    #[test]
+    fn faucet_claim_hash_refuses_noncanonical_claim_fields() {
+        ensure_python();
+        let account = taira_i105_from_seed(0x74);
+        assert!(account_faucet_claim_hash_v1_py(&account, 0, "00").is_err());
+        for nonce in ["", "0", "AB", " 00", "00 ", "0x00", "gg", &"00".repeat(33)] {
+            assert!(account_faucet_claim_hash_v1_py(&account, 1, nonce).is_err());
+        }
+        for invalid_account in [
+            String::new(),
+            "alias@domain".into(),
+            format!(" {account}"),
+            format!("{account} "),
+        ] {
+            assert!(account_faucet_claim_hash_v1_py(&invalid_account, 1, "00").is_err());
+        }
+        assert!(account_faucet_claim_hash_v1_py(&account, u64::MAX, &"ff".repeat(32)).is_ok());
     }
     #[test]
     fn prepared_binding_parser_accepts_only_the_exact_v1_shape() {
@@ -12009,39 +12054,6 @@ fn decode_single_committed_transaction(response_bytes: &[u8]) -> PyResult<Commit
     }
     Ok(transactions.remove(0))
 }
-fn decode_single_carrier_block(response_bytes: &[u8]) -> PyResult<SignedBlock> {
-    let response = decode_from_bytes::<QueryResponse>(response_bytes).map_err(|error| {
-        PyValueError::new_err(format!(
-            "failed to decode carrier block query response: {error}"
-        ))
-    })?;
-    let QueryResponse::Iterable(output) = response else {
-        return Err(PyValueError::new_err(
-            "carrier block query returned a singular response",
-        ));
-    };
-    if output.has_more || output.continue_cursor.is_some() {
-        return Err(PyValueError::new_err(
-            "carrier block query returned more than one page",
-        ));
-    }
-    let mut blocks = Vec::new();
-    for batch in output.batch {
-        let QueryOutputBatchBox::Block(mut batch) = batch else {
-            return Err(PyValueError::new_err(
-                "carrier block query returned an unexpected batch type",
-            ));
-        };
-        blocks.append(&mut batch);
-    }
-    if blocks.len() != 1 {
-        return Err(PyValueError::new_err(format!(
-            "carrier block query must return exactly one block, got {}",
-            blocks.len()
-        )));
-    }
-    Ok(blocks.remove(0))
-}
 #[pyfunction]
 #[pyo3(name = "committed_transaction_carrier_block_hash")]
 /// Extract and validate the carrier block hash from an exact transaction query response.
@@ -12188,30 +12200,30 @@ fn batch_outcome_json(outcome: &AssetBatchTransferOutcome) -> PyResult<json::Val
 }
 #[pyfunction]
 #[pyo3(name = "verify_committed_transaction_inclusion_json")]
-/// Verify a committed transaction response against its exact carrier block response.
+/// Authenticate a selected full output against an independently anchored finality chain.
 fn verify_committed_transaction_inclusion_json_py(
     transaction_hash: &str,
     transaction_response_bytes: &[u8],
-    block_response_bytes: &[u8],
+    executed_block_wire: &[u8],
+    finality_bundle_chain_json: &str,
+    expected_network_id: &PyNetworkId,
+    trusted_height_context_id: &str,
 ) -> PyResult<String> {
     let expected = parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
-    let committed = decode_single_committed_transaction(transaction_response_bytes)?;
-    if committed.entrypoint_hash != expected {
-        return Err(PyValueError::new_err(
-            "committed transaction response does not match the requested transaction hash",
-        ));
-    }
-    let carrier = decode_single_carrier_block(block_response_bytes)?;
-    if committed.block_hash != carrier.hash() {
-        return Err(PyValueError::new_err(
-            "carrier block response does not match the committed transaction",
-        ));
-    }
-    if !committed.verify_inclusion_in_block(&carrier) {
-        return Err(PyValueError::new_err(
-            "committed transaction inclusion proof verification failed",
-        ));
-    }
+    let (committed, carrier, bundle) =
+        committed_transaction_verification::authenticate_committed_transaction(
+            expected,
+            transaction_response_bytes,
+            executed_block_wire,
+            finality_bundle_chain_json,
+            *expected_network_id.as_inner(),
+            trusted_height_context_id,
+        )?;
+    let execution_commitment = &bundle
+        .finality_proof
+        .finality_artifact
+        .commit_qc
+        .execution_commitment;
     let entrypoint_kind = match &committed.entrypoint {
         TransactionEntrypoint::External(_) => "External",
         TransactionEntrypoint::SealedCommitment(_) => "SealedCommitment",
@@ -12285,6 +12297,31 @@ fn verify_committed_transaction_inclusion_json_py(
         ))
     })?;
     let mut result = norito::json::Map::new();
+    result.insert(
+        "network_id".into(),
+        json::to_value(&bundle.commitment.network_id)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+    );
+    result.insert(
+        "height_context_id".into(),
+        json::to_value(&bundle.commitment.height_context_id.0)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+    );
+    result.insert(
+        "execution_commitment".into(),
+        json::to_value(execution_commitment)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+    );
+    result.insert(
+        "executed_block_wire_hash".into(),
+        json::Value::String(hex_encode(
+            execution_commitment.executed_block_wire_hash.as_ref(),
+        )),
+    );
+    result.insert(
+        "executed_block_wire_len".into(),
+        json::Value::from(execution_commitment.executed_block_wire_len),
+    );
     result.insert(
         "transaction_hash".into(),
         norito::json::Value::String(hex_encode(committed.entrypoint_hash.as_ref())),
@@ -13098,6 +13135,52 @@ fn verify_python_prepared_onboarding_context_v1(
     Ok(())
 }
 
+fn canonical_python_account_faucet_claim_v1(
+    claim: &PythonAccountFaucetClaimV1,
+) -> PyResult<(AccountId, Hash)> {
+    let account_id = parse_exact_i105_account_id(&claim.account_id, "faucet claim account_id")?;
+    if claim.pow_anchor_height == 0 {
+        return Err(PyValueError::new_err(
+            "faucet claim proof anchor height must be a positive u64",
+        ));
+    }
+    let nonce = claim.pow_nonce_hex.as_str();
+    if nonce.is_empty()
+        || nonce.len() > 64
+        || nonce.len() % 2 != 0
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(PyValueError::new_err(
+            "faucet claim proof nonce must be 1..32 bytes of canonical lowercase hexadecimal",
+        ));
+    }
+    use norito::codec::Encode as _;
+    let encoded_claim = claim.encode();
+    let claim_hash = Hash::new_from_chunks(&[
+        ACCOUNT_FAUCET_CLAIM_HASH_DOMAIN_V1,
+        encoded_claim.as_slice(),
+    ]);
+    Ok((account_id, claim_hash))
+}
+
+#[pyfunction]
+#[pyo3(name = "account_faucet_claim_hash_v1")]
+/// Hash the exact canonical solved faucet claim for its prepared-operation binding.
+fn account_faucet_claim_hash_v1_py(
+    account_id: &str,
+    pow_anchor_height: u64,
+    pow_nonce_hex: &str,
+) -> PyResult<String> {
+    let claim = PythonAccountFaucetClaimV1 {
+        account_id: account_id.to_owned(),
+        pow_anchor_height,
+        pow_nonce_hex: pow_nonce_hex.to_owned(),
+    };
+    let (_, hash) = canonical_python_account_faucet_claim_v1(&claim)?;
+    Ok(hex_encode(hash.as_ref()))
+}
 fn verify_python_prepared_faucet_context_v1(
     context: &PythonPreparedFaucetContextV1,
     signed: &SignedTransaction,
@@ -13108,31 +13191,7 @@ fn verify_python_prepared_faucet_context_v1(
             "prepared faucet account differs from its exact claim",
         ));
     }
-    let account_id =
-        parse_exact_i105_account_id(&context.account_id, "prepared faucet account_id")?;
-    if context.claim.pow_anchor_height == 0 {
-        return Err(PyValueError::new_err(
-            "prepared faucet proof anchor height must be a positive u64",
-        ));
-    }
-    let nonce = context.claim.pow_nonce_hex.as_str();
-    if nonce.is_empty()
-        || nonce.len() > 64
-        || nonce.len() % 2 != 0
-        || !nonce
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(PyValueError::new_err(
-            "prepared faucet proof nonce must be 1..32 bytes of canonical lowercase hexadecimal",
-        ));
-    }
-    use norito::codec::Encode as _;
-    let encoded_claim = context.claim.encode();
-    let claim_hash = Hash::new_from_chunks(&[
-        ACCOUNT_FAUCET_CLAIM_HASH_DOMAIN_V1,
-        encoded_claim.as_slice(),
-    ]);
+    let (account_id, claim_hash) = canonical_python_account_faucet_claim_v1(&context.claim)?;
     if claim_hash.as_ref() != expected_semantic_hash {
         return Err(PyValueError::new_err(
             "prepared faucet semantic hash differs from its exact claim",
@@ -15282,6 +15341,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         signed_transaction_envelope_from_versioned_v1_py,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(account_faucet_claim_hash_v1_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         verify_prepared_transaction_context_v1_py,
         module

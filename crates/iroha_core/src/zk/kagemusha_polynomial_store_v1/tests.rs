@@ -1512,3 +1512,6 @@ mod vanishing_roles;
 
 #[path = "quotient_roles.rs"]
 mod quotient_roles;
+
+#[path = "key_roles.rs"]
+mod key_roles;

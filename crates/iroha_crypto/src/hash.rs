@@ -6,7 +6,7 @@ use blake2::{
 use derive_more::{Debug, Deref, DerefMut, Display};
 use iroha_schema::{IntoSchema, TypeId};
 #[cfg(feature = "json")]
-use mv::json::JsonKeyCodec;
+use norito::json::JsonKeyCodec;
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 #[cfg(feature = "json")]

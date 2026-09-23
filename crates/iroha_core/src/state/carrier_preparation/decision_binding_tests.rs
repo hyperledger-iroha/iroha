@@ -120,27 +120,23 @@ fn exact_finality<A>(journals: &PreparedCarrierJournals<A>) -> VerifiedV2Finalit
 #[test]
 fn exact_decision_retains_original_journals_and_survives_static_handoff_without_apply() {
     fn assert_static_send<T: Send + 'static>() {}
-    assert_static_send::<DecisionBoundCarrierJournals<Reservation, Reservation>>();
+    assert_static_send::<DecisionBoundCarrierJournals<Reservation>>();
     let (state, proposal, topology, context) = super::super::super::tests::fixture();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let capture_released = Arc::new(AtomicUsize::new(0));
-    let binding_released = Arc::new(AtomicUsize::new(0));
     let journals = captured(&state, proposal, &topology, &context, &capture_released);
     let events_allocation = journals.publication_events.as_ptr();
     let checkpoint = journals.checkpoint;
     let wire = journals.valid.as_ref().encode_wire().unwrap();
     let finality = exact_finality(&journals);
     let finality_bytes = finality.artifact().clone();
+    assert_eq!(journals.context.as_ref(), &context);
+    assert_eq!(
+        journals.execution_prefix,
+        finality.artifact().commit_qc.execution_commitment
+    );
     let decided = journals
-        .bind_decision(finality, |inputs| {
-            assert_eq!(inputs.context, &context);
-            assert_eq!(inputs.block.encode_wire().unwrap(), wire);
-            assert_eq!(
-                inputs.execution_prefix,
-                inputs.finality.commit_qc.execution_commitment
-            );
-            Ok::<_, Infallible>(Reservation(Arc::clone(&binding_released)))
-        })
+        .bind_decision(finality)
         .unwrap_or_else(|refusal| panic!("bind actual execution: {}", refusal.error));
     assert_eq!(decided.block().encode_wire().unwrap(), wire);
     assert_eq!(decided.finality(), &finality_bytes);
@@ -179,15 +175,13 @@ fn exact_decision_retains_original_journals_and_survives_static_handoff_without_
     drop(state);
     let decided = std::thread::spawn(move || decided).join().unwrap();
     assert_eq!(capture_released.load(Ordering::SeqCst), 0);
-    assert_eq!(binding_released.load(Ordering::SeqCst), 0);
     drop(decided);
     assert_eq!(capture_released.load(Ordering::SeqCst), 1);
-    assert_eq!(binding_released.load(Ordering::SeqCst), 1);
     assert_eq!(kura.blocks_count(), 0);
 }
 
 #[test]
-fn other_signed_context_releases_binding_admission_and_retains_original_owner() {
+fn other_signed_context_retains_original_capture_owner_for_retry() {
     let (state, proposal, topology, context) = super::super::super::tests::fixture();
     let released = Arc::new(AtomicUsize::new(0));
     let journals = captured(&state, proposal, &topology, &context, &released);
@@ -200,10 +194,7 @@ fn other_signed_context_releases_binding_admission_and_retains_original_owner() 
         journals.valid.as_ref().header().view_change_index(),
     );
     let wire = journals.valid.as_ref().encode_wire().unwrap();
-    let binding_released = Arc::new(AtomicUsize::new(0));
-    let refusal = match journals.bind_decision(foreign, |_| {
-        Ok::<_, Infallible>(Reservation(Arc::clone(&binding_released)))
-    }) {
+    let refusal = match journals.bind_decision(foreign) {
         Err(refusal) => refusal,
         Ok(_) => panic!("foreign context accepted"),
     };
@@ -213,11 +204,10 @@ fn other_signed_context_releases_binding_admission_and_retains_original_owner() 
     ));
     assert_eq!(refusal.journals.valid.as_ref().encode_wire().unwrap(), wire);
     assert_eq!(released.load(Ordering::SeqCst), 0);
-    assert_eq!(binding_released.load(Ordering::SeqCst), 1);
     let exact = exact_finality(&refusal.journals);
     let decided = refusal
         .journals
-        .bind_decision(exact, |_| Ok::<_, Infallible>(()))
+        .bind_decision(exact)
         .unwrap_or_else(|refusal| panic!("retry original owner: {}", refusal.error));
     drop(decided);
     assert_eq!(released.load(Ordering::SeqCst), 1);
@@ -230,7 +220,6 @@ fn same_header_signed_foreign_proposal_returns_every_original_journal_and_guard(
     let (state, proposal, topology, context) = super::super::super::tests::fixture();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let released = Arc::new(AtomicUsize::new(0));
-    let binding_released = Arc::new(AtomicUsize::new(0));
     let journals = captured(&state, proposal, &topology, &context, &released);
     let events = journals.publication_events.as_ptr();
     let checkpoint = journals.checkpoint;
@@ -243,9 +232,7 @@ fn same_header_signed_foreign_proposal_returns_every_original_journal_and_guard(
         journals.valid.as_ref().header().view_change_index(),
     );
     let expected_artifact = foreign.artifact().clone();
-    let refusal = match journals.bind_decision(foreign, |_| {
-        Ok::<_, Infallible>(Reservation(Arc::clone(&binding_released)))
-    }) {
+    let refusal = match journals.bind_decision(foreign) {
         Err(refusal) => refusal,
         Ok(_) => panic!("foreign signed payload accepted"),
     };
@@ -272,7 +259,6 @@ fn same_header_signed_foreign_proposal_returns_every_original_journal_and_guard(
             .matches_current(&state.block_hashes)
     );
     assert_eq!(released.load(Ordering::SeqCst), 0);
-    assert_eq!(binding_released.load(Ordering::SeqCst), 1);
     assert_eq!(
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
         before
@@ -281,7 +267,7 @@ fn same_header_signed_foreign_proposal_returns_every_original_journal_and_guard(
     drop(
         refusal
             .journals
-            .bind_decision(exact, |_| Ok::<_, Infallible>(()))
+            .bind_decision(exact)
             .unwrap_or_else(|refusal| panic!("retry exact finality: {}", refusal.error)),
     );
     assert_eq!(released.load(Ordering::SeqCst), 1);
@@ -301,9 +287,7 @@ fn verified_decision_for_different_execution_cannot_replace_the_retained_prefix(
         changed,
         journals.valid.as_ref().header().view_change_index(),
     );
-    let refusal = match journals.bind_decision(foreign, |_| -> Result<(), Infallible> {
-        panic!("execution mismatch must precede wire work")
-    }) {
+    let refusal = match journals.bind_decision(foreign) {
         Err(refusal) => refusal,
         Ok(_) => panic!("foreign execution accepted"),
     };
@@ -329,7 +313,7 @@ fn exact_wire_signature_substitution_is_rejected_by_the_canonical_block_owner() 
     let extra = KeyPair::try_from_seed(vec![0xFE; 32], Algorithm::BlsNormal).unwrap();
     journals.valid.as_mut().sign(extra.private_key(), 99);
     let substituted_wire = journals.valid.as_ref().encode_wire().unwrap();
-    let refusal = match journals.bind_decision(exact.clone(), |_| Ok::<_, Infallible>(())) {
+    let refusal = match journals.bind_decision(exact.clone()) {
         Err(refusal) => refusal,
         Ok(_) => panic!("changed exact signed wire accepted"),
     };
@@ -349,7 +333,7 @@ fn exact_wire_signature_substitution_is_rejected_by_the_canonical_block_owner() 
         .unwrap();
     drop(
         journals
-            .bind_decision(exact, |_| Ok::<_, Infallible>(()))
+            .bind_decision(exact)
             .unwrap_or_else(|refusal| panic!("original exact wire: {}", refusal.error)),
     );
     assert_eq!(released.load(Ordering::SeqCst), 1);
@@ -358,41 +342,58 @@ fn exact_wire_signature_substitution_is_rejected_by_the_canonical_block_owner() 
 }
 
 #[test]
-fn binding_capacity_refusal_preserves_complete_original_custody_for_retry() {
-    #[derive(Debug, PartialEq, Eq)]
-    enum Capacity {
-        Full,
-    }
+fn original_capture_pool_remains_reserved_through_decision_binding_and_handoff() {
+    use mv::allocation::{AllocationBudget, AllocationRefusal};
     let (state, proposal, topology, context) = super::super::super::tests::fixture();
-    let released = Arc::new(AtomicUsize::new(0));
-    let journals = captured(&state, proposal, &topology, &context, &released);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    let prepared = super::super::super::tests::prepare(&state, proposal, &topology, &context)
+        .unwrap_or_else(|(_, error)| panic!("actual carrier execution: {error}"));
+    let budget = AllocationBudget::new(64 << 20);
+    // This real finite pool funds the exact World wrapper and effects layouts.
+    // It deliberately makes no claim to cover nested execution payloads.
+    let journals = prepared
+        .prepare_journals(None, None, |inputs| {
+            let bytes = inputs
+                .world_journal_shell_bytes()?
+                .checked_add(inputs.retained_effects_layout.size())
+                .ok_or(AllocationRefusal::DemandOverflow)?;
+            budget.try_reserve_bytes(bytes)
+        })
+        .unwrap();
+    let reserved = budget.reserved_bytes();
+    assert!(reserved > 0);
+    let remaining = budget
+        .try_reserve_bytes(budget.limit_bytes() - reserved)
+        .unwrap();
+    let refusal = budget
+        .try_reserve_bytes(1)
+        .err()
+        .expect("original owner consumes the pool");
+    assert!(matches!(refusal, AllocationRefusal::Capacity { .. }));
     let finality = exact_finality(&journals);
     let wire = journals.valid.as_ref().encode_wire().unwrap();
-    let events = journals.publication_events.as_ptr();
-    let mut calls = 0;
-    let refusal = match journals.bind_decision(finality, |inputs| {
-        calls += 1;
-        assert_eq!(inputs.block.encode_wire().unwrap(), wire);
-        Err::<(), _>(Capacity::Full)
-    }) {
-        Err(refusal) => refusal,
-        Ok(_) => panic!("refused resource admission ignored"),
-    };
-    assert_eq!(calls, 1);
-    assert!(matches!(
-        refusal.error,
-        CarrierDecisionBindingError::Admission(Capacity::Full)
-    ));
-    assert_eq!(refusal.journals.publication_events.as_ptr(), events);
-    assert_eq!(released.load(Ordering::SeqCst), 0);
-    drop(state.world.block());
-    drop(state.transactions.block());
-    let decided = refusal
-        .journals
-        .bind_decision(refusal.finality, |_| Ok::<_, Infallible>(()))
-        .unwrap_or_else(|refusal| panic!("resource retry: {}", refusal.error));
+    let events = journals.publication_events.as_ptr().addr();
+    let effects = std::ptr::from_ref(journals.effects.as_ref()).addr();
+    let decided = journals
+        .bind_decision(finality)
+        .unwrap_or_else(|refusal| panic!("exact original decision: {}", refusal.error));
+    let decided = std::thread::spawn(move || decided).join().unwrap();
+    assert_eq!(decided.block().encode_wire().unwrap(), wire);
+    assert_eq!(decided.journals.publication_events.as_ptr().addr(), events);
+    assert_eq!(
+        std::ptr::from_ref(decided.journals.effects.as_ref()).addr(),
+        effects
+    );
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    drop(remaining);
+    assert_eq!(budget.reserved_bytes(), reserved);
     drop(decided);
-    assert_eq!(released.load(Ordering::SeqCst), 1);
+    assert_eq!(budget.reserved_bytes(), 0);
+    drop(budget.try_reserve_bytes(budget.limit_bytes()).unwrap());
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
+    );
     assert_eq!(state.committed_height(), 0);
     assert_eq!(state.kura.blocks_count(), 0);
 }

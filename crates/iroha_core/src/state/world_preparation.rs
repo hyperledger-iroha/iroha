@@ -21,6 +21,7 @@ enum Phase<'target, Admission> {
 /// a partial field acquisition nor its notification escapes through a callee.
 pub(in crate::state) struct WorldPublicationSlot<'target, Admission, Installation> {
     target: &'target World,
+    scope: Option<&'target AllocationScope<'target>>,
     phase: Option<Phase<'target, Admission>>,
     attempted: bool,
     retryable: bool,
@@ -31,12 +32,17 @@ pub(in crate::state) struct WorldPublicationSlot<'target, Admission, Installatio
 
 impl<Admission> DetachedWorld<Admission> {
     /// Move the exact World into its caller without probing or allocating.
-    pub(in crate::state) fn publication_slot<Installation>(
+    /// The scope is explicit mode input: prepaid fields refuse a missing or
+    /// foreign pool before acquiring writers. Untracked fields need no scope.
+    /// All field publishers and cleanup remain within this borrowed lifetime.
+    pub(in crate::state) fn publication_slot<'target, Installation>(
         self,
-        target: &World,
-    ) -> WorldPublicationSlot<'_, Admission, Installation> {
+        target: &'target World,
+        scope: Option<&'target AllocationScope<'target>>,
+    ) -> WorldPublicationSlot<'target, Admission, Installation> {
         WorldPublicationSlot {
             target,
+            scope,
             phase: Some(Phase::Original(self)),
             attempted: false,
             retryable: true,
@@ -100,7 +106,9 @@ impl<'target, Admission, Installation> WorldPublicationSlot<'target, Admission, 
         };
         fields.retry.reverse();
         while let Some(original) = fields.retry.pop() {
-            fields.fields.push(original.publication_slot(self.target));
+            fields
+                .fields
+                .push(original.publication_slot(self.target, self.scope));
         }
         // Every shell and its original journal is already in this caller before
         // the first physical acquisition or a native field preparation can panic.

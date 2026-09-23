@@ -126,6 +126,39 @@ fn staking_values() -> Vec<Value> {
     let validator = account(0x51);
     let staker = account(0x52);
     let request_id = Hash::new(b"fixture-unbond-request");
+    let bond_plan = staking::monetary_plan_fixture(
+        &staker,
+        &validator,
+        13,
+        crate::nexus::PublicLaneMonetaryPreconditionV1::Bond(
+            crate::nexus::PublicLaneBondPreconditionV1 {
+                activation_height: 1,
+                peer_id: iroha_model_base::peer::PeerId::new(keypair(0x54).public_key().clone()),
+            },
+        ),
+    );
+    let unbond_plan = staking::monetary_plan_fixture(
+        &validator,
+        &staker,
+        7,
+        crate::nexus::PublicLaneMonetaryPreconditionV1::Unbond(
+            crate::nexus::PublicLaneUnbondPreconditionV1 {
+                activation_height: 1,
+                request_hash: Hash::new(b"fixture-pending-withdrawal-record"),
+            },
+        ),
+    );
+    let slash_plan = staking::monetary_plan_fixture(
+        &validator,
+        &account(0x53),
+        3,
+        crate::nexus::PublicLaneMonetaryPreconditionV1::Slash(
+            crate::nexus::PublicLaneSlashPreconditionV1 {
+                activation_height: 1,
+                slashable_exposure: Quantity::from(13_u64),
+            },
+        ),
+    );
     vec![
         capture(staking::BondPublicLaneStake {
             lane_id: LaneId::SINGLE,
@@ -133,6 +166,7 @@ fn staking_values() -> Vec<Value> {
             staker: staker.clone(),
             amount: Quantity::from(13_u64),
             metadata: Metadata::default(),
+            monetary_plan: bond_plan,
         }),
         capture(staking::SchedulePublicLaneUnbond {
             lane_id: LaneId::SINGLE,
@@ -147,6 +181,7 @@ fn staking_values() -> Vec<Value> {
             validator: validator.clone(),
             staker,
             request_id,
+            monetary_plan: unbond_plan,
         }),
         capture(staking::SlashPublicLaneValidator {
             lane_id: LaneId::SINGLE,
@@ -156,6 +191,7 @@ fn staking_values() -> Vec<Value> {
             amount: Quantity::from(3_u64),
             reason_code: "double_sign".into(),
             metadata: Metadata::default(),
+            monetary_plan: slash_plan,
         }),
         capture(staking::RecordPublicLaneRewards {
             lane_id: LaneId::SINGLE,

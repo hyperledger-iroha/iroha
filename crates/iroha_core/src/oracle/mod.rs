@@ -10,7 +10,7 @@ use iroha_data_model::oracle::{
     OracleAggregationError, OracleId, ReplayKey, aggregate_observations,
 };
 #[cfg(feature = "json")]
-use mv::json::JsonKeyCodec;
+use norito::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json;

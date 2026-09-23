@@ -478,6 +478,7 @@ impl_direct_instruction_box!(crate::isi::soradns::AddReleaseSigner);
 impl_direct_instruction_box!(crate::isi::soradns::RemoveReleaseSigner);
 impl_direct_instruction_box!(crate::isi::soradns::SetDirectoryRotationPolicy);
 // Allow direct boxing of public lane staking instructions.
+impl_direct_instruction_box!(crate::isi::staking::RegisterPublicLaneCandidate);
 impl_direct_instruction_box!(crate::isi::staking::RegisterPublicLaneValidator);
 impl_direct_instruction_box!(crate::isi::staking::BondPublicLaneStake);
 impl_direct_instruction_box!(crate::isi::staking::SchedulePublicLaneUnbond);
@@ -2794,8 +2795,8 @@ pub mod prelude {
         staking::{
             ActivatePublicLaneValidator, BondPublicLaneStake, CancelConsensusEvidencePenalty,
             ClaimPublicLaneRewards, ExitPublicLaneValidator, FinalizePublicLaneUnbond,
-            RebindPublicLaneValidatorPeer, RecordPublicLaneRewards, RegisterPublicLaneValidator,
-            SchedulePublicLaneUnbond, SlashPublicLaneValidator,
+            RebindPublicLaneValidatorPeer, RecordPublicLaneRewards, RegisterPublicLaneCandidate,
+            RegisterPublicLaneValidator, SchedulePublicLaneUnbond, SlashPublicLaneValidator,
         },
         vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     };

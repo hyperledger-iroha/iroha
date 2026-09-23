@@ -41,6 +41,8 @@ struct RetirementBank {
     dropped: RefCell<Vec<u64>>,
     fault: Cell<Option<DropFault>>,
     layout_panic: Cell<Option<u64>>,
+    layout_calls: Cell<usize>,
+    fold_fault: Cell<Option<(usize, bool)>>,
 }
 struct RetirementSnapshot {
     layout: Rc<Cell<StoredPolynomialLayoutV1>>,
@@ -49,7 +51,19 @@ struct RetirementSnapshot {
 }
 impl StoredPolynomialSnapshotV1 for RetirementSnapshot {
     fn layout(&self) -> StoredPolynomialLayoutV1 {
-        let layout = self.layout.get();
+        let mut layout = self.layout.get();
+        let call = self.bank.layout_calls.get();
+        self.bank.layout_calls.set(call + 1);
+        if let Some((target, panic)) = self.bank.fold_fault.get() {
+            if target == call {
+                self.bank.fold_fault.set(None);
+                if panic {
+                    panic!("injected opening blind validation unwind");
+                }
+                layout.proof_context = [8; 32];
+                self.layout.set(layout);
+            }
+        }
         if self.bank.layout_panic.get() == Some(layout.ordinal()) {
             self.bank.layout_panic.set(None);
             panic!("injected coefficient handoff layout unwind");
@@ -998,3 +1012,6 @@ fn both_pasta_inverse_named_factories_refuse_substitution_missing_context_invali
     inverse_named_factory_failures::<EqAffine>();
     inverse_named_factory_failures::<EpAffine>();
 }
+
+#[path = "retirement/blind_tests.rs"]
+mod blind_tests;
