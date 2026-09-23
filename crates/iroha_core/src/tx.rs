@@ -8668,6 +8668,14 @@ pub mod tests {
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             unbond
         )));
+        let pending_unbond = iroha_data_model::nexus::PublicLaneUnbonding {
+            request_id,
+            amount: Quantity::one(),
+            release_at_ms: 1_700_000_000_000,
+            slashable_through_height: 1,
+            liability_release_height: 2,
+        };
+        let stake_asset = cash_leg.asset_definition_id.clone();
         let finalize = iroha_data_model::isi::staking::FinalizePublicLaneUnbond {
             lane_id: TestLaneId::SINGLE,
             validator: counterparty.clone(),
@@ -8678,19 +8686,16 @@ pub mod tests {
                     test_network_id(),
                 ),
                 valid_until_height: 2,
-                source_asset: iroha_data_model::asset::AssetId::of(
-                    cash_leg.asset_definition_id.clone(),
-                    authority.clone(),
-                ),
-                destination_asset: iroha_data_model::asset::AssetId::of(
-                    cash_leg.asset_definition_id.clone(),
-                    counterparty.clone(),
-                ),
-                amount: 1u32.into(),
+                source_asset: AssetId::of(stake_asset.clone(), authority.clone()),
+                destination_asset: AssetId::of(stake_asset, counterparty.clone()),
+                amount: pending_unbond.amount.clone(),
                 precondition: iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Unbond(
                     iroha_data_model::nexus::PublicLaneMonetaryUnbondV1 {
                         activation_height: 1,
-                        request_hash: iroha_crypto::Hash::new(b"time-sensitive-pending-unbond"),
+                        request_hash: iroha_data_model::nexus::public_lane_unbonding_commitment(
+                            &pending_unbond,
+                        )
+                        .unwrap(),
                     },
                 ),
             },

@@ -245,7 +245,7 @@ fn retained_governance_fixture(
         .kagemusha_mint_finality
         .authority_generation
         .bind_network_id(network)
-        .expect("bind signed genesis mint-finality authority to its network");
+        .expect("bind the signed genesis authority to its finalized network");
     let kagemusha_mint_finality_authorization =
         crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(
             &kagemusha_mint_finality_authority,

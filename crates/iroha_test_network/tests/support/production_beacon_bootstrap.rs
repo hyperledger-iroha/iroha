@@ -1374,9 +1374,7 @@ async fn four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse() -> Result<(
 async fn run_fresh_custody_bootstrap() -> Result<()> {
     // Validate the same immutable identity used by the paid trust helper before
     // artifact reads, custody creation, genesis generation, or child startup.
-    // The complete fixture retains the exact release-source admission previously
-    // enforced by the supervisor; no renewal worker or development identity can
-    // stand in for that source binding.
+    // The complete fixture binds every proof to this exact release source.
     let build_identity = epoch_retention::admit_build_identity(
         iroha_core::compiled_build_identity!()
             .wrap_err("production beacon fixture has invalid compiled build metadata")?,

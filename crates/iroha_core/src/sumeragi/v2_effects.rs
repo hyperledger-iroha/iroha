@@ -3383,6 +3383,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                         )
                     })?
                     .clone();
+                body_store
+                    .authorize_recovered_terminal_apply(&terminal)
+                    .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
                 drop(terminal);
                 if recovered_validations.insert(key, validated).is_some() {
                     return Err(EffectExecutorError::BodyStore(

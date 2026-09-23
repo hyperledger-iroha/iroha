@@ -15,11 +15,15 @@ use iroha_data_model::{
     parameter::{Parameter, system::SumeragiNposParameters},
     prelude::Quantity,
 };
+use iroha_genesis::GenesisTopologyEntry;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-use iroha_test_network::{NetworkBuilder, unexecuted_genesis_factory_with_post_topology};
+use iroha_test_network::{
+    NetworkBuilder, genesis_participant_committee_key_instructions,
+    unexecuted_genesis_factory_with_post_topology,
+};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use std::time::Duration;
 use toml::{Table, Value as TomlValue};
@@ -95,6 +99,7 @@ fn route_multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
 }
 fn route_multilane_genesis_post_topology_transactions(
     topology: &[PeerId],
+    topology_entries: &[GenesisTopologyEntry],
 ) -> Vec<Vec<InstructionBox>> {
     let stake_asset_id = route_stake_asset_definition_id();
     let fee_asset_id = route_fee_asset_definition_id();
@@ -146,11 +151,15 @@ fn route_multilane_genesis_post_topology_transactions(
         .into(),
         Mint::asset_quantity(
             ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
-            AssetId::new(fee_asset_id.clone(), gas_account_id),
+            AssetId::new(fee_asset_id.clone(), gas_account_id.clone()),
         )
         .into(),
     ];
     let mut validator_tx = Vec::with_capacity(topology.len() * 2);
+    bootstrap_tx.extend(genesis_participant_committee_key_instructions(
+        topology_entries,
+        topology,
+    ));
     for (index, peer_id) in topology.iter().enumerate() {
         let validator_id = route_lane_validator_account(index);
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
@@ -179,7 +188,7 @@ fn route_multilane_genesis_post_topology_transactions(
                     Metadata::default(),
                     iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
                         AssetId::new(stake_asset_id.clone(), validator_id.clone()),
-                        AssetId::new(stake_asset_id.clone(), route_bootstrap_gas_account_id()),
+                        AssetId::new(stake_asset_id.clone(), gas_account_id.clone()),
                         Quantity::from(ROUTE_VALIDATOR_STAKE),
                     ),
                 )
@@ -297,8 +306,10 @@ pub(super) fn network_builder_with_genesis_transactions(
         .with_auto_populated_trusted_peers()
         .without_npos_genesis_bootstrap()
         .with_genesis_block(move |topology, topology_entries| {
-            let post_topology =
-                route_multilane_genesis_post_topology_transactions(topology.as_ref());
+            let post_topology = route_multilane_genesis_post_topology_transactions(
+                topology.as_ref(),
+                &topology_entries,
+            );
             let mut genesis = unexecuted_genesis_factory_with_post_topology(
                 extra_transactions.clone(),
                 post_topology,

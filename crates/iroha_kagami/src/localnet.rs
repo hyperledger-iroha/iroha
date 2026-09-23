@@ -17,7 +17,7 @@ use iroha_config::{
     base::toml::TomlSource,
     parameters::{actual, defaults::taira as taira_defaults},
 };
-use iroha_core::zk::confidential_v2;
+use iroha_core::{state::derive_committee_key_id, zk::confidential_v2};
 use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair};
 #[cfg(test)]
 use iroha_data_model::isi::UnregisterBox;
@@ -36,10 +36,12 @@ use iroha_data_model::{
             MAX_VALIDATORS_PER_HEIGHT, SumeragiV2GenesisContextParameters, is_valid_committee_size,
         },
     },
+    consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
     da::commitment::DaProofPolicyBundle,
     isi::{
         GrantBox, RegisterBox, RevokeBox, SetAssetDefinitionAlias,
         alias_setup::EnsureAlias,
+        consensus_keys::RegisterConsensusKey,
         kagemusha_v1::{
             KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
             KagemushaMintFinalityGenesisParametersV1,
@@ -70,7 +72,7 @@ use iroha_executor_data_model::permission::{
         CanResolveAccountAlias,
     },
     asset::CanMintAssetWithDefinition,
-    governance::CanEnactGovernance,
+    governance::{CanEnactGovernance, CanManageConsensusKeys},
     nexus::{
         CanEnrollFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
         CanPublishSpaceDirectoryManifestForAccountDomain,
@@ -4440,6 +4442,38 @@ fn append_localnet_npos_bootstrap(
         builder = builder.append_instruction(Grant::account_permission(
             enroll_permission,
             onboarding_account_id.clone(),
+        ));
+    }
+    if public_validator_lanes
+        .iter()
+        .any(|lane_id| *lane_id != LaneId::SINGLE)
+    {
+        // The same physical peers serve global and participant lanes. Publish
+        // both purpose-specific key records before the participant registrations.
+        builder = builder
+            .next_transaction()
+            .append_instruction(Grant::account_permission(
+                CanManageConsensusKeys,
+                genesis_account_id.clone(),
+            ));
+        for peer in peers {
+            let id = derive_committee_key_id(&peer.public_key);
+            builder = builder.append_instruction(RegisterConsensusKey {
+                id: id.clone(),
+                record: ConsensusKeyRecord {
+                    id,
+                    public_key: peer.public_key.clone(),
+                    pop: Some(peer.bls_pop.clone()),
+                    activation_height: 1,
+                    expiry_height: None,
+                    replaces: None,
+                    status: ConsensusKeyStatus::Active,
+                },
+            });
+        }
+        builder = builder.append_instruction(Revoke::account_permission(
+            CanManageConsensusKeys,
+            genesis_account_id.clone(),
         ));
     }
     append_public_lane_validator_registrations(
@@ -9192,6 +9226,16 @@ mod tests {
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
         let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
             .expect("parse generated genesis");
+        let parameters = manifest
+            .effective_parameters()
+            .expect("read generated genesis parameters");
+        assert!(
+            parameters
+                .custom()
+                .get(&SumeragiNposParameters::parameter_id())
+                .is_none(),
+            "permissioned genesis must not commit NPoS epoch parameters"
+        );
         let mut validators = Vec::new();
         let mut activations = Vec::new();
         for instruction in manifest.instructions() {
@@ -9481,6 +9525,29 @@ mod tests {
             .map(|register| register.validator.clone())
             .collect();
         assert_eq!(actual, expected, "validator roster should match peers");
+        let staking = &peer_cfg["nexus"]["staking"];
+        let stake_asset_id = AssetDefinitionId::parse_address_literal(
+            staking["stake_asset_id"]
+                .as_str()
+                .expect("configured stake asset"),
+        )
+        .expect("canonical stake asset");
+        let escrow_account_id = AccountId::parse_encoded(
+            staking["stake_escrow_account_id"]
+                .as_str()
+                .expect("configured stake escrow"),
+        )
+        .expect("canonical stake escrow");
+        for register in &validators {
+            assert_eq!(
+                register.monetary_plan,
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), register.stake_account.clone()),
+                    AssetId::new(stake_asset_id.clone(), escrow_account_id.clone()),
+                    register.initial_stake.clone(),
+                ),
+            );
+        }
         assert_localnet_dataspace_catalog_quorum(temp.path(), peer_count);
     }
     #[test]
@@ -9672,6 +9739,53 @@ mod tests {
             )
         );
         let manifest = localnet_genesis_for_opts(&opts);
+        let peers = build_peers(
+            opts.peers.get(),
+            opts.seed.as_ref().map(String::as_bytes),
+            opts.base_api_port,
+            opts.base_p2p_port,
+        )
+        .expect("rebuild deterministic Nexus peers");
+        let committee_keys = manifest
+            .instructions()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<RegisterConsensusKey>())
+            .collect::<Vec<_>>();
+        assert_eq!(committee_keys.len(), peers.len());
+        for peer in &peers {
+            let expected_id = derive_committee_key_id(&peer.public_key);
+            assert!(committee_keys.iter().any(|registration| {
+                registration.id == expected_id
+                    && registration.record.id == expected_id
+                    && registration.record.public_key == peer.public_key
+                    && registration.record.pop.as_deref() == Some(peer.bls_pop.as_slice())
+                    && registration.record.activation_height == 1
+                    && registration.record.expiry_height.is_none()
+                    && registration.record.status == ConsensusKeyStatus::Active
+            }));
+        }
+        let key_permission = Permission::from(CanManageConsensusKeys);
+        let key_grants = manifest
+            .instructions()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
+            .filter_map(|grant| match grant {
+                GrantBox::Permission(grant) if grant.object() == &key_permission => {
+                    Some(grant.destination())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let key_revokes = manifest
+            .instructions()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<RevokeBox>())
+            .filter_map(|revoke| match revoke {
+                RevokeBox::Permission(revoke) if revoke.object() == &key_permission => {
+                    Some(revoke.destination())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(key_grants.len(), 1);
+        assert_eq!(key_revokes, key_grants);
         let mut registrations_by_lane = BTreeMap::<u32, usize>::new();
         let mut activations_by_lane = BTreeMap::<u32, usize>::new();
         for instruction in manifest.instructions() {

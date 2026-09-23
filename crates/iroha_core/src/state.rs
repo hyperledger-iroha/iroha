@@ -16304,7 +16304,7 @@ pub(crate) fn derive_validator_key_id(public_key: &PublicKey) -> ConsensusKeyId 
     derive_peer_consensus_key_id(public_key, ConsensusKeyRole::Validator, "validator")
 }
 /// Derive a collision-resistant participant-committee key identifier from a peer public key.
-pub(crate) fn derive_committee_key_id(public_key: &PublicKey) -> ConsensusKeyId {
+pub fn derive_committee_key_id(public_key: &PublicKey) -> ConsensusKeyId {
     derive_peer_consensus_key_id(public_key, ConsensusKeyRole::Committee, "committee")
 }
 /// Fetch the stored BLS proof-of-possession for a consensus public key.
@@ -16586,19 +16586,15 @@ pub(crate) fn peer_consensus_key_gate_for_role(
 ) -> ConsensusKeyGate {
     peer_consensus_key_gate_matching_role(snapshot, peer_id, block_height, Some(&role))
 }
-const GLOBAL_LANE_CONSENSUS_KEY_ROLES: &[ConsensusKeyRole] = &[ConsensusKeyRole::Validator];
-const PARTICIPANT_LANE_CONSENSUS_KEY_ROLES: &[ConsensusKeyRole] =
-    &[ConsensusKeyRole::Committee, ConsensusKeyRole::Validator];
-/// Return the ordered consensus-key roles accepted for one lane.
+/// Return the exact consensus-key role accepted for one lane.
 ///
-/// Global consensus accepts only `Validator` keys. Participant lanes prefer
-/// the narrower `Committee` role but retain `Validator` compatibility for
-/// existing transparent lane deployments.
-pub(crate) fn consensus_key_roles_for_lane(lane_id: LaneId) -> &'static [ConsensusKeyRole] {
+/// Global consensus accepts only `Validator` keys. Participant lanes accept
+/// only `Committee` keys.
+pub(crate) fn consensus_key_role_for_lane(lane_id: LaneId) -> ConsensusKeyRole {
     if lane_id == LaneId::SINGLE {
-        GLOBAL_LANE_CONSENSUS_KEY_ROLES
+        ConsensusKeyRole::Validator
     } else {
-        PARTICIPANT_LANE_CONSENSUS_KEY_ROLES
+        ConsensusKeyRole::Committee
     }
 }
 const fn consensus_key_gate_priority(gate: ConsensusKeyGate) -> u8 {
@@ -16610,24 +16606,19 @@ const fn consensus_key_gate_priority(gate: ConsensusKeyGate) -> u8 {
         ConsensusKeyGate::Live => 4,
     }
 }
-/// Resolve the best lifecycle gate among the roles accepted for one lane.
+/// Resolve the lifecycle gate for the exact role accepted on one lane.
 pub(crate) fn peer_consensus_key_gate_for_lane(
     snapshot: &impl WorldReadOnly,
     peer_id: &PeerId,
     block_height: u64,
     lane_id: LaneId,
 ) -> ConsensusKeyGate {
-    let mut best = ConsensusKeyGate::Missing;
-    for role in consensus_key_roles_for_lane(lane_id) {
-        let candidate = peer_consensus_key_gate_for_role(snapshot, peer_id, block_height, *role);
-        if candidate == ConsensusKeyGate::Live {
-            return candidate;
-        }
-        if consensus_key_gate_priority(candidate) > consensus_key_gate_priority(best) {
-            best = candidate;
-        }
-    }
-    best
+    peer_consensus_key_gate_for_role(
+        snapshot,
+        peer_id,
+        block_height,
+        consensus_key_role_for_lane(lane_id),
+    )
 }
 fn peer_consensus_key_gate_matching_role(
     snapshot: &impl WorldReadOnly,
@@ -16690,7 +16681,7 @@ pub(crate) fn peer_has_live_consensus_key_for_role(
         ConsensusKeyGate::Live
     )
 }
-/// Check whether a peer has a live key in the role set accepted for one lane.
+/// Check whether a peer has a live key with the exact role accepted for one lane.
 pub(crate) fn peer_has_live_consensus_key_for_lane(
     snapshot: &impl WorldReadOnly,
     peer_id: &PeerId,
@@ -16718,18 +16709,19 @@ pub(crate) fn live_consensus_key_pop_for_peer_with_role(
 ) -> Option<Vec<u8>> {
     live_consensus_key_pop_for_peer_matching_role(snapshot, peer_id, block_height, Some(&role))
 }
-/// Fetch a live PoP using the ordered role policy for one lane.
+/// Fetch a live PoP for the exact role accepted on one lane.
 pub(crate) fn live_consensus_key_pop_for_peer_on_lane(
     snapshot: &impl WorldReadOnly,
     peer_id: &PeerId,
     block_height: u64,
     lane_id: LaneId,
 ) -> Option<Vec<u8>> {
-    consensus_key_roles_for_lane(lane_id)
-        .iter()
-        .find_map(|role| {
-            live_consensus_key_pop_for_peer_with_role(snapshot, peer_id, block_height, *role)
-        })
+    live_consensus_key_pop_for_peer_with_role(
+        snapshot,
+        peer_id,
+        block_height,
+        consensus_key_role_for_lane(lane_id),
+    )
 }
 fn live_consensus_key_pop_for_peer_matching_role(
     snapshot: &impl WorldReadOnly,

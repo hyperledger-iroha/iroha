@@ -610,9 +610,7 @@ fn lifecycle_apply_dispatch_waits_for_exact_runner_decision_cleanup() {
 
 #[cfg(feature = "bls")]
 #[test]
-fn apply_barrier_handoff_retires_exact_live_global_proposal() {
-    // Independent Native lane custody across a real global carrier is covered by
-    // native_driver_retains_exact_ingress_and_instance_across_global_carrier_change.
+fn apply_barrier_handoff_retires_exact_live_proposal_without_lane_adapter_authority() {
     let mut fixture = ProductionTransportFixture::new();
     let started = Instant::now();
     fixture
@@ -638,6 +636,13 @@ fn apply_barrier_handoff_retires_exact_live_global_proposal() {
             pre_decision_directive,
         );
     assert!(local_proposal.already_attempted(pre_decision_directive));
+    let lane_work =
+        super::super::v2_lane_work::tests::runner_handoff_losing_merge_fixture_for_test();
+    assert_eq!(
+        super::super::v2_lane_work::tests::runner_handoff_losing_merge_counts_for_test(&lane_work,),
+        (1, 1)
+    );
+
     let commit =
         fixture.quorum_certificate(wire::GlobalPhase::Commit, fixture.canonical_commitment);
     let decision = (
@@ -700,6 +705,11 @@ fn apply_barrier_handoff_retires_exact_live_global_proposal() {
     );
     assert!(local_proposal.is_pristine_for_test());
     assert!(!local_proposal.already_attempted(pre_decision_directive));
+    assert_eq!(
+        super::super::v2_lane_work::tests::runner_handoff_losing_merge_counts_for_test(&lane_work,),
+        (1, 1),
+        "the global Decision handoff has no authority over the retired lane adapter"
+    );
     assert!(!output_guard.restart_required());
 }
 
@@ -6663,7 +6673,12 @@ fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
     (
         foreign_context.kagemusha_mint_finality_authorization,
         foreign_context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(foreign_context.network_id, foreign_context.epoch, foreign_context.epoch_end_height, &foreign_context.roster);
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
+        foreign_context.network_id,
+        foreign_context.epoch,
+        foreign_context.epoch_end_height,
+        &foreign_context.roster,
+    );
     let mut foreign_commit = fixture.qc(wire::GlobalPhase::Commit);
     foreign_commit.round.context_id = foreign_context.id();
     foreign_commit.proposal_round.context_id = foreign_context.id();

@@ -15326,7 +15326,7 @@ mod evidence_http_tests {
         result.expect("bounded JSON projection");
         assert_eq!(
             snapshot.url.path(),
-            format!("/v1/offline/assets/{asset}/registration")
+            format!("/v1/assets/definitions/{asset}/registration")
         );
         super::tests::assert_canonical_account_signed_request(&client, &snapshot);
         assert_eq!(snapshot.max_response_bytes, 2 * 1024);
@@ -22406,7 +22406,7 @@ impl Client {
         &self,
         asset: &AssetDefinitionId,
     ) -> Result<norito::json::Value> {
-        let path = format!("v1/offline/assets/{asset}/registration");
+        let path = format!("v1/assets/definitions/{asset}/registration");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(
             self.account_signed_get_request(url)?

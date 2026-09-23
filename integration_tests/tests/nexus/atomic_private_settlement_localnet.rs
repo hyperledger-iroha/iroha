@@ -3843,6 +3843,49 @@ fn genesis_registers_only_participant_processes_as_committee_peers() {
     let committee_validator_entries = process_entries[shape.global_validator_count()..].to_vec();
 
     let transactions = genesis_post_topology(shape, &topology, &committee_validator_entries);
+    let monetary_registrations = transactions
+        .iter()
+        .flatten()
+        .filter_map(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        monetary_registrations.len(),
+        shape.lane_count() * VALIDATORS_PER_LANE
+    );
+    for registration in monetary_registrations {
+        assert_eq!(
+            registration.monetary_plan.network_scope,
+            iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Genesis
+        );
+        assert_eq!(registration.monetary_plan.valid_until_height, 1);
+        assert_eq!(
+            registration.monetary_plan.source_asset,
+            iroha_data_model::asset::AssetId::new(
+                stake_asset_definition_id(),
+                registration.validator.clone()
+            )
+        );
+        assert_eq!(
+            registration.monetary_plan.destination_asset,
+            iroha_data_model::asset::AssetId::new(stake_asset_definition_id(), ALICE_ID.clone())
+        );
+        assert_eq!(
+            registration.monetary_plan.amount,
+            registration.initial_stake
+        );
+        assert_eq!(
+            registration.monetary_plan.precondition,
+            iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
+                    activation_height: 1
+                }
+            )
+        );
+    }
     let registrations = transactions
         .iter()
         .flatten()

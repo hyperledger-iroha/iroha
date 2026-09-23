@@ -206,14 +206,23 @@ mod tests {
     }
 
     fn staking_asset(owner: AccountId) -> AssetId {
-        AssetId::new(
-            AssetDefinitionId::derive_from_components(
-                iroha_model_base::domain::DomainId::try_new("manifest", "universal")
-                    .expect("fixture domain"),
-                "stake".parse().expect("fixture asset name"),
-            ),
+        AssetId::of(
+            AssetDefinitionId::parse_address_literal(
+                &iroha_config::parameters::defaults::nexus::staking::stake_asset_id(),
+            )
+            .expect("configured stake asset"),
             owner,
         )
+    }
+
+    fn escrow_account() -> AccountId {
+        iroha_data_model::account::address::AccountAddress::from_i105_for_discriminant(
+            &iroha_config::parameters::defaults::nexus::staking::stake_escrow_account_id(),
+            Some(iroha_config::parameters::defaults::common::chain_discriminant()),
+        )
+        .expect("configured staking escrow")
+        .to_account_id()
+        .expect("escrow account")
     }
 
     fn instructions(peers: &[finality::PeerV1]) -> Vec<InstructionBox> {
@@ -232,7 +241,7 @@ mod tests {
                         Metadata::default(),
                         PublicLaneMonetaryPlanV1::genesis_registration(
                             staking_asset(account.clone()),
-                            staking_asset(self::account(140)),
+                            staking_asset(escrow_account()),
                             Quantity::from(1_u64),
                         ),
                     )
@@ -260,12 +269,12 @@ mod tests {
         assert!(validator_bindings(&instructions, &trust.peers).is_ok());
         for registration in registrations {
             assert_eq!(registration.stake_account, registration.validator);
-            assert_ne!(registration.stake_account, account(140));
+            assert_ne!(registration.stake_account, escrow_account());
             assert_eq!(
                 registration.monetary_plan,
                 PublicLaneMonetaryPlanV1::genesis_registration(
                     staking_asset(registration.stake_account.clone()),
-                    staking_asset(account(140)),
+                    staking_asset(escrow_account()),
                     registration.initial_stake.clone(),
                 )
             );

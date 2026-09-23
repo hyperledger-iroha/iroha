@@ -8714,7 +8714,7 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_account_rejects_when_account_has_only_reward_processing_cursor() {
+    fn unregister_account_rejects_retained_reward_processing_cursor() {
         with_registered_account_unregistration_candidate(|authority, _, account_id, tx| {
             let key = (LaneId::SINGLE, account_id.clone());
             let cursor = iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
@@ -8741,7 +8741,7 @@ mod tests {
         });
     }
     #[test]
-    fn unregister_account_rejects_when_account_is_reward_accrual_source_owner() {
+    fn unregister_account_rejects_when_account_is_reward_claim_asset_owner() {
         assert_account_unregister_guard(
             |tx, domain_id, authority, account_id| {
                 let source = AssetId::new(

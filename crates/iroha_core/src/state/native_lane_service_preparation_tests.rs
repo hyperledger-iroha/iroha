@@ -426,9 +426,9 @@ fn native_service_retention_fixture(atomic: bool) -> Box<NativeServicePreparatio
             .build(&authority)
             .into_key_value();
         world.accounts.insert(id, account);
-        let id = iroha_genesis::GENESIS_DOMAIN_ID.clone();
-        let domain = Domain::new(id.clone()).build(&authority);
-        world.domains.insert(id, domain);
+        let domain_id = iroha_genesis::GENESIS_DOMAIN_ID.clone();
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        world.domains.insert(domain_id, domain);
     });
     setup.genesis_instructions = super::carrier_preparation::archive_fixture_instructions();
     let economic = native_economic_fixture_from_state(
@@ -512,9 +512,10 @@ state_test! { sync native_service_control_only_admission_retains_one_execution_a
     assert_eq!(fixture.state.committed_height() as u64, context.height);
     let view = fixture.state.view();
     assert_eq!(view.world.assets.get(&fixture.source_asset).unwrap().0, Quantity::from(100u32));
-    let destination = view.world.assets.get(&fixture.destination_asset);
-    assert!(destination.is_none(), "control publication must not create an economic asset");
-    assert_eq!(destination.map(|asset| asset.0.clone()).unwrap_or_else(Quantity::zero), Quantity::from(0u32));
+    assert!(
+        view.world.assets.get(&fixture.destination_asset).is_none(),
+        "without a Native transfer, no destination asset row is created"
+    );
     drop(view);
     drop(published);
     drop(retained);

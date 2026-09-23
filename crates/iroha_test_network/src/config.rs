@@ -14,7 +14,7 @@ use iroha_core::{
     compliance::LaneComplianceEngine,
     governance::manifest::LaneManifestRegistry,
     query::store::LiveQueryStore,
-    state::{State, World},
+    state::{State, World, derive_committee_key_id},
     sumeragi::network_topology::Topology as CoreTopology,
 };
 use iroha_crypto::{Hash, KeyPair, SignatureOf};
@@ -23,11 +23,13 @@ use iroha_data_model::{
     account::{Account, AccountId},
     asset::{AssetDefinitionId, definition::AssetDefinition, id::AssetId},
     block::consensus_v2::{ConsensusMode as WireConsensusMode, SumeragiV2GenesisContextParameters},
+    consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
     da::commitment::DaProofPolicyBundle,
     domain::Domain,
     hijiri::HijiriParametersV1,
     isi::{
-        Grant, InstructionBox, Mint, SetParameter,
+        Grant, InstructionBox, Mint, Revoke, SetParameter,
+        consensus_keys::RegisterConsensusKey,
         kagemusha_v1::{
             KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
             KagemushaMintFinalityGenesisParametersV1,
@@ -51,7 +53,7 @@ use iroha_executor_data_model::permission::{
     asset::{CanMintAssetWithDefinition, CanTransferAssetWithDefinition},
     domain::CanUnregisterDomain,
     executor::CanUpgradeExecutor,
-    governance::CanManageParliament,
+    governance::{CanManageConsensusKeys, CanManageParliament},
     parameter::{CanSetHijiriParameters, CanSetParameters},
     peer::CanManagePeers,
     query::CanReadAllLedgerData,
@@ -97,6 +99,51 @@ pub(crate) struct StagedGenesisPolicyHashes {
 }
 pub fn chain_id() -> ChainId {
     ChainId::from("00000000-0000-0000-0000-000000000000")
+}
+/// Build post-topology genesis instructions that install Committee keys for participant peers.
+///
+/// The fixture genesis authority receives key-management permission only while
+/// these records are registered. Each peer must have an authenticated BLS PoP
+/// in the genesis topology entries.
+pub fn genesis_participant_committee_key_instructions(
+    topology_entries: &[GenesisTopologyEntry],
+    participant_peers: &[PeerId],
+) -> Vec<InstructionBox> {
+    if participant_peers.is_empty() {
+        return Vec::new();
+    }
+    let genesis_authority = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
+    let mut instructions = Vec::with_capacity(participant_peers.len() + 2);
+    instructions
+        .push(Grant::account_permission(CanManageConsensusKeys, genesis_authority.clone()).into());
+    for peer in participant_peers {
+        let entry = topology_entries
+            .iter()
+            .find(|entry| entry.peer == *peer)
+            .expect("participant peer has a genesis topology entry");
+        let pop = entry
+            .pop_bytes()
+            .expect("valid participant peer proof-of-possession")
+            .expect("participant peer proof-of-possession is present");
+        let id = derive_committee_key_id(peer.public_key());
+        instructions.push(
+            RegisterConsensusKey {
+                id: id.clone(),
+                record: ConsensusKeyRecord {
+                    id,
+                    public_key: peer.public_key().clone(),
+                    pop: Some(pop),
+                    activation_height: 1,
+                    expiry_height: None,
+                    replaces: None,
+                    status: ConsensusKeyStatus::Active,
+                },
+            }
+            .into(),
+        );
+    }
+    instructions.push(Revoke::account_permission(CanManageConsensusKeys, genesis_authority).into());
+    instructions
 }
 #[cfg(test)]
 fn sanitize_strings(value: &mut Value) {
@@ -1410,7 +1457,11 @@ mod tests {
     use super::*;
     use iroha_core::state::StateReadOnly;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{asset::AssetDefinition, domain::Domain};
+    use iroha_data_model::{
+        asset::AssetDefinition,
+        domain::Domain,
+        isi::{GrantBox, RevokeBox},
+    };
     use norito::codec::Decode;
 
     // Genesis uses the same exact four-validator committee and authenticated PoPs
@@ -1445,6 +1496,47 @@ mod tests {
         let first = KeyPair::try_from_seed(vec![0xC0; 32], Algorithm::BlsNormal)
             .expect("deterministic first test-network validator");
         genesis_committee_with_key(&first)
+    }
+    #[test]
+    fn participant_committee_key_instructions_bind_pop_and_restore_permission() {
+        init_instruction_registry();
+        let (_, entries) = genesis_committee();
+        assert!(genesis_participant_committee_key_instructions(&entries, &[]).is_empty());
+        let peer = entries[0].peer.clone();
+        let instructions =
+            genesis_participant_committee_key_instructions(&entries, &[peer.clone()]);
+        assert_eq!(instructions.len(), 3);
+        let authority = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
+        let expected_permission = Permission::from(CanManageConsensusKeys);
+        let Some(GrantBox::Permission(grant)) = instructions[0].as_any().downcast_ref::<GrantBox>()
+        else {
+            panic!("first instruction must grant consensus-key management");
+        };
+        assert_eq!(grant.destination(), &authority);
+        assert_eq!(grant.object(), &expected_permission);
+        let register = instructions[1]
+            .as_any()
+            .downcast_ref::<RegisterConsensusKey>()
+            .expect("second instruction registers the Committee key");
+        let id = derive_committee_key_id(peer.public_key());
+        assert_eq!(register.id, id);
+        assert_eq!(register.record.id, id);
+        assert_eq!(register.record.public_key, peer.public_key().clone());
+        assert_eq!(
+            register.record.pop,
+            entries[0].pop_bytes().expect("fixture PoP")
+        );
+        assert_eq!(register.record.activation_height, 1);
+        assert_eq!(register.record.expiry_height, None);
+        assert_eq!(register.record.replaces, None);
+        assert_eq!(register.record.status, ConsensusKeyStatus::Active);
+        let Some(RevokeBox::Permission(revoke)) =
+            instructions[2].as_any().downcast_ref::<RevokeBox>()
+        else {
+            panic!("last instruction must revoke consensus-key management");
+        };
+        assert_eq!(revoke.destination(), &authority);
+        assert_eq!(revoke.object(), &expected_permission);
     }
     // Adversarial wire fixture only: production cannot mutate the fragment count
     // independently of its one complete execution-output owner.
@@ -2094,7 +2186,9 @@ mod tests {
             dataspace_catalog,
             ..Default::default()
         };
-        let post_topology_transactions = vec![vec![
+        let escrow_account_id = AccountId::parse_encoded(&nexus.staking.stake_escrow_account_id)
+            .expect("configured staking escrow");
+        let mut post_topology_instructions = vec![
             Register::domain(Domain::new(nexus_domain.clone())).into(),
             Register::account(Account::new(validator_id.clone())).into(),
             Register::asset_definition({
@@ -2112,6 +2206,12 @@ mod tests {
                 AssetId::new(stake_asset_id.clone(), validator_id.clone()),
             )
             .into(),
+        ];
+        post_topology_instructions.extend(genesis_participant_committee_key_instructions(
+            &entries,
+            &[peer_id.clone()],
+        ));
+        post_topology_instructions.extend([
             RegisterPublicLaneValidator::new(
                 lane_one.id,
                 validator_id.clone(),
@@ -2121,17 +2221,14 @@ mod tests {
                 Metadata::default(),
                 iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
                     AssetId::new(stake_asset_id.clone(), validator_id.clone()),
-                    AssetId::new(
-                        stake_asset_id.clone(),
-                        AccountId::parse_encoded(&nexus.staking.stake_escrow_account_id)
-                            .expect("configured genesis fixture escrow"),
-                    ),
+                    AssetId::new(stake_asset_id.clone(), escrow_account_id),
                     Quantity::from(10_u32),
                 ),
             )
             .into(),
             ActivatePublicLaneValidator::new(lane_one.id, validator_id.clone()).into(),
-        ]];
+        ]);
+        let post_topology_transactions = vec![post_topology_instructions];
         let (block, genesis_account, topology_vec, genesis_key_pair) =
             super::build_minimal_genesis_unexecuted_with_post_topology(
                 Vec::new(),

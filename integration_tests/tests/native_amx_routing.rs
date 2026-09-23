@@ -29,6 +29,7 @@ use iroha::{
         },
         isi::{
             Grant, InstructionBox, Log, Mint, Register, SetParameter,
+            consensus_keys::RegisterConsensusKey,
             musubi::{
                 AddMusubiArchiveLocationV1, PublishMusubiReleaseV1, RegisterMusubiArchiveV1,
                 RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
@@ -85,19 +86,20 @@ use iroha_config::{
     },
 };
 use iroha_config_base::WithOrigin;
-use iroha_core::{da::proof_policy_bundle, kura::Kura};
+use iroha_core::{da::proof_policy_bundle, kura::Kura, state::derive_committee_key_id};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_executor_data_model::permission::sorafs::{
     CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder,
 };
+use iroha_genesis::GenesisTopologyEntry;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, dataspace_setup_instruction,
-    domain_setup_instruction_in_dataspace, init_instruction_registry,
-    unexecuted_genesis_factory_with_post_topology,
+    domain_setup_instruction_in_dataspace, genesis_participant_committee_key_instructions,
+    init_instruction_registry, unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::json::{self, Value as JsonValue};
@@ -237,7 +239,10 @@ fn da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lane_config = ActualLaneConfig::from_catalog(&catalog);
     proof_policy_bundle(&lane_config)
 }
-fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<InstructionBox>> {
+fn genesis_post_topology_transactions(
+    topology: &[PeerId],
+    topology_entries: &[GenesisTopologyEntry],
+) -> Vec<Vec<InstructionBox>> {
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = fee_asset_definition_id();
     let gas_account_id = gas_account();
@@ -285,11 +290,15 @@ fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Instructio
         .into(),
         Mint::asset_quantity(
             VALIDATOR_FEE_SEED,
-            AssetId::new(fee_asset_id.clone(), gas_account_id),
+            AssetId::new(fee_asset_id.clone(), gas_account_id.clone()),
         )
         .into(),
     ];
     let mut validator_tx = Vec::with_capacity(topology.len() * lane_ids.len() * 2);
+    bootstrap_tx.extend(genesis_participant_committee_key_instructions(
+        topology_entries,
+        topology,
+    ));
     for (index, peer_id) in topology.iter().enumerate() {
         let validator_id = validator_account(index);
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
@@ -318,7 +327,7 @@ fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Instructio
                     Metadata::default(),
                     iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
                         AssetId::new(stake_asset_id.clone(), validator_id.clone()),
-                        AssetId::new(stake_asset_id.clone(), gas_account()),
+                        AssetId::new(stake_asset_id.clone(), gas_account_id.clone()),
                         Quantity::from(VALIDATOR_STAKE),
                     ),
                 )
@@ -388,7 +397,7 @@ fn localnet_builder() -> NetworkBuilder {
         .with_genesis_block(|topology, topology_entries| {
             let mut genesis = unexecuted_genesis_factory_with_post_topology(
                 Vec::new(),
-                genesis_post_topology_transactions(topology.as_ref()),
+                genesis_post_topology_transactions(topology.as_ref(), &topology_entries),
                 topology,
                 topology_entries,
             );
@@ -3048,4 +3057,77 @@ fn multilane_release_gate_requested(context: &str) -> Result<bool> {
 async fn native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs()
 -> Result<()> {
     qualification_scenarios::run_native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs().await
+}
+
+#[test]
+fn genesis_staking_plans_bind_funded_validators_to_configured_custody() {
+    iroha_test_network::init_instruction_registry();
+    let entries = (0..4)
+        .map(|index| {
+            let key = iroha_crypto::KeyPair::try_from_seed(
+                vec![index + 1; 32],
+                iroha_crypto::Algorithm::BlsNormal,
+            )
+            .expect("deterministic genesis staking validator");
+            GenesisTopologyEntry::new(
+                PeerId::new(key.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("deterministic genesis staking validator PoP"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let topology = entries
+        .iter()
+        .map(|entry| entry.peer.clone())
+        .collect::<Vec<_>>();
+    let transactions = genesis_post_topology_transactions(&topology, &entries);
+    let committee_registrations = transactions
+        .iter()
+        .flatten()
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<RegisterConsensusKey>())
+        .collect::<Vec<_>>();
+    assert_eq!(committee_registrations.len(), topology.len());
+    for (registration, peer) in committee_registrations.iter().zip(&topology) {
+        assert_eq!(registration.id, derive_committee_key_id(peer.public_key()));
+    }
+    let registrations = transactions
+        .iter()
+        .flatten()
+        .filter_map(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(registrations.len(), 12);
+    for registration in registrations {
+        assert_eq!(
+            registration.monetary_plan.network_scope,
+            iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Genesis
+        );
+        assert_eq!(registration.monetary_plan.valid_until_height, 1);
+        assert_eq!(
+            registration.monetary_plan.source_asset,
+            iroha_data_model::asset::AssetId::new(
+                stake_asset_definition_id(),
+                registration.validator.clone()
+            )
+        );
+        assert_eq!(
+            registration.monetary_plan.destination_asset,
+            iroha_data_model::asset::AssetId::new(stake_asset_definition_id(), gas_account())
+        );
+        assert_eq!(
+            registration.monetary_plan.amount,
+            registration.initial_stake
+        );
+        assert_eq!(
+            registration.monetary_plan.precondition,
+            iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
+                    activation_height: 1
+                }
+            )
+        );
+    }
 }

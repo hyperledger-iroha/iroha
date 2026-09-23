@@ -16,6 +16,7 @@ use iroha::{
         domain::Domain,
         isi::{
             InstructionBox, Log, Mint, Register,
+            consensus_keys::RegisterConsensusKey,
             space_directory::PublishSpaceDirectoryManifest,
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
@@ -29,17 +30,21 @@ use iroha::{
     },
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
-use iroha_core::da::proof_policy_bundle;
+use iroha_core::{da::proof_policy_bundle, state::derive_committee_key_id};
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::{
     ValidationFail,
     query::error::{FindError, QueryExecutionFail},
 };
+use iroha_genesis::GenesisTopologyEntry;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-use iroha_test_network::{NetworkBuilder, unexecuted_genesis_factory_with_post_topology};
+use iroha_test_network::{
+    NetworkBuilder, genesis_participant_committee_key_instructions,
+    unexecuted_genesis_factory_with_post_topology,
+};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
@@ -143,8 +148,10 @@ fn localnet_builder() -> NetworkBuilder {
         .with_peers(TOTAL_PEERS)
         .without_npos_genesis_bootstrap()
         .with_genesis_block(|topology, topology_entries| {
-            let post_topology =
-                npos_multilane_genesis_post_topology_transactions(topology.as_ref());
+            let post_topology = npos_multilane_genesis_post_topology_transactions(
+                topology.as_ref(),
+                &topology_entries,
+            );
             let mut genesis = unexecuted_genesis_factory_with_post_topology(
                 npos_override_transactions(VALIDATORS_PER_LANE),
                 post_topology,
@@ -318,6 +325,7 @@ fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
 }
 fn npos_multilane_genesis_post_topology_transactions(
     topology: &[PeerId],
+    topology_entries: &[GenesisTopologyEntry],
 ) -> Vec<Vec<InstructionBox>> {
     assert_eq!(
         topology.len(),
@@ -402,6 +410,10 @@ fn npos_multilane_genesis_post_topology_transactions(
         .into(),
         Mint::asset_quantity(200_u32, AssetId::new(ds2_asset_def.clone(), BOB_ID.clone())).into(),
     ];
+    bootstrap_tx.extend(genesis_participant_committee_key_instructions(
+        topology_entries,
+        &topology[VALIDATORS_PER_LANE..LANE_VALIDATOR_COUNT],
+    ));
     for (index, peer) in topology.iter().take(LANE_VALIDATOR_COUNT).enumerate() {
         let lane_index = if index < VALIDATORS_PER_LANE {
             NEXUS_LANE_INDEX
@@ -1509,14 +1521,15 @@ mod tests {
         ALICE_ID, ALICE_KEYPAIR, AccountId, Algorithm, AssetDefinitionId, BlockHeader, DS1_ID_U64,
         DS1_LANE_INDEX, DS1_MANIFEST_HASH, DS2_ID_U64, DS2_LANE_INDEX, DS2_MANIFEST_HASH, DomainId,
         ExpectedLaneValidatorBinding, Hash, KeyPair, LANE_VALIDATOR_COUNT, Level, Log, NEXUS_ALIAS,
-        NEXUS_ID_U64, NEXUS_LANE_INDEX, NetworkId, RegisterPublicLaneValidator, RoutedJsonResponse,
-        RoutedTransactionSubmitResponse, SignedTransaction, TOTAL_PEERS,
-        account_assets_response_contains, encode_versioned_signed_transaction,
-        expect_proxy_fanout_headers, expect_proxy_route_headers, expected_lane_binding_for_peer,
-        lane_validator_snapshot, manifest_response_contains_dataspace,
-        manifest_response_contains_status, multilane_da_proof_policy_bundle,
-        nexus_fee_asset_definition_id, npos_multilane_genesis_post_topology_transactions,
-        permission_response_contains, routed_header_string, routed_json_empty_body_is_transient,
+        NEXUS_ID_U64, NEXUS_LANE_INDEX, NetworkId, RegisterConsensusKey,
+        RegisterPublicLaneValidator, RoutedJsonResponse, RoutedTransactionSubmitResponse,
+        SignedTransaction, TOTAL_PEERS, VALIDATORS_PER_LANE, account_assets_response_contains,
+        derive_committee_key_id, encode_versioned_signed_transaction, expect_proxy_fanout_headers,
+        expect_proxy_route_headers, expected_lane_binding_for_peer, lane_validator_snapshot,
+        manifest_response_contains_dataspace, manifest_response_contains_status,
+        multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
+        npos_multilane_genesis_post_topology_transactions, permission_response_contains,
+        routed_header_string, routed_json_empty_body_is_transient,
         routed_json_response_is_transient, routed_response_context, routing_probe_gas_account_id,
         stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
         validator_authority_seed,
@@ -1567,17 +1580,25 @@ mod tests {
             "ds2coin".parse().expect("asset name"),
         )
     }
-    fn deterministic_topology(peer_count: usize) -> Vec<PeerId> {
-        (0..peer_count)
+    fn deterministic_genesis_topology(
+        peer_count: usize,
+    ) -> (Vec<PeerId>, Vec<iroha_genesis::GenesisTopologyEntry>) {
+        let entries = (0..peer_count)
             .map(|index| {
                 let mut seed = vec![0_u8; 32];
-                seed[0] = 0xE1;
+                seed[0] = 0xE2;
                 seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
-                let key_pair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
-                    .expect("fixture tx/query routing topology peer key");
-                PeerId::new(key_pair.public_key().clone())
+                let key_pair = KeyPair::try_from_seed(seed, Algorithm::BlsNormal)
+                    .expect("fixture tx/query routing genesis peer key");
+                iroha_genesis::GenesisTopologyEntry::new(
+                    PeerId::new(key_pair.public_key().clone()),
+                    iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                        .expect("fixture tx/query routing genesis peer PoP"),
+                )
             })
-            .collect()
+            .collect::<Vec<_>>();
+        let topology = entries.iter().map(|entry| entry.peer.clone()).collect();
+        (topology, entries)
     }
     fn decode_manifest_hash_fixture(raw: &str) -> [u8; 32] {
         assert_eq!(raw.len(), 64);
@@ -1639,10 +1660,27 @@ mod tests {
     }
     #[test]
     fn genesis_post_topology_builder_requires_full_wrong_ingress_roster() {
-        let topology = deterministic_topology(TOTAL_PEERS);
-        let transactions = npos_multilane_genesis_post_topology_transactions(&topology);
+        let (topology, entries) = deterministic_genesis_topology(TOTAL_PEERS);
+        let transactions = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
         assert_eq!(transactions.len(), 1);
-        assert_eq!(transactions[0].len(), 12 + LANE_VALIDATOR_COUNT * 5);
+        assert_eq!(
+            transactions[0].len(),
+            12 + LANE_VALIDATOR_COUNT * 5 + (LANE_VALIDATOR_COUNT - VALIDATORS_PER_LANE) + 2
+        );
+        let committee_registrations = transactions[0]
+            .iter()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<RegisterConsensusKey>())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            committee_registrations.len(),
+            LANE_VALIDATOR_COUNT - VALIDATORS_PER_LANE
+        );
+        for (registration, peer) in committee_registrations
+            .iter()
+            .zip(&topology[VALIDATORS_PER_LANE..LANE_VALIDATOR_COUNT])
+        {
+            assert_eq!(registration.id, derive_committee_key_id(peer.public_key()));
+        }
         let lane_registrations = transactions[0]
             .iter()
             .filter_map(|instruction| {
@@ -1652,6 +1690,40 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(lane_registrations.len(), LANE_VALIDATOR_COUNT);
+        for registration in &lane_registrations {
+            assert_eq!(
+                registration.monetary_plan.network_scope,
+                iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Genesis
+            );
+            assert_eq!(registration.monetary_plan.valid_until_height, 1);
+            assert_eq!(
+                registration.monetary_plan.source_asset,
+                iroha_data_model::asset::AssetId::new(
+                    stake_asset_definition_id(),
+                    registration.validator.clone()
+                )
+            );
+            assert_eq!(
+                registration.monetary_plan.destination_asset,
+                iroha_data_model::asset::AssetId::new(
+                    stake_asset_definition_id(),
+                    routing_probe_gas_account_id()
+                )
+            );
+            assert_eq!(
+                registration.monetary_plan.amount,
+                registration.initial_stake
+            );
+            assert_eq!(
+                registration.monetary_plan.precondition,
+                iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                    iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
+                        activation_height: 1
+                    }
+                )
+            );
+        }
+
         assert!(
             lane_registrations
                 .iter()
@@ -1662,17 +1734,17 @@ mod tests {
             expected_lane_binding_for_peer(0, &topology[0]).peer_id,
             topology[0].to_string()
         );
-        let short_topology = deterministic_topology(TOTAL_PEERS - 1);
+        let (short_topology, short_entries) = deterministic_genesis_topology(TOTAL_PEERS - 1);
         let result = panic::catch_unwind(|| {
-            npos_multilane_genesis_post_topology_transactions(&short_topology)
+            npos_multilane_genesis_post_topology_transactions(&short_topology, &short_entries)
         });
         assert!(result.is_err());
     }
     #[test]
     fn genesis_post_topology_builder_is_stable_for_same_wrong_ingress_roster() {
-        let topology = deterministic_topology(TOTAL_PEERS);
-        let first = npos_multilane_genesis_post_topology_transactions(&topology);
-        let second = npos_multilane_genesis_post_topology_transactions(&topology);
+        let (topology, entries) = deterministic_genesis_topology(TOTAL_PEERS);
+        let first = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
+        let second = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
         assert_eq!(format!("{first:?}"), format!("{second:?}"));
     }
     #[test]

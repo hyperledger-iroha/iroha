@@ -57,28 +57,29 @@ fn reward_epoch_zero_is_claimable_once() {
         .execute(&sink, &mut stx)
         .unwrap();
     let claim = ClaimPublicLaneRewards {
-        claim_plan: fixture_reward_claim_plan(&stx, lane, &(validator.clone()), Some(0)),
+        claim_plan: fixture_reward_claim_plan(&stx, lane, &validator, Some(0)),
         lane_id: lane,
         account: validator.clone(),
     };
     claim.clone().execute(&validator, &mut stx).unwrap();
-    let error = claim
+    let stale_error = claim
         .execute(&validator, &mut stx)
-        .expect_err("a consumed signed cursor cannot replay");
-    assert!(error.to_string().contains("cursor changed"));
+        .expect_err("a signed claim cannot replay its previous cursor");
+    assert!(stale_error.to_string().contains("cursor changed"));
     ClaimPublicLaneRewards {
         claim_plan: fixture_reward_claim_plan(&stx, lane, &validator, Some(0)),
         lane_id: lane,
         account: validator.clone(),
     }
     .execute(&validator, &mut stx)
-    .unwrap();
+    .expect("fresh empty claim remains a no-op");
     assert_eq!(
         stx.world
             .public_lane_reward_claims
-            .get(&(lane, validator.clone()))
-            .and_then(|state| state.through_epoch),
-        Some(0)
+            .get(&(lane, validator.clone())),
+        Some(&PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(0)
+        })
     );
     assert_eq!(
         stx.world
@@ -109,7 +110,7 @@ fn reward_dust_accumulates_until_paid() {
         .execute(&sink, &mut stx)
         .unwrap();
     let claim = ClaimPublicLaneRewards {
-        claim_plan: fixture_reward_claim_plan(&stx, lane, &(validator.clone()), None),
+        claim_plan: fixture_reward_claim_plan(&stx, lane, &validator, None),
         lane_id: lane,
         account: validator.clone(),
     };
@@ -117,9 +118,10 @@ fn reward_dust_accumulates_until_paid() {
     assert_eq!(
         stx.world
             .public_lane_reward_claims
-            .get(&(lane, validator.clone()))
-            .and_then(|state| state.through_epoch),
-        Some(0)
+            .get(&(lane, validator.clone())),
+        Some(&PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(0)
+        })
     );
     assert_eq!(
         stx.world
@@ -134,10 +136,10 @@ fn reward_dust_accumulates_until_paid() {
     reward_distribution(lane, 1, &asset, &validator, 25)
         .execute(&sink, &mut stx)
         .unwrap();
-    let error = claim
+    let stale_error = claim
         .execute(&validator, &mut stx)
-        .expect_err("old dust observation cannot authorize a changed cursor");
-    assert!(error.to_string().contains("cursor changed"));
+        .expect_err("old dust claim must not absorb later records");
+    assert!(stale_error.to_string().contains("cursor changed"));
     ClaimPublicLaneRewards {
         claim_plan: fixture_reward_claim_plan(&stx, lane, &validator, None),
         lane_id: lane,
@@ -220,7 +222,7 @@ fn reward_reserve_blocks_transfer_and_burn_but_releases_paid_rewards() {
         &Quantity::from(200_u64)
     );
     ClaimPublicLaneRewards {
-        claim_plan: fixture_reward_claim_plan(&stx, lane, &(validator.clone()), None),
+        claim_plan: fixture_reward_claim_plan(&stx, lane, &validator, None),
         lane_id: lane,
         account: validator.clone(),
     }
@@ -249,7 +251,7 @@ fn reward_failed_payment_restores_claim_and_reserve() {
     // Simulate an unavailable funding balance; payment must not consume entitlement.
     stx.world.assets.remove(asset.clone());
     let claim = ClaimPublicLaneRewards {
-        claim_plan: fixture_reward_claim_plan(&stx, lane, &(validator.clone()), None),
+        claim_plan: fixture_reward_claim_plan(&stx, lane, &validator, None),
         lane_id: lane,
         account: validator.clone(),
     };
@@ -284,7 +286,7 @@ fn reward_obligation_audit_rejects_corrupt_record_keys() {
         .epoch = 2;
     assert!(rewards::outstanding_rewards(&stx.world, &asset).is_err());
     let error = ClaimPublicLaneRewards {
-        claim_plan: fixture_reward_claim_plan(&stx, lane, &(validator.clone()), None),
+        claim_plan: fixture_reward_claim_plan(&stx, lane, &validator, None),
         lane_id: lane,
         account: validator.clone(),
     }
@@ -321,7 +323,7 @@ fn reward_claim_uses_recorded_custody_after_fee_policy_changes() {
     stx.nexus.staking.public_validator_mode =
         iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
     ClaimPublicLaneRewards {
-        claim_plan: fixture_reward_claim_plan(&stx, lane, &(validator.clone()), None),
+        claim_plan: fixture_reward_claim_plan(&stx, lane, &validator, None),
         lane_id: lane,
         account: validator.clone(),
     }
@@ -381,7 +383,7 @@ fn reward_recording_excludes_bonded_custody_from_a_shared_fee_sink() {
         .execute(&sink, &mut stx)
         .unwrap();
     ClaimPublicLaneRewards {
-        claim_plan: fixture_reward_claim_plan(&stx, lane, &(validator.clone()), None),
+        claim_plan: fixture_reward_claim_plan(&stx, lane, &validator, None),
         lane_id: lane,
         account: validator.clone(),
     }
@@ -476,10 +478,10 @@ fn reward_failed_second_asset_rolls_back_the_enclosing_transaction() {
         let mut stx = state_block.transaction();
         stx.nexus = nexus;
         seed_test_call_hash(&mut stx, 0xB7);
-        // The later sorted custody asset is unavailable; batch preparation must reject before any payout.
+        // A later sorted custody asset is unavailable; the complete payout batch must roll back.
         stx.world.assets.remove(assets[1].clone());
         let error = ClaimPublicLaneRewards {
-            claim_plan: fixture_reward_claim_plan(&stx, lane, &(validator.clone()), None),
+            claim_plan: fixture_reward_claim_plan(&stx, lane, &validator, None),
             lane_id: lane,
             account: validator.clone(),
         }
@@ -489,11 +491,25 @@ fn reward_failed_second_asset_rolls_back_the_enclosing_transaction() {
         assert_eq!(
             stx.world.assets.get(&assets[0]).unwrap().as_ref(),
             &Quantity::from(100_u64),
-            "the first payout must remain unapplied when the second preparation fails"
+            "a failed later payout must restore the earlier payout inside the instruction"
         );
         assert_eq!(
             stx.world.public_lane_reward_reserves.get(&assets[0]),
-            Some(&Quantity::from(25_u64))
+            Some(&Quantity::from(25_u64)),
+            "failure must retain the first source reserve",
+        );
+        assert!(
+            stx.world
+                .public_lane_reward_claims
+                .get(&(lane, validator.clone()))
+                .is_none()
+        );
+        assert!(
+            stx.world
+                .public_lane_reward_accruals
+                .iter()
+                .next()
+                .is_none()
         );
         assert_eq!(
             stx.world.public_lane_reward_reserves.get(&assets[1]),

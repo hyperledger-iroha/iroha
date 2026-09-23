@@ -4075,7 +4075,7 @@ pub mod application_api {
         EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET => dataspace_get("application.explorer_accounts_by_account_id_get", "/v1/explorer/accounts/{account_id}");
         EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET => dataspace_get("application.explorer_accounts_by_account_id_qr_get", "/v1/explorer/accounts/{account_id}/qr");
         EXPLORER_DOMAINS_BY_DOMAIN_ID_GET => dataspace_get("application.explorer_domains_by_domain_id_get", "/v1/explorer/domains/{domain_id}");
-        OFFLINE_ASSET_REGISTRATION_GET => dataspace_get("application.offline_asset_registration_get", "/v1/offline/assets/{asset_definition_id}/registration");
+        OFFLINE_ASSET_REGISTRATION_GET => dataspace_get("application.offline_asset_registration_get", "/v1/assets/definitions/{asset}/registration");
         EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_GET => dataspace_get("application.explorer_asset_definitions_by_definition_id_get", "/v1/explorer/asset-definitions/{definition_id}");
         EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_ECONOMETRICS_GET => dataspace_get("application.explorer_asset_definitions_by_definition_id_econometrics_get", "/v1/explorer/asset-definitions/{definition_id}/econometrics");
         EXPLORER_ASSET_DEFINITIONS_BY_DEFINITION_ID_SNAPSHOT_GET => dataspace_get("application.explorer_asset_definitions_by_definition_id_snapshot_get", "/v1/explorer/asset-definitions/{definition_id}/snapshot");
