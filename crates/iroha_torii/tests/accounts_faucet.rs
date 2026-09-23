@@ -15,7 +15,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    Registrable,
+    IntoKeyValue, Registrable,
     account::AccountId,
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     isi::{
@@ -565,7 +565,10 @@ fn register_faucet_user_for_test(
     let mut tx = block.transaction();
     tx.world_mut_for_testing().insert_account_for_testing(
         user_id.clone(),
-        Account::new(user_id.clone()).build(authority_id),
+        Account::new(user_id.clone())
+            .build(authority_id)
+            .into_key_value()
+            .1,
     );
     tx.apply();
     block

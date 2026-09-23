@@ -16,7 +16,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    NetworkId, Registrable,
+    IntoKeyValue, NetworkId, Registrable,
     account::{AccountAddress, AccountId},
     asset::{AssetDefinitionId, AssetId},
     isi::{
@@ -399,7 +399,10 @@ fn install_conflicting_onboarding_state_for_test(
     let authority_id = AccountId::new(authority.public_key().clone());
     world.insert_account_for_testing(
         account_id.clone(),
-        Account::new(account_id.clone()).build(&authority_id),
+        Account::new(account_id.clone())
+            .build(&authority_id)
+            .into_key_value()
+            .1,
     );
     world.smart_contract_state_mut_for_testing().insert(
         iroha_core::sns::record_storage_key(&selector),
