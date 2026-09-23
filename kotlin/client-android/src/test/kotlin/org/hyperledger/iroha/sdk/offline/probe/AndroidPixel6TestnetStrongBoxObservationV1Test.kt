@@ -258,4 +258,28 @@ class AndroidPixel6TestnetStrongBoxObservationV1Test {
         }
         assertEquals(0, store.reserves)
     }
+
+    @Test fun skippedAndOverflowedIndicesNeverReserveOrTouchStrongBox() {
+        val device = Device()
+        val store = Store()
+        val skipped = byteArrayOf(2) + ByteArray(15)
+        assertFailsWith<IllegalArgumentException> {
+            Pixel6TestnetObservationRunnerV1(device, store).collect(
+                network, release, frame.copyOf().also { skipped.copyInto(it, 444) },
+                lane, before, skipped,
+            )
+        }
+        val maximum = ByteArray(16) { 0xff.toByte() }
+        assertFailsWith<IllegalArgumentException> {
+            Pixel6TestnetObservationRunnerV1(device, store).collect(
+                network, release, frame.copyOf().also {
+                    maximum.copyInto(it, 428)
+                    before.copyInto(it, 444)
+                },
+                lane, maximum, before,
+            )
+        }
+        assertEquals(0, store.reserves)
+        assertEquals(0, device.generated)
+    }
 }
