@@ -6974,13 +6974,81 @@ pub(crate) mod valid {
             block_cadence: Duration,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
-        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
+        ) -> Result<ValidatedReplayExecution<'state>, Error> {
             let authority = match VerifiedReplayProposal::new(&executed, verified, merge_entry) {
                 Ok(authority) => authority,
-                Err(error) => return WithEvents::new(Err((Box::new(executed), Box::new(error)))),
+                Err(error) => return Err((Box::new(executed), Box::new(error))),
             };
+            let proposal = executed.canonical_resultless_proposal();
+            if proposal
+                .execution_context()
+                .is_some_and(|bundle| bundle.native_lane_decisions.is_some())
+            {
+                // Current finality alone does not authenticate epoch continuity.
+                // Rejoin the original parent receipt or the exact audited snapshot
+                // before taking any State execution writers.
+                let native =
+                    (|| -> Result<ValidatedReplayExecution<'state>, BlockValidationError> {
+                        authority.validate(&proposal, &state.query_view())?;
+                        let frozen = &verified.height_context;
+                        if !topology
+                            .as_ref()
+                            .iter()
+                            .eq(frozen.roster.iter().map(|entry| &entry.validator))
+                        {
+                            return Err(Self::execution_context_error(
+                                "Native replay topology differs from verified finality",
+                            ));
+                        }
+                        let context = if frozen.snapshot_bootstrap.is_some() {
+                        let bootstrap = state.authenticated_snapshot_v2_bootstrap()
+                            .filter(|record| record.context == *frozen && record.validator_set_pops == verified.validator_set_pops)
+                            .ok_or_else(|| Self::execution_context_error("Native replay lacks its exact authenticated snapshot context"))?;
+                        crate::sumeragi::v2::VerifiedHeightContext::snapshot_bootstrap(bootstrap)
+                    } else {
+                        let parent_height = frozen.height.checked_sub(1)
+                            .filter(|height| *height != 0)
+                            .ok_or_else(|| Self::execution_context_error("Native replay requires an authenticated predecessor"))?;
+                        let (parent, receipt) = state.kura().v2_finality_artifact_with_receipt(parent_height)
+                            .map_err(|error| Self::execution_context_error(error.to_string()))?
+                            .ok_or_else(|| Self::execution_context_error("Native replay parent finality is unavailable"))?;
+                        crate::sumeragi::v2::VerifiedHeightContext::successor(
+                            frozen.clone(), verified.validator_set_pops.clone(), &parent, &receipt, &parent.validator_set_pops,
+                        )
+                    }.map_err(|error| Self::execution_context_error(error.to_string()))?;
+                        let source = match state.prepare_proposed_native_lane_batch_source(&proposal, &[])
+                        .map_err(Self::execution_context_error)? {
+                        crate::state::NativeLaneBatchSourcePreparationV1::Ready(source) => source,
+                        crate::state::NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired { .. } => {
+                            return Err(Self::execution_context_error("Native replay first input body is unavailable"));
+                        }
+                        crate::state::NativeLaneBatchSourcePreparationV1::ObservationChanged => {
+                            return Err(Self::execution_context_error("Native replay pre-State observation changed"));
+                        }
+                    };
+                        let input = Self::validate_and_record_native_candidate(
+                            source,
+                            context,
+                            genesis_account,
+                            time_source,
+                            block_cadence,
+                        )
+                        .map_err(|error| Self::execution_context_error(error.to_string()))?
+                        .ok_or_else(|| {
+                            Self::execution_context_error(
+                                "Native replay source observation changed",
+                            )
+                        })?;
+                        Ok(ValidatedReplayExecution {
+                            valid: input.valid,
+                            state: input.state,
+                            native: input.native,
+                        })
+                    })();
+                return native.map_err(|error| (Box::new(executed), Box::new(error)));
+            }
             Self::validate_keep_voting_block_inner(
-                executed.canonical_resultless_proposal(),
+                proposal,
                 topology,
                 genesis_account,
                 time_source,
@@ -6996,6 +7064,12 @@ pub(crate) mod valid {
                 true,
                 None,
             )
+            .unpack(|_| {})
+            .map(|(valid, state)| ValidatedReplayExecution {
+                valid,
+                state,
+                native: None,
+            })
         }
         /// Exercise a Sumeragi-v2 unit fixture with an externally prevalidated block signature.
         ///
@@ -7179,6 +7253,11 @@ pub(crate) mod valid {
                     .parent_commit_qc
                     .as_ref()
                     .map(|qc| qc.subject.block_hash)
+                    .or_else(|| {
+                        frozen
+                            .snapshot_bootstrap
+                            .map(|anchor| anchor.snapshot_block_hash)
+                    })
                     != view.latest_block_hash()
             {
                 return Err(Self::execution_context_error(

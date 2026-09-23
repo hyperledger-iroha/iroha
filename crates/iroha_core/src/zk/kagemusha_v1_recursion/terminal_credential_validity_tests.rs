@@ -84,6 +84,7 @@ fn credential_fixture() -> (KagemushaHardwareProfileV1, KagemushaHardwareCredent
     )
     .expect("canonical diagnostic key");
     let profile = KagemushaHardwareProfileV1 {
+        app_attestation_authority_policy_digest: [0xA5; 32],
         version: 1,
         protocol_version: 1,
         hardware_profile_id: [0; 32],
@@ -110,6 +111,7 @@ fn credential_fixture() -> (KagemushaHardwareProfileV1, KagemushaHardwareCredent
             .expect("low-S signature")
     };
     let mut credential = KagemushaHardwareCredentialV1 {
+        app_policy_binding_digest: [0xA6; 32],
         version: 1,
         credential_id: [0; 32],
         network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(

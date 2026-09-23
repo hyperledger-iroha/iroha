@@ -6489,7 +6489,7 @@ mod executor_model {
                     inventory.inrou_stage_tree_sha256 = None;
                 }
                 let steps = execution_steps(scope);
-                assert_eq!(steps.len(), if scope.includes_inrou() { 16 } else { 15 });
+                assert_eq!(steps.len(), if scope.includes_inrou() { 15 } else { 14 });
                 assert_eq!(
                     steps.contains(&ExecutionStep::Preseed),
                     scope.includes_inrou()

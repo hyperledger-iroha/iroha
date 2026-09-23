@@ -227,6 +227,7 @@ pub(crate) fn incoming_payment_fixture(
     let asset = asset();
     let asset_incarnation = incarnation();
     let mut credential = KagemushaHardwareCredentialV1 {
+        app_policy_binding_digest: [0xA6; 32],
         version: KAGEMUSHA_WIRE_VERSION_V1,
         credential_id: [0; 32],
         network_id,
@@ -918,6 +919,7 @@ pub(super) fn state_verification_fixture()
             device_key_reference: digest(0x96),
             hardware_policy_id: digest(0x97),
         },
+        next_one_use_key_reference: [0; 32],
         state_nonce_commitment: digest(0x98),
         consumed_credit_root: pasta_pair(0x99),
         state_commitment_components: pasta_pair(0x9B),

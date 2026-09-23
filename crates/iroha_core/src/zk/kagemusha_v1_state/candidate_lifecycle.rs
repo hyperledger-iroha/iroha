@@ -12,11 +12,15 @@ use iroha_data_model::kagemusha::{
     KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, KAGEMUSHA_OUTBOX_RETRY_METADATA_MAX_BYTES_V1,
     KAGEMUSHA_PAYMENT_MAX_BYTES_V1, KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1,
     KAGEMUSHA_REDEMPTION_VOUCHER_MAX_BYTES_V1, KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1,
-    KAGEMUSHA_WIRE_VERSION_V1, KagemushaCommitCertificateV1, KagemushaHardwareTerminalBodyV1,
+    KAGEMUSHA_WIRE_VERSION_V1, KagemushaAppAttestHardwareTransitionSelectionV1,
+    KagemushaAppAttestationAuthorityPolicyV1, KagemushaAuthenticatedReleaseV1,
+    KagemushaCommitCertificateV1, KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1,
+    KagemushaHardwareTerminalBodyV1, KagemushaHardwareTransitionSelectionExpectedV1,
     KagemushaLifecycleBindingV1, KagemushaOperationKindV1, KagemushaOutboxReservationV1,
     KagemushaPairedProofV1, KagemushaPaymentOutputV1, KagemushaPaymentRequestV1,
     KagemushaPaymentV1, KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1,
-    KagemushaRedemptionVoucherV1, kagemusha_ciphertext_digest_v1, kagemusha_payment_body_digest_v1,
+    KagemushaRedemptionVoucherV1, KagemushaSignedHardwareTransitionSelectionV1,
+    kagemusha_ciphertext_digest_v1, kagemusha_payment_body_digest_v1,
     kagemusha_prepared_transfer_digest_v1,
 };
 use norito::codec::{Decode, Encode};
@@ -1045,6 +1049,114 @@ impl PersistedOutgoingCandidateV1 {
             return Err(KagemushaStateErrorV1::InvalidRecoveryMaterial);
         }
         Ok(candidate)
+    }
+
+    /// Verify a signed hardware selection against this exact locally verified candidate.
+    ///
+    /// This prepares a digest for a future foldable proof. It does not authorize an outgoing
+    /// monetary commit: the physical secure-index semantics and recursive signature verification
+    /// still require release-pinned platform and proof qualification. The expected app binding
+    /// is reconstructed from the authenticated app policy and release, not from the signer.
+    /// Testnet experiments may continue through their separately identified non-hardware corridor.
+    pub fn verify_signed_hardware_selection_for_proof(
+        &self,
+        selection: &KagemushaSignedHardwareTransitionSelectionV1,
+        credential: &KagemushaHardwareCredentialV1,
+        release: &KagemushaAuthenticatedReleaseV1,
+        app_policy: &KagemushaAppAttestationAuthorityPolicyV1,
+        authenticated_secure_index_before: u128,
+    ) -> Result<DigestV1, KagemushaStateErrorV1> {
+        let (profile, expected) = self.hardware_selection_context_for_proof(
+            credential,
+            release,
+            app_policy,
+            authenticated_secure_index_before,
+        )?;
+        selection
+            .verify_against(credential, &profile, app_policy, expected)
+            .map_err(|_| KagemushaStateErrorV1::HardwareCertificateMismatch)
+    }
+
+    /// Verify an App Attest assertion against this exact locally verified candidate.
+    ///
+    /// This returns evidence for a future recursive fold only. The original assertion
+    /// CBOR is parsed and its signature checked here; the complete Apple enrollment
+    /// attestation must also pass the release-pinned platform verifier. This check cannot
+    /// authorize an outgoing monetary commit by itself.
+    pub fn verify_app_attest_hardware_selection_for_proof(
+        &self,
+        selection: &KagemushaAppAttestHardwareTransitionSelectionV1,
+        credential: &KagemushaHardwareCredentialV1,
+        release: &KagemushaAuthenticatedReleaseV1,
+        app_policy: &KagemushaAppAttestationAuthorityPolicyV1,
+        authenticated_secure_index_before: u128,
+    ) -> Result<DigestV1, KagemushaStateErrorV1> {
+        let (profile, expected) = self.hardware_selection_context_for_proof(
+            credential,
+            release,
+            app_policy,
+            authenticated_secure_index_before,
+        )?;
+        selection
+            .verify_signature_and_counter_against(credential, &profile, expected, app_policy)
+            .map_err(|_| KagemushaStateErrorV1::HardwareCertificateMismatch)
+    }
+
+    fn hardware_selection_context_for_proof(
+        &self,
+        credential: &KagemushaHardwareCredentialV1,
+        release: &KagemushaAuthenticatedReleaseV1,
+        app_policy: &KagemushaAppAttestationAuthorityPolicyV1,
+        authenticated_secure_index_before: u128,
+    ) -> Result<
+        (
+            KagemushaHardwareProfileV1,
+            KagemushaHardwareTransitionSelectionExpectedV1,
+        ),
+        KagemushaStateErrorV1,
+    > {
+        let prepared = &self.prepared;
+        let predecessor = &prepared.predecessor_state;
+        let enabled = release
+            .enabled_profile(prepared.lifecycle().hardware_profile_id)
+            .ok_or(KagemushaStateErrorV1::InvalidHardwareProfile)?;
+        credential
+            .validate_app_policy_binding_for_release(
+                &enabled.hardware_profile,
+                release.release_id(),
+                app_policy,
+            )
+            .map_err(|_| KagemushaStateErrorV1::HardwareCertificateMismatch)?;
+        if release.release_id() != prepared.lifecycle().release_id
+            || enabled.suite_id != credential.suite_id
+            || credential.device_key_reference
+                != predecessor.device_policy_binding.device_key_reference
+            || predecessor.device_policy_binding.hardware_policy_id
+                != release.provider_policy_root()
+            || credential.hardware_profile_id != predecessor.hardware_profile_id
+            || credential.policy_epoch != predecessor.policy_epoch
+            || credential.network_id != prepared.proof_statement.lane.network_id
+            || credential.lane_commitment != prepared.proof_statement.lane.device_lane_id
+            || u128::from(credential.hardware_epoch_generation)
+                != predecessor.hardware_epoch.generation
+            || credential.hardware_epoch_id != predecessor.hardware_epoch.epoch_id
+        {
+            return Err(KagemushaStateErrorV1::HardwareCertificateMismatch);
+        }
+        let expected = KagemushaHardwareTransitionSelectionExpectedV1 {
+            release_id: release.release_id(),
+            hardware_policy_digest: release.hardware_policy_digest(),
+            app_policy_digest: credential.app_policy_binding_digest,
+            operation_kind: prepared.lifecycle().operation_kind,
+            transition_statement_digest: prepared.proof_statement.digest()?,
+            candidate_envelope_digest: self.candidate_envelope_digest,
+            terminal_body_commitment: self
+                .hardware_terminal_body()?
+                .canonical_commitment()
+                .map_err(|_| KagemushaStateErrorV1::HardwareCertificateMismatch)?,
+            secure_index_before: authenticated_secure_index_before,
+        };
+        Ok((enabled.hardware_profile, expected))
     }
 
     /// Build the exact self-free terminal body which qualified hardware must commit atomically.

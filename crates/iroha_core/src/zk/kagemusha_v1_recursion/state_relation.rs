@@ -892,6 +892,7 @@ pub(super) struct AssignedState<F: KagemushaPoseidonFieldV1> {
     pub(super) epoch_id: [AssignedValue<F>; 2],
     pub(super) key_reference: [AssignedValue<F>; 2],
     pub(super) policy_id: [AssignedValue<F>; 2],
+    pub(super) next_one_use_key_reference: [AssignedValue<F>; 2],
     pub(super) nonce: [AssignedValue<F>; 2],
     pub(super) replay_root: AssignedValue<F>,
     pub(super) commitment: AssignedValue<F>,
@@ -1308,6 +1309,38 @@ where
     for (after, before) in successor.policy_id.into_iter().zip(predecessor.policy_id) {
         assert_if_equal(ctx, &range, rotate, after, before);
     }
+    let predecessor_next_key_zero_low =
+        gate.is_zero(ctx, predecessor.next_one_use_key_reference[0]);
+    let predecessor_next_key_zero_high =
+        gate.is_zero(ctx, predecessor.next_one_use_key_reference[1]);
+    let predecessor_next_key_zero = gate.and(
+        ctx,
+        predecessor_next_key_zero_low,
+        predecessor_next_key_zero_high,
+    );
+    let successor_next_key_zero_low = gate.is_zero(ctx, successor.next_one_use_key_reference[0]);
+    let successor_next_key_zero_high = gate.is_zero(ctx, successor.next_one_use_key_reference[1]);
+    let successor_next_key_zero = gate.and(
+        ctx,
+        successor_next_key_zero_low,
+        successor_next_key_zero_high,
+    );
+    assert_if_equal(
+        ctx,
+        &range,
+        non_bootstrap,
+        successor_next_key_zero,
+        predecessor_next_key_zero,
+    );
+    let predecessor_ratchet_active = gate.not(ctx, predecessor_next_key_zero);
+    let ratchet_active = gate.mul(ctx, non_bootstrap, predecessor_ratchet_active);
+    assert_if_digest_different(
+        ctx,
+        &range,
+        ratchet_active,
+        successor.next_one_use_key_reference,
+        predecessor.next_one_use_key_reference,
+    );
     assert_if_digest_different(
         ctx,
         &range,
@@ -1984,6 +2017,11 @@ where
             value.device_policy_binding.hardware_policy_id
         }),
     );
+    let next_one_use_key_reference = assign_digest(
+        ctx,
+        range,
+        state.map_or([0; 32], |value| value.next_one_use_key_reference),
+    );
     let nonce = assign_digest(
         ctx,
         range,
@@ -2054,6 +2092,8 @@ where
             key_reference[1],
             policy_id[0],
             policy_id[1],
+            next_one_use_key_reference[0],
+            next_one_use_key_reference[1],
             nonce[0],
             nonce[1],
             replay_root,
@@ -2074,6 +2114,7 @@ where
         epoch_id,
         key_reference,
         policy_id,
+        next_one_use_key_reference,
         nonce,
         replay_root,
         commitment,
@@ -2259,6 +2300,7 @@ mod tests {
                 device_key_reference: projection_digest(11),
                 hardware_policy_id: projection_digest(12),
             },
+            next_one_use_key_reference: [0; 32],
             state_nonce_commitment: projection_digest(13),
             consumed_credit_root: KagemushaPastaStateCommitmentV1::ZERO,
             state_commitment_components: KagemushaPastaStateCommitmentV1 {

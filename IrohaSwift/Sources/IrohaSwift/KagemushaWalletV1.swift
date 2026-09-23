@@ -21,6 +21,9 @@ public struct KagemushaHardwareQualificationV1: Equatable, Sendable {
     releaseID: Data, hardwarePolicyDigest: Data, coreAuthorizationKeyReference: Data,
     profile: KagemushaHardwareProfileV1, credential: KagemushaHardwareCredentialV1
   ) throws {
+    guard !profile.platformClass.isOrdinaryApp else {
+      throw KagemushaWalletErrorV1.nativeVerificationRequired
+    }
     guard profile.hardwareProfileID == credential.hardwareProfileID,
       profile.policyEpoch == credential.policyEpoch,
       profile.firmwarePolicyDigest == credential.firmwarePolicyDigest,

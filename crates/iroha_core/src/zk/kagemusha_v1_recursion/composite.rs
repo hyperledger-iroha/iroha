@@ -4,7 +4,8 @@
 //! the predecessor's carried BGH19 history, and consumes the opposite parity's complete curve
 //! equation audit through the dedicated dense MSM machine. Bootstrap preserves the same parser
 //! shape but selector-disables only the nonexistent monetary predecessor; GuardBundle authority
-//! remains enabled for every operation.
+//! remains enabled for every operation. Prepared KeyMint one-use heads remain circuit-fixed to
+//! zero until the exact signed selection and attested key chain enter both parity folds.
 
 use ff::Field as _;
 use halo2_base::{
@@ -85,7 +86,7 @@ const INCOMING_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1: usize =
 use crate::zk::{
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
     kagemusha_v1_state::{
-        KAGEMUSHA_RECEIVE_FOLD_DOMAIN_V1, KagemushaMintFoldOpeningWitnessV1,
+        KAGEMUSHA_RECEIVE_FOLD_DOMAIN_V1, KagemushaMintFoldOpeningWitnessV1, KagemushaStateV1,
         mint_envelope_digest_v1,
     },
     pasta_dense_msm::{PastaDenseMsmConfigV1, PastaDenseMsmJobsV1},
@@ -916,6 +917,47 @@ pub(super) fn assigned_digest_bytes<F: halo2_base::utils::ScalarField>(
     Ok(digest)
 }
 
+fn require_complete_hardware_selection_fold_v1(
+    predecessor: Option<&KagemushaStateV1>,
+    successor: &KagemushaStateV1,
+) -> Result<(), String> {
+    if successor.next_one_use_key_reference != [0; 32]
+        || predecessor.is_some_and(|state| state.next_one_use_key_reference != [0; 32])
+    {
+        return Err(
+            "one-use KeyMint hardware selection is not bound by both Pasta monetary folds"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn constrain_unqualified_hardware_selection_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    assigned: &state_relation::KagemushaAssignedStateRelationV1<F>,
+) {
+    constrain_unqualified_hardware_selection_limbs_v1(
+        builder,
+        assigned.predecessor.next_one_use_key_reference,
+        assigned.successor.next_one_use_key_reference,
+    );
+}
+
+fn constrain_unqualified_hardware_selection_limbs_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    predecessor: [AssignedValue<F>; 2],
+    successor: [AssignedValue<F>; 2],
+) {
+    // TODO: Replace this enforced zero mode only after the complete signed
+    // selection and attested one-use key chain are constrained in both parities.
+    // A host-side preflight alone would leave a valid malicious witness path.
+    let ctx = builder.main(0);
+    let zero = ctx.load_constant(F::ZERO);
+    for limb in predecessor.into_iter().chain(successor) {
+        ctx.constrain_equal(&limb, &zero);
+    }
+}
+
 fn build_scalar_half<C>(
     state: KagemushaStateRelationWitnessV1,
     guard_relation: KagemushaGuardBundleRelationWitnessV1,
@@ -936,10 +978,12 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: KagemushaPoseidonFieldV1,
 {
+    require_complete_hardware_selection_fold_v1(state.predecessor.as_ref(), &state.successor)?;
     let parent_enabled = state.operation != KagemushaOperationV1::Bootstrap;
     let mint_enabled = state.operation == KagemushaOperationV1::MintFold;
     let (mut builder, assigned_state) =
         state_relation::relation_builder_with_bindings::<C::ScalarExt>(Some(&state))?;
+    constrain_unqualified_hardware_selection_v1(&mut builder, &assigned_state);
     let mut sha_jobs = PastaSha256JobsV1::default();
     let assigned_guard =
         constrain_guard_bundle_semantics_v1(&mut builder, &mut sha_jobs, &guard_relation)?;
@@ -3854,6 +3898,58 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     const RECEIVER_LANE_TEST_K: u32 = 17;
+
+    #[test]
+    fn paired_monetary_builder_rejects_unproved_one_use_key_heads() {
+        let (public, _) = super::super::tests::state_verification_fixture();
+        let mut successor = public.successor;
+        assert!(require_complete_hardware_selection_fold_v1(None, &successor).is_ok());
+        successor.next_one_use_key_reference = [0x61; 32];
+        assert!(require_complete_hardware_selection_fold_v1(None, &successor).is_err());
+        successor.next_one_use_key_reference = [0; 32];
+        let mut predecessor = successor.clone();
+        predecessor.next_one_use_key_reference = [0x62; 32];
+        assert!(
+            require_complete_hardware_selection_fold_v1(Some(&predecessor), &successor).is_err()
+        );
+    }
+
+    #[test]
+    fn paired_monetary_relation_constrains_unproved_key_heads_in_both_pasta_fields() {
+        fn check<F: KagemushaPoseidonFieldV1>(predecessor: u64, successor: u64) -> bool {
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(9)
+                .use_lookup_bits(8)
+                .use_instance_columns(1);
+            let ctx = builder.main(0);
+            let before = [
+                ctx.load_witness(F::from(predecessor)),
+                ctx.load_witness(F::ZERO),
+            ];
+            let after = [
+                ctx.load_witness(F::from(successor)),
+                ctx.load_witness(F::ZERO),
+            ];
+            constrain_unqualified_hardware_selection_limbs_v1(&mut builder, before, after);
+            builder.assigned_instances = vec![Vec::new()];
+            builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+            MockProver::run(9, &builder, vec![Vec::new()])
+                .expect("key-head mode circuit")
+                .verify()
+                .is_ok()
+        }
+
+        for outcome in [
+            check::<Fp>(0, 0),
+            check::<Fq>(0, 0),
+            !check::<Fp>(1, 0),
+            !check::<Fq>(1, 0),
+            !check::<Fp>(0, 1),
+            !check::<Fq>(0, 1),
+        ] {
+            assert!(outcome);
+        }
+    }
 
     #[test]
     fn aggregate_guard_column_authenticates_both_credential_digests_in_both_fields() {

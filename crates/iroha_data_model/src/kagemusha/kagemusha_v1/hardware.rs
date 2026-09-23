@@ -11,11 +11,11 @@ use super::{
     KAGEMUSHA_COMMIT_CERTIFICATE_MAX_BYTES_V1, KAGEMUSHA_HARDWARE_CREDENTIAL_ID_LANE_OFFSET_V1,
     KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1, KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1,
     KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1, KAGEMUSHA_HARDWARE_PROFILE_MAX_BYTES_V1,
-    KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_WIRE_VERSION_V1,
-    KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1, KagemushaHardwareCredentialV1,
-    KagemushaHardwareProfileV1, KagemushaHardwareTerminalBodyV1, KagemushaLifecycleBindingV1,
-    KagemushaOperationKindV1, KagemushaOutboxReservationV1, KagemushaValidationErrorV1,
-    LIFECYCLE_BINDING_DIGEST_DOMAIN, OUTBOX_RESERVATION_COMMITMENT_DOMAIN, SUITE_COMMITMENT_DOMAIN,
+    KAGEMUSHA_WIRE_VERSION_V1, KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1,
+    KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1, KagemushaHardwareTerminalBodyV1,
+    KagemushaLifecycleBindingV1, KagemushaOperationKindV1, KagemushaOutboxReservationV1,
+    KagemushaValidationErrorV1, LIFECYCLE_BINDING_DIGEST_DOMAIN,
+    OUTBOX_RESERVATION_COMMITMENT_DOMAIN, SUITE_COMMITMENT_DOMAIN,
     commit_certificate_circuit_transcript_v1, commit_certificate_id_circuit_transcript_v1,
     decode_bounded_canonical, digest_bytes, digest_encoded, fixed_canonical_preimage_bytes_v1,
     invalid, kagemusha_device_key_reference_v1, kagemusha_liability_pool_id_v1,
@@ -41,6 +41,7 @@ impl KagemushaHardwareProfileV1 {
             qualification_report_digest: self.qualification_report_digest,
             valid_from_ms: self.valid_from_ms,
             expires_at_ms: self.expires_at_ms,
+            app_attestation_authority_policy_digest: self.app_attestation_authority_policy_digest,
         }
     }
 
@@ -53,9 +54,9 @@ impl KagemushaHardwareProfileV1 {
         digest_encoded(HARDWARE_PROFILE_DIGEST_DOMAIN, &self.id_preimage())
     }
 
-    /// Return the exact unchanged canonical Norito profile-ID preimage.
+    /// Return the exact first-release canonical Norito profile-ID preimage.
     ///
-    /// The 40-byte header and fifteen compact-length-prefixed fields are retained,
+    /// The 40-byte header and sixteen compact-length-prefixed fields are fixed,
     /// including the u32-LE platform discriminant, 65-byte governance key, and CRC64.
     /// This encodes the unsigned identity body without validating or authorizing
     /// the profile, so it can also be used before sealing its profile ID.
@@ -93,7 +94,7 @@ impl KagemushaHardwareProfileV1 {
         if self.version != KAGEMUSHA_WIRE_VERSION_V1
             || self.protocol_version != KAGEMUSHA_WIRE_VERSION_V1
             || self.policy_epoch == 0
-            || self.capability_mask != KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1
+            || self.capability_mask != self.platform_class.required_guarantees()
             || self.valid_from_ms >= self.expires_at_ms
         {
             return Err(invalid("kagemusha.hardware_profile.header"));
@@ -127,6 +128,10 @@ impl KagemushaHardwareProfileV1 {
             (
                 "kagemusha.hardware_profile.qualification_report_digest",
                 self.qualification_report_digest,
+            ),
+            (
+                "kagemusha.hardware_profile.app_attestation_authority_policy_digest",
+                self.app_attestation_authority_policy_digest,
             ),
         ] {
             require_nonzero(field, value)?;
@@ -166,6 +171,7 @@ impl KagemushaHardwareCredentialV1 {
             device_key_reference: self.device_key_reference,
             issued_at_ms: self.issued_at_ms,
             expires_at_ms: self.expires_at_ms,
+            app_policy_binding_digest: self.app_policy_binding_digest,
         }
     }
 
@@ -181,11 +187,12 @@ impl KagemushaHardwareCredentialV1 {
         ))
     }
 
-    /// Return the exact unchanged canonical Norito credential-ID preimage.
+    /// Return the exact canonical Norito credential-ID preimage.
     ///
     /// This is not a new wire codec. The 40-byte Norito header is followed by
-    /// thirteen compact-length-prefixed fixed-width fields, with payload widths
-    /// 2,32,32,32,32,8,32,32,8,65,32,8,8. The lane occupies bytes 185..217.
+    /// fourteen compact-length-prefixed fixed-width fields, with payload widths
+    /// 2,32,32,32,32,8,32,32,8,65,32,8,8,32. The lane occupies bytes 185..217;
+    /// the stable app policy occupies bytes 377..409.
     /// The identity hashes the credential-ID domain, zero separator, u64-LE
     /// byte length, and these complete bytes, including the canonical header.
     /// A proof opening this preimage must bind its digest to the authenticated
@@ -273,6 +280,10 @@ impl KagemushaHardwareCredentialV1 {
             (
                 "kagemusha.hardware_credential.device_key_reference",
                 self.device_key_reference,
+            ),
+            (
+                "kagemusha.hardware_credential.app_policy_binding_digest",
+                self.app_policy_binding_digest,
             ),
         ] {
             require_nonzero(field, value)?;

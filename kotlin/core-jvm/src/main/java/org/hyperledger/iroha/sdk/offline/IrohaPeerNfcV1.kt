@@ -476,6 +476,7 @@ class IrohaPeerNfcReceiverSessionV1(
     private var received = 0
     private var paymentBytes: ByteArray? = null
     private var acknowledgementBytes: ByteArray? = null
+    private var pendingPaymentContext: IrohaPeerNfcPaymentAdmissionContextV1? = null
 
     @Synchronized fun handle(command: IrohaPeerNfcCommandV1): Any = when (command.type) {
         IrohaPeerNfcCommandTypeV1.GET_INFO -> info().encode()
@@ -495,6 +496,8 @@ class IrohaPeerNfcReceiverSessionV1(
         }
         IrohaPeerNfcCommandTypeV1.RESET_SESSION -> {
             require(phase == IrohaPeerNfcPhaseV1.REQUEST_READY || phase == IrohaPeerNfcPhaseV1.PAYMENT_RECEIVING)
+            require(pendingPaymentContext == null) { "payment admission is pending" }
+            require(paymentBytes == null) { "committed payment identity cannot be reset" }
             descriptor = null
             paymentBuffer = null
             received = 0
@@ -508,6 +511,7 @@ class IrohaPeerNfcReceiverSessionV1(
         durable: IrohaPeerNfcDurablePaymentAdmissionV1,
     ) {
         require(durable.context === context)
+        require(pendingPaymentContext === context) { "payment admission context changed" }
         require(phase == IrohaPeerNfcPhaseV1.PAYMENT_RECEIVING)
         val payment = requireNotNull(paymentBytes)
         require(context.canonicalRequest().contentEquals(requestBytes))
@@ -521,16 +525,23 @@ class IrohaPeerNfcReceiverSessionV1(
         validateKagemushaExchange(request, decodeNfcMessage(payment, profilePolicy.profile, IrohaPeerPayloadKind.PAYMENT, limits), acknowledgement)
         acknowledgementBytes = durable.canonicalAcknowledgement()
         phase = IrohaPeerNfcPhaseV1.ACKNOWLEDGEMENT_READY
+        pendingPaymentContext = null
     }
 
     @Synchronized fun rejectPayment(context: IrohaPeerNfcPaymentAdmissionContextV1) {
-        if (context.canonicalRequest().contentEquals(requestBytes)) {
-            descriptor = null
+        if (phase == IrohaPeerNfcPhaseV1.PAYMENT_RECEIVING && pendingPaymentContext === context) {
+            pendingPaymentContext = null
             paymentBuffer = null
-            paymentBytes = null
+            // The native transition may have happened before its response was lost.
+            // Retain the first committed payment and admit only its exact replay.
             received = 0
             phase = IrohaPeerNfcPhaseV1.REQUEST_READY
         }
+    }
+
+    /** An interrupted RF activation cannot retain an in-flight admission as a second COMMIT. */
+    @Synchronized fun abandonPendingPayment() {
+        pendingPaymentContext?.let { rejectPayment(it) }
     }
 
     @Synchronized fun info(): IrohaPeerNfcInfoV1 = IrohaPeerNfcInfoV1(
@@ -566,6 +577,11 @@ class IrohaPeerNfcReceiverSessionV1(
         require(profilePolicy.accepts(next.profile))
         require(next.schemaVersion == profilePolicy.profile.requiredSchemaVersion)
         require(next.messageLength in 1..limits.maximumMessageBytes)
+        paymentBytes?.let {
+            require(next.encode().contentEquals(requireNotNull(descriptor).encode())) {
+                "uncertain payment must retain its exact descriptor"
+            }
+        }
         descriptor = next
         paymentBuffer = ByteArray(next.messageLength)
         received = 0
@@ -575,11 +591,17 @@ class IrohaPeerNfcReceiverSessionV1(
 
     private fun writePayment(command: IrohaPeerNfcCommandV1): ByteArray {
         require(phase == IrohaPeerNfcPhaseV1.PAYMENT_RECEIVING)
+        require(pendingPaymentContext == null) { "payment admission is pending" }
         require(command.offset == received) { "payment chunks must be exact and contiguous" }
         val chunk = command.bytes()
         require(chunk.size <= limits.maximumWriteChunkBytes)
         val buffer = requireNotNull(paymentBuffer)
         require(received + chunk.size <= buffer.size)
+        paymentBytes?.let {
+            require(chunk.contentEquals(it.copyOfRange(received, received + chunk.size))) {
+                "uncertain payment must retain its exact bytes"
+            }
+        }
         chunk.copyInto(buffer, received)
         received += chunk.size
         return byteArrayOf()
@@ -587,6 +609,7 @@ class IrohaPeerNfcReceiverSessionV1(
 
     private fun commitPayment(): IrohaPeerNfcPaymentAdmissionDispositionV1 {
         require(phase == IrohaPeerNfcPhaseV1.PAYMENT_RECEIVING)
+        require(pendingPaymentContext == null) { "payment admission is pending" }
         val buffer = requireNotNull(paymentBuffer)
         require(received == buffer.size)
         val message = decodeNfcMessage(buffer, profilePolicy.profile, IrohaPeerPayloadKind.PAYMENT, limits)
@@ -594,9 +617,12 @@ class IrohaPeerNfcReceiverSessionV1(
         require(message.canonicalHash.contentEquals(expected.canonicalHash()))
         require(message.wireHash.contentEquals(expected.wireHash()))
         validateKagemushaExchange(request, message, null)
-        paymentBytes = buffer.copyOf()
+        paymentBytes?.let { require(buffer.contentEquals(it)) { "uncertain payment changed" } }
+        if (paymentBytes == null) paymentBytes = buffer.copyOf()
+        val context = IrohaPeerNfcPaymentAdmissionContextV1(requestBytes, buffer)
+        pendingPaymentContext = context
         return IrohaPeerNfcPaymentAdmissionDispositionV1.Persist(
-            IrohaPeerNfcPaymentAdmissionContextV1(requestBytes, buffer),
+            context,
         )
     }
 }

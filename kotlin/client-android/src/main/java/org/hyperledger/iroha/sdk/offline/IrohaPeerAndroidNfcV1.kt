@@ -84,12 +84,33 @@ object IrohaPeerIsoDepLimitsV1 {
 class IrohaPeerNfcAmbiguousTransceiveExceptionV1(cause: IOException) :
     IOException("NFC command response is unknown", cause), IrohaPeerNfcAmbiguousResponseErrorV1
 
+/** Exact ISO SELECT AID envelope used before the KAGEMUSHA command inventory. */
+internal object IrohaPeerNfcAidSelectionV1 {
+    private val prefix = byteArrayOf(0x00, 0xa4.toByte(), 0x04, 0x00)
+    private val success = byteArrayOf(0x90.toByte(), 0x00)
+
+    fun command(): ByteArray = prefix + byteArrayOf(IrohaPeerNfcV1.APPLICATION_IDENTIFIER_SIZE.toByte()) +
+        IrohaPeerNfcV1.applicationIdentifier() + byteArrayOf(0x00)
+
+    fun isSelect(apdu: ByteArray): Boolean =
+        apdu.size >= 2 && apdu[0] == prefix[0] && apdu[1] == prefix[1]
+
+    fun accepts(apdu: ByteArray): Boolean {
+        val expected = command()
+        return apdu.contentEquals(expected) ||
+            apdu.contentEquals(expected.copyOf(expected.size - 1))
+    }
+
+    fun succeeded(response: ByteArray): Boolean = response.contentEquals(success)
+}
+
 /** Thin Android IsoDep transceiver around the transport-neutral APDU codec. */
 class IrohaPeerIsoDepTransceiverV1 private constructor(
     private val isoDep: IsoDep,
     private val operationTimeoutMillis: Int,
 ) : Closeable {
     init { require(operationTimeoutMillis in 1..120_000) }
+    private var aidSelected = false
 
     val localLimits: IrohaPeerNfcLimitsV1
         get() = IrohaPeerIsoDepLimitsV1.derive(
@@ -99,13 +120,23 @@ class IrohaPeerIsoDepTransceiverV1 private constructor(
 
     @Throws(IOException::class)
     fun connect() {
-        if (!isoDep.isConnected) isoDep.connect()
+        if (!isoDep.isConnected) {
+            aidSelected = false
+            isoDep.connect()
+        }
         isoDep.timeout = operationTimeoutMillis
+        if (!aidSelected) {
+            val response = isoDep.transceive(IrohaPeerNfcAidSelectionV1.command())
+            if (!IrohaPeerNfcAidSelectionV1.succeeded(response)) {
+                throw IOException("KAGEMUSHA NFC application selection failed")
+            }
+            aidSelected = true
+        }
     }
 
     @Throws(IOException::class)
     fun transceive(command: IrohaPeerNfcCommandV1): IrohaPeerNfcApduResponseV1 {
-        if (!isoDep.isConnected) throw IOException("IsoDep is not connected")
+        if (!isoDep.isConnected || !aidSelected) throw IOException("KAGEMUSHA NFC application is not selected")
         val encoded = IrohaPeerNfcAPDUCodecV1.encode(command)
         if (encoded.size > isoDep.maxTransceiveLength) throw IOException("NFC APDU exceeds tag limit")
         val response = try {
@@ -121,6 +152,7 @@ class IrohaPeerIsoDepTransceiverV1 private constructor(
         transceive(command).toReaderResponse()
 
     override fun close() {
+        aidSelected = false
         if (isoDep.isConnected) isoDep.close()
     }
 
@@ -175,22 +207,27 @@ class IrohaPeerNfcReceiverApduBridgeV1(
             )
             is IrohaPeerNfcPaymentAdmissionDispositionV1.Persist -> {
                 val context = result.context
-                durableTransitions.stagePayment(context) { record, error ->
-                    activation.perform(epoch) {
-                        val response = if (error != null || record == null) {
-                            receiver.rejectPayment(context)
-                            IrohaPeerNfcApduResponseV1(statusWord = IrohaPeerNfcStatusWordV1.STORAGE_FAILURE)
-                        } else {
-                            try {
-                                receiver.completePayment(context, record)
-                                IrohaPeerNfcApduResponseV1(statusWord = IrohaPeerNfcStatusWordV1.SUCCESS)
-                            } catch (_: Throwable) {
+                try {
+                    durableTransitions.stagePayment(context) { record, error ->
+                        activation.perform(epoch) {
+                            val response = if (error != null || record == null) {
                                 receiver.rejectPayment(context)
                                 IrohaPeerNfcApduResponseV1(statusWord = IrohaPeerNfcStatusWordV1.STORAGE_FAILURE)
+                            } else {
+                                try {
+                                    receiver.completePayment(context, record)
+                                    IrohaPeerNfcApduResponseV1(statusWord = IrohaPeerNfcStatusWordV1.SUCCESS)
+                                } catch (_: Throwable) {
+                                    receiver.rejectPayment(context)
+                                    IrohaPeerNfcApduResponseV1(statusWord = IrohaPeerNfcStatusWordV1.STORAGE_FAILURE)
+                                }
                             }
+                            respond.respond(response)
                         }
-                        respond.respond(response)
                     }
+                } catch (_: Exception) {
+                    receiver.rejectPayment(context)
+                    respond.respond(IrohaPeerNfcApduResponseV1(statusWord = IrohaPeerNfcStatusWordV1.STORAGE_FAILURE))
                 }
             }
             else -> throw IllegalStateException("unknown NFC receiver disposition")
@@ -199,6 +236,7 @@ class IrohaPeerNfcReceiverApduBridgeV1(
 
     override fun onDeactivated(reason: Int) {
         activation.invalidate()
+        receiver.abandonPendingPayment()
     }
 
     private class ActivationEpoch {
@@ -211,29 +249,87 @@ class IrohaPeerNfcReceiverApduBridgeV1(
     }
 }
 
+/** Exactly one response crosses the synchronous/asynchronous HostApduService return boundary. */
+internal class IrohaPeerNfcApduReplyGateV1(private val post: (ByteArray) -> Unit) {
+    private val lock = Any()
+    private var returned = false
+    private var replied = false
+    private var direct: ByteArray? = null
+
+    fun deliver(encoded: ByteArray) {
+        synchronized(lock) {
+            if (replied) return
+            replied = true
+            if (returned) post(encoded) else direct = encoded
+        }
+    }
+
+    fun finish(): ByteArray? = synchronized(lock) {
+        returned = true
+        direct
+    }
+}
+
+/** Each SELECT or RF deactivation invalidates responses from the previous activation. */
+internal class IrohaPeerNfcApduSelectionStateV1 {
+    private var epoch = 0L
+    var isSelected = false
+        private set
+
+    fun select(apdu: ByteArray): Boolean {
+        epoch += 1
+        isSelected = IrohaPeerNfcAidSelectionV1.accepts(apdu)
+        return isSelected
+    }
+
+    fun currentEpoch(): Long? = if (isSelected) epoch else null
+
+    fun isCurrent(expected: Long): Boolean = isSelected && epoch == expected
+
+    fun deactivate() {
+        epoch += 1
+        isSelected = false
+    }
+}
+
 /** HostApduService base which supports asynchronous durable staging. */
 abstract class IrohaPeerAsyncHostApduServiceV1 : HostApduService() {
     private val responseHandler: Handler by lazy { Handler(Looper.getMainLooper()) }
+    private val selection = IrohaPeerNfcApduSelectionStateV1()
     protected abstract val commandHandler: IrohaPeerNfcAsyncCommandHandlerV1
 
     final override fun processCommandApdu(commandApdu: ByteArray?, extras: Bundle?): ByteArray? {
         if (commandApdu == null) return failure(IrohaPeerNfcStatusWordV1.WRONG_LENGTH)
+        if (IrohaPeerNfcAidSelectionV1.isSelect(commandApdu)) {
+            val wasSelected = selection.isSelected
+            val accepted = selection.select(commandApdu)
+            if (wasSelected) commandHandler.onDeactivated(DEACTIVATION_DESELECTED)
+            return failure(if (accepted) IrohaPeerNfcStatusWordV1.SUCCESS else IrohaPeerNfcStatusWordV1.NOT_FOUND)
+        }
+        val epoch = selection.currentEpoch()
+            ?: return failure(IrohaPeerNfcStatusWordV1.CONDITIONS_NOT_SATISFIED)
         val command = try {
             IrohaPeerNfcAPDUCodecV1.decode(commandApdu)
         } catch (_: IllegalArgumentException) {
             return failure(IrohaPeerNfcStatusWordV1.WRONG_DATA)
         }
-        var synchronous = true
-        var direct: ByteArray? = null
-        commandHandler.handle(command) { response ->
-            val encoded = response.encode()
-            if (synchronous) direct = encoded else responseHandler.post { sendResponseApdu(encoded) }
+        val gate = IrohaPeerNfcApduReplyGateV1 { encoded ->
+            responseHandler.post {
+                if (selection.isCurrent(epoch)) sendResponseApdu(encoded)
+            }
         }
-        synchronous = false
-        return direct
+        try {
+            commandHandler.handle(command) { response -> gate.deliver(response.encode()) }
+        } catch (_: IllegalArgumentException) {
+            gate.deliver(failure(IrohaPeerNfcStatusWordV1.WRONG_DATA))
+        } catch (_: IllegalStateException) {
+            gate.deliver(failure(IrohaPeerNfcStatusWordV1.CONDITIONS_NOT_SATISFIED))
+        }
+        return gate.finish()
     }
 
     final override fun onDeactivated(reason: Int) {
+        selection.deactivate()
         commandHandler.onDeactivated(reason)
     }
 

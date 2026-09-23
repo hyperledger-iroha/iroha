@@ -331,6 +331,7 @@ mod tests {
             proof: paired_proof(0xA5),
         };
         let recipient_credential = KagemushaHardwareCredentialV1 {
+            app_policy_binding_digest: [0xA6; 32],
             version: KAGEMUSHA_WIRE_VERSION_V1,
             credential_id: [0x26; 32],
             network_id,

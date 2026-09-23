@@ -1271,7 +1271,8 @@ public enum KagemushaNoritoV1 {
       enumUnit(v.platformClass.rawValue), v.productClassDigest, v.firmwarePolicyDigest,
       v.enrollmentAttestationVerifierDigest, v.attestationTrustRootsDigest,
       v.allowedSuiteCommitment, u64(v.policyEpoch), v.governanceCredentialPublicKey.sec1Bytes,
-      u16(v.capabilityMask), v.qualificationReportDigest, u64(v.validFromMS), u64(v.expiresAtMS),
+      u32(v.capabilityMask), v.qualificationReportDigest, u64(v.validFromMS), u64(v.expiresAtMS),
+      v.appAttestationAuthorityPolicyDigest,
     ])
   }
 
@@ -1280,7 +1281,8 @@ public enum KagemushaNoritoV1 {
       u16(v.version), v.credentialID, v.networkID, v.hardwareProfileID, v.suiteID,
       v.firmwarePolicyDigest, u64(v.policyEpoch), v.laneCommitment, v.hardwareEpochID,
       u64(v.hardwareEpochGeneration), v.devicePublicKey.sec1Bytes, v.deviceKeyReference,
-      u64(v.issuedAtMS), u64(v.expiresAtMS), v.governanceSignature.rawBytes,
+      u64(v.issuedAtMS), u64(v.expiresAtMS), v.appPolicyBindingDigest,
+      v.governanceSignature.rawBytes,
     ])
   }
 
@@ -1598,8 +1600,9 @@ public enum KagemushaNoritoV1 {
       attestationTrustRootsDigest: r.digestField(),
       allowedSuiteCommitment: r.digestField(), policyEpoch: r.u64Field(),
       governanceCredentialPublicKey: KagemushaDevicePublicKeyV1(sec1Bytes: r.exactField(65)),
-      capabilityMask: r.u16Field(), qualificationReportDigest: r.digestField(),
-      validFromMS: r.u64Field(), expiresAtMS: r.u64Field())
+      capabilityMask: r.u32Field(), qualificationReportDigest: r.digestField(),
+      validFromMS: r.u64Field(), expiresAtMS: r.u64Field(),
+      appAttestationAuthorityPolicyDigest: r.digestField())
     try r.finish()
     return value
   }
@@ -1616,7 +1619,7 @@ public enum KagemushaNoritoV1 {
       hardwareEpochGeneration: r.u64Field(),
       devicePublicKey: KagemushaDevicePublicKeyV1(sec1Bytes: r.exactField(65)),
       deviceKeyReference: r.digestField(), issuedAtMS: r.u64Field(),
-      expiresAtMS: r.u64Field(),
+      expiresAtMS: r.u64Field(), appPolicyBindingDigest: r.digestField(),
       governanceSignature: KagemushaDeviceSignatureV1(rawBytes: r.exactField(64)))
     try r.finish()
     return value

@@ -46,6 +46,9 @@ use std::{
 pub mod confidential_v2;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
+/// P-256-specific nonnative curve primitives for hardware-selection circuit construction.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod kagemusha_p256_curve_gadget;
 /// Core-owned confidential polynomial storage foundation for the consuming prover.
 #[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_polynomial_store_v1;

@@ -330,6 +330,7 @@ fn mint_recipient_material(
         credential_witness_with_policy(0, release_id, empty_effect, &provider_policy);
 
     let mut hardware_credential = KagemushaHardwareCredentialV1 {
+        app_policy_binding_digest: platform_credential.statement.app_policy_binding_digest,
         version: KAGEMUSHA_WIRE_VERSION_V1,
         credential_id: [0; 32],
         network_id: lane().network_id,

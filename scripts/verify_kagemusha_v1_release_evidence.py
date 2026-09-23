@@ -588,7 +588,18 @@ _PLATFORM_CLASSES = (
     "apple_oem_service",
     "dedicated_secure_element",
     "other_qualified",
+    "apple_app_attest",
+    "android_key_mint",
 )
+
+
+def _required_platform_guarantees(platform: str) -> int:
+    """Return the exact first-release guarantee set for a governed class."""
+    try:
+        index = _PLATFORM_CLASSES.index(platform)
+    except ValueError:
+        _fail(f"unsupported hardware platform class {platform!r}")
+    return 0xFFFF if index < 4 else (0x70000 if index == 4 else 0xB0000)
 _P256_PRIME = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
 _P256_B = 0x5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B
 _P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
@@ -682,6 +693,7 @@ _HARDWARE_PROFILE_FIELDS = {
     "qualification_report_digest",
     "valid_from_ms",
     "expires_at_ms",
+    "app_attestation_authority_policy_digest",
 }
 
 
@@ -716,17 +728,21 @@ def _hardware_profile_preimage_payload(value: Mapping[str, object]) -> bytes:
             value["governance_credential_public_key"],
             "hardware governance credential public key",
         ),
-        _u16(
+        _u32(
             _integer(
                 value["capability_mask"],
                 "hardware capability mask",
                 minimum=0,
-                maximum=(1 << 16) - 1,
+                maximum=(1 << 32) - 1,
             )
         ),
         _hex_bytes(value["qualification_report_digest"], "hardware qualification digest"),
         _u64(_integer(value["valid_from_ms"], "hardware valid-from time")),
         _u64(_integer(value["expires_at_ms"], "hardware expiry time", minimum=1)),
+        _hex_bytes(
+            value["app_attestation_authority_policy_digest"],
+            "hardware app authority policy digest",
+        ),
     )
 
 
@@ -763,10 +779,14 @@ def _hardware_profile_payload(value: Mapping[str, object]) -> bytes:
             value["governance_credential_public_key"],
             "hardware governance credential public key",
         ),
-        _u16(int(value["capability_mask"])),
+        _u32(int(value["capability_mask"])),
         _hex_bytes(value["qualification_report_digest"], "hardware qualification digest"),
         _u64(int(value["valid_from_ms"])),
         _u64(int(value["expires_at_ms"])),
+        _hex_bytes(
+            value["app_attestation_authority_policy_digest"],
+            "hardware app authority policy digest",
+        ),
     )
 
 
@@ -1009,12 +1029,19 @@ def rust_provider_policy_root(
             _fail("provider policy lacks valid governed issuer authorization")
         if position in nodes:
             _fail("provider policy leaf indices must be unique")
-        capabilities = _integer(hardware["capability_mask"], "provider capabilities", minimum=65535, maximum=65535)
+        capabilities = _integer(
+            hardware["capability_mask"],
+            "provider capabilities",
+            minimum=0,
+            maximum=(1 << 32) - 1,
+        )
         platform = _PLATFORM_CLASSES.index(str(hardware["platform_class"]))
+        if capabilities != _required_platform_guarantees(str(hardware["platform_class"])):
+            _fail("provider profile guarantee mask differs from its platform class")
         nodes[position] = hashlib.sha256(
             b"iroha:kagemusha:v1:hardware-policy-leaf\0"
             + bytes.fromhex(profile_id) + bytes([platform])
-            + capabilities.to_bytes(2, "little") + bytes.fromhex(authority)
+            + capabilities.to_bytes(4, "little") + bytes.fromhex(authority)
         ).digest()
 
     def node(left: bytes, right: bytes) -> bytes:
@@ -2536,7 +2563,8 @@ class EvidenceVerifier:
             expected_profile_id != profile_id
             or int(hardware_profile["version"]) != WIRE_VERSION
             or int(hardware_profile["protocol_version"]) != WIRE_VERSION
-            or int(hardware_profile["capability_mask"]) != (1 << 16) - 1
+            or int(hardware_profile["capability_mask"])
+            != _required_platform_guarantees(str(hardware_profile["platform_class"]))
             or int(hardware_profile["valid_from_ms"]) >= int(hardware_profile["expires_at_ms"])
             or hardware_profile["allowed_suite_commitment"] != _suite_commitment(suite_id)
         ):
@@ -2551,6 +2579,7 @@ class EvidenceVerifier:
             "attestation_trust_roots_digest",
             "allowed_suite_commitment",
             "qualification_report_digest",
+            "app_attestation_authority_policy_digest",
         ):
             _digest(hardware_profile[field], f"profile {profile_id} {field}")
         profile_projection: dict[str, object] = {

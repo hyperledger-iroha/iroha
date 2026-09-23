@@ -42,6 +42,10 @@ object KagemushaNoritoV1 {
     private const val PROOF_SCHEMA = MODEL + "KagemushaPairedProofV1"
     private const val HARDWARE_PROFILE_SCHEMA = MODEL + "KagemushaHardwareProfileV1"
     private const val HARDWARE_CREDENTIAL_SCHEMA = MODEL + "KagemushaHardwareCredentialV1"
+    private const val HARDWARE_PROFILE_ID_PREIMAGE_SCHEMA =
+        "iroha.kagemusha.v1.hardware-profile-id-preimage"
+    private const val HARDWARE_CREDENTIAL_ID_PREIMAGE_SCHEMA =
+        "iroha.kagemusha.v1.hardware-credential-id-preimage"
     private const val REQUEST_SCHEMA = MODEL + "KagemushaPaymentRequestV1"
     private const val PEER_CREDIT_CONTEXT_SCHEMA = MODEL + "KagemushaPeerCreditContextV1"
     private const val CREDIT_OPENING_SCHEMA = MODEL + "KagemushaCreditOpeningV1"
@@ -79,6 +83,8 @@ object KagemushaNoritoV1 {
     const val MAXIMUM_DEVICE_MINT_STAGE_RESULT_BYTES: Int = 128
 
     private val DEVICE_KEY_REFERENCE_DOMAIN = ascii("iroha:kagemusha:v1:device-key-reference")
+    private val HARDWARE_PROFILE_ID_DOMAIN = ascii("iroha:kagemusha:v1:hardware-profile")
+    private val HARDWARE_CREDENTIAL_ID_DOMAIN = ascii("iroha:kagemusha:v1:hardware-credential-id")
     private val PASTA_STATE_COMMITMENT_DOMAIN = ascii("iroha:kagemusha:v1:pasta-state-commitment")
     private val LIABILITY_POOL_DOMAIN = ascii("iroha:kagemusha:v1:liability-pool")
     private val REQUEST_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:payment-request")
@@ -165,6 +171,58 @@ object KagemushaNoritoV1 {
     @JvmStatic
     fun decodeHardwareCredentialShapeExact(bytes: ByteArray): KagemushaHardwareCredentialV1 =
         decodeExact(bytes, 768, HARDWARE_CREDENTIAL_SCHEMA, HARDWARE_CREDENTIAL_ADAPTER, ::encodeHardwareCredentialShape)
+
+    /** Exact canonical 413-byte first-release profile-ID preimage; shape only. */
+    @JvmStatic
+    fun hardwareProfileIdPreimageShape(value: KagemushaHardwareProfileV1): ByteArray =
+        frame(HARDWARE_PROFILE_ID_PREIMAGE_SCHEMA) { e ->
+            u16Field(e, value.version)
+            u16Field(e, value.protocolVersion)
+            bytes32Field(e, value.providerId())
+            enumUnitField(e, value.platformClass.ordinal)
+            bytes32Field(e, value.productClassDigest())
+            bytes32Field(e, value.firmwarePolicyDigest())
+            bytes32Field(e, value.enrollmentAttestationVerifierDigest())
+            bytes32Field(e, value.attestationTrustRootsDigest())
+            bytes32Field(e, value.allowedSuiteCommitment())
+            u64Field(e, value.policyEpoch)
+            publicKeyField(e, value.governanceCredentialPublicKey)
+            u32Field(e, value.capabilityMask)
+            bytes32Field(e, value.qualificationReportDigest())
+            u64Field(e, value.validFromMs)
+            u64Field(e, value.expiresAtMs)
+            bytes32Field(e, value.appAttestationAuthorityPolicyDigest())
+        }.also { require(it.size == 413) { "KAGEMUSHA profile-ID preimage layout drift" } }
+
+    /** Profile ID expected by Rust for this unsigned body; governance still authenticates it. */
+    @JvmStatic
+    fun expectedHardwareProfileIdShape(value: KagemushaHardwareProfileV1): ByteArray =
+        digestEncoded(HARDWARE_PROFILE_ID_DOMAIN, hardwareProfileIdPreimageShape(value))
+
+    /** Exact canonical 409-byte first-release credential-ID preimage; shape only. */
+    @JvmStatic
+    fun hardwareCredentialIdPreimageShape(value: KagemushaHardwareCredentialV1): ByteArray =
+        frame(HARDWARE_CREDENTIAL_ID_PREIMAGE_SCHEMA) { e ->
+            u16Field(e, value.version)
+            networkField(e, value.networkId)
+            bytes32Field(e, value.hardwareProfileId())
+            bytes32Field(e, value.suiteId())
+            bytes32Field(e, value.firmwarePolicyDigest())
+            u64Field(e, value.policyEpoch)
+            bytes32Field(e, value.laneCommitment())
+            bytes32Field(e, value.hardwareEpochId())
+            u64Field(e, value.hardwareEpochGeneration)
+            publicKeyField(e, value.devicePublicKey)
+            bytes32Field(e, value.deviceKeyReference())
+            u64Field(e, value.issuedAtMs)
+            u64Field(e, value.expiresAtMs)
+            bytes32Field(e, value.appPolicyBindingDigest())
+        }.also { require(it.size == 409) { "KAGEMUSHA credential-ID preimage layout drift" } }
+
+    /** Credential ID expected by Rust for this unsigned body; issuer signature is separate. */
+    @JvmStatic
+    fun expectedHardwareCredentialIdShape(value: KagemushaHardwareCredentialV1): ByteArray =
+        digestEncoded(HARDWARE_CREDENTIAL_ID_DOMAIN, hardwareCredentialIdPreimageShape(value))
 
     /** Encode one terminal hardware certificate. */
     @JvmStatic
@@ -1383,17 +1441,19 @@ object KagemushaNoritoV1 {
             bytes32Field(e, v.allowedSuiteCommitment())
             u64Field(e, v.policyEpoch)
             publicKeyField(e, v.governanceCredentialPublicKey)
-            u16Field(e, v.capabilityMask)
+            u32Field(e, v.capabilityMask)
             bytes32Field(e, v.qualificationReportDigest())
             u64Field(e, v.validFromMs)
             u64Field(e, v.expiresAtMs)
+            bytes32Field(e, v.appAttestationAuthorityPolicyDigest())
         },
         decode = { d ->
             KagemushaHardwareProfileV1(
                 readU16(d), readU16(d), readFixed32(d), readFixed32(d),
-                KagemushaHardwarePlatformClassV1.values()[readEnumUnit(d, 4)],
+                KagemushaHardwarePlatformClassV1.values()[readEnumUnit(d, 6)],
                 readFixed32(d), readFixed32(d), readFixed32(d), readFixed32(d), readFixed32(d),
-                readU64(d), readPublicKey(d), readU16(d), readFixed32(d), readU64(d), readU64(d),
+                readU64(d), readPublicKey(d), readU32(d), readFixed32(d), readU64(d), readU64(d),
+                readFixed32(d),
             )
         },
     )
@@ -1414,13 +1474,15 @@ object KagemushaNoritoV1 {
             bytes32Field(e, v.deviceKeyReference())
             u64Field(e, v.issuedAtMs)
             u64Field(e, v.expiresAtMs)
+            bytes32Field(e, v.appPolicyBindingDigest())
             signatureField(e, v.governanceSignature)
         },
         decode = { d ->
             KagemushaHardwareCredentialV1(
                 readU16(d), readFixed32(d), readNetwork(d), readFixed32(d), readFixed32(d),
                 readFixed32(d), readU64(d), readFixed32(d), readFixed32(d), readU64(d),
-                readPublicKey(d), readFixed32(d), readU64(d), readU64(d), readSignature(d),
+                readPublicKey(d), readFixed32(d), readU64(d), readU64(d), readFixed32(d),
+                readSignature(d),
             )
         },
     )

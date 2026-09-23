@@ -754,7 +754,7 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
         (
             "crates/iroha_core/src/state.rs",
             "fn replay_blocks_from_kura_range_inner(",
-            "            state_block.staged_merge_entry(),\n",
+            "            replay.state.staged_merge_entry(),\n",
             "            None,\n",
             "replay_blocks_from_kura_range_inner",
         ),
