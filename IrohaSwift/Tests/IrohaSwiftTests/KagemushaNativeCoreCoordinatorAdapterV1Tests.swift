@@ -5,6 +5,17 @@ import XCTest
 
 /// Scripted endpoints verify orchestration only; they provide no proof or hardware qualification.
 final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
+  func testCloseRevokesTypedAdapterBeforeMonetaryDispatch() throws {
+    let endpoint = Endpoint()
+    let core = try adapter(endpoint)
+    try core.close()
+    try core.close()
+    XCTAssertEqual(endpoint.closeCalls, 1)
+    XCTAssertThrowsError(try core.reserveOperationID(
+      operation: 5, operationID: Data(repeating: 7, count: 32), publicBinding: Data([1])))
+    XCTAssertEqual(endpoint.calls, 0)
+  }
+
   func testAllElevenMethodsMapExactNativeFields() throws {
     let f = try Fixture()
     let endpoint = Endpoint()
@@ -533,6 +544,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
 
   private final class Endpoint: KagemushaCoreCoordinatorEndpointV1 {
     var calls = 0
+    var closeCalls = 0
     var responseHandler: ((KagemushaCoreCoordinatorMethodV1, [Data]) throws -> [Data])?
     private var method: KagemushaCoreCoordinatorMethodV1 = .reserveOperationID
     private var expected: [Data]?
@@ -540,8 +552,9 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     func expect(_ method: KagemushaCoreCoordinatorMethodV1, _ request: [Data]?, _ response: [Data]) {
       self.method = method; expected = request; self.response = response
     }
-    func contract() -> [UInt32] { [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff] }
+    func contract() -> [UInt32] { [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1] }
     func open(storagePath: Data) -> UInt64 { 1 }
+    func close(handle: UInt64) { XCTAssertEqual(handle, 1); closeCalls += 1 }
     func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data {
       calls += 1
       if let responseHandler, let selected = KagemushaCoreCoordinatorMethodV1(rawValue: method) {
@@ -610,7 +623,8 @@ struct AuthenticatedProviderFixtureV1 {
         providerID: digest(1), platformClass: .appleOEMService, productClassDigest: digest(2), firmwarePolicyDigest: seed.firmwarePolicyDigest,
         enrollmentAttestationVerifierDigest: digest(4), attestationTrustRootsDigest: digest(5), allowedSuiteCommitment: digest(6),
         policyEpoch: selectedEpoch, governanceCredentialPublicKey: seed.devicePublicKey, capabilityMask: 0xffff,
-        qualificationReportDigest: digest(8), validFromMS: 0, expiresAtMS: seed.expiresAtMS + 1)
+        qualificationReportDigest: digest(8), validFromMS: 0, expiresAtMS: seed.expiresAtMS + 1,
+        appAttestationAuthorityPolicyDigest: digest(9))
       let credential = try KagemushaHardwareCredentialV1(credentialID: requestCredential ? seed.credentialID : c.credentialID,
         networkID: requestCredential ? seed.networkID : c.lane.networkID,
         hardwareProfileID: selectedProfileID, suiteID: requestCredential ? seed.suiteID : c.release.suiteID,
@@ -620,7 +634,8 @@ struct AuthenticatedProviderFixtureV1 {
         hardwareEpochGeneration: generation,
         devicePublicKey: devicePublicKey ?? seed.devicePublicKey,
         deviceKeyReference: requestCredential ? seed.deviceKeyReference : c.devicePolicyBinding.deviceKeyReference,
-        issuedAtMS: seed.issuedAtMS, expiresAtMS: seed.expiresAtMS, governanceSignature: seed.governanceSignature)
+        issuedAtMS: seed.issuedAtMS, expiresAtMS: seed.expiresAtMS,
+        appPolicyBindingDigest: digest(10), governanceSignature: seed.governanceSignature)
       return try KagemushaHardwareQualificationV1(releaseID: requestCredential ? request.releaseID : c.release.releaseID,
         hardwarePolicyDigest: policy ?? c.devicePolicyBinding.hardwarePolicyID, coreAuthorizationKeyReference: coreKey ?? c.coreAuthorizationKeyReference,
         profile: profile, credential: credential)

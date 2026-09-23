@@ -503,10 +503,10 @@ int32_t connect_norito_kagemusha_v1_redemption_voucher_text_validate(
   "13b51124f0329fc47b0aa3bf551f83f1806920c9898e7c07cd7f0730eb57fbb9"
 
 // Exact bounded KAGEMUSHA Core coordinator contract. The contract probe
-// returns the number of uint32_t words written (10) on success. It is an ABI
+// returns the number of uint32_t words written (11) on success. It is an ABI
 // pin only and grants no monetary authority. Its word count is independent
 // of the eleven coordinator method codes below.
-#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORD_COUNT_V1 10
+#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORD_COUNT_V1 11
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_FRAME_MAGIC_V1 "IKGMCOR1"
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1 UINT16_C(2)
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_FIELDS_V1 16
@@ -538,7 +538,8 @@ int32_t connect_norito_kagemusha_core_coordinator_invoke_v1(
     uint64_t handle, uint8_t method,
     const uint8_t* request_frame, size_t request_frame_length,
     uint8_t** output_frame, size_t* output_frame_length);
-// Generic builds install no backend, so open/invoke return
+int32_t connect_norito_kagemusha_core_coordinator_close_v1(uint64_t handle);
+// Generic builds install no backend, so open/invoke/close return
 // CONNECT_NORITO_ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1. A qualified platform
 // build must install the Rust backend exactly once; there is no C/JNI
 // installer, replacement, uninstall, or monetary software fallback. Invoke

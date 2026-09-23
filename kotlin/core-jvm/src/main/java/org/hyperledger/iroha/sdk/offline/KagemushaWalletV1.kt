@@ -69,6 +69,9 @@ class KagemushaHardwareQualificationV1(
         require(protocolVersion == KagemushaWireV1.WIRE_VERSION)
         require(profile.version == protocolVersion && profile.protocolVersion == protocolVersion)
         require(credential.version == protocolVersion)
+        require(!profile.platformClass.isOrdinaryApp) {
+            "ordinary-app KeyMint/App Attest needs the paired Core proof gate before monetary admission"
+        }
         require(profile.hardwareProfileId().contentEquals(credential.hardwareProfileId()))
         require(profile.policyEpoch == credential.policyEpoch)
         require(capabilityValues == EnumSet.allOf(KagemushaHardwareCapabilityV1::class.java)) {

@@ -214,27 +214,30 @@ The priority families are iPhone, Samsung, Huawei, Google, and Meizu. Other majo
 brands follow the same exact-profile qualification path. No model/OS/firmware/
 provider tuple has been qualified by this assessment.
 
-A read-only host inventory on 2026-09-07 found one Android emulator and no
-physical Android target. All remembered Apple targets were unavailable. This
-check establishes local device availability only; it performs no attestation or
-hardware qualification.
+A read-only host inventory on 2026-09-23 found the remembered iPhone offline in
+Xcode and no attached Android device in `adb devices -l`. This establishes
+local device availability only; it performs no attestation or hardware
+qualification.
 
 | Family | Integration work and evidence required |
 | --- | --- |
-| iPhone | Swift/native integration, authorized provisioned secure-element service, exact supported model/OS/territory, and physical qualification. |
-| Samsung | Kotlin/Android native integration and an authorized service implementing the complete non-forking device contract; qualify each model/firmware. |
-| Huawei | Establish the exact Android or HarmonyOS application/runtime and authorized service, then build and qualify its native integration. Android coverage does not establish HarmonyOS coverage. |
-| Google | Kotlin/Android native integration and an authorized non-forking service; qualify exact Pixel/model/firmware profiles. |
-| Meizu | Establish model/OS/native runtime and authorized service availability, then run the same full qualification. |
+| iPhone | Swift App Attest enrollment and original-assertion verification for an ordinary app, exact signed counter/one-use proof fold, lost-assertion recovery and physical qualification for each supported OS/profile. HCE, NFC and QR are byte transports, not monetary authority. |
+| Samsung | Kotlin/Android KeyMint attestation and one-use-key ratchet integration; physically verify hardware enforcement of rollback resistance and single use for each admitted model/firmware. |
+| Huawei | Establish the exact Android or HarmonyOS app/runtime and available attested key service, then run the same non-forking proof and physical qualification. Android coverage does not establish HarmonyOS coverage. |
+| Google | Qualify the Android KeyMint one-use profile on exact Pixel/model/firmware tuples and integrate its evidence with the recursive monetary proof. |
+| Meizu | Establish model/OS/runtime and attested one-use key availability, then run the same full qualification. |
 
-Apple's NFC & SE platform requires an agreement and entitlement; access alone
-does not establish KAGEMUSHA contract compliance. See Apple's
-[platform requirements](https://developer.apple.com/support/nfc-se-platform/).
-Android's rollback-resistant **key deletion** semantics do not specify an
-application's aggregate-balance compare-and-swap journal. The latter remains a
-separate KAGEMUSHA requirement; see the Android
-[KeyProtection contract](https://android.googlesource.com/platform/frameworks/base/+/master/keystore/java/android/security/keystore/KeyProtection.java)
-and [device bridge contract](kagemusha_device_bridge_v1.md).
+The ordinary-app profile does not require Apple's Secure Element Credential
+entitlement or an external card. [App Attest](https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server)
+provides an attested app key and signed assertions; physical enforcement of
+strict-next counter behavior and sound consumed-but-lost recovery are separate
+release obligations. HCE entitlement affects only a transfer transport.
+Android's KeyMint attestation can describe a hardware-enforced one-use key and
+rollback resistance, but those tags must be present in each admitted device's
+actual chain; app-hosted counters and rollback-resistant key deletion alone do
+not establish the monetary ratchet. See the [Android attestation
+contract](https://source.android.com/docs/security/features/keystore/attestation)
+and [phone algorithm](kagemusha_v1_phone_algorithm.md).
 
 ## Security findings and implementation work
 

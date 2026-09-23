@@ -50,6 +50,7 @@ mod kagemusha_top_up_admission_tests {
         let device_key_reference = kagemusha_device_key_reference_v1(&device_public_key);
         let suite_id = [0x10; 32];
         let hardware_credential = KagemushaHardwareCredentialV1 {
+            app_policy_binding_digest: [0xA6; 32],
             version: KAGEMUSHA_WIRE_VERSION_V1,
             credential_id: [0; 32],
             network_id,
@@ -197,8 +198,7 @@ mod kagemusha_top_up_admission_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let mut state_block =
-            state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut state_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_transaction = state_block.transaction();
         let error = StateBlock::validate_stateful_admission(
             transaction,

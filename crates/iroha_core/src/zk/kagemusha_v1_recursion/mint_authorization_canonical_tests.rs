@@ -34,6 +34,8 @@ enum Mutation {
     ProfileId,
     RecipientOpening,
     CreditOpening,
+    AppleAppMode,
+    AndroidAppMode,
 }
 
 struct CommitmentFixture {
@@ -117,6 +119,7 @@ fn profile_fixture() -> KagemushaHardwareProfileV1 {
     )
     .expect("fixture canonical governance key");
     let profile = KagemushaHardwareProfileV1 {
+        app_attestation_authority_policy_digest: [0xA5; 32],
         version: KAGEMUSHA_WIRE_VERSION_V1,
         protocol_version: KAGEMUSHA_WIRE_VERSION_V1,
         hardware_profile_id: [0; 32],
@@ -274,6 +277,15 @@ fn hash_only_case<F: KagemushaPoseidonFieldV1>(mutation: Mutation) -> HashOnlyCa
     let ctx = builder.main(0);
     let mut sha_jobs = PastaSha256JobsV1::default();
     let mut profile = profile_fixture();
+    if mutation == Mutation::AppleAppMode || mutation == Mutation::AndroidAppMode {
+        profile.platform_class = if mutation == Mutation::AppleAppMode {
+            KagemushaHardwarePlatformClassV1::AppleAppAttest
+        } else {
+            KagemushaHardwarePlatformClassV1::AndroidKeyMint
+        };
+        profile.capability_mask = profile.platform_class.required_guarantees();
+        profile = profile.seal_hardware_profile_id().unwrap();
+    }
     let mut expected_profile_id = profile.hardware_profile_id;
     if mutation == Mutation::ProfileField {
         profile.firmware_policy_digest[0] ^= 1;
@@ -361,6 +373,14 @@ fn assigned_canonical_mint_hashes_reject_substituted_fields_and_ids() {
         Mutation::RecipientOpening,
         Mutation::CreditOpening,
     ] {
+        assert_hash_only_case!(Fp, mutation, false);
+        assert_hash_only_case!(Fq, mutation, false);
+    }
+}
+
+#[test]
+fn admitted_mint_circuits_reject_both_ordinary_app_modes_without_assertion_fold() {
+    for mutation in [Mutation::AppleAppMode, Mutation::AndroidAppMode] {
         assert_hash_only_case!(Fp, mutation, false);
         assert_hash_only_case!(Fq, mutation, false);
     }

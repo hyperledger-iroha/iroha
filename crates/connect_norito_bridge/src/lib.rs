@@ -151,9 +151,9 @@ pub use kagemusha_core_coordinator_v1::{
     KagemushaCoreCoordinatorMethodV1, KagemushaCoreSenderCandidateArchiveV1,
     KagemushaCoreSenderPreparationArchiveV1, KagemushaCoreSenderPreparationSelectorV1,
     KagemushaCoreSenderRecoveryArchiveV1, KagemushaCoreSenderWalletContextV1,
-    install_kagemusha_core_coordinator_backend_v1, kagemusha_core_coordinator_decode_request_v1,
-    kagemusha_core_coordinator_decode_response_v1, kagemusha_core_coordinator_encode_request_v1,
-    kagemusha_core_coordinator_encode_response_v1,
+    KagemushaExclusiveCoordinatorBackendV1, install_kagemusha_core_coordinator_backend_v1,
+    kagemusha_core_coordinator_decode_request_v1, kagemusha_core_coordinator_decode_response_v1,
+    kagemusha_core_coordinator_encode_request_v1, kagemusha_core_coordinator_encode_response_v1,
     kagemusha_core_coordinator_validate_method_request_v1,
     kagemusha_core_coordinator_validate_method_response_v1,
     kagemusha_core_coordinator_validate_storage_path_v1,
@@ -1355,7 +1355,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_contract_vector_v1(
     0
 }
 
-/// Copy the exact ten-word KAGEMUSHA Core coordinator contract.
+/// Copy the exact eleven-word KAGEMUSHA Core coordinator contract.
 ///
 /// Success returns the written word count, not a generic zero status. The
 /// vector is an ABI compatibility probe and grants no monetary authority.
@@ -1404,8 +1404,13 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_open_v1(
     {
         return ERR_KAGEMUSHA_V1;
     }
-    let storage_path = unsafe { slice::from_raw_parts(storage_path_ptr, storage_path_len) };
-    let Ok(storage_path) = kagemusha_core_coordinator_validate_storage_path_v1(storage_path) else {
+    // Snapshot the bounded foreign buffer once so the delegated backend receives
+    // the exact bytes validated here even if the caller reuses its memory.
+    let storage_path = Zeroizing::new(
+        unsafe { slice::from_raw_parts(storage_path_ptr, storage_path_len) }.to_vec(),
+    );
+    let Ok(storage_path) = kagemusha_core_coordinator_validate_storage_path_v1(&storage_path)
+    else {
         return ERR_KAGEMUSHA_V1;
     };
     let Some(backend) =
@@ -1461,8 +1466,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
     {
         return ERR_KAGEMUSHA_V1;
     }
-    let request_frame = unsafe { slice::from_raw_parts(request_frame_ptr, request_frame_len) };
-    if kagemusha_core_coordinator_v1::archive_boundary::validate_request(method, request_frame)
+    // Validate, dispatch and correlate one owned copy of the foreign request.
+    let request_frame = Zeroizing::new(
+        unsafe { slice::from_raw_parts(request_frame_ptr, request_frame_len) }.to_vec(),
+    );
+    if kagemusha_core_coordinator_v1::archive_boundary::validate_request(method, &request_frame)
         .is_err()
     {
         return ERR_KAGEMUSHA_V1;
@@ -1473,7 +1481,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
         return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
     };
     let response_frame = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.invoke(handle, method, request_frame)
+        backend.invoke(handle, method, &request_frame)
     })) {
         Ok(Ok(response_frame)) => response_frame,
         Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)) => {
@@ -1486,7 +1494,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
     if response_frame.len() > KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1
         || kagemusha_core_coordinator_v1::archive_boundary::validate_response(
             method,
-            request_frame,
+            &request_frame,
             &response_frame,
         )
         .is_err()
@@ -1495,6 +1503,29 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
     }
     unsafe { write_bytes_usize(output_ptr, output_len, &response_frame) }
         .map_or_else(|error| error, |()| 0)
+}
+
+/// Revoke an opened coordinator handle before delegating hardware-session teardown.
+///
+/// Close never commits, aborts or erases uncertain monetary state. A failed delegated
+/// teardown still leaves the process-local handle revoked and cannot permit reopening.
+#[unsafe(no_mangle)]
+pub extern "C" fn connect_norito_kagemusha_core_coordinator_close_v1(handle: u64) -> c_int {
+    if handle == 0 {
+        return ERR_KAGEMUSHA_V1;
+    }
+    let Some(backend) =
+        kagemusha_core_coordinator_v1::installed_kagemusha_core_coordinator_backend_v1()
+    else {
+        return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
+    };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.close(handle))) {
+        Ok(Ok(())) => 0,
+        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)) => {
+            ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
+        }
+        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)) | Err(_) => ERR_KAGEMUSHA_V1,
+    }
 }
 
 /// Query the optional audited KAGEMUSHA V1 device service.
@@ -10146,6 +10177,23 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoord
     } else {
         0
     }
+}
+
+/// Revoke one Kotlin coordinator handle before native hardware-session teardown.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeCloseV1(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    handle: jni::sys::jlong,
+) -> jni::sys::jint {
+    let handle = u64::from_ne_bytes(handle.to_ne_bytes());
+    connect_norito_kagemusha_core_coordinator_close_v1(handle)
 }
 
 /// Invoke one closed KAGEMUSHA Core coordinator method through the Kotlin Android SDK.

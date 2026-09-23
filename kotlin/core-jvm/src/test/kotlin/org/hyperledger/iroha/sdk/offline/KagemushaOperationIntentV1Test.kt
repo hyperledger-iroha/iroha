@@ -259,6 +259,7 @@ class KagemushaOperationIntentV1Test {
             allowedSuiteCommitment = digest(8), policyEpoch = 1,
             governanceCredentialPublicKey = deviceKey, capabilityMask = 0xffff,
             qualificationReportDigest = digest(9), validFromMs = 1, expiresAtMs = 20000,
+            appAttestationAuthorityPolicyDigest = digest(18),
         )
         val credential = KagemushaHardwareCredentialV1(
             version = 1, credentialId = digest(10), networkId = NetworkId.fromBytes(digest(11)),
@@ -266,7 +267,8 @@ class KagemushaOperationIntentV1Test {
             firmwarePolicyDigest = profile.firmwarePolicyDigest(), policyEpoch = profile.policyEpoch,
             laneCommitment = digest(13), hardwareEpochId = digest(14), hardwareEpochGeneration = 1,
             devicePublicKey = deviceKey, deviceKeyReference = digest(15),
-            issuedAtMs = 10, expiresAtMs = 19000, governanceSignature = signature,
+            issuedAtMs = 10, expiresAtMs = 19000, appPolicyBindingDigest = digest(19),
+            governanceSignature = signature,
         )
         return KagemushaHardwareQualificationV1(
             protocolVersion = 1, profile = profile, credential = credential,

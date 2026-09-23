@@ -20,9 +20,16 @@ use p256::ecdsa::{
 };
 use sha2::{Digest as _, Sha256};
 
+mod app_attest_extensions;
 mod exchange;
 mod funding;
 mod hardware;
+mod hardware_selection;
+pub use hardware_selection::{
+    KAGEMUSHA_APP_ATTEST_SELECTION_MAX_BYTES_V1, KagemushaAppAttestHardwareTransitionSelectionV1,
+    KagemushaHardwareTransitionSelectionExpectedV1, KagemushaHardwareTransitionSelectionV1,
+    KagemushaSignedHardwareTransitionSelectionV1,
+};
 
 /// Version carried by every clean-slate KAGEMUSHA wire value.
 pub const KAGEMUSHA_WIRE_VERSION_V1: u16 = 1;
@@ -111,15 +118,16 @@ pub const KAGEMUSHA_HARDWARE_PROFILE_MAX_BYTES_V1: usize = 512;
 /// Maximum canonical compact hardware credential bytes.
 pub const KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1: usize = 768;
 /// Exact canonical Norito bytes hashed by a V1 hardware credential identity.
-pub const KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1: usize = 376;
+pub const KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1: usize = 409;
 /// Byte offset of the 32-byte lane in the canonical credential-ID preimage.
 pub const KAGEMUSHA_HARDWARE_CREDENTIAL_ID_LANE_OFFSET_V1: usize = 185;
 /// Semantic value ranges in the canonical credential-ID preimage, in field order.
 ///
 /// The fields are version, network, profile, suite, firmware policy, policy epoch,
 /// lane, hardware epoch, hardware generation, device key, key reference, issuance,
-/// and expiry. Header, CRC, and field-length prefixes are outside these ranges.
-pub const KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_FIELD_RANGES_V1: [core::ops::Range<usize>; 13] = [
+/// expiry, and app/device policy binding. Header, CRC, and field-length prefixes are outside
+/// these ranges.
+pub const KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_FIELD_RANGES_V1: [core::ops::Range<usize>; 14] = [
     41..43,
     44..76,
     77..109,
@@ -133,16 +141,18 @@ pub const KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_FIELD_RANGES_V1: [core::ops:
     326..358,
     359..367,
     368..376,
+    377..409,
 ];
 /// Exact canonical Norito bytes hashed by a V1 hardware-profile identity.
-pub const KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1: usize = 378;
+pub const KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1: usize = 413;
 /// Semantic value ranges in the canonical profile-ID preimage, in field order.
 ///
 /// The fields are version, protocol version, provider, platform class (u32-LE),
 /// product, firmware policy, enrollment verifier, trust roots, allowed suite,
 /// policy epoch, governance key, capabilities, qualification report, activation,
-/// and expiry. Header, CRC, and field-length prefixes are outside these ranges.
-pub const KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1: [core::ops::Range<usize>; 15] = [
+/// expiry, and approved app-attestation authority policy. Header, CRC, and field-length prefixes
+/// are outside these ranges.
+pub const KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1: [core::ops::Range<usize>; 16] = [
     41..43,
     44..46,
     47..79,
@@ -154,10 +164,11 @@ pub const KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1: [core::ops::Ra
     217..249,
     250..258,
     259..324,
-    325..327,
-    328..360,
-    361..369,
-    370..378,
+    325..329,
+    330..362,
+    363..371,
+    372..380,
+    381..413,
 ];
 /// Exact canonical Norito bytes hashed by a randomized recipient commitment.
 pub const KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_BYTES_V1: usize = 139;
@@ -294,9 +305,9 @@ pub const KAGEMUSHA_HARDWARE_CAPABILITY_OFFLINE_HARDWARE_EPOCH_ROTATION_V1: u16 
 pub const KAGEMUSHA_HARDWARE_CAPABILITY_ROLLBACK_SAFE_COUNTER_ROLLOVER_V1: u16 = 1 << 14;
 /// Hardware fails closed instead of falling back to software authority.
 pub const KAGEMUSHA_HARDWARE_CAPABILITY_NO_SOFTWARE_FALLBACK_V1: u16 = 1 << 15;
-/// Exact capability set required from every KAGEMUSHA V1 hardware profile.
-pub const KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1: u16 =
-    KAGEMUSHA_HARDWARE_CAPABILITY_EXACT_NEXT_PREDECESSOR_CONSUMPTION_V1
+/// Exact lower-sixteen-bit OEM checkpoint capability set.
+pub const KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1: u32 =
+    (KAGEMUSHA_HARDWARE_CAPABILITY_EXACT_NEXT_PREDECESSOR_CONSUMPTION_V1
         | KAGEMUSHA_HARDWARE_CAPABILITY_ONE_USE_SUCCESSOR_AUTHORIZATION_V1
         | KAGEMUSHA_HARDWARE_CAPABILITY_ROLLBACK_RESISTANT_COUNTER_AND_JOURNAL_V1
         | KAGEMUSHA_HARDWARE_CAPABILITY_SEALED_TRANSITION_RECOVERY_V1
@@ -311,7 +322,28 @@ pub const KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1: u16 =
         | KAGEMUSHA_HARDWARE_CAPABILITY_TRUSTED_TIME_OR_LEASE_V1
         | KAGEMUSHA_HARDWARE_CAPABILITY_OFFLINE_HARDWARE_EPOCH_ROTATION_V1
         | KAGEMUSHA_HARDWARE_CAPABILITY_ROLLBACK_SAFE_COUNTER_ROLLOVER_V1
-        | KAGEMUSHA_HARDWARE_CAPABILITY_NO_SOFTWARE_FALLBACK_V1;
+        | KAGEMUSHA_HARDWARE_CAPABILITY_NO_SOFTWARE_FALLBACK_V1) as u32;
+
+/// A governed verifier attested the exact app signing identity and release.
+pub const KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_RELEASE_V1: u32 = 1 << 16;
+/// The transition signature key is bound to the attested platform key service.
+pub const KAGEMUSHA_APP_GUARANTEE_ATTESTED_P256_KEY_V1: u32 = 1 << 17;
+/// Apple App Attest signs an increasing assertion counter. This does not claim a
+/// rollback-resistant monetary journal or one-use hardware key.
+pub const KAGEMUSHA_APP_GUARANTEE_SIGNED_ASSERTION_COUNTER_V1: u32 = 1 << 18;
+/// Android KeyMint attests rollback resistance and a hardware-enforced one-use
+/// key limit for each transition key.
+pub const KAGEMUSHA_APP_GUARANTEE_HARDWARE_ONE_USE_KEY_V1: u32 = 1 << 19;
+/// Exact ordinary iPhone App Attest guarantee set.
+pub const KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1: u32 =
+    KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_RELEASE_V1
+        | KAGEMUSHA_APP_GUARANTEE_ATTESTED_P256_KEY_V1
+        | KAGEMUSHA_APP_GUARANTEE_SIGNED_ASSERTION_COUNTER_V1;
+/// Exact ordinary Android KeyMint guarantee set.
+pub const KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1: u32 =
+    KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_RELEASE_V1
+        | KAGEMUSHA_APP_GUARANTEE_ATTESTED_P256_KEY_V1
+        | KAGEMUSHA_APP_GUARANTEE_HARDWARE_ONE_USE_KEY_V1;
 
 const DEVICE_KEY_REFERENCE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:device-key-reference";
 const ASSET_IDENTITY_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:asset-identity";
@@ -578,6 +610,27 @@ impl AsRef<[u8]> for KagemushaDevicePublicKeyV1 {
 }
 
 impl KagemushaDeviceSignatureV1 {
+    /// Parse a canonical DER ECDSA signature and normalize its S scalar for the direct
+    /// hardware-selection wire profile.
+    ///
+    /// Android KeyMint commonly returns DER from `SHA256withECDSA`; ECDSA's `(r, n - s)`
+    /// equivalent is normalized before the fixed-width low-S signature enters Norito.
+    /// This conversion is cryptographic framing only, not evidence of hardware enforcement.
+    ///
+    /// # Errors
+    /// Returns an error for malformed or non-canonical DER or an invalid P-256 signature.
+    pub fn from_der_normalizing_low_s(bytes: &[u8]) -> Result<Self, KagemushaValidationErrorV1> {
+        if !(8..=72).contains(&bytes.len()) {
+            return Err(invalid("device_signature"));
+        }
+        let parsed = P256Signature::from_der(bytes).map_err(|_| invalid("device_signature"))?;
+        if parsed.to_der().as_bytes() != bytes {
+            return Err(invalid("device_signature"));
+        }
+        let canonical = parsed.normalize_s().unwrap_or(parsed);
+        Self::from_raw_bytes(canonical.to_bytes().as_ref())
+    }
+
     /// Parse a canonical fixed-width low-S P-256 ECDSA signature.
     ///
     /// # Errors
@@ -847,7 +900,7 @@ pub struct KagemushaPairedProofV1 {
 /// Qualified platform class represented by one governed hardware profile.
 ///
 /// A class label never grants KAGEMUSHA authority by itself. The complete
-/// profile, physical qualification evidence, credential, and recursive proof
+/// profile, platform qualification evidence, credential, and recursive proof
 /// must all validate.
 #[derive(
     Debug,
@@ -878,15 +931,50 @@ pub enum KagemushaHardwarePlatformClassV1 {
     DedicatedSecureElement,
     /// Other governed implementation with equivalent physical evidence.
     OtherQualified,
+    /// Ordinary iPhone app using governed App Attest enrollment and assertions.
+    AppleAppAttest,
+    /// Ordinary Android app using governed KeyMint enrollment and one-use keys.
+    AndroidKeyMint,
 }
 
-/// Governed KAGEMUSHA V1 non-forking hardware-service profile.
+impl KagemushaHardwarePlatformClassV1 {
+    /// Exact guarantee mask allowed for this platform class.
+    #[must_use]
+    pub const fn required_guarantees(self) -> u32 {
+        match self {
+            Self::AndroidOemService
+            | Self::AppleOemService
+            | Self::DedicatedSecureElement
+            | Self::OtherQualified => KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+            Self::AppleAppAttest => KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1,
+            Self::AndroidKeyMint => KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1,
+        }
+    }
+
+    /// Whether the profile uses an ordinary app's attested key service.
+    #[must_use]
+    pub const fn is_ordinary_app(self) -> bool {
+        matches!(self, Self::AppleAppAttest | Self::AndroidKeyMint)
+    }
+}
+
+/// Exact guarantee mask for a proof's canonical platform-class discriminant.
+#[must_use]
+pub const fn kagemusha_required_guarantees_for_platform_tag_v1(tag: u8) -> Option<u32> {
+    match tag {
+        0..=3 => Some(KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1),
+        4 => Some(KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1),
+        5 => Some(KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1),
+        _ => None,
+    }
+}
+
+/// Governed KAGEMUSHA V1 hardware-service or attested ordinary-app profile.
 ///
-/// The capability mask must equal
-/// [`KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1`]. A stock hardware-backed
-/// signing key is therefore insufficient unless its surrounding service
-/// implements and qualifies the complete counter, journal, capacity,
-/// atomic-commit, recovery, time/lease, rotation, and no-fallback contract.
+/// The guarantee mask must equal the exact set for its platform class. OEM
+/// checkpoint services retain all sixteen hardware lifecycle capabilities.
+/// Ordinary apps declare a smaller, platform-specific attested-key guarantee
+/// set; they do not claim hardware journals or rollback-resistant app storage.
 #[derive(
     Debug,
     Clone,
@@ -934,18 +1022,21 @@ pub struct KagemushaHardwareProfileV1 {
     pub policy_epoch: u64,
     /// P-256 key authorized to issue compact device credentials for this profile.
     pub governance_credential_public_key: KagemushaDevicePublicKeyV1,
-    /// Exact required capability bit set; missing and unknown bits fail closed.
-    pub capability_mask: u16,
-    /// Digest of the physical-device qualification report admitted by governance.
+    /// Exact class-specific guarantee bits; missing and unknown bits fail closed.
+    pub capability_mask: u32,
+    /// Digest of the class-specific qualification report admitted by governance.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub qualification_report_digest: [u8; 32],
     /// Inclusive profile activation time in Unix milliseconds.
     pub valid_from_ms: u64,
     /// Exclusive profile credential-issuance deadline in Unix milliseconds.
     pub expires_at_ms: u64,
+    /// Governance-selected exact app-attestation authority and app release policy.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub app_attestation_authority_policy_digest: [u8; 32],
 }
 
-/// Compact governance credential consumed by the recursive hardware guard.
+/// Compact governance credential consumed by the recursive authority guard.
 ///
 /// Raw OEM/platform attestation remains an online enrollment input. This
 /// credential is the sole compact V1 projection and binds the enrolled device
@@ -988,10 +1079,11 @@ pub struct KagemushaHardwareCredentialV1 {
     /// Hiding commitment to the device's authoritative aggregate-state lane.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub lane_commitment: [u8; 32],
-    /// Rollback-resistant hardware epoch identity.
+    /// Governed authority epoch identity. Only OEM checkpoint mode claims a
+    /// rollback-resistant hardware epoch journal.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub hardware_epoch_id: [u8; 32],
-    /// Monotonic hardware epoch generation used for rollover and rotation.
+    /// Monotonic logical epoch generation; its enforcement follows the profile.
     pub hardware_epoch_generation: u64,
     /// Device transition, request, staging, and acknowledgement authority key.
     pub device_public_key: KagemushaDevicePublicKeyV1,
@@ -1002,6 +1094,9 @@ pub struct KagemushaHardwareCredentialV1 {
     pub issued_at_ms: u64,
     /// Exclusive credential expiry in Unix milliseconds.
     pub expires_at_ms: u64,
+    /// Stable release/profile/device/lane app-policy binding approved before enrollment nonces.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub app_policy_binding_digest: [u8; 32],
     /// Governance/profile-issuer signature over the exact compact credential.
     pub governance_signature: KagemushaDeviceSignatureV1,
 }
@@ -2166,10 +2261,11 @@ struct HardwareProfileIdPreimageV1 {
     allowed_suite_commitment: [u8; 32],
     policy_epoch: u64,
     governance_credential_public_key: KagemushaDevicePublicKeyV1,
-    capability_mask: u16,
+    capability_mask: u32,
     qualification_report_digest: [u8; 32],
     valid_from_ms: u64,
     expires_at_ms: u64,
+    app_attestation_authority_policy_digest: [u8; 32],
 }
 
 /// Exact pre-ID peer-transfer context authenticated by encrypted-credit AAD.
@@ -2258,6 +2354,7 @@ struct HardwareCredentialIdPreimageV1 {
     device_key_reference: [u8; 32],
     issued_at_ms: u64,
     expires_at_ms: u64,
+    app_policy_binding_digest: [u8; 32],
 }
 
 fn fixed_canonical_preimage_bytes_v1<T: norito::NoritoSerialize, const N: usize>(
@@ -2517,7 +2614,7 @@ pub fn kagemusha_mint_credit_opening_commitment_preimage_layout_v1() -> Result<
     )
 }
 
-/// Return fixed framing for the unchanged canonical hardware-profile identity.
+/// Return fixed framing for the canonical hardware-profile identity.
 ///
 /// The platform discriminant is a u32-LE semantic field, not a framing constant.
 /// Semantic fields occupy [`KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1`].
@@ -2556,6 +2653,7 @@ pub fn kagemusha_hardware_profile_id_preimage_layout_v1()
         qualification_report_digest: [8; 32],
         valid_from_ms: 9,
         expires_at_ms: 10,
+        app_attestation_authority_policy_digest: [11; 32],
     };
     fixed_canonical_preimage_layout_v1(
         &preimage,
@@ -2576,6 +2674,7 @@ pub fn kagemusha_hardware_profile_id_preimage_layout_v1()
             &preimage.qualification_report_digest,
             &preimage.valid_from_ms.to_le_bytes(),
             &preimage.expires_at_ms.to_le_bytes(),
+            &preimage.app_attestation_authority_policy_digest,
         ],
         field,
     )
@@ -2618,7 +2717,7 @@ pub fn kagemusha_credit_opening_canonical_layout_v1()
 
 /// Return fixed framing bytes for the unchanged canonical credential-ID preimage.
 ///
-/// Header bytes 0..31, the layout flag at 39, and all thirteen field-length
+/// Header bytes 0..31, the layout flag at 39, and all fourteen field-length
 /// prefixes are fixed by the authoritative private Norito type. Value bytes and
 /// the data-dependent CRC64 at 31..39 are left unconstrained. This template
 /// supplies no credential authority and does not verify that CRC; proof users
@@ -2656,6 +2755,7 @@ pub fn kagemusha_hardware_credential_id_preimage_layout_v1() -> Result<
         device_key_reference: [0; 32],
         issued_at_ms: 0,
         expires_at_ms: 0,
+        app_policy_binding_digest: [0; 32],
     };
     let bytes = norito::encode_canonical(&preimage)?;
     if bytes.len() != KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1 {
@@ -2680,6 +2780,7 @@ pub fn kagemusha_hardware_credential_id_preimage_layout_v1() -> Result<
         (325, 32),
         (358, 8),
         (367, 8),
+        (376, 32),
     ] {
         if bytes[offset] != length {
             return Err(invalid("kagemusha.hardware_credential.id_preimage_layout"));

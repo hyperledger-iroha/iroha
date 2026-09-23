@@ -746,6 +746,7 @@ fn bootstrap_preview(
         seed.lane,
         seed.hardware_epoch,
         seed.device_policy_binding,
+        seed.next_one_use_key_reference,
         seed.state_nonce_commitment,
         BOOTSTRAP_TIME,
     )
@@ -1416,6 +1417,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         preview.state.lane.clone(),
         preview.state.hardware_epoch,
         preview.state.device_policy_binding,
+        preview.state.next_one_use_key_reference,
         preview.state.state_nonce_commitment,
         BOOTSTRAP_TIME,
         KagemushaDurableCapacityV1 {

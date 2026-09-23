@@ -120,7 +120,9 @@ public enum KagemushaWireV1 {
   public static let maximumOutboxRetryMetadataBytes: UInt32 = 512
   public static let minimumPaymentOutboxBytes: UInt32 = 25_728
   public static let minimumRedemptionOutboxBytes: UInt32 = 26_112
-  public static let requiredHardwareCapabilityMask: UInt16 = 0xffff
+  public static let requiredHardwareCapabilityMask: UInt32 = 0x0000_ffff
+  public static let appleAppAttestCapabilityMask: UInt32 = 0x0007_0000
+  public static let androidKeyMintCapabilityMask: UInt32 = 0x000b_0000
 
   /// Exact minimum recoverable outbox reservation for a terminal operation.
   public static func minimumOutboxBytes(for operation: KagemushaOperationKindV1) -> UInt32 {

@@ -440,6 +440,8 @@ int32_t connect_norito_kagemusha_core_coordinator_invoke_v1(
     size_t *output_frame_length
 );
 
+int32_t connect_norito_kagemusha_core_coordinator_close_v1(uint64_t handle);
+
 int32_t connect_norito_kagemusha_device_capabilities_v1(
     uint8_t *output,
     size_t output_capacity
@@ -478,9 +480,10 @@ probe remains available even when the stock monetary provider correctly reports
 device-unavailable.
 
 The coordinator contract call returns the written word count and pins exactly
-`[2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff]`: frame version, native ABI, peer
+`[2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1]`: frame version, native ABI, peer
 messages, complete wire payloads, artifact roles, relations, helper circuits,
-device operations, hardware capabilities, and the required capability mask.
+device operations, hardware capabilities, the required capability mask, and
+required close/revocation lifecycle.
 Its digest/inventory role is exact format agreement and tamper detection only.
 
 Coordinator request and response frames start with ASCII `IKGMCOR1`, followed
@@ -493,12 +496,17 @@ prepared sender transition, build the terminal envelope, accept the installed
 terminal, recover sender, recover the byte-identical terminal envelope, and
 release the outbox after a closed terminal receipt, and begin observation. Android callers use the canonical
 Kotlin SDK owner `org.hyperledger.iroha.sdk.offline.KagemushaCoreCoordinatorJniV1`
-with `nativeContractV1`, `nativeOpenV1`, and `nativeInvokeV1`. These three SDK JNI
+with `nativeContractV1`, `nativeOpenV1`, `nativeInvokeV1`, and `nativeCloseV1`. These SDK JNI
 exports own the coordinator implementation; there is no application-specific JNI
 namespace. The Java Android facade uses the Kotlin transport. Swift invokes the
 corresponding C exports through the validated native loader. The SDK checks the complete
-ten-word ABI inventory, retains unsigned handle bits, serializes calls, and
+eleven-word ABI inventory, retains unsigned handle bits, serializes calls, and
 correlates all returned identities/envelopes before exposing bounded fields.
+On logout or account switch, close revokes the process-local handle before
+delegating session teardown. A stale handle cannot invoke, and a second open
+cannot create another hardware owner in the same process; the app must start a
+new process to select a new coordinator. Close does not erase uncertain monetary
+state, so recovery remains the qualified backend's responsibility.
 
 `KagemushaCoreCoordinatorFrameV1` and `KagemushaCoreCoordinatorBridgeV1` are
 transport layers, not implementations of `KagemushaNativeCoreCoordinatorV1`.
@@ -553,8 +561,9 @@ native owner bounds outstanding attempts, invalidates superseded challenges, and
 requires a fresh challenge after recreation. Method 3 must bind the accepted reply
 to that exact outstanding command and challenge. An already accepted observation
 cannot be republished as fresh. If a read completes durable work, its authenticated
-dependent evidence must be saved before acknowledging that work. The ten-word
-contract probe remains unchanged; the closed method inventory contains eleven codes.
+dependent evidence must be saved before acknowledging that work. The
+eleven-word contract probe includes the required close lifecycle; the closed
+method inventory independently contains eleven codes.
 
 Method 3 has exactly ten fields: device operation `u32`, request ID, canonical
 command, canonical reply, original 64-byte low-S P-256 response authenticator,
