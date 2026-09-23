@@ -83,6 +83,21 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaExclusiveCoordinatorBackendV
         self.inner.invoke(handle, method, request_frame)
     }
 
+    fn invoke_initial_enrollment(
+        &self,
+        handle: u64,
+        request_frame: &[u8],
+    ) -> Result<Vec<u8>, KagemushaCoreCoordinatorBackendErrorV1> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+        if handle == 0 || state.selected_handle != Some(handle) {
+            return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
+        }
+        self.inner.invoke_initial_enrollment(handle, request_frame)
+    }
+
     fn close(&self, handle: u64) -> Result<(), KagemushaCoreCoordinatorBackendErrorV1> {
         let mut state = self
             .state
@@ -272,6 +287,27 @@ mod tests {
         );
         assert_eq!(backend.close_calls.load(Ordering::SeqCst), 1);
         assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn enrollment_dispatch_requires_explicit_backend_implementation() {
+        let backend = Arc::new(Backend::new(false));
+        let owner = KagemushaExclusiveCoordinatorBackendV1::new(backend.clone());
+        assert_eq!(owner.open("/private/wallet"), Ok(7));
+        assert_eq!(
+            owner.invoke_initial_enrollment(7, b"phase-one"),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
+        );
+        assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            owner.invoke_initial_enrollment(8, b"phase-one"),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+        assert_eq!(owner.close(7), Ok(()));
+        assert_eq!(
+            owner.invoke_initial_enrollment(7, b"phase-one"),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
     }
 
     #[test]

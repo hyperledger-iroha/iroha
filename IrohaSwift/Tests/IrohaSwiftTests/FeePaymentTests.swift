@@ -50,6 +50,31 @@ final class FeePaymentTests: XCTestCase {
         XCTAssertNoThrow(try intent.canonicalNorito())
     }
 
+    func testCurrentFeeJSONRejectsStringAndUnsafeNumericBounds() throws {
+        for gas in [#""1""#, "9007199254740992"] {
+            let raw = Data(
+                #"{"payer":"authority","value":{"charge_limits":[],"gas_limit":\#(gas)}}"#.utf8
+            )
+            XCTAssertThrowsError(try JSONDecoder().decode(FeePaymentIntent.self, from: raw), gas)
+        }
+        for revision in [#""1""#, "9007199254740992"] {
+            let raw = Data(
+                #"{"payer":"sponsor","value":{"program_id":{"sponsor":"\#(authority)","name":"wallet_fx"},"program_revision":\#(revision),"charge_limits":[],"gas_limit":null}}"#.utf8
+            )
+            XCTAssertThrowsError(try JSONDecoder().decode(FeePaymentIntent.self, from: raw), revision)
+        }
+        let admitted = Data(
+            #"{"payer":"authority","value":{"charge_limits":[],"gas_limit":9007199254740991}}"#.utf8
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode(FeePaymentIntent.self, from: admitted),
+            .authority(chargeLimits: [], gasLimit: 9_007_199_254_740_991)
+        )
+        XCTAssertThrowsError(try FeePaymentIntent.authority(
+            chargeLimits: [], gasLimit: 9_007_199_254_740_992
+        ).canonicalJSONData())
+    }
+
     func testSponsorProgramEqualityUsesUniversalAccountIdentity() throws {
         let alternateSponsor = try exactCanonicalToriiAccountAddress(authority)
             .address.toI105(networkPrefix: 369)

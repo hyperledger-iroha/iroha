@@ -923,12 +923,29 @@ public final class IrohaSDK: @unchecked Sendable {
                                                           creationTimeMs: creationTimeMs)
     }
 
+    /// Build the exact unsigned current batch payload at the caller's retained
+    /// creation time. No signing or submission occurs. Compare its hash with
+    /// native inspection before accepting retained signed wire on recovery.
+    public func buildExecutableBatchPayload(
+        networkId: NetworkId, authority: String, creationTimeMs: UInt64,
+        entries: [TransactionBatchEntry], feePayment: FeePaymentIntent,
+        metadata: [String: ToriiJSONValue], ttlMs: UInt64? = 100_000,
+        nonce: UInt32? = nil
+    ) throws -> Data {
+        try SingleInstructionSwiftNoritoEncoder.executableBatchPayload(
+            networkId: networkId, authority: authority, creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs, nonce: nonce, entries: entries, feePayment: feePayment,
+            metadata: metadata
+        )
+    }
+
     /// Build and sign one atomic ordered mix of native instructions and deployed-contract calls.
     public func buildSignedExecutableBatch(
         networkId: NetworkId,
         authority: String,
         entries: [TransactionBatchEntry],
         feePayment: FeePaymentIntent,
+        metadata: [String: ToriiJSONValue],
         ttlMs: UInt64? = 100_000,
         nonce: UInt32? = nil,
         signingKey: SigningKey
@@ -941,6 +958,7 @@ public final class IrohaSDK: @unchecked Sendable {
             nonce: nonce,
             entries: entries,
             feePayment: feePayment,
+            metadata: metadata,
             signingKey: signingKey
         )
     }
@@ -951,6 +969,7 @@ public final class IrohaSDK: @unchecked Sendable {
         authority: String,
         entries: [TransactionBatchEntry],
         feePayment: FeePaymentIntent,
+        metadata: [String: ToriiJSONValue],
         ttlMs: UInt64? = 100_000,
         nonce: UInt32? = nil,
         keypair: Keypair
@@ -960,6 +979,7 @@ public final class IrohaSDK: @unchecked Sendable {
             authority: authority,
             entries: entries,
             feePayment: feePayment,
+            metadata: metadata,
             ttlMs: ttlMs,
             nonce: nonce,
             signingKey: SigningKey.ed25519(privateKey: keypair.privateKeyBytes)

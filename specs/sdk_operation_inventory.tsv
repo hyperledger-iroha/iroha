@@ -192,7 +192,6 @@ application.telemetry_peers_info_get	GET	/v1/telemetry/peers-info	diagnostic	tor
 application.telemetry_propagation_get	GET	/v1/telemetry/propagation	diagnostic	torii_default	public	read	http	all(app_api,telemetry)	false	false	false	false
 application.transactions_history_get	GET	/v1/transactions/history	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 application.transactions_query_post	POST	/v1/transactions/query	public	optional_canonical_account_signature	dataspace_visible	compute	http	feature(app_api)	true	true	false	true
-application.transactions_visible_query_post	POST	/v1/transactions/visible/query	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
 application.webhooks_by_id_delete	DELETE	/v1/webhooks/{id}	public	operator_signature	operator	mutation	http	feature(app_api)	true	true	false	true
 application.webhooks_get	GET	/v1/webhooks	public	operator_signature	operator	read	http	feature(app_api)	true	true	false	true
 application.webhooks_post	POST	/v1/webhooks	public	operator_signature	operator	mutation	http	feature(app_api)	true	true	false	true

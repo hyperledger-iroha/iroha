@@ -55,6 +55,31 @@ pub(super) fn assemble_canonical_preimage_v1<F: KagemushaPoseidonFieldV1>(
         .checked_sub(payload_len)
         .filter(|start| *start >= HEADER_BYTES)
         .ok_or_else(|| "canonical preimage payload length exceeds frame".to_owned())?;
+    let required_header_bytes = [
+        (0, norito::core::MAGIC[0]),
+        (1, norito::core::MAGIC[1]),
+        (2, norito::core::MAGIC[2]),
+        (3, norito::core::MAGIC[3]),
+        (4, norito::core::VERSION_MAJOR),
+        (5, norito::core::VERSION_MINOR),
+        (22, norito::core::Compression::None as u8),
+    ];
+    if required_header_bytes
+        .into_iter()
+        .any(|(index, expected)| layout[index] != Some(expected))
+    {
+        return Err("canonical preimage has a noncanonical header".to_owned());
+    }
+    let flags = layout[HEADER_BYTES - 1]
+        .ok_or_else(|| "canonical preimage header flags are not fixed".to_owned())?;
+    norito::core::validate_header_flags(flags)
+        .map_err(|_| "canonical preimage has unsupported header flags".to_owned())?;
+    if layout[HEADER_BYTES..payload_start]
+        .iter()
+        .any(|byte| *byte != Some(0))
+    {
+        return Err("canonical preimage has nonzero or unbound alignment padding".to_owned());
+    }
     if layout[CHECKSUM_RANGE].iter().any(Option::is_some) {
         return Err("canonical preimage checksum must be computed".to_owned());
     }
@@ -212,7 +237,6 @@ fn assemble_bounded_canonical_frame_template_v1<F: KagemushaPoseidonFieldV1>(
 /// derived in-circuit, so values 127 and 128 retain identical topology while using their unique
 /// minimal encodings. The caller must equality-bind `length` to the exact byte stream or field
 /// whose prefix this represents; this primitive proves the encoding, not that external binding.
-#[cfg(test)]
 pub(super) fn canonical_compact_length_u14_stream_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -244,6 +268,20 @@ pub(super) fn canonical_compact_length_u14_stream_v1<F: KagemushaPoseidonFieldV1
         PastaSha256ByteV1::range_checked(ctx, range, high),
     ];
     KagemushaBoundedByteStreamV1::constrain(ctx, range, bytes, actual_len)
+}
+
+/// Frame the exact bounded recovery payload with the native model's canonical Norito prefix.
+///
+/// The caller must supply only already-authenticated semantic bytes. This helper derives the
+/// payload length and checksum in-circuit; it cannot turn arbitrary sealed bytes into authority.
+pub(super) fn assemble_terminal_recovery_frame_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    payload: &KagemushaBoundedByteStreamV1<F>,
+) -> Result<KagemushaBoundedByteStreamV1<F>, String> {
+    let prefix = crate::zk::kagemusha_v1_state::terminal_recovery_canonical_frame_prefix_v1()
+        .map_err(|_| "terminal recovery canonical frame prefix changed".to_owned())?;
+    assemble_bounded_canonical_frame_template_v1(ctx, range, &prefix, payload)
 }
 
 /// Compute CRC64-XZ as its affine map over Boolean-proven input bits.
@@ -618,6 +656,58 @@ mod tests {
         empty_field[0] = &[];
         assert!(
             assemble_canonical_preimage_v1(ctx, &range, &layout, &reversed, &empty_field).is_err()
+        );
+    }
+
+    #[test]
+    fn canonical_assembler_rejects_noncanonical_header_and_alignment() {
+        use iroha_data_model::kagemusha::{
+            KAGEMUSHA_CREDIT_OPENING_CANONICAL_FIELD_RANGES_V1,
+            kagemusha_credit_opening_canonical_layout_v1,
+        };
+        let mut builder = BaseCircuitBuilder::<Fp>::default()
+            .use_k(12)
+            .use_lookup_bits(11);
+        let range = builder.range_chip();
+        let ctx = builder.main(0);
+        let layout = kagemusha_credit_opening_canonical_layout_v1().expect("model layout");
+        let ranges = KAGEMUSHA_CREDIT_OPENING_CANONICAL_FIELD_RANGES_V1;
+        let fields = ranges
+            .iter()
+            .map(|range| vec![PastaSha256ByteV1::constant(0); range.len()])
+            .collect::<Vec<_>>();
+        let fields = fields.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let mut altered_magic = layout.clone();
+        altered_magic[0] = Some(norito::core::MAGIC[0] ^ 1);
+        assert!(
+            assemble_canonical_preimage_v1(ctx, &range, &altered_magic, &ranges, &fields).is_err()
+        );
+        let mut altered_compression = layout.clone();
+        altered_compression[22] = Some(1);
+        assert!(
+            assemble_canonical_preimage_v1(ctx, &range, &altered_compression, &ranges, &fields)
+                .is_err()
+        );
+        let mut unbound_flags = layout.clone();
+        unbound_flags[39] = None;
+        assert!(
+            assemble_canonical_preimage_v1(ctx, &range, &unbound_flags, &ranges, &fields).is_err()
+        );
+        let payload_len = u64::from_le_bytes(
+            layout[PAYLOAD_LENGTH_RANGE]
+                .iter()
+                .map(|byte| byte.expect("fixed length"))
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("eight bytes"),
+        ) as usize;
+        let payload_start = layout.len() - payload_len;
+        assert!(payload_start > HEADER_BYTES);
+        let mut altered_padding = layout;
+        altered_padding[HEADER_BYTES] = Some(1);
+        assert!(
+            assemble_canonical_preimage_v1(ctx, &range, &altered_padding, &ranges, &fields)
+                .is_err()
         );
     }
 }

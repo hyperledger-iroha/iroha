@@ -131,7 +131,14 @@ and independent-review gates. Exact OEM services/profiles for the requested
 brands remain external dependencies. Release authentication and fail-closed
 activation must stay enforced throughout this work.
 
-## Current validation boundary — 2026-09-22
+## Current validation boundary — 2026-09-23
+
+A September 23 focused `connect_norito_bridge` library check reached
+`iroha_core` and exposed two typed SHA-bit provenance errors in the staged
+terminal-recovery relation. Both call sites now use the typed bit decomposition;
+the check and associated new regression tests still need to rerun after the
+concurrent signed Taira release build clears the machine. This is source repair,
+not a passing current-root build.
 
 The fresh Kotlin/JVM KAGEMUSHA selection executes **57 tests: 33 pass, 24 fail,
 zero skipped**, with all 699 captured SDK/build/fixture inputs unchanged. Every
@@ -214,17 +221,47 @@ The priority families are iPhone, Samsung, Huawei, Google, and Meizu. Other majo
 brands follow the same exact-profile qualification path. No model/OS/firmware/
 provider tuple has been qualified by this assessment.
 
-A read-only host inventory on 2026-09-23 found the remembered iPhone offline in
-Xcode and no attached Android device in `adb devices -l`. This establishes
-local device availability only; it performs no attestation or hardware
-qualification.
+A physical iPhone 17 Pro Max running iOS 26.7 completed a nonmonetary App Attest
+probe on 2026-09-23. Its development attestation had 164-byte authenticator
+data, flag `0x40`, counter zero, and no extension suffix. Two same-key assertions
+had 37-byte authenticator data, flag `0x40`, no suffix, and counters one and two;
+discarding the first assertion did not prevent the hardware counter from
+advancing. The saved attestation passed Swift verification of Apple's pinned
+root, certificate chain, nonce, key ID, App ID, AAGUID and public key. Both
+assertions passed the documented P-256-SHA256 signature check against that
+attested key: Apple forms `nonce = SHA256(authenticatorData || clientDataHash)`
+and ECDSA-SHA256 signs that nonce. The exact same-run raw objects pass a
+23-test isolated Swift validation harness, including attestation and both
+assertion signatures.
+The device supplied no signed validation-category or bundle-version measurement,
+so this iOS 26.7 result cannot establish per-release identity. All raw objects
+remain in an untracked, app-private diagnostic record; no monetary proof was
+admitted. The connected Pixel 6 is now authorized for `adb`; its physical
+Keystore probe reports neither `android.hardware.keystore.single_use_key` nor
+`limited_use_key`, and its attestation has no hardware rollback-resistance tag.
+The mandatory Pixel 6 profile was additionally tested with forced StrongBox
+P-256 `setMaxUsageCount(1)` on Android 16. Its attestation identified StrongBox
+for the key and KeyMint but put use-limit tag 405 in `softwareEnforced`, with
+neither tag 405 nor rollback-resistance tag 303 in `hardwareEnforced`. The
+first signature verified and the second failed with
+`KeyPermanentlyInvalidatedException`; that is software-limited use, not
+hardware no-fork evidence. Its internal eSE is connected, but no access rule
+for the current applet was observed. An app-accessible, provisioned hardware
+counter/checkpoint profile or another physically proven no-fork primitive is
+required to support this device for production offline money.
+An experimental Pixel 6 StrongBox observation collector and testnet-only app
+entry point are source-staged with exact selection/network/release binding and
+local lost-result freezing. Four collector JVM tests and one physical device
+test passed before the latest frame and nonce hardening; the new source and app
+tests still need reruns. Their output is explicitly non-qualified and is not a
+production monetary certificate.
 
 | Family | Integration work and evidence required |
 | --- | --- |
-| iPhone | Swift App Attest enrollment and original-assertion verification for an ordinary app, exact signed counter/one-use proof fold, lost-assertion recovery and physical qualification for each supported OS/profile. HCE, NFC and QR are byte transports, not monetary authority. |
+| iPhone | Bind an app-release policy without claiming unavailable iOS 26 per-assertion version measurement, then complete the exact signed-counter/one-use proof fold, lost-assertion recovery and physical qualification for each supported OS/profile. HCE, NFC and QR are byte transports, not monetary authority. |
 | Samsung | Kotlin/Android KeyMint attestation and one-use-key ratchet integration; physically verify hardware enforcement of rollback resistance and single use for each admitted model/firmware. |
 | Huawei | Establish the exact Android or HarmonyOS app/runtime and available attested key service, then run the same non-forking proof and physical qualification. Android coverage does not establish HarmonyOS coverage. |
-| Google | Qualify the Android KeyMint one-use profile on exact Pixel/model/firmware tuples and integrate its evidence with the recursive monetary proof. |
+| Google | Pixel 6 is mandatory and cannot use the tested KeyMint one-use profile. Obtain and qualify an app-accessible internal hardware counter/checkpoint service or a distinct no-fork primitive on that exact device, then bind it into the recursive monetary proof. |
 | Meizu | Establish model/OS/runtime and attested one-use key availability, then run the same full qualification. |
 
 The ordinary-app profile does not require Apple's Secure Element Credential
@@ -238,6 +275,23 @@ actual chain; app-hosted counters and rollback-resistant key deletion alone do
 not establish the monetary ratchet. See the [Android attestation
 contract](https://source.android.com/docs/security/features/keystore/attestation)
 and [phone algorithm](kagemusha_v1_phone_algorithm.md).
+
+The Android SDK now has typed method-12 enrollment framing over the existing
+native coordinator. Debug and release Kotlin compilation pass. Its six focused
+managed tests compile but cannot execute on the current host without a rebuilt
+ABI-23 `connect_norito_bridge` address validator; the prior four-test invocation
+failed during account fixture construction, before exercising the adapter.
+The adapter retains one
+phase-1 selection in process, freezes an ambiguous selection response and
+rejects issuer completion after a changed proof result. It
+does not create the missing qualified native backend or admit Android money.
+The iOS app's native coordinator also dispatches method 12 through the exact
+schema-2 frame validator. It retains the original ticket, phase order, signed
+preparation selection and exact response/proof retries before exposure.
+Its focused transport source parses and its isolated state machine typechecks;
+the app still
+lacks an installed qualified enrollment components factory and current-source
+XCFramework for executable iOS qualification.
 
 ## Security findings and implementation work
 

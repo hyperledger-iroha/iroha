@@ -43,7 +43,13 @@ mod relation;
 #[cfg(feature = "zk-halo2-ipa")]
 mod state_checkpoint;
 mod state_relation;
+#[cfg(feature = "zk-halo2-ipa")]
+mod testnet_observation;
 mod terminal_authorization;
+#[cfg(feature = "zk-halo2-ipa")]
+mod terminal_body_commitment;
+#[cfg(feature = "zk-halo2-ipa")]
+mod terminal_durable_commitments;
 mod transport_decider;
 #[cfg(feature = "zk-halo2-ipa")]
 mod typed_sha_consumer;
@@ -192,6 +198,11 @@ pub use state_relation::{
     KagemushaReceiveFoldCreditV1, KagemushaStateRelationCircuitV1,
     KagemushaStateRelationPublicInputsV1, KagemushaStateRelationWitnessV1,
     public_instance as kagemusha_state_public_instance_v1,
+};
+#[cfg(feature = "zk-halo2-ipa")]
+pub use testnet_observation::{
+    KagemushaTestnetStateObservationScopeV1, KagemushaTestnetStateProofObservationV1,
+    observe_kagemusha_testnet_state_proof_v1,
 };
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 pub(crate) use terminal_authorization::public_instance as kagemusha_terminal_authorization_public_instance_v1;

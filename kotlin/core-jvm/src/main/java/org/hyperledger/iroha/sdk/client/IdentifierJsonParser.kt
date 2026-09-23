@@ -18,6 +18,7 @@ object IdentifierJsonParser {
             items.add(
                 IdentifierPolicySummary(
                     requiredExactString(item["policy_id"], "identifier policy list.items[$i].policy_id"),
+                    requiredExactString(item["program_id"], "identifier policy list.items[$i].program_id"),
                     requiredExactString(item["owner"], "identifier policy list.items[$i].owner"),
                     asBoolean(item["active"], "identifier policy list.items[$i].active"),
                     IdentifierNormalization.fromWireValue(
@@ -34,18 +35,15 @@ object IdentifierJsonParser {
                         "identifier policy list.items[$i].input_encryption_public_parameters_decoded"
                     ),
                     optionalExactString(item["note"], "identifier policy list.items[$i].note"),
-                    if (item["proof_verifier"] == null) null
+                    proofVerifier = if (item["proof_verifier"] == null) null
                     else parseProofVerifier(
                         expectObject(item["proof_verifier"], "identifier policy list.items[$i].proof_verifier"),
                         "identifier policy list.items[$i].proof_verifier"
                     ),
-                    outputOpeningPublicKey = if (!item.containsKey("output_opening_public_key"))
-                        requiredPublicKeyLiteral(item["resolver_public_key"], "identifier policy list.items[$i].resolver_public_key")
-                    else
-                        requiredPublicKeyLiteral(
-                            item["output_opening_public_key"],
-                            "identifier policy list.items[$i].output_opening_public_key",
-                        ),
+                    outputOpeningPublicKey = requiredPublicKeyLiteral(
+                        item["output_opening_public_key"],
+                        "identifier policy list.items[$i].output_opening_public_key",
+                    ),
                 )
             )
         }
@@ -288,7 +286,7 @@ object IdentifierJsonParser {
             if (root.containsKey("expires_at_ms")) asOptionalUnsignedLong(root["expires_at_ms"], "$context.expires_at_ms") else null
         )
 
-    private fun parseOutputOpening(root: Map<String, Any?>, context: String): RamLfeOutputOpening {
+    internal fun parseOutputOpening(root: Map<String, Any?>, context: String): RamLfeOutputOpening {
         val payload = expectObject(root["payload"], "$context.payload")
         return RamLfeOutputOpening(
             RamLfeOutputOpeningPayload(

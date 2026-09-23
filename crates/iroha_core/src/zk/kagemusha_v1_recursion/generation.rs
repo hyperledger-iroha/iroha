@@ -51,12 +51,13 @@ use iroha_data_model::kagemusha::{
 #[cfg(feature = "zk-halo2-ipa")]
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1, KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
-    KAGEMUSHA_WIRE_VERSION_V1, KagemushaAuthenticatedReleaseV1, KagemushaCommitCertificateV1,
-    KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1, KagemushaLifecycleBindingV1,
-    KagemushaMintAuthorizationV1, KagemushaMintCreditV1, KagemushaOutboxReservationV1,
-    KagemushaPairedProofV1, KagemushaPaymentOutputV1, KagemushaPaymentProofV1,
-    KagemushaPaymentRequestV1, KagemushaQualifiedHelperCircuitV1, KagemushaQualifiedRelationV1,
-    KagemushaRedemptionProofV1,
+    KAGEMUSHA_WIRE_VERSION_V1, KagemushaAppAttestHardwareTransitionSelectionV1,
+    KagemushaAppAttestationAuthorityPolicyV1, KagemushaAuthenticatedReleaseV1,
+    KagemushaCommitCertificateV1, KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1,
+    KagemushaLifecycleBindingV1, KagemushaMintAuthorizationV1, KagemushaMintCreditV1,
+    KagemushaOutboxReservationV1, KagemushaPairedProofV1, KagemushaPaymentOutputV1,
+    KagemushaPaymentProofV1, KagemushaPaymentRequestV1, KagemushaQualifiedHelperCircuitV1,
+    KagemushaQualifiedRelationV1, KagemushaRedemptionProofV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 use rand_core_06::{OsRng, RngCore as _};
@@ -413,6 +414,24 @@ impl<'a> KagemushaRecursiveIncomingEpGenerationWitnessV1<'a> {
     }
 }
 
+/// Original assertion and governed identity needed by both recursive proof parities.
+///
+/// These references carry the raw Apple assertion, enrolled credential, governed profile and
+/// issuer-pinned app authority into proof construction. A checked host result alone cannot
+/// authorize monetary admission; the recursive relation must verify the same raw evidence.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy)]
+pub struct KagemushaAppAttestRecursiveSelectionWitnessV1<'a> {
+    /// Original CBOR assertion and canonical Core selection subject.
+    pub selection: &'a KagemushaAppAttestHardwareTransitionSelectionV1,
+    /// Issuer-governed device key and application binding.
+    pub credential: &'a KagemushaHardwareCredentialV1,
+    /// Governance-approved hardware profile.
+    pub profile: &'a KagemushaHardwareProfileV1,
+    /// Authority and exact app identity pinned by the deployment.
+    pub app_policy: &'a KagemushaAppAttestationAuthorityPolicyV1,
+}
+
 /// Complete private input needed to build both production recursive state circuits.
 ///
 /// Exactly one incoming proof position is always present. `ReceiveFold` consumes it, while every
@@ -437,6 +456,8 @@ pub struct KagemushaRecursiveStateGenerationWitnessV1<'a> {
     pub mint_credit: &'a KagemushaMintCreditV1,
     /// Normalized hardware guard semantics constrained into the state proof.
     pub guard_relation: KagemushaGuardBundleRelationWitnessV1,
+    /// Original App Attest evidence for an app-backed transition; absent for a checkpoint lane.
+    pub hardware_selection: Option<KagemushaAppAttestRecursiveSelectionWitnessV1<'a>>,
     /// Eq predecessor state protocol compiled from the authenticated predecessor state key.
     pub eq_parent_protocol: &'a PlonkProtocol<EqAffine>,
     /// Ep predecessor state protocol compiled from the authenticated predecessor state key.
@@ -562,6 +583,7 @@ impl<'a> KagemushaRecursiveStateGenerationWitnessV1<'a> {
             mint_authorization: self.mint_authorization,
             mint_credit: self.mint_credit,
             guard_relation: self.guard_relation,
+            hardware_selection: self.hardware_selection,
             eq_parent_protocol: self.eq_parent_protocol,
             ep_parent_protocol: self.ep_parent_protocol,
             eq_parent_instances: self.eq_parent_instances,
@@ -4010,7 +4032,7 @@ fn mint_certificate_sha_messages_v1(
         )
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
         jobs.sha
-            .canonical_messages()
+            .bounded_claim_messages()
             .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?
     };
     halo2_proofs::release_allocator_slack();
@@ -4027,7 +4049,7 @@ fn mint_certificate_sha_messages_v1(
         )
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
         jobs.sha
-            .canonical_messages()
+            .bounded_claim_messages()
             .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?
     };
     KagemushaPairedShaMessagesV1::try_new(eq, ep)

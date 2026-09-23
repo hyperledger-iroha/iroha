@@ -1591,8 +1591,9 @@ pub mod core {
         ApiSurface::Public,
         Listener::Torii,
         RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
+        AdmissionPolicy::AuthenticatedAccount,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Read a transaction-entry proof from a block.
@@ -1603,8 +1604,9 @@ pub mod core {
         ApiSurface::Public,
         Listener::Torii,
         RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
+        AdmissionPolicy::AuthenticatedAccount,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Internal peer-to-peer Torii HTTP proxy.
@@ -3946,7 +3948,6 @@ pub mod application_api {
         ACCOUNTS_CAPABILITIES_GET => app_get("application.accounts_capabilities_get", "/v1/accounts/capabilities");
         ACCOUNTS_QUERY_POST => dataspace_compute_post("application.accounts_query_post", "/v1/accounts/query");
         TRANSACTIONS_QUERY_POST => dataspace_compute_post("application.transactions_query_post", "/v1/transactions/query");
-        TRANSACTIONS_VISIBLE_QUERY_POST => account_compute_post("application.transactions_visible_query_post", "/v1/transactions/visible/query");
         ACCOUNTS_ONBOARD_PLAN_POST => onboarding_compute_post("application.accounts_onboard_plan_post", "/v1/accounts/onboard/plan");
         ACCOUNTS_ONBOARD_PREPARE_POST => onboarding_compute_post("application.accounts_onboard_prepare_post", "/v1/accounts/onboard/prepare");
         ACCOUNTS_ONBOARD_POST => onboarding_post("application.accounts_onboard_post", "/v1/accounts/onboard");

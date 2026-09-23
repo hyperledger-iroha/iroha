@@ -15,10 +15,7 @@ fn authenticated_rate_limited_mcp_config(
     cfg
 }
 fn authenticated_mcp_request(payload: &Value, token: &str) -> Request<Body> {
-    authenticated_mcp_request_bytes(
-        norito::json::to_vec(payload).expect("serialize MCP payload"),
-        token,
-    )
+    current_mcp_http_request(payload.clone(), &[("x-api-token", token)])
 }
 fn authenticated_mcp_request_bytes(body: impl Into<Body>, token: &str) -> Request<Body> {
     Request::builder()
@@ -26,7 +23,7 @@ fn authenticated_mcp_request_bytes(body: impl Into<Body>, token: &str) -> Reques
         .uri("/v1/mcp")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ACCEPT, "application/json, text/event-stream")
-        .header("MCP-Protocol-Version", "2025-06-18")
+        .header("MCP-Protocol-Version", MODERN_MCP_PROTOCOL_VERSION)
         .header("x-api-token", token)
         .body(body.into())
         .expect("valid authenticated MCP request")
@@ -66,10 +63,10 @@ async fn assert_mcp_rate_limited_response(response: axum::response::Response) {
         Some("private, no-store")
     );
     let body = read_json_body(response).await;
-    assert_eq!(body.get("id"), Some(&Value::Null));
+    assert!(body.get("id").is_none());
     assert_eq!(
         body.pointer("/error/code").and_then(Value::as_i64),
-        Some(-32029)
+        Some(1_029)
     );
     assert_eq!(
         body.pointer("/error/data/error").and_then(Value::as_str),
@@ -83,7 +80,7 @@ async fn exhaust_authenticated_ordinary_bucket(app: &axum::Router, token: &str) 
             &norito::json!({
                 "jsonrpc": "2.0",
                 "id": "consume-ordinary",
-                "method": "ping"
+                "method": "server/discover"
             }),
             token,
         ),
@@ -436,7 +433,7 @@ async fn mcp_authenticated_rejections_do_not_refund_the_initial_ordinary_debit()
             &norito::json!({
                 "jsonrpc": "2.0",
                 "id": ("oversized".repeat(128)),
-                "method": "ping"
+                "method": "server/discover"
             }),
             oversized_token,
         ),
@@ -449,7 +446,7 @@ async fn mcp_authenticated_rejections_do_not_refund_the_initial_ordinary_debit()
         &norito::json!({
             "jsonrpc": "2.0",
             "id": "unsupported-protocol",
-            "method": "ping"
+            "method": "server/discover"
         }),
         rejected_token,
     );
@@ -550,7 +547,7 @@ async fn mcp_cancellation_fallback_requires_one_exact_configured_token() {
             &norito::json!({
                 "jsonrpc": "2.0",
                 "id": "valid-after-invalid-auth",
-                "method": "ping"
+                "method": "server/discover"
             }),
             token,
         ),
@@ -576,7 +573,7 @@ async fn mcp_anonymous_rate_limit_has_no_cancellation_control_fallback() {
         norito::json!({
             "jsonrpc": "2.0",
             "id": "consume-anonymous",
-            "method": "ping"
+            "method": "server/discover"
         }),
     )
     .await;
@@ -613,7 +610,7 @@ async fn mcp_jsonrpc_enforces_rate_limit() {
         body.get("error")
             .and_then(|value| value.get("code"))
             .and_then(Value::as_i64),
-        Some(-32029)
+        Some(1_029)
     );
     app.shutdown().await;
 }
@@ -651,7 +648,7 @@ async fn mcp_jsonrpc_charges_each_inner_tool_batch_dispatch() {
         norito::json!({
             "jsonrpc": "2.0",
             "id": "after-inner-dispatches",
-            "method": "ping"
+            "method": "server/discover"
         }),
         &[("x-api-token", "batch-principal")],
     )
@@ -661,7 +658,7 @@ async fn mcp_jsonrpc_charges_each_inner_tool_batch_dispatch() {
         body.get("error")
             .and_then(|value| value.get("code"))
             .and_then(Value::as_i64),
-        Some(-32029)
+        Some(1_029)
     );
     app.shutdown().await;
 }
@@ -733,7 +730,7 @@ async fn mcp_one_per_minute_rate_does_not_round_up_to_one_per_second() {
     let request = norito::json!({
         "jsonrpc": "2.0",
         "id": "one-per-minute",
-        "method": "ping"
+        "method": "server/discover"
     });
     let (status, _) = post_mcp(&app, request.clone()).await;
     assert_eq!(status, StatusCode::OK);
@@ -746,7 +743,7 @@ async fn mcp_one_per_minute_rate_does_not_round_up_to_one_per_second() {
         body.get("error")
             .and_then(|value| value.get("code"))
             .and_then(Value::as_i64),
-        Some(-32029)
+        Some(1_029)
     );
     app.shutdown().await;
 }

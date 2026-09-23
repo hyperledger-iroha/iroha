@@ -574,20 +574,25 @@ fn composes_mcp_endpoint() {
 }
 #[test]
 fn local_mcp_probe_requires_native_protocol_discovery() {
-    let discovery = norito::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": {
-            "resultType": "complete",
-            "supportedVersions": ["2025-06-18"]
-        }
-    });
-    let error = LocalMcpProbeResult::from_documents(&discovery, &norito::json!({}))
-        .expect_err("legacy-only discovery must not satisfy native MCP readiness");
-    assert!(
-        error.to_string().contains("2026-07-28"),
-        "unexpected error: {error}"
-    );
+    for versions in [
+        norito::json!(["2025-06-18"]),
+        norito::json!(["2026-07-28", "2025-06-18"]),
+    ] {
+        let discovery = norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "resultType": "complete",
+                "supportedVersions": (versions)
+            }
+        });
+        let error = LocalMcpProbeResult::from_documents(&discovery, &norito::json!({}))
+            .expect_err("retired MCP version must not satisfy readiness");
+        assert!(
+            error.to_string().contains("2026-07-28"),
+            "unexpected error: {error}"
+        );
+    }
 }
 fn mock_json_body(value: norito::json::Value) -> String {
     norito::json::to_string(&value).expect("serialize mock json body")
@@ -678,7 +683,7 @@ async fn validate_local_mcp_accepts_curated_iroha_tools() {
                 "id": 1,
                 "result": {
                     "resultType": "complete",
-                    "supportedVersions": ["2026-07-28", "2025-06-18"],
+                    "supportedVersions": ["2026-07-28"],
                     "capabilities": {
                         "tools": { "listChanged": false }
                     }
@@ -774,7 +779,7 @@ async fn validate_local_mcp_rejects_raw_torii_tools() {
                 "id": 1,
                 "result": {
                     "resultType": "complete",
-                    "supportedVersions": ["2026-07-28", "2025-06-18"]
+                    "supportedVersions": ["2026-07-28"]
                 }
             })));
     });

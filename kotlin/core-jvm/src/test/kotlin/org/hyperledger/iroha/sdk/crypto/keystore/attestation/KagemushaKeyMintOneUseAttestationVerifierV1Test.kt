@@ -31,10 +31,22 @@ import org.bouncycastle.asn1.x509.KeyUsage
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
 import org.bouncycastle.asn1.x9.X9ObjectIdentifiers
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 
 class KagemushaKeyMintOneUseAttestationVerifierV1Test {
+    @Test
+    fun preparedChallengeMatchesCoreFixedVector() {
+        val before = ByteArray(16).also { it[0] = 9 }
+        val after = ByteArray(16).also { it[0] = 10 }
+        val expected = "b118eeefecd47674107c021b5003531c6e6d2fe75e5c8f086515da1510816bf6"
+            .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        assertArrayEquals(expected, preparedChallengeV1(
+            ByteArray(32) { 7 }, ByteArray(32) { 8 }, before, after,
+        ))
+    }
+
     @Test
     fun acceptsPinnedHardwareOneUseAndExactCoreSelection() {
         val fixture = fixture()
@@ -71,6 +83,19 @@ class KagemushaKeyMintOneUseAttestationVerifierV1Test {
     fun unsupportedAuthorizationAndSoftwareSecurityLevelAreRejected() {
         rejects(fixture(unsupportedHardwareTag = true))
         rejects(fixture(securityLevel = 0))
+    }
+
+    @Test
+    fun keymasterAndInconsistentKeyMintVersionsCannotClaimHardwareSingleUse() {
+        rejects(fixture(attestationVersion = 4, keyMintVersion = 41))
+        rejects(fixture(attestationVersion = 100, keyMintVersion = 41))
+        rejects(fixture(attestationVersion = 100, keyMintVersion = 200))
+        rejects(fixture(attestationVersion = 600, keyMintVersion = 600))
+    }
+
+    @Test
+    fun keyMintRootOfTrustRequiresItsVerifiedBootHash() {
+        rejects(fixture(includeVerifiedBootHash = false))
     }
 
     @Test
@@ -148,6 +173,9 @@ class KagemushaKeyMintOneUseAttestationVerifierV1Test {
         lockedBoot: Boolean = true,
         securityLevel: Int = 1,
         unsupportedHardwareTag: Boolean = false,
+        attestationVersion: Int = 100,
+        keyMintVersion: Int = 100,
+        includeVerifiedBootHash: Boolean = true,
     ): Fixture {
         val root = ecKeyPair()
         val leaf = ecKeyPair()
@@ -173,13 +201,16 @@ class KagemushaKeyMintOneUseAttestationVerifierV1Test {
         if (hardwareRollback) hardware += 303 to DERNull.INSTANCE
         if (hardwareUsage) hardware += 405 to ASN1Integer(1)
         hardware += 702 to ASN1Integer(0)
-        hardware += 704 to DERSequence(arrayOf(
+        val rootOfTrust = mutableListOf<ASN1Encodable>(
             DEROctetString(ByteArray(32) { 0x11 }), ASN1Boolean.getInstance(lockedBoot),
-            ASN1Enumerated(0), DEROctetString(ByteArray(32) { 0x22 }),
-        ))
+            ASN1Enumerated(0),
+        )
+        if (includeVerifiedBootHash) rootOfTrust += DEROctetString(ByteArray(32) { 0x22 })
+        hardware += 704 to DERSequence(rootOfTrust.toTypedArray())
         if (unsupportedHardwareTag) hardware += 999 to ASN1Integer(1)
         val keyDescription = DERSequence(arrayOf(
-            ASN1Integer(100), ASN1Enumerated(securityLevel), ASN1Integer(100),
+            ASN1Integer(attestationVersion.toLong()), ASN1Enumerated(securityLevel),
+            ASN1Integer(keyMintVersion.toLong()),
             ASN1Enumerated(securityLevel), DEROctetString(challenge), DEROctetString(ByteArray(0)),
             authorizationList(software), authorizationList(hardware),
         )).encoded

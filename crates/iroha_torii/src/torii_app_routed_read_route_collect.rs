@@ -54,6 +54,16 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
         diagnostics,
         mut budget,
     } = collected;
+    if endpoint == ToriiReadEndpointV1::AccountAssetsQuery && diagnostics.failed_routes() != 0 {
+        return Err(with_torii_fanout_headers(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "incomplete_account_assets",
+                "account-assets query requires every authoritative target route",
+            ),
+            diagnostics,
+        ));
+    }
     let payloads = filter_non_authoritative_global_list_rows(app.as_ref(), endpoint, payloads)?;
     let payloads =
         filter_non_authoritative_global_portfolio_rows(app.as_ref(), endpoint, payloads)?;
@@ -186,6 +196,110 @@ async fn execute_torii_fanout_space_directory_manifest_payloads_resolved_routes(
     }
     Ok((payloads, diagnostics, routed_by, budget))
 }
+#[cfg(feature = "app_api")]
+async fn execute_torii_account_assets_list_fanout_for_resolved_routes(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+    proxy_memory: Option<ToriiProxyMemoryReservation>,
+) -> Response {
+    if routes.is_empty() {
+        return torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            "no authoritative account-assets route is configured",
+        );
+    }
+    let request_decode_plan = match torii_routed_read_request_decode_plan(app) {
+        Ok(plan) => plan,
+        Err(response) => return response,
+    };
+    let mut params = match decode_torii_proxy_query::<routing::AccountAssetsGetParams>(
+        request_decode_plan,
+        query_string.as_deref(),
+    ) {
+        Ok(params) => params,
+        Err(response) => return response,
+    };
+    let limits = routing::app_query_limits();
+    let page_limit = match limits.clamp_page_limit(params.limit) {
+        Ok(limit) => limit,
+        Err(error) => return error.into_response(),
+    };
+    let page_offset = params.offset;
+    let count_mode_label = routed_read_count_mode_label(params.count_mode.as_deref());
+    let routed_by = routed_by_for_routes(app, &routes);
+    params.offset = 0;
+    params.limit = Some(limits.max_page_limit.max(1));
+    params.count_mode = Some("exact".to_owned());
+    let collected = match collect_torii_paginated_list_json_payloads(
+        &routes,
+        limits.max_page_limit.max(1),
+        app.query_fanout_working_set_bytes,
+        app.torii_proxy_max_response_bytes,
+        |route, route_offset, route_limit| {
+            let mut page_params = params.clone();
+            page_params.offset = route_offset;
+            page_params.limit = Some(route_limit);
+            let proxy_memory = proxy_memory.clone();
+            let route_scope = route_scope.clone();
+            let path_args = path_args.clone();
+            async move {
+                let query_string = match encode_torii_proxy_query(&page_params) {
+                    Ok(query_string) => query_string,
+                    Err(error) => return error.into_response(),
+                };
+                execute_torii_read_for_route(
+                    app,
+                    route,
+                    torii_read_request(
+                        ToriiReadEndpointV1::AccountAssetsGet,
+                        route_scope,
+                        route,
+                        path_args,
+                        query_string,
+                        Vec::new(),
+                    ),
+                    proxy_memory,
+                )
+                .await
+            }
+        },
+    )
+    .await
+    {
+        Ok(collected) => collected,
+        Err(response) => return response,
+    };
+    let ToriiFanoutJsonPayloads {
+        payloads,
+        diagnostics,
+        budget,
+    } = collected;
+    if diagnostics.failed_routes() != 0 {
+        return with_torii_fanout_headers(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "incomplete_account_assets",
+                "account-assets read requires every authoritative target route",
+            ),
+            diagnostics,
+        );
+    }
+    merge_with_torii_fanout_headers(diagnostics, || {
+        merged_paginated_list_response(
+            payloads,
+            page_offset,
+            page_limit,
+            count_mode_label,
+            routed_by,
+            budget,
+        )
+    })
+}
+
 #[cfg(feature = "app_api")]
 async fn execute_torii_accounts_list_fanout_for_resolved_routes(
     app: &SharedAppState,

@@ -551,7 +551,6 @@ def test_public_query_helpers_reject_legacy_network_keyword_aliases(
             transaction_hash="11" * 32,
             authority="authority@payments",
             network_id=NETWORK_ID,
-            executed_block_wire=b"executed-wire",
             finality_bundle_chain_json="[finality-bundle]",
             trusted_height_context_id="trusted-root",
             private_key=b"\x11" * 32,
@@ -585,9 +584,10 @@ def test_verified_committed_transaction_joins_signed_query_to_required_finality_
 
     crypto.build_find_committed_transaction_query = transaction_query
     verification_inputs = []
-    def verify(requested_hash, transaction_response, executed_wire, **trust):
-        verification_inputs.append((requested_hash, transaction_response, executed_wire, trust))
+    def verify(requested_hash, transaction_response, **trust):
+        verification_inputs.append((requested_hash, transaction_response, trust))
         return {
+            "proof_kind": "selective-v1",
             "transaction_hash": transaction_hash,
             "block_hash": block_hash,
             "block_height": 7,
@@ -626,7 +626,6 @@ def test_verified_committed_transaction_joins_signed_query_to_required_finality_
         transaction_hash=transaction_hash,
         authority="authority@payments",
         network_id=NETWORK_ID,
-        executed_block_wire=b"executed-wire",
         finality_bundle_chain_json="[finality-bundle]",
         trusted_height_context_id="trusted-root",
         private_key_hex="44" * 32,
@@ -648,7 +647,7 @@ def test_verified_committed_transaction_joins_signed_query_to_required_finality_
         b"transaction-query",
     ]
     assert query_network_ids == [NETWORK_ID]
-    assert verification_inputs == [(transaction_hash, b"transaction-response", b"executed-wire", {
+    assert verification_inputs == [(transaction_hash, b"transaction-response", {
         "finality_bundle_chain_json": "[finality-bundle]",
         "expected_network_id": NETWORK_ID,
         "trusted_height_context_id": "trusted-root",
@@ -664,6 +663,7 @@ def test_verified_committed_transaction_joins_signed_query_to_required_finality_
 
 def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None:
     payload = {
+        "proof_kind": "selective-v1",
         "transaction_hash": "11" * 32,
         "block_hash": "22" * 32,
         "block_height": 7,
@@ -987,15 +987,15 @@ def test_committed_output_crypto_wrapper_requires_and_forwards_exact_trust_input
     verify = namespace["verify_committed_transaction_inclusion"]
     trust = dict(finality_bundle_chain_json="[exact-bundle]", expected_network_id=NETWORK_ID,
                  trusted_height_context_id="trusted-root")
-    assert verify("transaction", b"response", b"wire", **trust) == {"output_hash": "verified"}
-    assert calls == [("transaction", b"response", b"wire", "[exact-bundle]", NETWORK_ID, "trusted-root")]
-    for response, wire in [(bytearray(b"response"), b"wire"), (b"response", memoryview(b"wire"))]:
+    assert verify("transaction", b"response", **trust) == {"output_hash": "verified"}
+    assert calls == [("transaction", b"response", "[exact-bundle]", NETWORK_ID, "trusted-root")]
+    for response in [bytearray(b"response"), memoryview(b"response")]:
         with pytest.raises(TypeError, match="exact immutable bytes"):
-            verify("transaction", response, wire, **trust)
+            verify("transaction", response, **trust)
     with pytest.raises(TypeError, match="expected_network_id must be a NetworkId"):
-        verify("transaction", b"response", b"wire", **{**trust, "expected_network_id": b"untrusted"})
+        verify("transaction", b"response", **{**trust, "expected_network_id": b"untrusted"})
     with pytest.raises(ValueError, match="16 MiB"):
-        verify("transaction", b"response", b"wire", **{**trust, "finality_bundle_chain_json": " " * (16 * 1024 * 1024 + 1)})
+        verify("transaction", b"response", **{**trust, "finality_bundle_chain_json": " " * (16 * 1024 * 1024 + 1)})
     with pytest.raises(TypeError, match="required keyword-only"):
-        verify("transaction", b"response", b"wire")
+        verify("transaction", b"response")
     assert len(calls) == 1

@@ -911,6 +911,7 @@ pub(super) fn state_verification_fixture()
         },
         balance: 0,
         logical_sequence: 0,
+        secure_index: 0,
         hardware_epoch: HardwareEpochV1 {
             generation: 1,
             epoch_id: digest(0x95),

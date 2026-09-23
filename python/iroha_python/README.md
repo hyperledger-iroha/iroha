@@ -684,8 +684,8 @@ draft.register_rwa(
 
 `ToriiClient` also exposes the chain-state and explorer RWA read surfaces:
 
-The ten existing high-level Python callers for ledger-wide JSON query POSTs
-(account transactions/assets, domains, accounts, global/visible transactions,
+The nine existing high-level Python callers for ledger-wide JSON query POSTs
+(account transactions/assets, domains, accounts, transactions,
 repo agreements, asset holders/definitions, and RWAs) require an immutable
 genesis-derived `LocalSigningContext` plus matching `canonical_request_auth`.
 They sign the final method, percent-encoded path, query, and compact JSON body,

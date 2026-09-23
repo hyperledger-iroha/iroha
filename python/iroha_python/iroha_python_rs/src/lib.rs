@@ -12204,17 +12204,15 @@ fn batch_outcome_json(outcome: &AssetBatchTransferOutcome) -> PyResult<json::Val
 fn verify_committed_transaction_inclusion_json_py(
     transaction_hash: &str,
     transaction_response_bytes: &[u8],
-    executed_block_wire: &[u8],
     finality_bundle_chain_json: &str,
     expected_network_id: &PyNetworkId,
     trusted_height_context_id: &str,
 ) -> PyResult<String> {
     let expected = parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
-    let (committed, carrier, bundle) =
+    let (committed, bundle) =
         committed_transaction_verification::authenticate_committed_transaction(
             expected,
             transaction_response_bytes,
-            executed_block_wire,
             finality_bundle_chain_json,
             *expected_network_id.as_inner(),
             trusted_height_context_id,
@@ -12298,6 +12296,10 @@ fn verify_committed_transaction_inclusion_json_py(
     })?;
     let mut result = norito::json::Map::new();
     result.insert(
+        "proof_kind".into(),
+        json::Value::String("selective-v1".into()),
+    );
+    result.insert(
         "network_id".into(),
         json::to_value(&bundle.commitment.network_id)
             .map_err(|error| PyValueError::new_err(error.to_string()))?,
@@ -12332,7 +12334,7 @@ fn verify_committed_transaction_inclusion_json_py(
     );
     result.insert(
         "block_height".into(),
-        norito::json::Value::from(carrier.header().height().get()),
+        norito::json::Value::from(bundle.commitment.block_height),
     );
     result.insert(
         "output_hash".into(),

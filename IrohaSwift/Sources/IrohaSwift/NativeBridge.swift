@@ -109,6 +109,11 @@ enum NoritoBridgeLoader {
         "connect_norito_canonical_json_blake3_v1",
         "connect_norito_encode_account_onboarding_plan_body_v1",
         "connect_norito_alias_instruction_round_trip_v1",
+        "connect_norito_account_read_permission_multisig_payload_hash",
+        "connect_norito_account_read_permission_multisig_finalize",
+        "connect_norito_committed_transaction_query_payload_hash_v1",
+        "connect_norito_committed_transaction_query_finalize_v1",
+        "connect_norito_verify_committed_transaction_inclusion_v1",
         "iroha_privacy_compiled_profile_catalog_v1",
         "iroha_privacy_validate_compiled_profile_catalog_v1",
         "iroha_privacy_validate_exact12_capability_manifest_v1",
@@ -1898,6 +1903,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeTransferFn: EncodeTransferFn? = nil
     private var encodeTransferWithAlgFn: EncodeTransferWithAlgFn? = nil
     private var encodeTransferInstructionBoxFn: EncodeTransferInstructionBoxFn? = nil
+    private var encodeTransferInstructionFrameFn: EncodeTransferInstructionBoxFn? = nil
     private var encodeMintFn: EncodeMintFn? = nil
     private var encodeMintWithAlgFn: EncodeMintWithAlgFn? = nil
     private var encodeRegisterZkAssetFn: EncodeRegisterZkAssetFn? = nil
@@ -2310,6 +2316,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         } else {
             self.encodeTransferInstructionBoxFn = nil
         }
+        self.encodeTransferInstructionFrameFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_encode_transfer_instruction_frame_v1") }
+            .map { unsafeBitCast($0, to: EncodeTransferInstructionBoxFn.self) }
         loadPrivacySymbols(from: staticHandle)
         self.detachedTransactionInspectFn = staticHandle
             .flatMap { dlsym($0, "connect_norito_detached_transaction_scaffold_inspect_v1") }
@@ -2554,6 +2563,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.encodeTransferInstructionBoxFn = nil
             }
+            self.encodeTransferInstructionFrameFn = dlsym(handle, "connect_norito_encode_transfer_instruction_frame_v1")
+                .map { unsafeBitCast($0, to: EncodeTransferInstructionBoxFn.self) }
             if let mintSymbol = dlsym(handle, "connect_norito_encode_mint_signed_transaction") {
                 self.encodeMintFn = unsafeBitCast(mintSymbol, to: EncodeMintFn.self)
             } else {
@@ -3122,6 +3133,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeTransferFn = nil
             self.encodeTransferWithAlgFn = nil
             self.encodeTransferInstructionBoxFn = nil
+            self.encodeTransferInstructionFrameFn = nil
             self.encodeMintFn = nil
             self.encodeMintWithAlgFn = nil
             self.encodeRegisterZkAssetFn = nil
@@ -4630,6 +4642,74 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return data
         #else
         return nil
+        #endif
+    }
+
+    public func encodeTransferInstructionFrame(
+        authority: String,
+        assetDefinitionId: String,
+        quantity: String,
+        destination: String
+    ) throws -> TransactionInstructionFrame {
+        let canonicalQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(quantity).canonicalString
+        #if canImport(Darwin)
+        guard let freeFn, let encodeTransferInstructionFrameFn else { throw NativeBridgeError.bridgeUnavailable }
+
+        var instructionPtr: UnsafeMutablePointer<UInt8>? = nil
+        var instructionLen: UInt = 0
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            authority.withCString { authorityPtr in
+                assetDefinitionId.withCString { assetPtr in
+                    canonicalQuantity.withCString { quantityPtr in
+                        destination.withCString { destinationPtr in
+                            self.withSignedOutputs(
+                                signedPtr: &instructionPtr,
+                                signedLen: &instructionLen
+                            ) { instructionPtrPtr, instructionLenPtr in
+                                encodeTransferInstructionFrameFn(
+                                    authorityPtr,
+                                    UInt(authority.utf8.count),
+                                    assetPtr,
+                                    UInt(assetDefinitionId.utf8.count),
+                                    quantityPtr,
+                                    UInt(canonicalQuantity.utf8.count),
+                                    destinationPtr,
+                                    UInt(destination.utf8.count),
+                                    instructionPtrPtr,
+                                    instructionLenPtr
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if status != 0 {
+            if let instructionPtr { freeFn(instructionPtr) }
+            try throwOnStatus(status)
+            throw NativeBridgeError.invalidDetachedTransactionOutput
+        }
+        guard let instructionPtr else { throw NativeBridgeError.bridgeUnavailable }
+
+        defer { freeFn(instructionPtr) }
+        guard instructionLen > 0, instructionLen <= 1024 * 1024 else {
+            throw NativeBridgeError.invalidDetachedTransactionOutput
+        }
+        let data = Data(bytes: instructionPtr, count: Int(instructionLen))
+        try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(json.keys) == ["schema", "wire_name", "framed_payload_b64"],
+              json["schema"] as? String == "iroha.transfer_instruction_frame.v1",
+              let wireName = json["wire_name"] as? String,
+              let encoded = json["framed_payload_b64"] as? String,
+              let frame = Data(base64Encoded: encoded), frame.base64EncodedString() == encoded else {
+            throw NativeBridgeError.invalidDetachedTransactionOutput
+        }
+        return try TransactionInstructionFrame(wireName: wireName, framedPayload: frame)
+        #else
+        throw NativeBridgeError.bridgeUnavailable
         #endif
     }
 

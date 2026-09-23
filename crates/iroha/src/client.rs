@@ -21437,6 +21437,85 @@ impl Client {
         Ok(result)
     }
 
+    /// Relay one bounded canonical validation-fee proof page as untrusted bytes.
+    ///
+    /// The authenticated request uses this client's configured query account and
+    /// NetworkId. Decoding only checks the current wire shape. This method does
+    /// not authenticate finality, registry, witness, or checkpoint authority.
+    /// Consumers must verify the returned bytes against independently pinned
+    /// bindings and roots before displaying or using any policy projection.
+    ///
+    /// # Errors
+    ///
+    /// Rejects noncanonical/oversized requests, invalid request version or height,
+    /// transport/HTTP failure, nonexact media type, and malformed or oversized proof.
+    pub fn relay_validation_fee_current_policy_proof(
+        &self,
+        request_norito: &[u8],
+    ) -> Result<Vec<u8>> {
+        const MAX_RELAY_REQUEST: usize = 4096;
+        if request_norito.is_empty() || request_norito.len() > MAX_RELAY_REQUEST {
+            return Err(eyre!("validation-fee proof relay request exceeds bound"));
+        }
+        let request: ValidationFeeCurrentPolicyProofRequestV1 =
+            norito::decode_canonical_with_limits(
+                request_norito,
+                norito::canonical_decode_limits(request_norito.len()),
+            )
+            .wrap_err("validation-fee proof relay request is not canonical current Norito")?;
+        if request.version != VALIDATION_FEE_POLICY_PROOF_VERSION_V1
+            || request.trusted_checkpoint_height == 0
+        {
+            return Err(eyre!(
+                "invalid validation-fee proof relay request version or height"
+            ));
+        }
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_uri::VALIDATION_FEE_CURRENT_POLICY_PROOF,
+        );
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, request_norito.to_vec())?
+                .header("Content-Type", APPLICATION_NORITO)
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "validation-fee proof relay returned a non-success HTTP status"
+            ));
+        }
+        if exact_single_response_header(&response, "content-type")? != APPLICATION_NORITO
+            || response.headers().contains_key("x-iroha-reject-code")
+            || response
+                .headers()
+                .keys()
+                .any(|name| name.as_str().starts_with("sora-"))
+        {
+            return Err(eyre!(
+                "validation-fee proof relay has invalid response headers"
+            ));
+        }
+        let body = response.body();
+        if body.is_empty() || body.len() > VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES {
+            return Err(eyre!("validation-fee proof relay response exceeds bound"));
+        }
+        let proof: ValidationFeeCurrentPolicyProofV1 =
+            norito::decode_canonical_with_limits(body, norito::canonical_decode_limits(body.len()))
+                .wrap_err("validation-fee proof relay response is not canonical current Norito")?;
+        if proof.version != VALIDATION_FEE_POLICY_PROOF_VERSION_V1
+            || proof.evaluated_block_height == 0
+            || proof.observed_ledger_tip_height < proof.evaluated_block_height
+            || proof.more_available != (proof.evaluated_block_height < proof.observed_ledger_tip_height)
+            || proof.finality_chain.is_empty()
+            || proof.finality_chain.len() > iroha_torii_shared::validation_fee_api::VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_PROOFS {
+            return Err(eyre!("validation-fee proof relay response has invalid current proof shape"));
+        }
+        // No verify_against: the relay must not substitute its own trust anchor
+        // for the independently pinned checkpoint of each consuming application.
+        Ok(body.clone())
+    }
+
     /// Fetch and verify one bounded validation-fee policy proof page.
     ///
     /// The caller supplies a previously trusted checkpoint. The returned page
@@ -27252,6 +27331,108 @@ mod tests {
             Some(&APPLICATION_JSON.to_owned()),
         );
     }
+    #[test]
+    fn raw_fee_proof_relay_rejects_noncanonical_requests_before_http() {
+        let client = client_with_base_url(base_url());
+        let valid = to_bytes(&ValidationFeeCurrentPolicyProofRequestV1 {
+            version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+            trusted_checkpoint_height: 1,
+        })
+        .expect("request");
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        let invalid = vec![
+            Vec::new(),
+            vec![0; 4097],
+            trailing,
+            to_bytes(&ValidationFeeCurrentPolicyProofRequestV1 {
+                version: 2,
+                trusted_checkpoint_height: 1,
+            })
+            .unwrap(),
+            to_bytes(&ValidationFeeCurrentPolicyProofRequestV1 {
+                version: 1,
+                trusted_checkpoint_height: 0,
+            })
+            .unwrap(),
+        ];
+        with_mock_http(
+            |_| panic!("invalid proof relay request reached HTTP"),
+            |transport| {
+                let client = client.with_test_http_transport(transport);
+                for request in invalid {
+                    assert!(
+                        client
+                            .relay_validation_fee_current_policy_proof(&request)
+                            .is_err()
+                    );
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn raw_fee_proof_relay_signs_exact_bounded_request_and_rejects_response_shortcuts() {
+        let mut client = client_with_base_url(base_url());
+        client.headers.insert("X-Dataspace-Id".into(), "is2".into());
+        let request = to_bytes(&ValidationFeeCurrentPolicyProofRequestV1 {
+            version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+            trusted_checkpoint_height: 3,
+        })
+        .unwrap();
+        for response in [
+            mk_response(
+                StatusCode::OK,
+                br#"{"ready":true,"verified":true}"#.to_vec(),
+                Some(APPLICATION_JSON),
+            ),
+            mk_response(StatusCode::OK, vec![0], Some(APPLICATION_NORITO)),
+            mk_response(
+                StatusCode::OK,
+                vec![0],
+                Some("application/x-norito; charset=binary"),
+            ),
+            mk_response(StatusCode::FOUND, vec![], Some(APPLICATION_NORITO)),
+            mk_response(
+                StatusCode::OK,
+                vec![0; VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES + 1],
+                Some(APPLICATION_NORITO),
+            ),
+        ] {
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            with_mock_http(respond_with(&store, response), |transport| {
+                assert!(
+                    client
+                        .clone()
+                        .with_test_http_transport(transport)
+                        .relay_validation_fee_current_policy_proof(&request)
+                        .is_err()
+                );
+            });
+            let snapshots = store.lock().unwrap();
+            assert_eq!(snapshots.len(), 1);
+            let snapshot = &snapshots[0];
+            assert_eq!(snapshot.method, HttpMethod::POST);
+            assert_eq!(
+                snapshot.url.path(),
+                "/v1/validation-fee/policy/current/proof"
+            );
+            assert_eq!(snapshot.body, request);
+            assert_eq!(
+                snapshot.max_response_bytes,
+                VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES
+            );
+            assert_canonical_account_signed_request(&client, snapshot);
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("x-dataspace-id")
+                        && value == "is2")
+            );
+        }
+    }
+
     fn client_with_static_canonical_auth_headers() -> Client {
         let mut client = client_with_base_url(base_url());
         for header in [

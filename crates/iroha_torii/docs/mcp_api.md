@@ -156,20 +156,15 @@ treat `structuredContent` as data rather than instructions.
 
 - `jsonrpc` is required and must be the string `"2.0"`.
 - Missing, non-string, or different `jsonrpc` values are rejected as `invalid_request`.
-- Each native POST accepts exactly one JSON-RPC request object. Native client
-  notifications and JSON-RPC responses are rejected. The compatibility adapter
-  additionally accepts its documented legacy notifications and client response
-  objects. JSON-RPC array batches, including empty arrays, are rejected in both
-  eras as `invalid_request`.
-- On the legacy adapter, a request or response `id` must be a non-null string
-  or JSON number. Numeric IDs, including floating-point values, are echoed as
-  parsed JSON values. Native ID rules are stricter, as described below.
-- Native requests use stateless MCP `2026-07-28`. Every request carries object
+- Each POST accepts exactly one JSON-RPC request or notification object.
+  Client JSON-RPC response objects and outer JSON-RPC arrays, including empty
+  arrays, are rejected as `invalid_request`.
+- Requests use stateless MCP `2026-07-28`. Every request carries object
   `params._meta` with `io.modelcontextprotocol/protocolVersion` and
   `io.modelcontextprotocol/clientCapabilities`; client identity under
   `io.modelcontextprotocol/clientInfo` is recommended. When supplied, client
   information must contain string `name` and `version` fields.
-- Every native HTTP POST carries exactly one matching
+- Every HTTP POST carries exactly one matching
   `MCP-Protocol-Version` and `Mcp-Method` header. `tools/call` additionally
   carries `Mcp-Name` matching `params.name`; `resources/read` carries
   `Mcp-Name` matching `params.uri`. Methods with no corresponding name or URI
@@ -184,8 +179,8 @@ treat `structuredContent` as data rather than instructions.
   and JSON-RPC `-32020`. An unsupported protocol returns HTTP 400 and
   `-32022` with `supported` and `requested` values. Missing required modern
   `_meta` fields returns HTTP 400 and `-32602`.
-- Modern request IDs are non-null strings or integers. An invalid or unreadable
-  ID is not echoed as `null` in a modern error response.
+- Request IDs are non-null strings or integers; notifications omit `id`.
+  An invalid or unreadable ID is not echoed as `null` in an error response.
 - Successful modern results carry `resultType = "complete"` and server identity
   in `_meta["io.modelcontextprotocol/serverInfo"]`. Discovery, tool-list, and
   resource results also carry reviewed `ttlMs` and `cacheScope` hints.
@@ -194,9 +189,6 @@ treat `structuredContent` as data rather than instructions.
   `/v1/mcp` URL. MCP-aware clients may cache the parsed result only under the
   protocol cache key (method plus result-affecting params) and, for Torii's
   `private` scope, the exact same authorization context.
-- Torii retains initialization-based `2025-06-18` behavior on the same endpoint
-  as a compatibility adapter. Only legacy `initialize` may omit the version
-  header; later legacy requests carry `MCP-Protocol-Version: 2025-06-18`.
 - The advertised `tools/call_batch` extension may represent at most 64 tool
   dispatches. A native request must independently declare
   `clientCapabilities.extensions["org.hyperledger.iroha/tools"]` as an object;
@@ -213,8 +205,8 @@ treat `structuredContent` as data rather than instructions.
 - Long-polling transaction and contract wait helpers use a smaller derived
   quota (at most eight and always below the global limit), reserving capacity
   for bounded tools.
-- On the legacy compatibility path, when API-token authentication is required,
-  `notifications/cancelled` can stop
+- When API-token authentication is required, a stateless
+  `notifications/cancelled` request can stop
   the currently registered live `tools/call` or `tools/call_batch` owned by the
   same validated token principal and carrying the exact request ID plus
   per-call cancellation nonce. Put a canonical unpadded base64url encoding of
@@ -224,32 +216,27 @@ treat `structuredContent` as data rather than instructions.
   cancellation from targeting a later call that reuses the same JSON-RPC ID.
   String and losslessly parsed signed/unsigned integer IDs are type-tagged so
   numerically similar representations cannot alias.
-  Floating-point-form or out-of-range numeric IDs still receive normal JSON-RPC
-  responses but are
-  deliberately not remotely cancellable because JSON parsing cannot preserve
-  their exact wire identity.
+  Floating-point-form and out-of-range numeric request IDs are rejected.
 - Anonymous MCP calls remain usable but are not remotely cancellable: source IP
   is intentionally not treated as cancellation authentication.
-- Native HTTP cancellation uses the request-scoped transport: closing an active
-  response stream cancels that request. The legacy cancellation notification is
-  not accepted as a native `2026-07-28` request.
+- Closing an active response stream also cancels that request. Cancellation
+  notifications carry the same stateless metadata and matching routing headers
+  as other requests.
 - Unknown method is `method_not_found`.
-- Missing `params` is treated as `{}` where the method permits it; non-object
-  `params` and non-object `tools/call.arguments` are rejected as
-  `invalid_params`.
+- `params` must be an object containing `_meta`; non-object
+  `tools/call.arguments` is rejected as `invalid_params`.
 
 ### HTTP Status Behavior
 
 - `200 OK`: successful JSON-RPC responses and ordinary method-level JSON-RPC
   errors.
-- `202 Accepted`: accepted legacy MCP notifications and legacy client response
-  messages (no response body).
+- `202 Accepted`: accepted stateless client notifications (no response body).
 - `204 No Content`: the original authenticated request was cancelled before it
   produced a JSON-RPC response. Cancellation does not roll back a transaction
   already submitted to the ledger pipeline.
 - `400 Bad Request`: invalid JSON, an outer JSON-RPC array, malformed modern
   metadata, mirrored-header mismatch, an unsupported protocol version, or a
-  prohibited native notification/client-response body.
+  prohibited lifecycle notification/client-response body.
 - `408 Request Timeout`: request body did not complete within the collection deadline.
 - `401 Unauthorized`: API-token middleware rejected a missing or invalid
   token.
@@ -263,7 +250,7 @@ treat `structuredContent` as data rather than instructions.
 
 ## Supported JSON-RPC Methods
 
-Native `2026-07-28`:
+Stateless `2026-07-28`:
 
 - `server/discover`
 - `tools/list`
@@ -271,13 +258,7 @@ Native `2026-07-28`:
 - `tools/call_batch` (advertised Iroha extension)
 - `resources/list`
 - `resources/read`
-
-Legacy `2025-06-18` compatibility adds:
-
-- `initialize`
-- `notifications/initialized` (accepted with `202 Accepted` and an empty body)
 - `notifications/cancelled` (best-effort exact authenticated cancellation)
-- `ping`
 
 ## Method Reference
 
@@ -292,7 +273,7 @@ version error.
 Result shape:
 
 - `resultType = "complete"`
-- `supportedVersions = ["2026-07-28", "2025-06-18"]`
+- `supportedVersions = ["2026-07-28"]`
 - `capabilities.tools.listChanged`
 - `capabilities.resources.listChanged = false`
 - `capabilities.extensions["org.hyperledger.iroha/tools"]`, including the
@@ -300,45 +281,7 @@ Result shape:
 - `_meta["io.modelcontextprotocol/serverInfo"]`
 - `instructions`, `ttlMs`, and `cacheScope = "private"`
 
-### `initialize` (legacy compatibility)
-
-Only the `2025-06-18` adapter accepts this method. It requires
-`params.protocolVersion`, `params.capabilities`, and
-`params.clientInfo`. It returns MCP protocol metadata, server instructions, and
-capabilities for visible tools. Use the returned `protocolVersion` as the exact
-`MCP-Protocol-Version` header on subsequent POST requests.
-
-Result shape:
-
-- `protocolVersion` (currently `2025-06-18`)
-- `serverInfo` (`name`, the real Torii crate `version`)
-- `capabilities.tools` (`listChanged`)
-- `capabilities.experimental.iroha.tools` (`count`, `toolsetVersion`, and
-  `callBatch.maxDispatches`)
-- `instructions` (server-wide safety and discovery guidance)
-
-### `notifications/initialized` (legacy compatibility)
-Carries the standard client-ready lifecycle signal after a successful
-`initialize` response.
-
-Torii's legacy MCP HTTP adapter does not mint or retain an MCP
-session identifier. The notification therefore does not unlock server-side
-session state: negotiation is enforced per request. `initialize` may omit the
-protocol header, while every other POST must carry the exact supported
-`MCP-Protocol-Version`. This sequence exists only for compatibility; native
-clients do not send it.
-
-HTTP behavior:
-
-- `202 Accepted`
-- empty response body
-
-Torii accepts the notification when:
-- `method == "notifications/initialized"`
-- `id` is omitted
-- `jsonrpc == "2.0"`
-
-### `notifications/cancelled` (legacy compatibility)
+### `notifications/cancelled`
 
 Accepts the standard best-effort cancellation shape with
 `params.requestId` and an optional string `params.reason`, extended with
@@ -349,18 +292,12 @@ API token and is bound to the token fingerprint, exact string or losslessly
 parsed signed/unsigned integer JSON-RPC ID, and cancellation nonce. Calls that
 omit the nonce remain ordinary non-cancellable calls; malformed nonces on an
 authenticated call are rejected as `invalid_cancellation_nonce`.
-Floating-point-form and out-of-range numeric IDs are accepted for ordinary
-requests but are not entered in the cancellation registry.
+Floating-point-form and out-of-range numeric IDs are rejected.
 Unknown, completed, malformed, anonymous, and cross-principal cancellations
 are deliberately indistinguishable `202 Accepted` responses. A simultaneous
 duplicate live cancellable ID for the same authenticated principal is rejected
 as `request_id_in_use`; after completion, the ID can be reused safely with a
 fresh random cancellation nonce.
-
-### `ping` (legacy compatibility)
-
-Returns an empty result object for clients using the initialization-based
-`2025-06-18` adapter. Native clients do not send lifecycle pings.
 
 ### `tools/list`
 
@@ -466,10 +403,10 @@ Params:
 ### `tools/call_batch`
 
 Executes multiple tool calls inside one JSON-RPC request. This is an Iroha
-extension advertised by native `server/discover` and legacy `initialize`; it
+extension advertised by `server/discover`; it
 is not JSON-RPC array batching.
 
-On the native path, the caller must declare the extension on that same request
+The caller must declare the extension on that same request
 by using this object as
 `params._meta["io.modelcontextprotocol/clientCapabilities"]`:
 
@@ -480,9 +417,6 @@ by using this object as
   }
 }
 ```
-
-The legacy adapter retains its established batch behavior because it predates
-formal per-request extension negotiation.
 
 Params:
 
@@ -576,7 +510,7 @@ asset, or amount.
 
 The curated `iroha.accounts.faucet.prepare` and
 `iroha.accounts.faucet.submit` tools expose the exact two-step faucet protocol.
-They are omitted from initialization metadata and `tools/list` when this node
+They are omitted from `tools/list` when this node
 has no `torii.faucet` runtime configuration.
 Prepared faucet transactions carry a signature-bound marker version and
 semantic claim hash. Core derives an authority-scoped key and consumes it in
@@ -641,9 +575,8 @@ route-catalog decision, generated tools reject OpenAPI operations whose
 response contract advertises `text/event-stream` or HTTP `101`, so streaming
 exclusion does not depend on a path suffix.
 
-Do not hardcode the full tool catalog in clients. Native clients may call
-`server/discover` first or proceed directly to `tools/list`; compatibility
-clients use `initialize` followed by `tools/list`.
+Do not hardcode the full tool catalog in clients. Clients may call
+`server/discover` first or proceed directly to `tools/list`.
 
 ## Tool Arguments
 For OpenAPI-derived tools, pass structured arguments under:
@@ -764,14 +697,14 @@ Protocol and validation failures are returned in the top-level JSON-RPC
 `error`. Standard modern failures are identified by their reserved top-level
 code; Iroha application errors also carry a stable `error.data.error_code`.
 
-Protocol-level JSON-RPC codes used by both eras:
+Protocol-level JSON-RPC codes:
 
 - `-32700` -> `parse_error`
 - `-32600` -> `invalid_request`
 - `-32601` -> `method_not_found`
 - `-32602` -> `invalid_params`
 
-Native `2026-07-28` transport and application codes:
+Stateless `2026-07-28` transport and application codes:
 
 - `-32020` -> `header_mismatch`
 - `-32021` -> `missing_required_client_capability`
@@ -781,9 +714,6 @@ Native `2026-07-28` transport and application codes:
 - `1003` -> `request_timeout`
 - `1004` -> `dispatch_capacity_exhausted`
 - `1029` -> `rate_limited`
-
-Legacy `2025-06-18` compatibility codes retain their established values,
-including `-32004` for dispatch capacity and `-32029` for rate limiting.
 
 Additional MCP-specific `error_code` values may appear in `error.data`:
 
@@ -828,11 +758,6 @@ Notes:
    `resources/read` for one returned URI and honor its private TTL.
 5. Re-run `tools/list` when `_meta.iroha.listChanged` becomes `true` or its
    cache TTL expires.
-
-Clients explicitly configured for a known `2025-06-18` endpoint may use the
-compatibility sequence: `initialize`, `notifications/initialized`, then
-versioned tool requests. Do not infer a legacy downgrade from a generic modern
-transport, authentication, or protocol failure.
 
 ## Codex Plugin Workflow
 
@@ -1006,10 +931,3 @@ Send `Mcp-Name: iroha://runtime/abi/hash` with this request.
   }
 }
 ```
-
-### Legacy Initialize
-
-Clients explicitly configured for a known compatibility endpoint may initialize
-with `protocolVersion = "2025-06-18"`. The initial request may omit the
-protocol header; every later compatibility POST includes
-`MCP-Protocol-Version: 2025-06-18`.

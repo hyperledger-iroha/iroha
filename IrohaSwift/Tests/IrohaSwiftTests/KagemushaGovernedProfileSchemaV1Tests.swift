@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import XCTest
 @testable import IrohaSwift
 
@@ -104,6 +105,37 @@ final class KagemushaGovernedProfileSchemaV1Tests: XCTestCase {
       governedAuthorityPolicyDigest: profile.appAttestationAuthorityPolicyDigest,
       expectedPlatformClass: .androidKeyMint,
       appSigningIdentityDigest: selectedIdentity, appReleaseDigest: selectedAppRelease))
+  }
+
+  func testHardwareProfileIDMatchesRust413ByteVectorAndRejectsSubstitution() throws {
+    let scalar = Data(repeating: 0, count: 31) + Data([1])
+    let generator = try KagemushaDevicePublicKeyV1(
+      sec1Bytes: P256.Signing.PrivateKey(rawRepresentation: scalar).publicKey.x963Representation)
+    var suitePreimage = Data("iroha:kagemusha:v1:suite-commitment\0".utf8)
+    suitePreimage.append(Data([32, 0, 0, 0, 0, 0, 0, 0]))
+    suitePreimage.append(Data(repeating: 0x51, count: 32))
+    let suiteCommitment = Data(SHA256.hash(data: suitePreimage))
+    func profile(_ selectedID: Data) throws -> KagemushaHardwareProfileV1 {
+      try KagemushaHardwareProfileV1(
+        hardwareProfileID: selectedID, providerID: digest(0x41),
+        platformClass: .dedicatedSecureElement,
+        productClassDigest: digest(0x42), firmwarePolicyDigest: digest(0x43),
+        enrollmentAttestationVerifierDigest: digest(0x44),
+        attestationTrustRootsDigest: digest(0x45),
+        allowedSuiteCommitment: suiteCommitment, policyEpoch: 65,
+        governanceCredentialPublicKey: generator, capabilityMask: 0x0000_ffff,
+        qualificationReportDigest: digest(0x61), validFromMS: 1,
+        expiresAtMS: 100_000, appAttestationAuthorityPolicyDigest: digest(0xa5))
+    }
+    let substituted = try profile(digest(0x01))
+    let preimage = try KagemushaNoritoV1.hardwareProfileIDPreimageShape(substituted)
+    XCTAssertEqual(preimage.count, 413)
+    XCTAssertEqual(Data(preimage[325..<329]), Data([0xff, 0xff, 0, 0]))
+    let expected = try KagemushaNoritoV1.expectedHardwareProfileIDShape(substituted)
+    XCTAssertEqual(expected.map { String(format: "%02x", $0) }.joined(),
+      "a0a2b5d1a83a45f04e4552e4110893861c54aa5c03af4d466e7fa8aa3ef0a841")
+    XCTAssertThrowsError(try KagemushaNoritoV1.validateHardwareProfileIDShape(substituted))
+    XCTAssertNoThrow(try KagemushaNoritoV1.validateHardwareProfileIDShape(profile(expected)))
   }
 
   private func makeProfile(

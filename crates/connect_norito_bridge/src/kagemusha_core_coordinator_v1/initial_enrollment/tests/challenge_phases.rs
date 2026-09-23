@@ -1,7 +1,215 @@
 //! Consuming enrollment phases retain native pins, exact signing bytes and one deadline.
 //! Fixed test signers exercise cryptographic bindings; they confer no hardware qualification.
 
+use super::super::super::signed_app_preparation::{
+    SignedAppPreparationPinsV1, verify_signed_app_preparation_v1,
+};
 use super::*;
+
+fn preparation_fixture() -> Fixture {
+    let mut f = Fixture::new();
+    Arc::get_mut(&mut f.policy).unwrap().expires_at_ms = 200_000;
+    f
+}
+
+fn signed_preparation_pins<'a>(
+    f: &'a Fixture,
+    platform_class: KagemushaHardwarePlatformClassV1,
+    trusted_now_ms: u64,
+) -> SignedAppPreparationPinsV1<'a> {
+    SignedAppPreparationPinsV1 {
+        policy: &f.policy,
+        account_id: &f.owner.account_id,
+        platform_class,
+        selected_attested_key_id: match platform_class {
+            KagemushaHardwarePlatformClassV1::AppleAppAttest => {
+                Sha256::digest(f.qualification.credential.device_public_key.as_sec1_bytes()).into()
+            }
+            KagemushaHardwarePlatformClassV1::AndroidKeyMint => [0; 32],
+            _ => panic!("test only prepares ordinary apps"),
+        },
+        client_nonce: [90; 32],
+        release_id: f.release.release_id(),
+        profile_id: f.qualification.credential.hardware_profile_id,
+        lane_id: f.owner.lane_id,
+        trusted_now_ms,
+    }
+}
+
+fn sign_preparation_body(f: &Fixture, token: &mut Vec<u8>) {
+    token.truncate(209);
+    let mut message = b"iroha:kagemusha:v1:app-enrollment-preparation\0".to_vec();
+    message.extend_from_slice(&token[1..209]);
+    message.extend_from_slice(&f.policy.issuer_policy_id);
+    message.extend_from_slice(&Sha256::digest(f.owner.account_id.to_string().as_bytes()));
+    let signature = Signature::try_new(f.issuer.private_key(), &message).unwrap();
+    token.extend_from_slice(signature.payload());
+    assert_eq!(token.len(), 273);
+}
+
+fn signed_preparation_token(
+    f: &Fixture,
+    platform_class: KagemushaHardwarePlatformClassV1,
+) -> Vec<u8> {
+    let mut token = Vec::with_capacity(273);
+    token.push(1);
+    token.extend_from_slice(&1_000_u64.to_le_bytes());
+    token.extend_from_slice(&121_000_u64.to_le_bytes());
+    token.extend_from_slice(&[90; 32]);
+    token.extend_from_slice(&[91; 32]);
+    token.extend_from_slice(&f.release.release_id());
+    token.extend_from_slice(&f.qualification.credential.hardware_profile_id);
+    token.extend_from_slice(&match platform_class {
+        KagemushaHardwarePlatformClassV1::AppleAppAttest => {
+            Sha256::digest(f.qualification.credential.device_public_key.as_sec1_bytes()).into()
+        }
+        KagemushaHardwarePlatformClassV1::AndroidKeyMint => [0; 32],
+        _ => panic!("test only prepares ordinary apps"),
+    });
+    token.extend_from_slice(&f.owner.lane_id);
+    sign_preparation_body(f, &mut token);
+    token
+}
+
+#[test]
+fn signed_app_preparation_accepts_exact_apple_key_id_and_android_zero_sentinel() {
+    let f = preparation_fixture();
+    for platform in [
+        KagemushaHardwarePlatformClassV1::AppleAppAttest,
+        KagemushaHardwarePlatformClassV1::AndroidKeyMint,
+    ] {
+        let token = signed_preparation_token(&f, platform);
+        let verified =
+            verify_signed_app_preparation_v1(&token, signed_preparation_pins(&f, platform, 1_000))
+                .unwrap();
+        assert_eq!(verified.server_nonce, [91; 32]);
+        assert_eq!(verified.client_nonce, [90; 32]);
+        assert_eq!(verified.release_id, f.release.release_id());
+        assert_eq!(
+            verified.profile_id,
+            f.qualification.credential.hardware_profile_id
+        );
+        assert_eq!(verified.lane_id, f.owner.lane_id);
+        assert_eq!(verified.issued_at_ms, 1_000);
+        assert_eq!(verified.expires_at_ms, 121_000);
+        assert_eq!(token.len(), 273);
+    }
+}
+
+#[test]
+fn signed_app_preparation_rejects_field_account_policy_and_signature_substitution() {
+    let f = preparation_fixture();
+    let apple = KagemushaHardwarePlatformClassV1::AppleAppAttest;
+    let token = signed_preparation_token(&f, apple);
+    for offset in [17, 81, 113, 145, 177] {
+        let mut changed = token.clone();
+        changed[offset] ^= 1;
+        sign_preparation_body(&f, &mut changed);
+        assert!(
+            verify_signed_app_preparation_v1(&changed, signed_preparation_pins(&f, apple, 1_000),)
+                .is_err()
+        );
+    }
+    for offset in [49, 209, 272] {
+        let mut changed = token.clone();
+        changed[offset] ^= 1;
+        assert!(
+            verify_signed_app_preparation_v1(&changed, signed_preparation_pins(&f, apple, 1_000),)
+                .is_err()
+        );
+    }
+    let other_account = AccountId::new(
+        KeyPair::from_seed(vec![111; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+    let mut account_pins = signed_preparation_pins(&f, apple, 1_000);
+    account_pins.account_id = &other_account;
+    assert!(verify_signed_app_preparation_v1(&token, account_pins).is_err());
+    let mut other_policy = (*f.policy).clone();
+    other_policy.issuer_policy_id[0] ^= 1;
+    let mut policy_pins = signed_preparation_pins(&f, apple, 1_000);
+    policy_pins.policy = &other_policy;
+    assert!(verify_signed_app_preparation_v1(&token, policy_pins).is_err());
+    let mut wrong_signer = (*f.policy).clone();
+    wrong_signer.issuer_public_key = KeyPair::from_seed(vec![112; 32], Algorithm::Ed25519)
+        .public_key()
+        .clone();
+    let mut signer_pins = signed_preparation_pins(&f, apple, 1_000);
+    signer_pins.policy = &wrong_signer;
+    assert!(verify_signed_app_preparation_v1(&token, signer_pins).is_err());
+}
+
+#[test]
+fn signed_app_preparation_rejects_wrong_platform_key_id_and_time_interval() {
+    let f = preparation_fixture();
+    let apple = KagemushaHardwarePlatformClassV1::AppleAppAttest;
+    let android = KagemushaHardwarePlatformClassV1::AndroidKeyMint;
+    let apple_token = signed_preparation_token(&f, apple);
+    let android_token = signed_preparation_token(&f, android);
+    let mut substituted_key = signed_preparation_pins(&f, apple, 1_000);
+    substituted_key.selected_attested_key_id[0] ^= 1;
+    assert!(verify_signed_app_preparation_v1(&apple_token, substituted_key).is_err());
+    let mut android_nonzero = signed_preparation_pins(&f, android, 1_000);
+    android_nonzero.selected_attested_key_id = [1; 32];
+    assert!(verify_signed_app_preparation_v1(&android_token, android_nonzero).is_err());
+    assert!(verify_signed_app_preparation_v1(
+        &apple_token,
+        signed_preparation_pins(&f, android, 1_000),
+    )
+    .is_err());
+    assert!(verify_signed_app_preparation_v1(
+        &android_token,
+        signed_preparation_pins(&f, apple, 1_000),
+    )
+    .is_err());
+    for now in [999, 121_000] {
+        assert!(verify_signed_app_preparation_v1(
+            &apple_token,
+            signed_preparation_pins(&f, apple, now),
+        )
+        .is_err());
+    }
+    for (offset, value) in [(1, 0_u64), (9, 120_999_u64), (9, u64::MAX)] {
+        let mut changed = apple_token.clone();
+        changed[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        sign_preparation_body(&f, &mut changed);
+        assert!(
+            verify_signed_app_preparation_v1(&changed, signed_preparation_pins(&f, apple, 1_000),)
+                .is_err()
+        );
+    }
+    let mut zero_server = apple_token.clone();
+    zero_server[49..81].fill(0);
+    sign_preparation_body(&f, &mut zero_server);
+    assert!(
+        verify_signed_app_preparation_v1(&zero_server, signed_preparation_pins(&f, apple, 1_000),)
+            .is_err()
+    );
+    let mut repeated_server = apple_token.clone();
+    repeated_server[49..81].copy_from_slice(&[90; 32]);
+    sign_preparation_body(&f, &mut repeated_server);
+    assert!(
+        verify_signed_app_preparation_v1(
+            &repeated_server,
+            signed_preparation_pins(&f, apple, 1_000),
+        )
+        .is_err()
+    );
+    for truncated in [&apple_token[..272], &apple_token[..209]] {
+        assert!(
+            verify_signed_app_preparation_v1(truncated, signed_preparation_pins(&f, apple, 1_000),)
+                .is_err()
+        );
+    }
+    let mut wrong_version = apple_token;
+    wrong_version[0] = 2;
+    assert!(verify_signed_app_preparation_v1(
+        &wrong_version,
+        signed_preparation_pins(&f, apple, 1_000),
+    )
+    .is_err());
+}
 
 fn projection<'a>(
     challenge: &KagemushaRetailEnrollmentChallengeV1,

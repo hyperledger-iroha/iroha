@@ -114248,65 +114248,6 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/transactions/visible/query": {
-      "post": {
-        "description": "Query committed transactions visible to the authenticated viewer. Torii derives viewer scope from Authorization headers before applying the QueryEnvelope filter, sort, projection, and pagination shape.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "IrohaCanonicalAccount": [],
-            "IrohaCanonicalNonce": [],
-            "IrohaCanonicalSignature": [],
-            "IrohaCanonicalTimestampMs": []
-          },
-          {
-            "IrohaCanonicalWitness": []
-          }
-        ],
-        "summary": "Query visible transactions.",
-        "tags": [
-          "Transactions"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "authenticated_account",
-          "authentication": "canonical_account_signature",
-          "schemaVersion": 1,
-          "stableRouteId": "application.transactions_visible_query_post"
-        },
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/triggers/completed": {
       "get": {
         "description": "Return the bounded completion records retained for executed triggers.",

@@ -339,7 +339,11 @@ enum AliasSegment {
     Dataspace,
 }
 fn canonical_alias_segment(raw: &str, segment: AliasSegment) -> Result<Name, ParseError> {
-    if raw.is_empty() || raw.contains('.') {
+    // The alias label ends at `@`, so dots inside it cannot be confused with
+    // the optional `domain.dataspace` scope. Keep scope segments atomic.
+    if raw.is_empty()
+        || (matches!(segment, AliasSegment::Domain | AliasSegment::Dataspace) && raw.contains('.'))
+    {
         return Err(match segment {
             AliasSegment::Label => ParseError::new("account alias label segment is invalid"),
             AliasSegment::Domain => ParseError::new("account alias domain segment is invalid"),
@@ -2083,6 +2087,24 @@ mod tests {
         let root: AccountAliasName = "Merchant@Paynet".parse().expect("root alias");
         assert_eq!(root.to_string(), "merchant@paynet");
         assert!(root.domain.is_none());
+    }
+    #[test]
+    fn account_alias_name_accepts_canonical_dotted_labels() {
+        let bank: AccountAliasName = "Operator1.Treasury@Boi.Is2"
+            .parse()
+            .expect("dotted operator label");
+        assert_eq!(bank.to_string(), "operator1.treasury@boi.is2");
+        assert_eq!(bank.label.as_ref(), "operator1.treasury");
+        assert!(bank.is_canonical());
+        let customer: AccountAliasName = "Noa.Customer@Leumi.Is2"
+            .parse()
+            .expect("dotted customer label");
+        assert_eq!(customer.to_string(), "noa.customer@leumi.is2");
+        assert!(
+            "operator1.treasury@boi.is2.extra"
+                .parse::<AccountAliasName>()
+                .is_err()
+        );
     }
     #[test]
     fn account_alias_name_json_requires_explicit_domain_slot() {

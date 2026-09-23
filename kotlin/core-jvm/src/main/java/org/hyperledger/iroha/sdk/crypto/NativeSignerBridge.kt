@@ -11,7 +11,7 @@ class NativeSignerBridge private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
         const val REQUIRED_BRIDGE_ABI_VERSION: Int = 23
-        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 5
+        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 6
         private const val HASH_BYTES = 32
         private val nativeAvailable: Boolean = loadLibrary()
 
@@ -83,6 +83,53 @@ class NativeSignerBridge private constructor() {
             require(signature.isNotEmpty()) { "signature must not be empty" }
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
             return nativeVerifyDetached(algorithm.bridgeCode, publicKey, message, signature)
+        }
+
+        /** Prehash of the sole native CanReadAccountData change signed by a 1-of-1 wallet. */
+        @JvmStatic
+        fun accountReadPermissionMultisigPayloadHash(
+            networkId: NetworkId,
+            authority: String,
+            reportingAccount: String,
+            change: Int,
+            creationTimeMs: Long,
+            feePaymentJson: ByteArray,
+        ): ByteArray {
+            require(change == 1 || change == 2) { "change must be grant (1) or revoke (2)" }
+            requireCreationTime(creationTimeMs)
+            require(feePaymentJson.isNotEmpty()) { "Explicit fee payment is required" }
+            check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
+            val hash = checkNotNull(nativeAccountReadPermissionMultisigPayloadHash(
+                textBytes(networkId.literal, "networkId"), textBytes(authority, "authority"),
+                textBytes(reportingAccount, "reportingAccount"), change, creationTimeMs,
+                feePaymentJson.copyOf(),
+            )) { "native account permission prehash returned null" }
+            require(hash.size == HASH_BYTES) { "native account permission prehash has invalid size" }
+            return hash
+        }
+
+        /** Finalize the same one-instruction transaction from an external Ed25519 prehash signature. */
+        @JvmStatic
+        fun finalizeAccountReadPermissionMultisig(
+            networkId: NetworkId,
+            authority: String,
+            reportingAccount: String,
+            change: Int,
+            creationTimeMs: Long,
+            feePaymentJson: ByteArray,
+            signature: ByteArray,
+        ): NativeSignedTransaction {
+            require(change == 1 || change == 2) { "change must be grant (1) or revoke (2)" }
+            requireCreationTime(creationTimeMs)
+            require(signature.size == 64) { "signature must be 64-byte Ed25519" }
+            require(feePaymentJson.isNotEmpty()) { "Explicit fee payment is required" }
+            check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
+            return requireNativeSignedOutput(nativeFinalizeAccountReadPermissionMultisig(
+                textBytes(networkId.literal, "networkId"), textBytes(authority, "authority"),
+                textBytes(reportingAccount, "reportingAccount"), change, creationTimeMs,
+                feePaymentJson.copyOf(),
+                signature.copyOf(),
+            ), "finalizeAccountReadPermissionMultisig")
         }
 
         @JvmStatic
@@ -225,6 +272,18 @@ class NativeSignerBridge private constructor() {
             message: ByteArray,
             signature: ByteArray,
         ): Boolean
+
+        @JvmStatic
+        private external fun nativeAccountReadPermissionMultisigPayloadHash(
+            networkId: ByteArray, authority: ByteArray, reportingAccount: ByteArray,
+            change: Int, creationTimeMs: Long, feePaymentJson: ByteArray,
+        ): ByteArray?
+
+        @JvmStatic
+        private external fun nativeFinalizeAccountReadPermissionMultisig(
+            networkId: ByteArray, authority: ByteArray, reportingAccount: ByteArray,
+            change: Int, creationTimeMs: Long, feePaymentJson: ByteArray, signature: ByteArray,
+        ): Array<ByteArray?>?
 
         @JvmStatic
         private external fun nativeEncodeRegisterZkAssetSignedTransaction(

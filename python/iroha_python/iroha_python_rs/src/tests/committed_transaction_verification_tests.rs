@@ -4,7 +4,7 @@ use crate::{PyNetworkId, verify_committed_transaction_inclusion_json_py};
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::{
     account::AccountId,
-    block::{BlockHeader, consensus_v2::*},
+    block::{BlockHeader, SignedBlock, consensus_v2::*},
     bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeCommitment, BridgeFinalityProof},
     query::{QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse},
     transaction::TransactionBuilder,
@@ -241,7 +241,7 @@ fn synthetic_executed_commitment(
     iroha_data_model::block::consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"fixture parent state"), Hash::new(b"fixture post state"),
         Hash::new(b"fixture ordinary writes"), wire.len() as u64, Hash::new(&wire),
-    )
+    ).with_transaction_commitments_from_block(block).expect("native selective fixture commitments")
 }
 fn sign_bridge_finality_qc(commit_qc: &mut QuorumCertificate, keys: &[KeyPair]) {
     let preimage = Vote {
@@ -400,14 +400,12 @@ fn response(rows: Vec<CommittedTransaction>) -> Vec<u8> {
 }
 fn verify(
     committed: &CommittedTransaction,
-    wire: &[u8],
     bundles: &[BridgeFinalityBundle],
     root: &str,
 ) -> PyResult<String> {
     verify_committed_transaction_inclusion_json_py(
         &hex::encode(committed.entrypoint_hash.as_ref()),
         &response(vec![committed.clone()]),
-        wire,
         &json::to_json(&bundles.to_vec()).unwrap(),
         &PyNetworkId {
             inner: test_network_id(),
@@ -428,7 +426,7 @@ fn native_selected_output_authenticates_real_bls_chain_and_exact_projection() {
     let bundles = vec![bundle(first_proof), bundle(next_proof)];
     let wire = next.encode_wire().unwrap();
     let result: json::Value =
-        json::from_json(&verify(&selected, &wire, &bundles, &root).unwrap()).unwrap();
+        json::from_json(&verify(&selected, &bundles, &root).unwrap()).unwrap();
     assert_eq!(
         result["output_hash"].as_str(),
         Some(hex::encode(selected.output_hash.as_ref()).as_str())
@@ -466,14 +464,15 @@ fn native_selected_output_authenticates_real_bls_chain_and_exact_projection() {
         .unwrap()
     );
     assert_eq!(result["result_ok"].as_bool(), Some(true));
+    assert_eq!(result["proof_kind"].as_str(), Some("selective-v1"));
     let child_root = scalar(&bundles[1].commitment.height_context_id.0);
-    assert!(verify(&selected, &wire, &bundles[1..], &child_root).is_ok());
+    assert!(verify(&selected, &bundles[1..], &child_root).is_ok());
     for bad in [
         bundles[1..].to_vec(),
         vec![bundles[1].clone(), bundles[0].clone()],
         vec![bundles[0].clone(), bundles[0].clone()],
     ] {
-        assert!(verify(&selected, &wire, &bad, &root).is_err());
+        assert!(verify(&selected, &bad, &root).is_err());
     }
     let mut bad = bundles.clone();
     bad[1]
@@ -482,25 +481,16 @@ fn native_selected_output_authenticates_real_bls_chain_and_exact_projection() {
         .commit_qc
         .execution_commitment
         .executed_block_wire_hash = Hash::new(b"unsigned replacement commitment");
-    assert!(verify(&selected, &wire, &bad, &root).is_err());
+    assert!(verify(&selected, &bad, &root).is_err());
     bad = bundles.clone();
     bad[1].commitment.block_height += 1;
-    assert!(verify(&selected, &wire, &bad, &root).is_err());
-    assert!(
-        verify(
-            &selected,
-            &wire,
-            &bundles,
-            &scalar(&Hash::new(b"foreign root"))
-        )
-        .is_err()
-    );
+    assert!(verify(&selected, &bad, &root).is_err());
+    assert!(verify(&selected, &bundles, &scalar(&Hash::new(b"foreign root"))).is_err());
     let other_network = PyNetworkId::from_exact_bytes(&[0xA7; 32]).unwrap();
     assert!(
         verify_committed_transaction_inclusion_json_py(
             &hex::encode(selected.entrypoint_hash.as_ref()),
             &response(vec![selected.clone()]),
-            &wire,
             &json::to_json(&bundles).unwrap(),
             &other_network,
             &root
@@ -511,7 +501,6 @@ fn native_selected_output_authenticates_real_bls_chain_and_exact_projection() {
         verify_committed_transaction_inclusion_json_py(
             &hex::encode(Hash::new(b"other transaction").as_ref()),
             &response(vec![selected]),
-            &wire,
             &json::to_json(&bundles).unwrap(),
             &PyNetworkId {
                 inner: test_network_id()
@@ -549,35 +538,25 @@ fn native_selected_output_rejects_rehashed_outputs_and_swapped_rows() {
     changed.output_proof = rewritten.output_proof(1).unwrap();
     assert_eq!(rewritten.header(), original.header());
     assert!(changed.verify_inclusion_in_block(&rewritten));
-    assert!(verify(&changed, &rewritten.encode_wire().unwrap(), &bundles, &root).is_err());
+    assert!(verify(&changed, &bundles, &root).is_err());
     // Rejected execution is still valid evidence when the actual QC signs that wire.
     let rejection_bundle = vec![bundle(proof_for(&rewritten, None, &keys))];
-    let rejected: json::Value = json::from_json(
-        &verify(
-            &changed,
-            &rewritten.encode_wire().unwrap(),
-            &rejection_bundle,
-            &root,
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let rejected: json::Value =
+        json::from_json(&verify(&changed, &rejection_bundle, &root).unwrap()).unwrap();
     assert_eq!(rejected["result_ok"].as_bool(), Some(false));
     for index in [0, 2] {
         let mut swapped = selected.clone();
         swapped.output = original.execution_outputs()[index].clone();
         swapped.output_hash = HashOf::new(&swapped.output);
         swapped.output_proof = original.output_proof(index as u32).unwrap();
-        assert!(verify(&swapped, &wire, &bundles, &root).is_err());
+        assert!(verify(&swapped, &bundles, &root).is_err());
     }
-    let mut trailing = wire.clone();
-    trailing.push(0);
-    assert!(verify(&selected, &trailing, &bundles, &root).is_err());
+    let mut query = response(vec![selected.clone()]);
+    query.push(0);
     assert!(
         verify_committed_transaction_inclusion_json_py(
             &hex::encode(selected.entrypoint_hash.as_ref()),
-            &response(vec![selected.clone(), selected.clone()]),
-            &wire,
+            &query,
             &json::to_json(&bundles).unwrap(),
             &PyNetworkId {
                 inner: test_network_id()
@@ -586,11 +565,22 @@ fn native_selected_output_rejects_rehashed_outputs_and_swapped_rows() {
         )
         .is_err()
     );
-    assert!(verify(&selected, &wire, &[], &root).is_err());
+    assert!(
+        verify_committed_transaction_inclusion_json_py(
+            &hex::encode(selected.entrypoint_hash.as_ref()),
+            &response(vec![selected.clone(), selected.clone()]),
+            &json::to_json(&bundles).unwrap(),
+            &PyNetworkId {
+                inner: test_network_id()
+            },
+            &root
+        )
+        .is_err()
+    );
+    assert!(verify(&selected, &[], &root).is_err());
     assert!(
         verify(
             &selected,
-            &wire,
             &bundles,
             &hex::encode(bundles[0].commitment.height_context_id.0.as_ref())
         )
@@ -607,7 +597,6 @@ fn native_selected_output_rejects_chain_resource_overflow_before_authentication(
         authenticate_committed_transaction(
             expected,
             &[],
-            &[],
             &" ".repeat(MAX_FINALITY_CHAIN_JSON_BYTES + 1),
             test_network_id(),
             &root
@@ -620,8 +609,6 @@ fn native_selected_output_rejects_chain_resource_overflow_before_authentication(
     let proof = proof_for(&block, None, &keys());
     let root = scalar(&proof.finality_artifact.context_id().0);
     let bundles = vec![bundle(proof); MAX_FINALITY_CHAIN_BUNDLES + 1];
-    let error = verify(&selected, &block.encode_wire().unwrap(), &bundles, &root)
-        .unwrap_err()
-        .to_string();
+    let error = verify(&selected, &bundles, &root).unwrap_err().to_string();
     assert!(error.contains("1..4096") || error.contains("exceeds 16 MiB"));
 }

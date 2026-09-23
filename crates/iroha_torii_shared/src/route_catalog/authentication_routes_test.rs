@@ -193,7 +193,6 @@ named_route_policy_test!(
         );
         assert_route_policies(
             [
-                application_api::TRANSACTIONS_VISIBLE_QUERY_POST,
                 application_api::REPO_AGREEMENTS_QUERY_POST,
             ],
             ACCOUNT_EXPENSIVE,

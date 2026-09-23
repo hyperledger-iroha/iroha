@@ -197,9 +197,7 @@ use axum::{
 #[allow(unused_imports)]
 use base64::Engine;
 #[cfg(feature = "app_api")]
-use base64::engine::general_purpose::{
-    STANDARD as BASE64_STANDARD, URL_SAFE as BASE64_URL_SAFE, URL_SAFE_NO_PAD,
-};
+use base64::engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE as BASE64_URL_SAFE};
 use blake3::hash as blake3_hash;
 use dashmap::{DashMap, mapref::entry::Entry as DashEntry};
 use error_stack::{Report, ResultExt};
@@ -348,8 +346,6 @@ use iroha_torii_shared::{
     uri,
 };
 use ivm::iso20022::{MsgError, parse_xml_message};
-#[cfg(feature = "app_api")]
-use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey};
 use mv::storage::StorageReadOnly;
 use norito::core::SerializePayload as _;
 #[cfg(feature = "app_api")]
@@ -1180,7 +1176,6 @@ mod telemetry;
 #[cfg(all(feature = "app_api", any(test, feature = "test-fixtures")))]
 pub mod test_utils;
 #[cfg(feature = "app_api")]
-mod tx_history_alias_policy;
 #[cfg(feature = "telemetry")]
 use soranet_privacy_ingress::{
     SORANET_PRIVACY_INGEST_MAX_BODY_BYTES, handler_post_soranet_privacy_event,
@@ -2253,173 +2248,9 @@ fn resolve_alias_index_via_service(
     }
 }
 #[cfg(feature = "app_api")]
-#[derive(Clone)]
-enum TxHistoryJwtKey {
-    Hmac(Vec<u8>),
-    Pem(String),
-}
-#[cfg(feature = "app_api")]
-impl TxHistoryJwtKey {
-    fn decoding_key(&self, alg: JwtAlgorithm) -> Result<DecodingKey, String> {
-        match (self, alg) {
-            (
-                Self::Hmac(secret),
-                JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512,
-            ) => Ok(DecodingKey::from_secret(secret)),
-            (
-                Self::Pem(pem),
-                JwtAlgorithm::RS256
-                | JwtAlgorithm::RS384
-                | JwtAlgorithm::RS512
-                | JwtAlgorithm::PS256
-                | JwtAlgorithm::PS384
-                | JwtAlgorithm::PS512,
-            ) => DecodingKey::from_rsa_pem(pem.as_bytes()).map_err(|err| err.to_string()),
-            (Self::Pem(pem), JwtAlgorithm::ES256 | JwtAlgorithm::ES384) => {
-                DecodingKey::from_ec_pem(pem.as_bytes()).map_err(|err| err.to_string())
-            }
-            (Self::Pem(pem), JwtAlgorithm::EdDSA) => {
-                DecodingKey::from_ed_pem(pem.as_bytes()).map_err(|err| err.to_string())
-            }
-            (Self::Hmac(_), _) => Err("JWT_SECRET is only valid for HS256/HS384/HS512".to_string()),
-            (Self::Pem(_), _) => {
-                Err("JWT_PUBLIC_KEY_PEM is only valid for RS/PS/ES/EdDSA algorithms".to_string())
-            }
-        }
-    }
-}
-#[cfg(feature = "app_api")]
-#[derive(Clone)]
-struct TxHistoryJwtConfig {
-    algorithm: JwtAlgorithm,
-    key: TxHistoryJwtKey,
-    issuer: Option<String>,
-    audience: Option<String>,
-}
-#[cfg(feature = "app_api")]
 #[derive(Clone, Default)]
 struct TxHistoryAccessPolicy {
-    jwt: Option<TxHistoryJwtConfig>,
-    mandatory_aliases: tx_history_alias_policy::MandatoryAliasPolicy,
     allowed_asset_definition_id: Option<String>,
-    startup_error: Option<TxHistoryStartupError>,
-}
-#[cfg(feature = "app_api")]
-impl TxHistoryAccessPolicy {
-    fn with_startup_error(error: TxHistoryStartupError) -> Self {
-        Self {
-            startup_error: Some(error),
-            ..Self::default()
-        }
-    }
-
-    fn is_mandatory_alias(&self, dataspace_id: &str, alias: &str) -> bool {
-        self.mandatory_aliases.contains(dataspace_id, alias)
-    }
-}
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, thiserror::Error)]
-enum TxHistoryStartupError {
-    #[error("failed to load mandatory-alias policy `{path}`: {reason}")]
-    MandatoryAliasPolicy { path: PathBuf, reason: String },
-    #[error("unsupported JWT algorithm `{algorithm}`")]
-    UnsupportedJwtAlgorithm { algorithm: String },
-    #[error("JWT secret is required for `{algorithm}`")]
-    MissingJwtSecret { algorithm: String },
-    #[error(
-        "JWT secret for `{algorithm}` must contain {minimum}..={maximum} bytes of non-whitespace key material (got {actual})"
-    )]
-    InvalidJwtSecretLength {
-        algorithm: String,
-        minimum: usize,
-        maximum: usize,
-        actual: usize,
-    },
-    #[error("JWT public key is required for `{algorithm}`")]
-    MissingJwtPublicKey { algorithm: String },
-    #[error("invalid JWT public key for `{algorithm}`: {reason}")]
-    InvalidJwtPublicKey { algorithm: String, reason: String },
-}
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone)]
-struct TxHistoryViewerContext {
-    subject: String,
-    dataspace_id: String,
-    alias_candidates: Vec<String>,
-    account_ids: Vec<AccountId>,
-    is_mandatory_alias: bool,
-}
-#[cfg(feature = "app_api")]
-#[derive(Debug)]
-enum TxHistoryAudienceClaim {
-    Single(String),
-    Multiple(Vec<String>),
-}
-#[cfg(feature = "app_api")]
-#[derive(Debug)]
-struct TxHistoryJwtClaims {
-    sub: Option<String>,
-    dataspace_id: Option<String>,
-    exp: Option<u64>,
-    nbf: Option<u64>,
-    iss: Option<String>,
-    aud: Option<TxHistoryAudienceClaim>,
-}
-#[cfg(feature = "app_api")]
-fn parse_tx_history_jwt_algorithm(value: &str) -> Option<JwtAlgorithm> {
-    match value {
-        "HS256" => Some(JwtAlgorithm::HS256),
-        "HS384" => Some(JwtAlgorithm::HS384),
-        "HS512" => Some(JwtAlgorithm::HS512),
-        "RS256" => Some(JwtAlgorithm::RS256),
-        "RS384" => Some(JwtAlgorithm::RS384),
-        "RS512" => Some(JwtAlgorithm::RS512),
-        "PS256" => Some(JwtAlgorithm::PS256),
-        "PS384" => Some(JwtAlgorithm::PS384),
-        "PS512" => Some(JwtAlgorithm::PS512),
-        "ES256" => Some(JwtAlgorithm::ES256),
-        "ES384" => Some(JwtAlgorithm::ES384),
-        "EdDSA" => Some(JwtAlgorithm::EdDSA),
-        _ => None,
-    }
-}
-#[cfg(feature = "app_api")]
-fn tx_history_jwt_algorithm_name(algorithm: JwtAlgorithm) -> &'static str {
-    match algorithm {
-        JwtAlgorithm::HS256 => "HS256",
-        JwtAlgorithm::HS384 => "HS384",
-        JwtAlgorithm::HS512 => "HS512",
-        JwtAlgorithm::ES256 => "ES256",
-        JwtAlgorithm::ES384 => "ES384",
-        JwtAlgorithm::RS256 => "RS256",
-        JwtAlgorithm::RS384 => "RS384",
-        JwtAlgorithm::RS512 => "RS512",
-        JwtAlgorithm::PS256 => "PS256",
-        JwtAlgorithm::PS384 => "PS384",
-        JwtAlgorithm::PS512 => "PS512",
-        JwtAlgorithm::EdDSA => "EdDSA",
-    }
-}
-#[cfg(feature = "app_api")]
-fn tx_history_hmac_secret_bounds(algorithm: JwtAlgorithm) -> Option<(usize, usize)> {
-    let minimum = match algorithm {
-        JwtAlgorithm::HS256 => 32,
-        JwtAlgorithm::HS384 => 48,
-        JwtAlgorithm::HS512 => 64,
-        _ => return None,
-    };
-    Some((minimum, 4 * 1024))
-}
-#[cfg(feature = "app_api")]
-fn canonical_tx_history_subject_alias(
-    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    subject: &str,
-) -> Result<Option<String>, Error> {
-    if subject.is_empty() || !subject.contains('@') {
-        return Ok(None);
-    }
-    let (canonical, _) = parse_exact_account_alias_label_with_catalog(subject, catalog)?;
-    Ok(Some(canonical))
 }
 #[cfg(feature = "app_api")]
 fn is_exact_tx_history_dataspace_alias(
@@ -2431,101 +2262,6 @@ fn is_exact_tx_history_dataspace_alias(
         && iroha_model_base::name::canonicalize_domain_label(dataspace)
             .is_ok_and(|canonical| canonical == dataspace)
         && catalog.by_alias(dataspace).is_some()
-}
-#[cfg(feature = "app_api")]
-fn load_tx_history_access_policy(
-    config: Option<&iroha_config::parameters::actual::ToriiTxHistory>,
-    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-) -> Result<TxHistoryAccessPolicy, TxHistoryStartupError> {
-    let Some(config) = config else {
-        return Ok(TxHistoryAccessPolicy::default());
-    };
-    let mandatory_aliases = config
-        .mandatory_aliases_path
-        .as_deref()
-        .map(|path| {
-            tx_history_alias_policy::load_mandatory_alias_policy(
-                path,
-                catalog,
-                config.mandatory_aliases_max_file_bytes,
-            )
-            .map_err(|error| TxHistoryStartupError::MandatoryAliasPolicy {
-                path: path.to_path_buf(),
-                reason: error.to_string(),
-            })
-        })
-        .transpose()?
-        .unwrap_or_default();
-    let jwt = config
-        .jwt
-        .as_ref()
-        .map(|jwt| {
-            let algorithm = parse_tx_history_jwt_algorithm(&jwt.algorithm).ok_or_else(|| {
-                TxHistoryStartupError::UnsupportedJwtAlgorithm {
-                    algorithm: jwt.algorithm.clone(),
-                }
-            })?;
-            let key = match algorithm {
-                JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512 => {
-                    let secret = jwt.secret.as_ref().ok_or_else(|| {
-                        TxHistoryStartupError::MissingJwtSecret {
-                            algorithm: jwt.algorithm.clone(),
-                        }
-                    })?;
-                    let (minimum, maximum) =
-                        tx_history_hmac_secret_bounds(algorithm).ok_or_else(|| {
-                            TxHistoryStartupError::UnsupportedJwtAlgorithm {
-                                algorithm: jwt.algorithm.clone(),
-                            }
-                        })?;
-                    if !(minimum..=maximum).contains(&secret.len()) || secret.trim().is_empty() {
-                        return Err(TxHistoryStartupError::InvalidJwtSecretLength {
-                            algorithm: jwt.algorithm.clone(),
-                            minimum,
-                            maximum,
-                            actual: secret.len(),
-                        });
-                    }
-                    TxHistoryJwtKey::Hmac(secret.as_bytes().to_vec())
-                }
-                _ => {
-                    let pem = jwt.public_key_pem.as_ref().ok_or_else(|| {
-                        TxHistoryStartupError::MissingJwtPublicKey {
-                            algorithm: jwt.algorithm.clone(),
-                        }
-                    })?;
-                    TxHistoryJwtKey::Pem(pem.clone())
-                }
-            };
-            let cfg = TxHistoryJwtConfig {
-                algorithm,
-                key,
-                issuer: jwt.issuer.clone(),
-                audience: jwt.audience.clone(),
-            };
-            cfg.key.decoding_key(cfg.algorithm).map_err(|reason| {
-                TxHistoryStartupError::InvalidJwtPublicKey {
-                    algorithm: jwt.algorithm.clone(),
-                    reason,
-                }
-            })?;
-            Ok(cfg)
-        })
-        .transpose()?;
-    Ok(TxHistoryAccessPolicy {
-        jwt,
-        mandatory_aliases,
-        allowed_asset_definition_id: config.allowed_asset_definition_id.clone(),
-        startup_error: None,
-    })
-}
-#[cfg(feature = "app_api")]
-fn ensure_tx_history_access_policy_ready(policy: &TxHistoryAccessPolicy) -> Result<(), Error> {
-    policy.startup_error.as_ref().map_or(Ok(()), |error| {
-        Err(Error::TxHistoryStartup {
-            reason: error.to_string(),
-        })
-    })
 }
 #[cfg(feature = "app_api")]
 fn load_public_dataspace_upstreams(
@@ -9071,68 +8807,6 @@ async fn handler_transactions_query(
     .await)
 }
 #[cfg(feature = "app_api")]
-async fn handler_transactions_visible_query(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
-) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    let limits = crate::routing::app_query_limits();
-    let mut env = env;
-    let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
-    env.pagination.limit = Some(page_limit);
-    env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
-    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
-        Ok(viewer) => viewer,
-        Err(response) => return Ok(response),
-    };
-    let allowed_asset_definition_id = match resolve_tx_history_allowed_asset_definition_id(&app) {
-        Ok(value) => value,
-        Err(err) => return Ok(tx_history_alias_resolution_reject(err)),
-    };
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    let cost = limits.rate_limit_cost(page_limit);
-    let rate_key = format!("tx-history-query:{}", viewer.subject);
-    if !limits::allow_cost_conditionally(&app.rate_limiter, &rate_key, cost.max(1), enforce).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    let rate_limit_bypassed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    if !rate_limit_bypassed {
-        check_access_enforced_with_cost(
-            &app,
-            &headers,
-            Some(remote_ip),
-            "v1/transactions/visible/query",
-            enforce,
-            cost,
-        )
-        .await?;
-    }
-    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
-    let visibility = crate::routing::TxHistoryVisibilityScope {
-        viewer_account_ids: viewer.account_ids,
-        viewer_dataspace_id: viewer.dataspace_id,
-        allow_dataspace_wide: viewer.is_mandatory_alias,
-        asset_definition_domains: asset_definition_domain_snapshot(&app),
-    };
-    routing::handle_v1_transactions_visible_query_with_policy(
-        app.state.clone(),
-        crate::utils::extractors::NoritoJson(env),
-        app.telemetry.clone(),
-        visibility,
-        allowed_asset_definition_id,
-    )
-    .await
-    .map(IntoResponse::into_response)
-}
-#[cfg(feature = "app_api")]
 async fn handler_account_assets(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -9176,24 +8850,23 @@ async fn handler_account_assets(
         &[],
         routing::ENDPOINT_ACCOUNTS_ASSETS,
     )?;
-    let use_target_account_routes =
-        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller.caller());
-    let route_scope = torii_account_read_route_scope(
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    );
-    let routes = match torii_account_assets_read_routes(
-        app.as_ref(),
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    ) {
-        Ok(routes) => routes,
-        Err(response) => return Ok(response),
-    };
+    let route_scope =
+        torii_account_read_route_scope(&parsed_account_id, caller.caller(), caller.is_signed());
+    let routes =
+        match torii_account_assets_read_routes(app.as_ref(), &parsed_account_id, caller.caller()) {
+            Ok(routes) => routes,
+            Err(response) => return Ok(response),
+        };
     if routes.is_empty() {
-        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+        return Ok(if caller.is_signed() {
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "signed account-assets read has no authoritative target route",
+            )
+        } else {
+            torii_empty_list_response(routed_by_for_routes(&app, &[]))
+        });
     }
     let query_string = encode_torii_proxy_query(&p)?;
     Ok(execute_torii_list_read_for_routes(
@@ -9318,24 +8991,23 @@ async fn handler_account_assets_query(
             Ok(parsed) => parsed,
             Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
         };
-    let use_target_account_routes =
-        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller.caller());
-    let route_scope = torii_account_read_route_scope(
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    );
-    let routes = match torii_account_assets_read_routes(
-        app.as_ref(),
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    ) {
-        Ok(routes) => routes,
-        Err(response) => return Ok(response),
-    };
+    let route_scope =
+        torii_account_read_route_scope(&parsed_account_id, caller.caller(), caller.is_signed());
+    let routes =
+        match torii_account_assets_read_routes(app.as_ref(), &parsed_account_id, caller.caller()) {
+            Ok(routes) => routes,
+            Err(response) => return Ok(response),
+        };
     if routes.is_empty() {
-        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+        return Ok(if caller.is_signed() {
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "signed account-assets query has no authoritative target route",
+            )
+        } else {
+            torii_empty_list_response(routed_by_for_routes(&app, &[]))
+        });
     }
     let body = norito::json::to_vec(&payload.0).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
@@ -9506,8 +9178,84 @@ async fn handler_account_history_get(
     .await)
 }
 #[cfg(feature = "app_api")]
+fn signed_tx_history_dataspace_from_headers(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+    caller: &AccountId,
+    signed_alias: &str,
+) -> Result<String, AxResponse> {
+    let mut values = headers.get_all("x-dataspace-id").iter();
+    let Some(value) = values.next() else {
+        return Err(tx_history_reject(
+            StatusCode::BAD_REQUEST,
+            "tx_history_dataspace_required",
+            "X-Dataspace-Id is required for a signed transaction history feed",
+        ));
+    };
+    if values.next().is_some() {
+        return Err(tx_history_reject(
+            StatusCode::BAD_REQUEST,
+            "tx_history_dataspace_ambiguous",
+            "X-Dataspace-Id must appear exactly once",
+        ));
+    }
+    let alias = value.to_str().map_err(|_| {
+        tx_history_reject(
+            StatusCode::BAD_REQUEST,
+            "tx_history_dataspace_invalid",
+            "X-Dataspace-Id must be an exact configured dataspace alias",
+        )
+    })?;
+    if alias != signed_alias {
+        return Err(tx_history_reject(
+            StatusCode::BAD_REQUEST,
+            "tx_history_dataspace_mismatch",
+            "X-Dataspace-Id must match the canonical signed dataspace_id query selector",
+        ));
+    }
+    let nexus = app.state.nexus_snapshot();
+    if !is_exact_tx_history_dataspace_alias(&nexus.dataspace_catalog, alias) {
+        return Err(tx_history_reject(
+            StatusCode::BAD_REQUEST,
+            "tx_history_dataspace_invalid",
+            "X-Dataspace-Id must be an exact configured dataspace alias",
+        ));
+    }
+    let dataspace = nexus
+        .dataspace_catalog
+        .by_alias(alias)
+        .expect("exact configured dataspace alias was checked above")
+        .id;
+    if !torii_all_dataspace_routes(app.as_ref())
+        .iter()
+        .any(|route| route.dataspace_id == dataspace)
+    {
+        return Err(tx_history_reject(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "tx_history_route_unavailable",
+            "the selected dataspace has no active Torii route",
+        ));
+    }
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let exact_permission: Permission = CanReadRestrictedDataspace { dataspace }.into();
+    let global_permission: Permission = CanReadAllLedgerData.into();
+    if !torii_account_has_permission(world, caller, &exact_permission)
+        && !torii_account_has_permission(world, caller, &global_permission)
+    {
+        return Err(tx_history_reject(
+            StatusCode::FORBIDDEN,
+            "tx_history_dataspace_permission_denied",
+            "the signed account lacks read permission for the selected dataspace",
+        ));
+    }
+    Ok(alias.to_owned())
+}
+#[cfg(feature = "app_api")]
 async fn handler_transactions_history_get(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     AxQuery(params): AxQuery<crate::routing::AccountTransactionsGetParams>,
 ) -> Result<Response, Error> {
@@ -9516,35 +9264,61 @@ async fn handler_transactions_history_get(
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
-        Ok(viewer) => viewer,
+    let caller = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        "v1/transactions/history",
+    )?
+    .caller()
+    .cloned()
+    .ok_or_else(|| Error::AppUnauthorized {
+        code: "tx_history_signature_required",
+        message: "canonical signed account headers are required for transaction history".to_owned(),
+    })?;
+    let Some(signed_dataspace_alias) = params.dataspace_id.as_deref() else {
+        return Ok(tx_history_reject(
+            StatusCode::BAD_REQUEST,
+            "tx_history_dataspace_required",
+            "the signed dataspace_id query selector is required for transaction history",
+        ));
+    };
+    let dataspace_alias = match signed_tx_history_dataspace_from_headers(
+        &app,
+        &headers,
+        &caller,
+        signed_dataspace_alias,
+    ) {
+        Ok(alias) => alias,
         Err(response) => return Ok(response),
     };
     let allowed_asset_definition_id = match resolve_tx_history_allowed_asset_definition_id(&app) {
-        Ok(value) => value,
-        Err(err) => return Ok(tx_history_alias_resolution_reject(err)),
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return Ok(tx_history_reject(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "tx_history_asset_policy_unavailable",
+                "the transaction history asset restriction is not configured",
+            ));
+        }
+        Err(error) => return Ok(tx_history_alias_resolution_reject(error)),
     };
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    let rate_key = format!("tx-history:{}", viewer.subject);
+    let rate_key = format!("tx-history:{caller}:{dataspace_alias}");
     if !limits::allow_cost_conditionally(&app.rate_limiter, &rate_key, cost.max(1), enforce).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let additional_dataspace = viewer
-        .is_mandatory_alias
-        .then_some(viewer.dataspace_id.as_str());
-    let dataspace_visibility = torii_dataspace_read_visibility_for_accounts(
-        app.as_ref(),
-        &viewer.account_ids,
-        additional_dataspace,
-    );
+    let dataspace_visibility = torii_dataspace_read_visibility(app.as_ref(), Some(&caller));
     let visibility = crate::routing::TxHistoryVisibilityScope {
-        viewer_account_ids: viewer.account_ids,
-        viewer_dataspace_id: viewer.dataspace_id,
-        allow_dataspace_wide: viewer.is_mandatory_alias,
+        viewer_account_ids: vec![caller],
+        viewer_dataspace_id: dataspace_alias,
+        allow_dataspace_wide: true,
         asset_definition_domains: asset_definition_domain_snapshot(&app),
     };
     routing::handle_v1_transactions_history_get(
@@ -9553,7 +9327,7 @@ async fn handler_transactions_history_get(
         tel,
         visibility,
         dataspace_visibility,
-        allowed_asset_definition_id,
+        Some(allowed_asset_definition_id),
     )
     .await
     .map(IntoResponse::into_response)
@@ -11753,14 +11527,6 @@ fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitio
 fn resolve_tx_history_allowed_asset_definition_id(
     app: &AppState,
 ) -> Result<Option<AssetDefinitionId>, Error> {
-    if app.tx_history_access_policy.startup_error.is_some() {
-        return Err(Error::AppServiceUnavailable {
-            code: "tx_history_configuration_invalid",
-            message:
-                "transaction history is unavailable because its runtime configuration is invalid"
-                    .to_owned(),
-        });
-    }
     app.tx_history_access_policy
         .allowed_asset_definition_id
         .as_deref()
@@ -20056,9 +19822,82 @@ fn torii_account_assets_read_routes(
     app: &AppState,
     target_account: &AccountId,
     caller: Option<&AccountId>,
-    use_target_account_routes: bool,
 ) -> Result<Vec<RoutingDecision>, Response> {
-    torii_account_read_routes(app, target_account, caller, use_target_account_routes)
+    let Some(caller) = caller else {
+        return Ok(torii_visible_account_read_routes(app, None));
+    };
+    let target_routes = torii_target_account_routes(app, target_account)?;
+    let exact_permission: Permission =
+        iroha_executor_data_model::permission::query::CanReadAccountData {
+            account: target_account.clone(),
+        }
+        .into();
+    if caller == target_account
+        || torii_account_has_permission(app.state.view().world(), caller, &exact_permission)
+    {
+        return Ok(target_routes);
+    }
+    let (_, denied) = torii_intersect_signed_query_routes(
+        target_routes.clone(),
+        torii_visible_account_read_routes(app, Some(caller)),
+    );
+    if denied != 0 {
+        return Err(torii_signed_query_permission_denied_response(
+            caller, denied,
+        ));
+    }
+    Ok(target_routes)
+}
+
+#[cfg(feature = "app_api")]
+fn torii_account_assets_route_visibility(
+    app: &AppState,
+    scope: &ToriiFanoutRouteScopeV1,
+    path_account: &str,
+    route: RoutingDecision,
+) -> Result<routing::DataspaceReadVisibility, Response> {
+    let path_account = parse_internal_fanout_account_id(path_account, "path target")?;
+    match scope {
+        ToriiFanoutRouteScopeV1::TargetAccount {
+            account_id,
+            caller_account_id: Some(caller_account_id),
+        } => {
+            let scoped_account = parse_internal_fanout_account_id(account_id, "scope target")?;
+            if scoped_account != path_account {
+                return Err(torii_proxy_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proxy_request",
+                    "account-assets path and route scope must name the same exact account",
+                ));
+            }
+            let caller = parse_internal_fanout_account_id(caller_account_id, "caller")?;
+            let routes = torii_account_assets_read_routes(app, &path_account, Some(&caller))?;
+            if !routes.contains(&route) {
+                return Err(torii_signed_query_permission_denied_response(&caller, 1));
+            }
+            Ok(routing::DataspaceReadVisibility::exact_account(
+                route.dataspace_id,
+                path_account,
+            ))
+        }
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: None,
+        } => {
+            if !torii_visible_account_read_routes(app, None).contains(&route) {
+                return Err(torii_proxy_error_response(
+                    StatusCode::FORBIDDEN,
+                    "permission_denied",
+                    "account-assets route is not publicly visible",
+                ));
+            }
+            Ok(torii_dataspace_read_visibility(app, None))
+        }
+        _ => Err(torii_proxy_error_response(
+            StatusCode::FORBIDDEN,
+            "permission_denied",
+            "account-assets route requires a signed exact-target scope or public visibility",
+        )),
+    }
 }
 #[cfg(feature = "app_api")]
 fn torii_account_permissions_read_routes(
@@ -20874,6 +20713,12 @@ fn target_account_iterable_query(
         },
     };
     match query.item {
+        QueryItemKind::CommittedTransaction => query
+            .exact_transaction_read_authority_with_limits(norito::canonical_decode_limits(
+                query.predicate_bytes.len(),
+            ))
+            .ok()
+            .flatten(),
         QueryItemKind::Domain => {
             decode_query_payload::<FindDomainsByAccountId>(&query.query_payload)
                 .map(|query| query.account_id().clone())
@@ -20988,6 +20833,28 @@ fn target_account_iterable_query_bounded(
     }
     let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
     Ok(match item_kind {
+        QueryItemKind::CommittedTransaction => {
+            if query.predicate_bytes.len() > memory_limits.canonical_encoded_bytes {
+                return Err(torii_proxy_error_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "query_capacity_exceeded",
+                    "exact transaction routing predicate exceeds its admitted encoding allowance",
+                ));
+            }
+            match query.exact_transaction_read_authority_with_limits(
+                memory_limits.decode_limits(query.predicate_bytes.len())?,
+            ) {
+                Ok(authority) => authority,
+                Err(error) if error.is_decode_resource_limit() => {
+                    return Err(torii_proxy_error_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "query_capacity_exceeded",
+                        "exact transaction routing predicate exceeds its admitted decode allowance",
+                    ));
+                }
+                Err(_) => None,
+            }
+        }
         QueryItemKind::Domain => target_account!(FindDomainsByAccountId, payload),
         QueryItemKind::Asset => target_account!(FindAssetsByAccountId, payload),
         QueryItemKind::Nft => target_account!(FindNftsByAccountId, payload),
@@ -26292,6 +26159,15 @@ async fn execute_torii_read_request_locally(
             let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
                 return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
             };
+            let visibility = match torii_account_assets_route_visibility(
+                app.as_ref(),
+                &request.route_scope,
+                &account_id,
+                routing_decision,
+            ) {
+                Ok(visibility) => visibility,
+                Err(response) => return response,
+            };
             let params = match decode_torii_proxy_query::<routing::AccountAssetsGetParams>(
                 request_decode_plan,
                 request.query_string.as_deref(),
@@ -26315,6 +26191,15 @@ async fn execute_torii_read_request_locally(
         ToriiReadEndpointV1::AccountAssetsQuery => {
             let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
                 return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
+            };
+            let visibility = match torii_account_assets_route_visibility(
+                app.as_ref(),
+                &request.route_scope,
+                &account_id,
+                routing_decision,
+            ) {
+                Ok(visibility) => visibility,
+                Err(response) => return response,
             };
             let env = match decode_torii_proxy_json_body::<crate::filter::QueryEnvelope>(
                 request_decode_plan,
@@ -27232,7 +27117,9 @@ async fn execute_torii_read_for_route(
 ) -> Response {
     let protected_control_plane_read = matches!(
         request.endpoint,
-        ToriiReadEndpointV1::AliasResolve
+        ToriiReadEndpointV1::AccountAssetsGet
+            | ToriiReadEndpointV1::AccountAssetsQuery
+            | ToriiReadEndpointV1::AliasResolve
             | ToriiReadEndpointV1::AliasResolveIndex
             | ToriiReadEndpointV1::AliasLookupByAccount
             | ToriiReadEndpointV1::ContractAliasResolve
@@ -33841,23 +33728,44 @@ async fn handler_post_account_recovery_status(
     }
 }
 #[cfg(feature = "app_api")]
+fn can_read_asset_transfer_control(
+    app: &AppState,
+    authority: &AccountId,
+    target: &AccountId,
+) -> bool {
+    if authority == target {
+        return true;
+    }
+    let view = app.state.view();
+    let world = view.world();
+    let exact: Permission = iroha_executor_data_model::permission::query::CanReadAccountData {
+        account: target.clone(),
+    }
+    .into();
+    let global: Permission = CanReadAllLedgerData.into();
+    torii_account_has_permission(world, authority, &exact)
+        || torii_account_has_permission(world, authority, &global)
+}
+#[cfg(feature = "app_api")]
 async fn handler_post_asset_transfer_control_get(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<crate::routing::AssetTransferControlGetRequestDto>,
 ) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(&app, &headers)?;
-    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
-        Ok(viewer) => viewer,
-        Err(response) => return Ok(response),
-    };
+    if !can_read_asset_transfer_control(&app, &verified.account, &request.account_id) {
+        return Err(Error::AppForbidden {
+            code: "asset_transfer_control_read_denied",
+            message: "signed account lacks exact read permission for the requested account"
+                .to_owned(),
+        });
+    }
     let key = rate_limit_key(
         &headers,
-        Some(remote_ip),
-        &format!("v1/controls/asset-transfer/query:{}", viewer.subject),
-        app.authenticated_api_token_principal(&headers),
+        Some(remote.ip()),
+        &format!("v1/controls/asset-transfer/query:{}", verified.account),
+        None,
     );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
@@ -40175,339 +40083,6 @@ fn tx_history_alias_resolution_reject(err: Error) -> AxResponse {
         tx_history_alias_resolution_error_message(&err),
     )
 }
-#[cfg(feature = "app_api")]
-fn decode_tx_history_jwt_json_part(encoded: &str, error: &'static str) -> Result<Value, String> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(encoded.as_bytes())
-        .map_err(|_| error.to_string())?;
-    if URL_SAFE_NO_PAD.encode(&bytes) != encoded {
-        return Err(error.to_string());
-    }
-    norito::json::from_slice(&bytes).map_err(|_| error.to_string())
-}
-#[cfg(feature = "app_api")]
-fn tx_history_bearer_token(auth_header: &str) -> Result<&str, String> {
-    let Some((scheme, token)) = auth_header.split_once(' ') else {
-        return Err("Authorization header must use Bearer token".to_string());
-    };
-    if !scheme.eq_ignore_ascii_case("bearer")
-        || token.is_empty()
-        || token.bytes().any(|byte| byte.is_ascii_whitespace())
-    {
-        return Err(
-            "Authorization header must contain one Bearer scheme and token separated by one ASCII space"
-                .to_string(),
-        );
-    }
-    Ok(token)
-}
-#[cfg(feature = "app_api")]
-fn tx_history_jwt_string_claim(
-    claims: &Map,
-    field: &'static str,
-) -> Result<Option<String>, String> {
-    match claims.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_str()
-            .map(ToString::to_string)
-            .ok_or_else(|| "invalid JWT payload".to_string())
-            .map(Some),
-    }
-}
-#[cfg(feature = "app_api")]
-fn tx_history_jwt_u64_claim(claims: &Map, field: &'static str) -> Result<Option<u64>, String> {
-    match claims.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
-            .ok_or_else(|| "invalid JWT payload".to_string())
-            .map(Some),
-    }
-}
-#[cfg(feature = "app_api")]
-fn tx_history_jwt_audience_claim(claims: &Map) -> Result<Option<TxHistoryAudienceClaim>, String> {
-    match claims.get("aud") {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => {
-            if let Some(audience) = value.as_str() {
-                return Ok(Some(TxHistoryAudienceClaim::Single(audience.to_string())));
-            }
-            let Some(values) = value.as_array() else {
-                return Err("invalid JWT payload".to_string());
-            };
-            let mut audiences = Vec::with_capacity(values.len());
-            for value in values {
-                let Some(audience) = value.as_str() else {
-                    return Err("invalid JWT payload".to_string());
-                };
-                audiences.push(audience.to_string());
-            }
-            Ok(Some(TxHistoryAudienceClaim::Multiple(audiences)))
-        }
-    }
-}
-#[cfg(feature = "app_api")]
-fn decode_tx_history_jwt_claims(
-    auth_header: &str,
-    jwt: &TxHistoryJwtConfig,
-) -> Result<TxHistoryJwtClaims, String> {
-    let token = tx_history_bearer_token(auth_header)?;
-    let key = jwt.key.decoding_key(jwt.algorithm)?;
-    let mut parts = token.split('.');
-    let Some(header_part) = parts.next().filter(|part| !part.is_empty()) else {
-        return Err("invalid JWT".to_string());
-    };
-    let Some(claims_part) = parts.next().filter(|part| !part.is_empty()) else {
-        return Err("invalid JWT".to_string());
-    };
-    let Some(signature_part) = parts.next().filter(|part| !part.is_empty()) else {
-        return Err("invalid JWT".to_string());
-    };
-    if parts.next().is_some() {
-        return Err("invalid JWT".to_string());
-    }
-    let signature = URL_SAFE_NO_PAD
-        .decode(signature_part.as_bytes())
-        .map_err(|_| "invalid JWT".to_string())?;
-    if URL_SAFE_NO_PAD.encode(signature) != signature_part {
-        return Err("invalid JWT".to_string());
-    }
-    let header = decode_tx_history_jwt_json_part(header_part, "invalid JWT payload")?;
-    let header_object = header
-        .as_object()
-        .ok_or_else(|| "invalid JWT payload".to_string())?;
-    if header_object
-        .keys()
-        .any(|field| !matches!(field.as_str(), "alg" | "typ"))
-    {
-        return Err("unsupported JWT header parameter".to_string());
-    }
-    if let Some(token_type) = header_object.get("typ")
-        && token_type.as_str() != Some("JWT")
-    {
-        return Err("JWT typ header must use the exact `JWT` spelling".to_string());
-    }
-    let header_algorithm = header_object
-        .get("alg")
-        .and_then(Value::as_str)
-        .and_then(parse_tx_history_jwt_algorithm)
-        .ok_or_else(|| "JWT algorithm does not match Torii tx_history configuration".to_string())?;
-    if header_algorithm != jwt.algorithm {
-        return Err("JWT algorithm does not match Torii tx_history configuration".to_string());
-    }
-    let signed_message = format!("{header_part}.{claims_part}");
-    let signature_valid = jsonwebtoken::crypto::verify(
-        signature_part,
-        signed_message.as_bytes(),
-        &key,
-        jwt.algorithm,
-    )
-    .map_err(|_| "invalid JWT".to_string())?;
-    if !signature_valid {
-        return Err("invalid JWT".to_string());
-    }
-    let claims_value = decode_tx_history_jwt_json_part(claims_part, "invalid JWT payload")?;
-    let claims_object = claims_value
-        .as_object()
-        .ok_or_else(|| "invalid JWT payload".to_string())?;
-    let claims = TxHistoryJwtClaims {
-        sub: tx_history_jwt_string_claim(claims_object, "sub")?,
-        dataspace_id: tx_history_jwt_string_claim(claims_object, "dataspace_id")?,
-        exp: tx_history_jwt_u64_claim(claims_object, "exp")?,
-        nbf: tx_history_jwt_u64_claim(claims_object, "nbf")?,
-        iss: tx_history_jwt_string_claim(claims_object, "iss")?,
-        aud: tx_history_jwt_audience_claim(claims_object)?,
-    };
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| "system clock is before UNIX_EPOCH".to_string())?
-        .as_secs();
-    let exp = claims.exp.ok_or_else(|| "missing exp claim".to_string())?;
-    if exp <= now {
-        return Err("JWT expired".to_string());
-    }
-    if let Some(nbf) = claims.nbf
-        && now < nbf
-    {
-        return Err("JWT is not yet valid".to_string());
-    }
-    if let Some(expected_issuer) = jwt.issuer.as_deref() {
-        let actual_issuer = claims
-            .iss
-            .as_deref()
-            .ok_or_else(|| "missing iss claim".to_string())?;
-        if actual_issuer != expected_issuer {
-            return Err("invalid JWT issuer".to_string());
-        }
-    }
-    if let Some(expected_audience) = jwt.audience.as_deref() {
-        let matches = claims.aud.as_ref().is_some_and(|audience| match audience {
-            TxHistoryAudienceClaim::Single(value) => value == expected_audience,
-            TxHistoryAudienceClaim::Multiple(values) => {
-                values.iter().any(|value| value == expected_audience)
-            }
-        });
-        if !matches {
-            return Err("invalid JWT audience".to_string());
-        }
-    }
-    Ok(claims)
-}
-#[cfg(feature = "app_api")]
-fn resolve_tx_history_alias_account_id(
-    app: &SharedAppState,
-    alias_input: &str,
-) -> Result<Option<AccountId>, Error> {
-    Ok(resolve_alias_on_chain(app, alias_input)?.map(|(_, account_id, _)| account_id))
-}
-#[cfg(feature = "app_api")]
-fn tx_history_viewer_from_headers(
-    app: &SharedAppState,
-    headers: &HeaderMap,
-) -> Result<TxHistoryViewerContext, AxResponse> {
-    if app.tx_history_access_policy.startup_error.is_some() {
-        return Err(tx_history_reject(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "tx_history_configuration_invalid",
-            "transaction history is unavailable because its runtime configuration is invalid",
-        ));
-    }
-    let Some(jwt) = app.tx_history_access_policy.jwt.as_ref() else {
-        return Err(tx_history_reject(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "tx_history_auth_unavailable",
-            "transaction history bearer auth is not configured",
-        ));
-    };
-    let mut authorization_values = headers.get_all(axum::http::header::AUTHORIZATION).iter();
-    let authorization_value = authorization_values.next().ok_or_else(|| {
-        tx_history_reject(
-            StatusCode::UNAUTHORIZED,
-            "tx_history_authorization_missing",
-            "missing Authorization header",
-        )
-    })?;
-    if authorization_values.next().is_some() {
-        return Err(tx_history_reject(
-            StatusCode::UNAUTHORIZED,
-            "tx_history_authorization_invalid",
-            "Authorization header must appear exactly once",
-        ));
-    }
-    let auth_header = authorization_value.to_str().map_err(|_| {
-        tx_history_reject(
-            StatusCode::UNAUTHORIZED,
-            "tx_history_authorization_invalid",
-            "Authorization header must be visible ASCII",
-        )
-    })?;
-    let claims = decode_tx_history_jwt_claims(auth_header, jwt).map_err(|message| {
-        tx_history_reject(
-            StatusCode::UNAUTHORIZED,
-            "tx_history_authorization_invalid",
-            message,
-        )
-    })?;
-    let subject = claims.sub.ok_or_else(|| {
-        tx_history_reject(
-            StatusCode::UNAUTHORIZED,
-            "tx_history_subject_missing",
-            "missing sub claim",
-        )
-    })?;
-    if subject.is_empty() {
-        return Err(tx_history_reject(
-            StatusCode::UNAUTHORIZED,
-            "tx_history_subject_invalid",
-            "sub claim must be a canonical account id or account alias literal",
-        ));
-    }
-    let dataspace_id = claims.dataspace_id.ok_or_else(|| {
-        tx_history_reject(
-            StatusCode::UNAUTHORIZED,
-            "tx_history_dataspace_missing",
-            "missing dataspace_id claim",
-        )
-    })?;
-    let nexus = app.state.nexus_snapshot();
-    if !is_exact_tx_history_dataspace_alias(&nexus.dataspace_catalog, &dataspace_id) {
-        return Err(tx_history_reject(
-            StatusCode::UNAUTHORIZED,
-            "tx_history_dataspace_invalid",
-            "dataspace_id claim must name one exact configured dataspace alias",
-        ));
-    }
-    let canonical_account_id = AccountId::parse_encoded(&subject).ok();
-    let alias_candidates = if canonical_account_id.is_some() {
-        Vec::new()
-    } else {
-        match canonical_tx_history_subject_alias(&nexus.dataspace_catalog, &subject) {
-            Ok(Some(alias)) => vec![alias],
-            Ok(None) | Err(_) => {
-                return Err(tx_history_reject(
-                    StatusCode::UNAUTHORIZED,
-                    "tx_history_subject_invalid",
-                    "sub claim must be a canonical account id or account alias literal",
-                ));
-            }
-        }
-    };
-    let mut dedupe = HashSet::new();
-    let mut account_ids = Vec::new();
-    let mut is_mandatory_alias = false;
-    if let Some(account_id) = canonical_account_id {
-        if dedupe.insert(account_id.to_string()) {
-            account_ids.push(account_id);
-        }
-    }
-    for alias in &alias_candidates {
-        match resolve_tx_history_alias_account_id(app, alias) {
-            Ok(Some(account_id)) => {
-                let catalog = app.state.nexus_snapshot().dataspace_catalog;
-                let (_, alias_label) =
-                    parse_exact_account_alias_label_with_catalog(alias, &catalog)
-                        .map_err(tx_history_alias_resolution_reject)?;
-                if !torii_authority_can_resolve_account_alias(
-                    app.state.view().world(),
-                    &account_id,
-                    &alias_label,
-                ) {
-                    return Err(tx_history_reject(
-                        StatusCode::FORBIDDEN,
-                        "tx_history_alias_permission_denied",
-                        "resolved JWT subject lacks exact account-alias resolve permission",
-                    ));
-                }
-                let key = account_id.to_string();
-                if dedupe.insert(key) {
-                    account_ids.push(account_id);
-                }
-                is_mandatory_alias |= app
-                    .tx_history_access_policy
-                    .is_mandatory_alias(&dataspace_id, alias);
-            }
-            Ok(None) => {}
-            Err(err) => {
-                return Err(tx_history_alias_resolution_reject(err));
-            }
-        }
-    }
-    if account_ids.is_empty() {
-        return Err(tx_history_reject(
-            StatusCode::FORBIDDEN,
-            "tx_history_requester_unbound",
-            "requester is not bound to a visible transaction account",
-        ));
-    }
-    Ok(TxHistoryViewerContext {
-        subject,
-        dataspace_id,
-        alias_candidates,
-        account_ids,
-        is_mandatory_alias,
-    })
-}
 const LEDGER_HEADER_PAGE_CAP: u64 = 512;
 async fn handler_ledger_headers(
     State(app): State<SharedAppState>,
@@ -40626,7 +40201,86 @@ fn executed_block_wire_too_large_response(height: NonZeroU64) -> Response {
         utils::current_response_format(),
     )
 }
+// Whole-carrier responses include unrelated Network and internal output material.
+// Exact-account and exact-dataspace grants cannot authorize this representation.
+fn require_full_ledger_carrier_permission(
+    app: &SharedAppState,
+    account: &AccountId,
+) -> Result<(), Error> {
+    let permission: Permission = CanReadAllLedgerData.into();
+    let view = app.state.view();
+    if !torii_account_has_permission(view.world(), account, &permission) {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "Full ledger carriers require CanReadAllLedgerData; use an authorized exact transaction query for selective inclusion".to_owned(),
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn authenticate_full_ledger_carrier_reader(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+) -> Result<AccountId, Error> {
+    let request = crate::app_auth::verify_canonical_network_request(
+        &app.state,
+        app.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        &[],
+        None,
+    )?
+    .ok_or_else(|| Error::AppUnauthorized {
+        code: "canonical_authentication_required",
+        message: "canonical account request authentication is required for full ledger carriers"
+            .to_owned(),
+    })?;
+    require_full_ledger_carrier_permission(app, &request.account)?;
+    Ok(request.account)
+}
+
 async fn handler_ledger_executed_block_wire(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(height): axum::extract::Path<u64>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+) -> Result<Response, Error> {
+    let account = authenticate_full_ledger_carrier_reader(&app, &headers, &method, &uri)?;
+    let mut response =
+        ledger_executed_block_wire_response(State(Arc::clone(&app)), axum::extract::Path(height))
+            .await?;
+    require_full_ledger_carrier_permission(&app, &account)?;
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    Ok(response)
+}
+
+async fn handler_block_proof(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(selector): axum::extract::Path<(u64, String)>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+) -> Result<Response, Error> {
+    let account = authenticate_full_ledger_carrier_reader(&app, &headers, &method, &uri)?;
+    let mut response =
+        block_proof_response(State(Arc::clone(&app)), axum::extract::Path(selector)).await?;
+    require_full_ledger_carrier_permission(&app, &account)?;
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    Ok(response)
+}
+
+async fn ledger_executed_block_wire_response(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
 ) -> Result<Response, Error> {
@@ -40667,7 +40321,7 @@ async fn handler_ledger_executed_block_wire(
     );
     Ok(response)
 }
-async fn handler_block_proof(
+async fn block_proof_response(
     State(app): State<SharedAppState>,
     axum::extract::Path((height, entry_hex)): axum::extract::Path<(u64, String)>,
 ) -> Result<Response, Error> {
@@ -44419,8 +44073,8 @@ impl Torii {
             LEDGER_HEADERS => public_get(handler_ledger_headers);
             LEDGER_STATE_ROOT => public_get(handler_ledger_state_root);
             LEDGER_STATE_PROOF => public_get(handler_ledger_state_proof);
-            LEDGER_EXECUTED_BLOCK_WIRE => public_get(handler_ledger_executed_block_wire);
-            LEDGER_BLOCK_PROOF => public_get(handler_block_proof);
+            LEDGER_EXECUTED_BLOCK_WIRE => canonical_signature_get(handler_ledger_executed_block_wire);
+            LEDGER_BLOCK_PROOF => canonical_signature_get(handler_block_proof);
         );
     }
     #[cfg(not(feature = "app_api"))]
@@ -45045,7 +44699,7 @@ impl Torii {
         mount_account_transactions_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, application_api;
-            TRANSACTIONS_HISTORY_GET => public_get(handler_transactions_history_get);
+            TRANSACTIONS_HISTORY_GET => optional_canonical_signature_get(handler_transactions_history_get);
             CONTRACTS_ACTIVITY_GET => optional_canonical_signature_get(handler_contracts_activity_get);
             CONTRACTS_EVENTS_GET => optional_canonical_signature_get(handler_contracts_events_get);
             CONTRACTS_ROLLUPS_SWAPS_FILLS_GET => optional_canonical_signature_get(handler_contracts_rollups_swaps_fills_get);
@@ -45082,7 +44736,6 @@ impl Torii {
         );
         mount_accounts_query(builder, app_state.clone(), transaction_max_content_len);
         mount_transactions_query(builder, app_state.clone(), transaction_max_content_len);
-        mount_visible_transactions_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, application_api;
             ACCOUNTS_ONBOARD_PLAN_POST => onboarding_post(handler_accounts_onboard_plan);
@@ -47301,16 +46954,12 @@ impl Torii {
             .transpose()?
             .flatten();
         #[cfg(feature = "app_api")]
-        let tx_history_access_policy =
-            Arc::new(if let Some(tx_history) = config.tx_history.as_ref() {
-                {
-                    let nexus = state.nexus_snapshot();
-                    load_tx_history_access_policy(Some(tx_history), &nexus.dataspace_catalog)
-                }
-                .map_err(|error| ToriiBuildError::invalid_configuration("tx_history", error))?
-            } else {
-                TxHistoryAccessPolicy::default()
-            });
+        let tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
+            allowed_asset_definition_id: config
+                .tx_history
+                .as_ref()
+                .and_then(|history| history.allowed_asset_definition_id.clone()),
+        });
         #[cfg(feature = "app_api")]
         let configured_public_dataspace_upstreams =
             load_public_dataspace_upstreams(&config.public_dataspace_upstreams)?;
@@ -49602,7 +49251,11 @@ fn is_exact_rate_limited_cancellation(payload: &norito::json::Value) -> bool {
     let Some(meta) = params.get("_meta").and_then(Value::as_object) else {
         return false;
     };
-    if meta.len() != 1 {
+    if !matches!(meta.len(), 3 | 4)
+        || !meta.contains_key(iroha_torii_shared::mcp::META_PROTOCOL_VERSION)
+        || !meta.contains_key(iroha_torii_shared::mcp::META_CLIENT_CAPABILITIES)
+        || (meta.len() == 4 && !meta.contains_key(iroha_torii_shared::mcp::META_CLIENT_INFO))
+    {
         return false;
     }
     let Some(encoded_nonce) = meta.get("iroha/cancellationNonce").and_then(Value::as_str) else {
@@ -49630,7 +49283,7 @@ async fn handle_rate_limited_mcp_request(
         return mcp_rate_limited_response(headers);
     }
     if utils::canonical_json_request_content_type(headers).is_err()
-        || !mcp::protocol_version_is_supported(headers, false)
+        || !mcp::protocol_version_is_supported(headers)
     {
         return mcp_rate_limited_response(headers);
     }
@@ -49646,7 +49299,9 @@ async fn handle_rate_limited_mcp_request(
     let Ok(payload) = norito::json::from_slice::<norito::json::Value>(&request_bytes) else {
         return mcp_rate_limited_response(headers);
     };
-    if !is_exact_rate_limited_cancellation(&payload) {
+    if mcp::validate_protocol_request(headers, &payload).is_err()
+        || !is_exact_rate_limited_cancellation(&payload)
+    {
         return mcp_rate_limited_response(headers);
     }
     mcp::handle_cancelled_notification(app, headers, &payload);
@@ -49663,32 +49318,6 @@ async fn handler_openapi(
         check_access(&app, &headers, Some(remote_ip), "openapi").await?;
     }
     Ok(routing::handler_openapi_spec(axum::extract::State(app)).await)
-}
-fn is_explicit_legacy_mcp_jsonrpc_response(
-    headers: &HeaderMap,
-    payload: &norito::json::Value,
-) -> bool {
-    if !mcp::is_jsonrpc_response(payload)
-        || payload
-            .as_object()
-            .and_then(|payload| payload.get("params"))
-            .and_then(norito::json::Value::as_object)
-            .and_then(|params| params.get("_meta"))
-            .and_then(norito::json::Value::as_object)
-            .and_then(|meta| meta.get(iroha_torii_shared::mcp::META_PROTOCOL_VERSION))
-            .and_then(norito::json::Value::as_str)
-            .is_some()
-    {
-        return false;
-    }
-    let mut versions = headers
-        .get_all(iroha_torii_shared::mcp::HEADER_PROTOCOL_VERSION)
-        .iter();
-    let Some(version) = versions.next() else {
-        return false;
-    };
-    versions.next().is_none()
-        && version.to_str().ok() == Some(iroha_torii_shared::mcp::LEGACY_PROTOCOL_VERSION)
 }
 /// POST /v1/mcp — dispatch bounded MCP JSON-RPC calls through exact cataloged routes.
 async fn handler_mcp_jsonrpc(
@@ -49793,9 +49422,6 @@ async fn handler_mcp_jsonrpc(
             ),
         );
     }
-    if is_explicit_legacy_mcp_jsonrpc_response(&headers, &payload) {
-        return mcp::private_no_store_response(StatusCode::ACCEPTED);
-    }
     let validated_protocol = match mcp::validate_protocol_request(&headers, &payload) {
         Ok(validated) => validated,
         Err(error) => {
@@ -49852,22 +49478,19 @@ async fn handler_mcp_jsonrpc(
         .await
     {
         mcp::JsonRpcRequestOutcome::Response(response_payload) => {
-            if validated_protocol.era.is_modern()
-                && mcp::jsonrpc_response_error_code(&response_payload)
-                    == Some(mcp::JSONRPC_METHOD_NOT_FOUND)
+            if mcp::jsonrpc_response_error_code(&response_payload)
+                == Some(mcp::JSONRPC_METHOD_NOT_FOUND)
             {
                 mcp::jsonrpc_transport_error_response_for_headers(
                     &headers,
                     ReviewedMcpJsonRpcError::MethodNotFound,
                     response_payload,
                 )
-            } else if validated_protocol.era.is_modern() {
+            } else {
                 mcp::bounded_modern_jsonrpc_http_response(
                     response_payload,
                     app.mcp.max_request_bytes,
                 )
-            } else {
-                mcp::bounded_jsonrpc_http_response(response_payload, app.mcp.max_request_bytes)
             }
         }
         mcp::JsonRpcRequestOutcome::Cancelled => {
@@ -50589,12 +50212,6 @@ pub enum Error {
         /// Stable payload-free startup failure code.
         code: &'static str,
     },
-    /// Transaction-history runtime configuration failed during startup: {reason}
-    #[cfg(feature = "app_api")]
-    TxHistoryStartup {
-        /// Operator-facing configuration failure reason.
-        reason: String,
-    },
     /// Failed to serialize response payload for `{context}`: {source}
     SerializationFailure {
         /// Logical context for the serialization failure.
@@ -51047,14 +50664,6 @@ impl Error {
                     "SoraFS evidence-viewer runtime failed to start",
                 )
             }
-            #[cfg(feature = "app_api")]
-            Self::TxHistoryStartup { reason } => {
-                iroha_logger::error!(%reason, "transaction-history runtime failed to start");
-                ErrorEnvelope::new(
-                    "tx_history_startup_error",
-                    "transaction-history runtime failed to start",
-                )
-            }
             Self::SerializationFailure { context, source } => {
                 iroha_logger::error!(
                     %context,
@@ -51156,8 +50765,6 @@ impl Error {
             SorafsModerationStartup { .. } => StatusCode::SERVICE_UNAVAILABLE,
             #[cfg(feature = "app_api")]
             SorafsEvidenceViewerStartup { .. } => StatusCode::SERVICE_UNAVAILABLE,
-            #[cfg(feature = "app_api")]
-            TxHistoryStartup { .. } => StatusCode::SERVICE_UNAVAILABLE,
             LaneLifecycle { .. } => StatusCode::BAD_REQUEST,
             Config(_) => StatusCode::NOT_FOUND,
             SerializationFailure { .. } => StatusCode::INTERNAL_SERVER_ERROR,

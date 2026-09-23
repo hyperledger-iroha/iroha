@@ -489,7 +489,7 @@ private func encodeNativeClaimIdentifierReceiptJSON(
 }
 
 enum SingleInstructionSwiftNoritoEncoder {
-    static func encodeExecutableBatch(
+    static func executableBatchPayload(
         networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
@@ -497,8 +497,8 @@ enum SingleInstructionSwiftNoritoEncoder {
         nonce: UInt32?,
         entries: [TransactionBatchEntry],
         feePayment: FeePaymentIntent,
-        signingKey: SigningKey
-    ) throws -> SignedTransactionEnvelope {
+        metadata: [String: ToriiJSONValue]
+    ) throws -> Data {
         guard !entries.isEmpty else {
             throw ExecutableBatchInputError.emptyBatch
         }
@@ -537,19 +537,38 @@ enum SingleInstructionSwiftNoritoEncoder {
         )
         transactionPayload.writeField(try feePayment.compactNorito())
         transactionPayload.writeField(TransactionAdmissionIntentV1.queuePlanSynced.norito)
-        transactionPayload.writeField(encodeEmptyMetadata())
+        transactionPayload.writeField(try CanonicalNorito.encodeCompactMetadata(metadata))
         transactionPayload.writeField(encodeNoneOption())
 
-        let signature = try signingKey.sign(IrohaHash.hash(transactionPayload.data))
+        return transactionPayload.data
+    }
+
+    static func encodeExecutableBatch(
+        networkId: NetworkId,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        nonce: UInt32?,
+        entries: [TransactionBatchEntry],
+        feePayment: FeePaymentIntent,
+        metadata: [String: ToriiJSONValue],
+        signingKey: SigningKey
+    ) throws -> SignedTransactionEnvelope {
+        let payload = try executableBatchPayload(
+            networkId: networkId, authority: authority, creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs, nonce: nonce, entries: entries, feePayment: feePayment,
+            metadata: metadata
+        )
+        let signature = try signingKey.sign(IrohaHash.hash(payload))
         let signed = encodeCompactSignedTransaction(
             signature: signature,
-            transactionPayload: transactionPayload.data
+            transactionPayload: payload
         )
         return SignedTransactionEnvelope(
             norito: encodeVersionedSignedTransaction(signed),
             signedTransaction: signed,
             payload: nil,
-            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload.data))
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(payload))
         )
     }
 

@@ -744,6 +744,7 @@ fn bootstrap_stage(hardware: SimulatedHardware, change: usize) -> BootstrapStage
         original.state.lane.clone(),
         0,
         0,
+        0,
         original.state.hardware_epoch,
         original.state.device_policy_binding,
         original.state.state_nonce_commitment,

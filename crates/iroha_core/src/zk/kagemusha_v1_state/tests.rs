@@ -782,6 +782,7 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
         lane.clone(),
         0,
         0,
+        0,
         old_epoch,
         old_policy,
         snapshot_digest(b"snapshot-old-state-nonce", 8),
@@ -816,6 +817,70 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
         guard_verifier: AcceptSnapshotGuardVerifierV1,
     };
     machine = snapshot_initial_publish(machine);
+
+    // Enrollment creates index zero without an assertion. The first signed transition
+    // consumes 0→1; a later rotation consumes 1→2 even though its epoch sequence resets.
+    let bootstrap_state = machine.state.clone();
+    assert_eq!(bootstrap_state.secure_index, 0);
+    let mut changed_index = bootstrap_state.clone();
+    changed_index.secure_index = 1;
+    assert_ne!(
+        changed_index
+            .recompute_commitment()
+            .expect("changed index commitment"),
+        bootstrap_state
+            .recompute_commitment()
+            .expect("bootstrap commitment"),
+    );
+    let ordinary = machine
+        .next_state(
+            0,
+            old_epoch,
+            old_policy,
+            snapshot_digest(b"snapshot-index-next-nonce", 41),
+            machine.consumed_credits.root(),
+        )
+        .expect("first selected transition");
+    assert_eq!((ordinary.logical_sequence, ordinary.secure_index), (1, 1));
+    machine.state = ordinary;
+    let rotated_policy = DevicePolicyBindingV1 {
+        device_key_reference: snapshot_digest(b"snapshot-index-rotated-key", 43),
+        hardware_policy_id: snapshot_digest(b"snapshot-index-rotated-policy", 44),
+    };
+    let rotated = machine
+        .next_state(
+            0,
+            current_epoch,
+            rotated_policy,
+            snapshot_digest(b"snapshot-index-rotate-nonce", 42),
+            machine.consumed_credits.root(),
+        )
+        .expect("rotation retains the global index");
+    assert_eq!((rotated.logical_sequence, rotated.secure_index), (0, 2));
+    machine.state = KagemushaStateV1::build(
+        bootstrap_state.context(),
+        bootstrap_state.liability_pool_id,
+        bootstrap_state.lane.clone(),
+        0,
+        0,
+        u128::MAX,
+        old_epoch,
+        old_policy,
+        snapshot_digest(b"snapshot-index-max-nonce", 46),
+        machine.consumed_credits.root(),
+    )
+    .expect("valid state at maximum secure index");
+    assert_eq!(
+        machine.next_state(
+            0,
+            current_epoch,
+            rotated_policy,
+            snapshot_digest(b"snapshot-index-overflow-nonce", 45),
+            machine.consumed_credits.root(),
+        ),
+        Err(KagemushaStateErrorV1::SecureIndexOverflow),
+    );
+    machine.state = bootstrap_state;
 
     let mint_amount = 4;
     let (mint_authorization, mint_credit, mint_opening) = snapshot_mint_credit(
@@ -891,6 +956,7 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
         lane,
         0,
         0,
+        machine.state.secure_index + 1,
         current_epoch,
         current_policy,
         snapshot_digest(b"snapshot-current-state-nonce", 11),
@@ -1186,6 +1252,7 @@ fn mock_recursive_verifier_one_thousand_credits_form_one_sendable_redeemable_agg
         context,
         liability_pool_id,
         lane,
+        0,
         0,
         0,
         hardware_epoch,

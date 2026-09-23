@@ -11,6 +11,7 @@ enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
     RESERVE_OPERATION_ID(1), ACCEPT_QUALIFICATION(2), ACCEPT_AUTHENTICATED_REPLY(3),
     BEGIN_SENDER_TRANSITION(4), PROVE_PREPARED_SENDER_TRANSITION(5), BUILD_TERMINAL_ENVELOPE(6),
     ACCEPT_INSTALLED_TERMINAL(7), RECOVER_SENDER(8), RECOVER_TERMINAL_ENVELOPE(9), RELEASE_OUTBOX(10), BEGIN_OBSERVATION(11),
+    INITIAL_ENROLLMENT(12),
 }
 
 /**
@@ -22,7 +23,7 @@ enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
 object KagemushaCoreCoordinatorFrameV1 {
     const val SCHEMA_VERSION = 2
     const val MAXIMUM_FIELDS = 16
-    const val MAXIMUM_FIELD_BYTES = 64 * 1024
+    const val MAXIMUM_FIELD_BYTES = 96 * 1024
     const val MAXIMUM_REQUEST_BYTES = 256 * 1024
     const val MAXIMUM_RESPONSE_BYTES = 128 * 1024
     private val magic = "IKGMCOR1".toByteArray(Charsets.US_ASCII)
@@ -151,6 +152,24 @@ object KagemushaCoreCoordinatorFrameV1 {
                 require(receipt.size > 4 && receipt.copyOfRange(0, 4).contentEquals(field(fields, 1))) { "invalid coordinator terminal receipt" }
                 qualification(fields, end + 2)
             }
+            KagemushaCoreCoordinatorMethodV1.INITIAL_ENROLLMENT -> when (number(fields, 0)) {
+                1 -> { count(fields, 2); bounded(fields, 1, 512) }
+                2 -> {
+                    count(fields, 11); ticket(fields, 1)
+                    require(field(fields, 2).size == 273) { "invalid signed app preparation" }; bounded(fields, 3, 8 * 1024)
+                    bounded(fields, 4, 2 * 1024); bounded(fields, 5, 16 * 1024)
+                    (6..8).forEach { digest(fields, it) }
+                    bounded(fields, 9, 2 * 1024); ticket(fields, 10)
+                }
+                3 -> {
+                    count(fields, 4); ticket(fields, 1)
+                    require(field(fields, 2).size == 64) { "invalid account signature" }
+                    bounded(fields, 3, 65_716)
+                }
+                4, 6 -> { count(fields, 2); ticket(fields, 1) }
+                5 -> { count(fields, 3); ticket(fields, 1); bounded(fields, 2, 16 * 1024) }
+                else -> throw IllegalArgumentException("unknown enrollment phase")
+            }
         }
     }
 
@@ -182,6 +201,21 @@ object KagemushaCoreCoordinatorFrameV1 {
                 count(response, 5); digest(response, 0); nonempty(response, 1); digest(response, 2)
                 nonempty(response, 3); nonempty(response, 4); equal(response, 3, request, senderInputs(request, 1))
             }
+            KagemushaCoreCoordinatorMethodV1.INITIAL_ENROLLMENT -> when (number(request, 0)) {
+                1 -> { count(response, 5); ticket(response, 0); (1..4).forEach { digest(response, it) } }
+                2 -> {
+                    count(response, 4); equal(response, 0, request, 1)
+                    equal(response, 1, request, 7); equal(response, 2, request, 8)
+                    equal(response, 3, request, 9)
+                }
+                3, 4 -> {
+                    count(response, 3); equal(response, 0, request, 1)
+                    digest(response, 1); bounded(response, 2, 83_124)
+                }
+                5 -> { count(response, 2); equal(response, 0, request, 1); digest(response, 1) }
+                6 -> count(response, 0)
+                else -> throw IllegalArgumentException("unknown enrollment phase")
+            }
         }
     }
 
@@ -194,6 +228,16 @@ object KagemushaCoreCoordinatorFrameV1 {
 
     private fun nonempty(fields: List<ByteArray>, index: Int) {
         require(field(fields, index).isNotEmpty()) { "empty coordinator field" }
+    }
+
+    private fun bounded(fields: List<ByteArray>, index: Int, maximum: Int) {
+        val value = field(fields, index)
+        require(value.isNotEmpty() && value.size <= maximum) { "invalid enrollment field size" }
+    }
+
+    private fun ticket(fields: List<ByteArray>, index: Int) {
+        val value = field(fields, index)
+        require(value.size == 8 && value.any { it.toInt() != 0 }) { "invalid enrollment ticket" }
     }
 
     private fun digest(fields: List<ByteArray>, index: Int) {

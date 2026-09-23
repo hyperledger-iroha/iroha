@@ -2,11 +2,16 @@
 //!
 //! The relation has one fixed shape for all six operations. It commits every private state
 //! field with the parity-native Poseidon construction, proves exact `u128` balance/sequence
-//! arithmetic, and evaluates one full 256-level consumed-credit path. `MintFold` and
+//! arithmetic and a global exact-next secure index, and evaluates one full 256-level
+//! consumed-credit path. `MintFold` and
 //! `ReceiveFold` each select that path. All other operations carry the replay root. A 256-bit
 //! credit ID therefore has
 //! no history/count admission cap and retains a 128-bit collision-security target under the
 //! width-3 Poseidon permutation.
+
+#[path = "transition_statement_flat.rs"]
+mod transition_statement_flat;
+pub(super) use transition_statement_flat::constrain_transition_statement_digest_v1;
 
 use core::marker::PhantomData;
 
@@ -479,12 +484,23 @@ impl KagemushaStateRelationWitnessV1 {
             predecessor
                 .validate()
                 .map_err(|error| format!("invalid predecessor state: {error}"))?;
+            if self.successor.secure_index
+                != predecessor
+                    .secure_index
+                    .checked_add(1)
+                    .ok_or_else(|| "secure index overflow".to_owned())?
+            {
+                return Err("secure index must advance exactly once".to_owned());
+            }
             if predecessor.release_id != self.successor.release_id
                 || predecessor.suite_id != self.successor.suite_id
                 || predecessor.vk_digest != self.successor.vk_digest
             {
                 return Err("V1 transitions cannot change the authenticated proof suite".to_owned());
             }
+        }
+        if is_bootstrap && self.successor.secure_index != 0 {
+            return Err("Bootstrap secure index must be zero".to_owned());
         }
         if self.lifecycle_binding_digest == [0; 32] {
             return Err("released lifecycle binding must be nonzero".to_owned());
@@ -888,6 +904,7 @@ pub(super) struct AssignedState<F: KagemushaPoseidonFieldV1> {
     pub(super) vk_digest: [AssignedValue<F>; 2],
     pub(super) balance: AssignedValue<F>,
     pub(super) sequence: AssignedValue<F>,
+    pub(super) secure_index: AssignedValue<F>,
     pub(super) epoch_generation: AssignedValue<F>,
     pub(super) epoch_id: [AssignedValue<F>; 2],
     pub(super) key_reference: [AssignedValue<F>; 2],
@@ -941,6 +958,7 @@ pub(super) struct KagemushaAssignedStateRelationV1<F: KagemushaPoseidonFieldV1> 
     pub(super) journal_revision_before: AssignedValue<F>,
     pub(super) journal_revision_after: AssignedValue<F>,
     pub(super) transition_effect_digest: [AssignedValue<F>; 2],
+    pub(super) mint_finality_semantic_digest: [AssignedValue<F>; 2],
     pub(super) mint_finality_proof_binding_digest: [AssignedValue<F>; 2],
     pub(super) peer_credit_id: [AssignedValue<F>; 2],
     pub(super) recipient_encryption_key_binding: [AssignedValue<F>; 2],
@@ -1148,6 +1166,13 @@ where
         successor.sequence,
         Constant(F::ZERO),
     );
+    assert_if_equal(
+        ctx,
+        &range,
+        bootstrap,
+        successor.secure_index,
+        Constant(F::ZERO),
+    );
     assert_if_equal(ctx, &range, bootstrap, amount, Constant(F::ZERO));
     assert_if_equal(
         ctx,
@@ -1163,6 +1188,14 @@ where
     assert_if_nonzero(ctx, &range, monetary, amount);
     let next_sequence = gate.inc(ctx, predecessor.sequence);
     assert_if_equal(ctx, &range, exact_next, successor.sequence, next_sequence);
+    let next_secure_index = gate.inc(ctx, predecessor.secure_index);
+    assert_if_equal(
+        ctx,
+        &range,
+        non_bootstrap,
+        successor.secure_index,
+        next_secure_index,
+    );
     assert_if_equal(ctx, &range, rotate, successor.sequence, Constant(F::ZERO));
     assert_if_equal(ctx, &range, rotate, successor.balance, predecessor.balance);
     assert_if_equal(ctx, &range, rotate, amount, Constant(F::ZERO));
@@ -1849,6 +1882,7 @@ where
             journal_revision_before,
             journal_revision_after,
             transition_effect_digest,
+            mint_finality_semantic_digest,
             mint_finality_proof_binding_digest,
             peer_credit_id,
             recipient_encryption_key_binding,
@@ -1993,6 +2027,7 @@ where
     );
     let balance = assign_u128(ctx, range, state.map_or(0, |value| value.balance));
     let sequence = assign_u128(ctx, range, state.map_or(0, |value| value.logical_sequence));
+    let secure_index = assign_u128(ctx, range, state.map_or(0, |value| value.secure_index));
     let epoch_generation = assign_u128(
         ctx,
         range,
@@ -2085,6 +2120,7 @@ where
             lane_id[1],
             balance,
             sequence,
+            secure_index,
             epoch_generation,
             epoch_id[0],
             epoch_id[1],
@@ -2110,6 +2146,7 @@ where
         vk_digest,
         balance,
         sequence,
+        secure_index,
         epoch_generation,
         epoch_id,
         key_reference,
@@ -2292,6 +2329,7 @@ mod tests {
             },
             balance: 8,
             logical_sequence: 9,
+            secure_index: 9,
             hardware_epoch: HardwareEpochV1 {
                 generation: 1,
                 epoch_id: projection_digest(10),

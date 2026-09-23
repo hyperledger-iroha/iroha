@@ -3,8 +3,8 @@ import Foundation
 
 /// Client-data binding for Core's canonical, domain-separated hardware selection.
 ///
-/// Core must construct and verify the Norito body from its durable transition intent. This
-/// type checks only its outer frame before giving the exact bytes to App Attest.
+/// Core must construct and verify the fixed V1 subject body from its durable transition intent.
+/// This type checks only the outer frame before giving the exact bytes to App Attest.
 public struct KagemushaAppAttestTransitionBindingV1: Sendable {
   private static let signingDomain = Data("iroha:kagemusha:v1:hardware-transition-selection\0".utf8)
   private static let maximumSigningBytes = 1_024
@@ -34,29 +34,41 @@ public struct KagemushaAppAttestTransitionBindingV1: Sendable {
   }
 }
 
-/// A distinct, server-challenged enrollment binding for one dedicated App Attest key.
+/// A distinct issuer challenge bound to one App Attest key and one approved phone lane.
 public struct KagemushaAppAttestEnrollmentBindingV1: Sendable {
-  public let releaseDigest: Data
-  public let laneDigest: Data
-  public let serverChallenge: Data
+  private static let domain = Data("iroha:kagemusha:v1:app-device-attestation-challenge\0".utf8)
 
-  public init(releaseDigest: Data, laneDigest: Data, serverChallenge: Data) throws {
-    guard releaseDigest.count == 32, laneDigest.count == 32, serverChallenge.count == 32,
-      releaseDigest.contains(where: { $0 != 0 }),
-      laneDigest.contains(where: { $0 != 0 }),
-      serverChallenge.contains(where: { $0 != 0 }) else {
+  public let clientNonce: Data
+  public let serverNonce: Data
+  public let releaseID: Data
+  public let profileID: Data
+  /// The decoded App Attest key ID: SHA256 of the key's P-256 SEC1 public point.
+  public let attestedKeyID: Data
+  public let laneID: Data
+
+  public init(clientNonce: Data, serverNonce: Data, releaseID: Data,
+    profileID: Data, attestedKeyID: Data, laneID: Data) throws {
+    let fields = [clientNonce, serverNonce, releaseID, profileID, attestedKeyID, laneID]
+    guard fields.allSatisfy({ $0.count == 32 && $0.contains(where: { $0 != 0 }) }),
+      clientNonce != serverNonce else {
       throw KagemushaAppAttestEvidenceErrorV1.invalidDigestLength
     }
-    self.releaseDigest = releaseDigest
-    self.laneDigest = laneDigest
-    self.serverChallenge = serverChallenge
+    self.clientNonce = clientNonce
+    self.serverNonce = serverNonce
+    self.releaseID = releaseID
+    self.profileID = profileID
+    self.attestedKeyID = attestedKeyID
+    self.laneID = laneID
   }
 
   public var canonicalClientData: Data {
-    var bytes = Data("KAGEMUSHA-APP-ATTEST-ENROLLMENT-V1\0".utf8)
-    bytes.append(releaseDigest)
-    bytes.append(laneDigest)
-    bytes.append(serverChallenge)
+    var bytes = Self.domain
+    bytes.append(clientNonce)
+    bytes.append(serverNonce)
+    bytes.append(releaseID)
+    bytes.append(profileID)
+    bytes.append(attestedKeyID)
+    bytes.append(laneID)
     return bytes
   }
 
@@ -99,6 +111,7 @@ public enum KagemushaAppAttestEvidenceErrorV1: Error, Equatable, Sendable {
   case emptyKeyID
   case emptyRawObject
   case invalidAssertionObject
+  case invalidAssertionSignature
   case invalidReleasePolicy
   case releaseMismatch
   case assertionCounterMismatch
@@ -108,6 +121,7 @@ public enum KagemushaAppAttestEvidenceErrorV1: Error, Equatable, Sendable {
 }
 
 /// Release identity pinned by enrollment policy, independent of the device's claim.
+/// This expectation is not itself a hardware measurement on iOS 26.
 public struct KagemushaAppAttestExpectedReleaseV1: Equatable, Sendable {
   private static let digestDomain = Data("iroha:kagemusha:v1:app-attest-release\0".utf8)
 
@@ -153,20 +167,28 @@ public struct KagemushaAppAttestExpectedReleaseV1: Equatable, Sendable {
   }
 }
 
-/// Parsed bytes from an assertion; its signature and app identity remain unverified.
+/// A release measurement is available only when Apple signs both extension fields.
+public enum KagemushaAppAttestReleaseMeasurementV1: Equatable, Sendable {
+  case unavailable
+  case signed(validationCategory: UInt32, bundleVersion: String)
+}
+
+/// Verified App Attest assertion bytes. Core must still authenticate the predecessor and fold.
 public struct KagemushaAppAttestAssertionEvidenceV1: Equatable, Sendable {
   public let rawAssertion: Data
   public let authenticatorData: Data
   public let signatureDER: Data
   public let signCount: UInt32
-  public let validationCategory: UInt32
-  public let bundleVersion: String
+  public let releaseMeasurement: KagemushaAppAttestReleaseMeasurementV1
   public let clientDataHash: Data
-  /// P-256's signed SHA-256 preimage digest under Apple's assertion protocol.
+  /// Apple's nonce: SHA256(authenticatorData || clientDataHash).
+  public let assertionNonce: Data
+  /// P-256-SHA256 signs the nonce, so the ECDSA message digest is SHA256(nonce).
   public let signatureMessageDigest: Data
 
   public init(rawAssertion: Data, clientDataHash: Data, expectedAppIDHash: Data,
-    expectedRelease: KagemushaAppAttestExpectedReleaseV1) throws {
+    expectedRelease: KagemushaAppAttestExpectedReleaseV1,
+    enrolledAssertionPublicKeyX963: Data) throws {
     guard clientDataHash.count == 32, expectedAppIDHash.count == 32,
       expectedAppIDHash.contains(where: { $0 != 0 }) else {
       throw KagemushaAppAttestEvidenceErrorV1.invalidDigestLength
@@ -176,9 +198,9 @@ public struct KagemushaAppAttestAssertionEvidenceV1: Equatable, Sendable {
       throw KagemushaAppAttestEvidenceErrorV1.invalidAppIDHash
     }
     let auth = [UInt8](parsed.authenticatorData)
-    // Apple's published attestation object carries a CBOR extension suffix with ED unset.
-    // Parse the complete suffix below; the flag alone is not an authority claim.
-    guard auth[32] & 0x40 == 0 else {
+    // iOS 26 App Attest sets 0x40 even though its assertion has no credential data.
+    // Do not interpret WebAuthn's AT/ED bits as proof of a CBOR extension suffix.
+    guard auth[32] == 0x40 || auth[32] == 0xc0 else {
       throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
     }
     let counter = (UInt32(auth[33]) << 24) | (UInt32(auth[34]) << 16)
@@ -186,45 +208,68 @@ public struct KagemushaAppAttestAssertionEvidenceV1: Equatable, Sendable {
     guard counter != 0 else {
       throw KagemushaAppAttestEvidenceErrorV1.assertionCounterMismatch
     }
-    var extensions = AssertionCBORReaderV1(Data(auth.dropFirst(37)))
-    guard try extensions.length(major: 5) == 2 else {
-      throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
-    }
-    var category: UInt32?
-    var version: String?
-    for _ in 0..<2 {
-      switch try extensions.text() {
-      case "validationCategory" where category == nil:
-        // Apple's App Attest category is a four-byte, little-endian CBOR byte string.
-        // The published attestation object fixture uses this exact UInt32 encoding.
-        let value = try extensions.byteString()
-        guard value.count == 4 else {
-          throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
-        }
-        let bytes = [UInt8](value)
-        category = UInt32(bytes[0]) | (UInt32(bytes[1]) << 8)
-          | (UInt32(bytes[2]) << 16) | (UInt32(bytes[3]) << 24)
-      case "bundleVersion" where version == nil:
-        version = try extensions.text()
-      default:
+    let releaseMeasurement: KagemushaAppAttestReleaseMeasurementV1
+    if auth.count == 37 {
+      guard auth[32] == 0x40 else {
         throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
       }
+      // iOS 26 supplies no signed app-version/category measurement here.
+      releaseMeasurement = .unavailable
+    } else {
+      var extensions = AssertionCBORReaderV1(Data(auth.dropFirst(37)))
+      guard try extensions.length(major: 5) == 2 else {
+        throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
+      }
+      var category: UInt32?
+      var version: String?
+      for _ in 0..<2 {
+        switch try extensions.text() {
+        case "validationCategory" where category == nil:
+          let value = try extensions.byteString()
+          guard value.count == 4 else {
+            throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
+          }
+          let bytes = [UInt8](value)
+          category = UInt32(bytes[0]) | (UInt32(bytes[1]) << 8)
+            | (UInt32(bytes[2]) << 16) | (UInt32(bytes[3]) << 24)
+        case "bundleVersion" where version == nil:
+          version = try extensions.text()
+        default:
+          throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
+        }
+      }
+      guard extensions.isAtEnd, let category, let version, !version.isEmpty else {
+        throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
+      }
+      guard category == expectedRelease.validationCategory,
+        version == expectedRelease.bundleVersion else {
+        throw KagemushaAppAttestEvidenceErrorV1.releaseMismatch
+      }
+      releaseMeasurement = .signed(validationCategory: category, bundleVersion: version)
     }
-    guard extensions.isAtEnd, let category, let version, !version.isEmpty else {
-      throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
-    }
-    guard category == expectedRelease.validationCategory,
-      version == expectedRelease.bundleVersion else {
-      throw KagemushaAppAttestEvidenceErrorV1.releaseMismatch
+    let nonce = Data(SHA256.hash(data: parsed.authenticatorData + clientDataHash))
+    guard let publicKey = try? P256.Signing.PublicKey(
+      x963Representation: enrolledAssertionPublicKeyX963),
+      let signature = try? P256.Signing.ECDSASignature(derRepresentation: parsed.signature),
+      publicKey.isValidSignature(signature, for: nonce) else {
+      throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionSignature
     }
     self.rawAssertion = rawAssertion
     authenticatorData = parsed.authenticatorData
     signatureDER = parsed.signature
     signCount = counter
-    validationCategory = category
-    bundleVersion = version
+    self.releaseMeasurement = releaseMeasurement
     self.clientDataHash = clientDataHash
-    signatureMessageDigest = Data(SHA256.hash(data: parsed.authenticatorData + clientDataHash))
+    assertionNonce = nonce
+    signatureMessageDigest = Data(SHA256.hash(data: nonce))
+  }
+
+  /// Reject an assertion that skipped the committed predecessor's counter.
+  /// Core must authenticate the predecessor before supplying this value.
+  func validateExactNext(previousCounter: UInt32) throws {
+    guard previousCounter < UInt32.max, signCount == previousCounter + 1 else {
+      throw KagemushaAppAttestEvidenceErrorV1.assertionCounterMismatch
+    }
   }
 
   private static func parseAssertion(_ raw: Data) throws -> (authenticatorData: Data, signature: Data) {
@@ -255,20 +300,22 @@ public struct KagemushaAppAttestAssertionEvidenceV1: Equatable, Sendable {
   }
 }
 
-/// Evidence acquisition only. The monetary verifier must independently validate the enrolled
-/// App Attest certificate, assertion signature, app identity, strict-next counter and proof fold.
+/// Evidence acquisition only. Core must independently verify enrollment, the authenticated
+/// predecessor, strict-next counter, and proof fold before admitting money.
 public actor KagemushaAppAttestEvidenceProviderV1 {
   private let service: any KagemushaAppAttestServiceV1
   private let intentStore: any KagemushaAppAttestAssertionIntentStoringV1
   private let expectedAppIDHash: Data
   private let expectedRelease: KagemushaAppAttestExpectedReleaseV1
+  private let enrolledAssertionPublicKeyX963: Data
   private var assertionInFlight = false
   private var locallyUncertain = false
 
   public init(service: any KagemushaAppAttestServiceV1,
     intentStore: any KagemushaAppAttestAssertionIntentStoringV1,
     expectedAppIDHash: Data,
-    expectedRelease: KagemushaAppAttestExpectedReleaseV1) throws {
+    expectedRelease: KagemushaAppAttestExpectedReleaseV1,
+    enrolledAssertionPublicKeyX963: Data) throws {
     guard expectedAppIDHash.count == 32,
       expectedAppIDHash.contains(where: { $0 != 0 }) else {
       throw KagemushaAppAttestEvidenceErrorV1.invalidDigestLength
@@ -277,6 +324,11 @@ public actor KagemushaAppAttestEvidenceProviderV1 {
     self.intentStore = intentStore
     self.expectedAppIDHash = expectedAppIDHash
     self.expectedRelease = expectedRelease
+    guard (try? P256.Signing.PublicKey(
+      x963Representation: enrolledAssertionPublicKeyX963)) != nil else {
+      throw KagemushaAppAttestEvidenceErrorV1.invalidReleasePolicy
+    }
+    self.enrolledAssertionPublicKeyX963 = enrolledAssertionPublicKeyX963
   }
 
   public func generateDedicatedKey() async throws -> String {
@@ -334,10 +386,9 @@ public actor KagemushaAppAttestEvidenceProviderV1 {
     do {
       evidence = try KagemushaAppAttestAssertionEvidenceV1(
         rawAssertion: raw, clientDataHash: digest, expectedAppIDHash: expectedAppIDHash,
-        expectedRelease: expectedRelease)
-      guard evidence.signCount == expectedPreviousCounter + 1 else {
-        throw KagemushaAppAttestEvidenceErrorV1.assertionCounterMismatch
-      }
+        expectedRelease: expectedRelease,
+        enrolledAssertionPublicKeyX963: enrolledAssertionPublicKeyX963)
+      try evidence.validateExactNext(previousCounter: expectedPreviousCounter)
       try intentStore.complete(keyID: keyID, counter: evidence.signCount,
         selectionDigest: digest, rawAssertion: raw)
       guard try intentStore.load(keyID: keyID) == .complete(

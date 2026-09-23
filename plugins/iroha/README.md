@@ -131,16 +131,8 @@ Torii. A manual client must:
   on that same request
 
 Do not send `initialize`, `notifications/initialized`, `ping`, or
-`Mcp-Session-Id` when using native `2026-07-28`. The protocol metadata is
+`Mcp-Session-Id`. The `2026-07-28` protocol metadata is
 self-contained in every request.
-
-The initialization-based `2025-06-18` flow is compatibility-only. Use it only
-when the connection is explicitly configured for a known legacy Torii
-endpoint. Do not infer a downgrade from a generic modern transport,
-authentication, or protocol failure. The compatibility sequence uses
-`initialize`, then `notifications/initialized`, and carries
-`MCP-Protocol-Version: 2025-06-18` on subsequent requests. The bundled Torii
-connection remains on the native stateless path.
 
 Requests without `Origin` are supported for non-browser clients. If a browser
 sends `Origin`, the value must exactly match one node-operator CORS allowlist

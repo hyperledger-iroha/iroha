@@ -13,7 +13,7 @@ import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 import { TORII_TEST_NATIVE_BINDING } from "../src/toriiTestHooks.js";
 
 const binding = Object.freeze({
-  schema: "cbsi.mobile-validation-fee-ledger-binding.v1",
+  schema: "iroha.validation-fee-ledger-binding.v1",
   networkId: NetworkId.fromBytes(Buffer.from("13".repeat(32), "hex")),
   policyChainGenesisHash: "35".repeat(32),
   checkpoint: Object.freeze({
@@ -680,4 +680,22 @@ test("proof catch-up fails closed when a non-final page does not advance", async
     client.catchUpValidationFeeCurrentPolicyProof(binding, {}),
     /did not advance/u,
   );
+});
+
+
+test("ledger binding accepts only the first-release Iroha schema", () => {
+  assert.equal(
+    normalizeValidationFeeLedgerBindingV1(binding).schema,
+    "iroha.validation-fee-ledger-binding.v1",
+  );
+  for (const schema of [
+    "cbsi.mobile-validation-fee-ledger-binding.v1",
+    "boi.validation-fee-ledger-binding.v1",
+    "",
+  ]) {
+    assert.throws(
+      () => normalizeValidationFeeLedgerBindingV1({ ...binding, schema }),
+      /binding.schema/u,
+    );
+  }
 });

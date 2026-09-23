@@ -58,7 +58,7 @@ pub(crate) fn parse_app_attest_assertion(
     }
     let authenticator_data = authenticator_data.ok_or(AppAttestExtensionError::Malformed)?;
     let signature_der = signature_der.ok_or(AppAttestExtensionError::Malformed)?;
-    if authenticator_data.len() < 38 || signature_der.len() < 8 {
+    if authenticator_data.len() < 37 || signature_der.len() < 8 {
         return Err(AppAttestExtensionError::Malformed);
     }
     Ok((authenticator_data, signature_der))
@@ -84,15 +84,13 @@ impl AppAttestAssertionExtensions<'_> {
 ///
 /// The caller must independently verify the exact original authenticator bytes under the
 /// enrolled App Attest key, RP ID, and exact-next signature counter. This parser requires the
-/// signed extension bytes, forbids the attested-credential flag, bounds all CBOR lengths, rejects
-/// indefinite forms, duplicate/missing/unknown keys and trailing bytes, and does not guess a
-/// legacy extension-free assertion format.
+/// signed extension bytes, bounds all CBOR lengths, rejects
+/// indefinite forms, duplicate/missing/unknown keys and trailing bytes. The caller handles the
+/// exact 37-byte assertion form separately; an empty suffix is not an extension map.
 pub(crate) fn parse_app_attest_assertion_extensions(
     authenticator_data: &[u8],
 ) -> Result<AppAttestAssertionExtensions<'_>, AppAttestExtensionError> {
-    if !(38..=MAX_AUTHENTICATOR_DATA_BYTES).contains(&authenticator_data.len())
-        || authenticator_data[32] & 0x40 != 0
-    {
+    if !(38..=MAX_AUTHENTICATOR_DATA_BYTES).contains(&authenticator_data.len()) {
         return Err(AppAttestExtensionError::Malformed);
     }
     let mut reader = CborReader::new(&authenticator_data[37..]);
@@ -424,9 +422,9 @@ mod tests {
             parse_app_attest_assertion_extensions(&signed_suffix_without_extension_flag),
             parse_app_attest_assertion_extensions(&auth_data(&valid))
         );
-        let mut credential_flag = auth_data(&valid);
-        credential_flag[32] = 0xc1;
-        assert!(parse_app_attest_assertion_extensions(&credential_flag).is_err());
+        let mut apple_assertion_flag = auth_data(&valid);
+        apple_assertion_flag[32] = 0x40;
+        assert!(parse_app_attest_assertion_extensions(&apple_assertion_flag).is_ok());
         let mut bad_utf8 = valid.clone();
         let last = bad_utf8.len() - 1;
         bad_utf8[last] = 0xff;

@@ -15,6 +15,24 @@ use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 
 use super::*;
 
+#[test]
+fn terminal_host_keeps_oem_mode_and_rejects_both_app_modes() {
+    for class in [
+        KagemushaHardwarePlatformClassV1::AndroidOemService,
+        KagemushaHardwarePlatformClassV1::AppleOemService,
+        KagemushaHardwarePlatformClassV1::DedicatedSecureElement,
+        KagemushaHardwarePlatformClassV1::OtherQualified,
+    ] {
+        require_terminal_assertion_fold_v1(class).expect("OEM checkpoint mode stays available");
+    }
+    for class in [
+        KagemushaHardwarePlatformClassV1::AppleAppAttest,
+        KagemushaHardwarePlatformClassV1::AndroidKeyMint,
+    ] {
+        assert!(require_terminal_assertion_fold_v1(class).is_err());
+    }
+}
+
 #[derive(Clone, Debug)]
 struct CredentialHashConfig<F: halo2_base::utils::ScalarField> {
     base: BaseConfig<F>,
@@ -151,12 +169,25 @@ enum Substitution {
     ProfileExpiry,
     ProfileActivation,
     Issuance,
+    AppleAppMode,
+    AndroidAppMode,
 }
 
 fn sender_opening_case<F: KagemushaPoseidonFieldV1>(
     mutation: Substitution,
 ) -> CredentialHashCircuit<F> {
     let (mut profile, mut credential) = credential_fixture();
+    if mutation == Substitution::AppleAppMode || mutation == Substitution::AndroidAppMode {
+        profile.platform_class = if mutation == Substitution::AppleAppMode {
+            KagemushaHardwarePlatformClassV1::AppleAppAttest
+        } else {
+            KagemushaHardwarePlatformClassV1::AndroidKeyMint
+        };
+        profile.capability_mask = profile.platform_class.required_guarantees();
+        profile = profile.seal_hardware_profile_id().unwrap();
+        credential.hardware_profile_id = profile.hardware_profile_id;
+        credential = credential.seal_credential_id().unwrap();
+    }
     let mut builder = BaseCircuitBuilder::<F>::new(false)
         .use_k(17)
         .use_lookup_bits(15)
@@ -196,7 +227,10 @@ fn sender_opening_case<F: KagemushaPoseidonFieldV1>(
         Substitution::CredentialIssued => credential.issued_at_ms -= 1,
         Substitution::ProfileExpiry => profile.expires_at_ms += 1,
         Substitution::ProfileActivation => profile.valid_from_ms -= 1,
-        Substitution::None | Substitution::Issuance => {}
+        Substitution::None
+        | Substitution::Issuance
+        | Substitution::AppleAppMode
+        | Substitution::AndroidAppMode => {}
     }
     let enabled = ctx.load_constant(F::ONE);
     let windows = constrain_terminal_sender_credential_v1(
@@ -241,6 +275,8 @@ fn assert_sender_openings<F: KagemushaPoseidonFieldV1>() {
         Substitution::ProfileExpiry,
         Substitution::ProfileActivation,
         Substitution::Issuance,
+        Substitution::AppleAppMode,
+        Substitution::AndroidAppMode,
     ] {
         let circuit = sender_opening_case::<F>(mutation);
         let result = MockProver::run(17, &circuit, vec![vec![]])

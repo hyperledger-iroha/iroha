@@ -1304,13 +1304,6 @@ mod tests {
             AuthenticationPolicy::OptionalCanonicalAccountSignature
         );
 
-        let visible = application_api::TRANSACTIONS_VISIBLE_QUERY_POST;
-        assert_eq!(visible.effect(), RouteEffect::ExpensiveCompute);
-        assert_eq!(visible.admission(), AdmissionPolicy::AuthenticatedAccount);
-        assert_eq!(
-            visible.authentication(),
-            AuthenticationPolicy::CanonicalAccountSignature
-        );
     }
     #[test]
     fn kaigi_signal_history_is_account_gated_expensive_compute() {

@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.offline
 
+import android.os.Build
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.util.concurrent.Executors
@@ -17,10 +19,13 @@ class KagemushaOmapiDiscoveryDeviceTest {
             val bridge = KagemushaOmapiDeviceLifecycleV1.openAsync(
                 InstrumentationRegistry.getInstrumentation().targetContext,
                 executor,
-                discoveryTimeoutMillis = 1_500,
-            ).get(5, TimeUnit.SECONDS)
+                discoveryTimeoutMillis = KagemushaOmapiDeviceLifecycleV1.DEFAULT_DISCOVERY_TIMEOUT_MILLIS,
+            ).get(15, TimeUnit.SECONDS)
 
             assertNotNull(bridge.availability)
+            if (Build.MANUFACTURER.equals("Google", ignoreCase = true) && Build.DEVICE == "oriole") {
+                Log.i("IrohaKagemushaOmapiProbe", "Pixel 6 provisioned-app discovery: ${bridge.availability}")
+            }
         } finally {
             executor.shutdownNow()
         }

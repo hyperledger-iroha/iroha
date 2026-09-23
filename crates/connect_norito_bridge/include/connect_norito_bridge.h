@@ -29,6 +29,8 @@ extern "C" {
 #define CONNECT_NORITO_ERR_PARLIAMENT_TIMED_OVN -505
 #define CONNECT_NORITO_ERR_VALIDATION_FEE_HIJIRI_QUOTE -506
 #define CONNECT_NORITO_ERR_PRIVATE_SETTLEMENT_RESPONSE -507
+#define CONNECT_NORITO_ERR_COMMITTED_TRANSACTION_INCLUSION -508
+#define CONNECT_NORITO_ERR_COMMITTED_TRANSACTION_QUERY -509
 #define CONNECT_NORITO_ERR_CONNECT_IDENTITY -410
 #define CONNECT_NORITO_ERR_CONNECT_APPROVAL -411
 
@@ -113,6 +115,67 @@ uint32_t connect_norito_bridge_abi_version(void);
 
 // Releases any bridge-owned byte buffer returned through an out pointer.
 void connect_norito_free(uint8_t *ptr);
+
+// Authenticate one selective current CommittedTransaction QueryResponse against
+// an independently pinned 32-byte NetworkId, canonical height-context hash,
+// and exact 32-byte requested transaction hash. The bounded JSON array must
+// contain 1..4096 consecutive four-validator BridgeFinalityBundle values.
+// On success, out_row is exact bare `norito::to_bytes(CommittedTransaction)`
+// (at most 4 MiB), suitable for lowercase-hex FI commit. out_result_ok is 1
+// only for an authenticated successful execution; a rejected execution is
+// still authentic and returns 0. All outputs are cleared on failure. Free the
+// row with connect_norito_free.
+int32_t connect_norito_verify_committed_transaction_inclusion_v1(
+    const uint8_t* response,
+    unsigned long response_len,
+    const uint8_t* finality_bundle_chain_json,
+    unsigned long finality_bundle_chain_json_len,
+    const uint8_t* expected_network_id,
+    unsigned long expected_network_id_len,
+    const uint8_t* trusted_height_context_id_utf8,
+    unsigned long trusted_height_context_id_utf8_len,
+    const uint8_t* expected_transaction_hash,
+    unsigned long expected_transaction_hash_len,
+    uint8_t** out_row,
+    unsigned long* out_row_len,
+    uint8_t* out_output_hash_32,
+    uint8_t* out_block_hash_32,
+    uint64_t* out_block_height,
+    uint8_t* out_result_ok);
+
+// Build the sole current wallet-self committed-transaction read: signed
+// FindTransactions with canonical AND(authority_eq, entry_eq), default selector
+// and params, a caller-supplied unique 32-byte nonce, and fixed 100-second TTL.
+// The external Ed25519 signer signs the returned exact 32-byte payload hash.
+// Both calls must receive identical arguments; finalization verifies the
+// signature against the authority's single controller. The signed query is
+// versioned Norito for one POST /query; Torii nonce replay rules prohibit retry.
+int32_t connect_norito_committed_transaction_query_payload_hash_v1(
+    const uint8_t* network_id,
+    unsigned long network_id_len,
+    const uint8_t* authority_utf8,
+    unsigned long authority_utf8_len,
+    const uint8_t* transaction_hash,
+    unsigned long transaction_hash_len,
+    uint64_t creation_time_ms,
+    const uint8_t* nonce_32,
+    unsigned long nonce_len,
+    uint8_t* out_payload_hash_32);
+
+int32_t connect_norito_committed_transaction_query_finalize_v1(
+    const uint8_t* network_id,
+    unsigned long network_id_len,
+    const uint8_t* authority_utf8,
+    unsigned long authority_utf8_len,
+    const uint8_t* transaction_hash,
+    unsigned long transaction_hash_len,
+    uint64_t creation_time_ms,
+    const uint8_t* nonce_32,
+    unsigned long nonce_len,
+    const uint8_t* signature_64,
+    unsigned long signature_len,
+    uint8_t** out_signed_query,
+    unsigned long* out_signed_query_len);
 
 // ---------------- Detached transaction verification ----------------
 
@@ -503,14 +566,14 @@ int32_t connect_norito_kagemusha_v1_redemption_voucher_text_validate(
   "13b51124f0329fc47b0aa3bf551f83f1806920c9898e7c07cd7f0730eb57fbb9"
 
 // Exact bounded KAGEMUSHA Core coordinator contract. The contract probe
-// returns the number of uint32_t words written (11) on success. It is an ABI
-// pin only and grants no monetary authority. Its word count is independent
-// of the eleven coordinator method codes below.
-#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORD_COUNT_V1 11
+// returns the number of uint32_t words written (12) on success. It is an ABI
+// pin only and grants no monetary authority. The final word is the closed
+// coordinator method count; an old native artifact cannot appear compatible.
+#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORD_COUNT_V1 12
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_FRAME_MAGIC_V1 "IKGMCOR1"
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1 UINT16_C(2)
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_FIELDS_V1 16
-#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_FIELD_BYTES_V1 65536
+#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_FIELD_BYTES_V1 98304
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_REQUEST_BYTES_V1 262144
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1 131072
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_STORAGE_PATH_BYTES_V1 4096
@@ -526,7 +589,8 @@ typedef enum ConnectNoritoKagemushaCoreCoordinatorMethodV1 {
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RECOVER_SENDER_V1 = 8,
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RECOVER_TERMINAL_ENVELOPE_V1 = 9,
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RELEASE_OUTBOX_V1 = 10,
-  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_BEGIN_OBSERVATION_V1 = 11
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_BEGIN_OBSERVATION_V1 = 11,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_INITIAL_ENROLLMENT_V1 = 12
 } ConnectNoritoKagemushaCoreCoordinatorMethodV1;
 
 int32_t connect_norito_kagemusha_core_coordinator_contract_v1(
@@ -1431,6 +1495,51 @@ int32_t connect_norito_open_confidential_memo_v1(
 // -11  provided hash buffer shorter than 32 bytes
 // -31  invalid nonce (zero when present)
 // -34  missing or invalid typed fee-payment JSON
+/* One wallet-signed CanReadAccountData(authority) grant (change=1) or revoke
+ * (change=2) to an exact reporting account. The authority must be a 1-of-1
+ * multisig account controlled by the supplied Ed25519 key. The output is a
+ * canonical versioned SignedTransaction and its 32-byte transaction hash.
+ * fee_payment_json is required and must contain explicit signed charge limits;
+ * the reviewed release policy selects the exact authority or sponsor payer. */
+int32_t connect_norito_account_read_permission_multisig_payload_hash(
+    const char* network_id, unsigned long network_id_len,
+    const char* authority, unsigned long authority_len,
+    const char* reporting_account, unsigned long reporting_account_len,
+    uint8_t change, uint64_t creation_time_ms,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+int32_t connect_norito_account_read_permission_multisig_finalize(
+    const char* network_id, unsigned long network_id_len,
+    const char* authority, unsigned long authority_len,
+    const char* reporting_account, unsigned long reporting_account_len,
+    uint8_t change, uint64_t creation_time_ms,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
+    const uint8_t* signature, unsigned long signature_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+int32_t connect_norito_encode_account_read_permission_multisig_signed_transaction(
+    const char* network_id, unsigned long network_id_len,
+    const char* authority, unsigned long authority_len,
+    const char* reporting_account, unsigned long reporting_account_len,
+    uint8_t change, uint64_t creation_time_ms,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+int32_t connect_norito_encode_account_read_permission_multisig_signed_transaction_alg(
+    const char* network_id, unsigned long network_id_len,
+    const char* authority, unsigned long authority_len,
+    const char* reporting_account, unsigned long reporting_account_len,
+    uint8_t change, uint64_t creation_time_ms,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t algorithm,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
 int32_t connect_norito_encode_transfer_signed_transaction(
     const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
@@ -1465,6 +1574,14 @@ int32_t connect_norito_encode_transfer_signed_transaction_alg(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_transfer_instruction_box(
+    const char* authority, unsigned long authority_len,
+    const char* asset_definition, unsigned long asset_definition_len,
+    const char* quantity, unsigned long quantity_len,
+    const char* destination, unsigned long destination_len,
+    uint8_t** out_instruction_ptr, unsigned long* out_instruction_len);
+
+/* Current native registry frame for an asset transfer; output is bounded JSON. */
+int32_t connect_norito_encode_transfer_instruction_frame_v1(
     const char* authority, unsigned long authority_len,
     const char* asset_definition, unsigned long asset_definition_len,
     const char* quantity, unsigned long quantity_len,

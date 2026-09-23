@@ -160,6 +160,24 @@ fn nonzero(digests: &[[u8; 32]]) -> bool {
     digests.iter().all(|digest| *digest != [0; 32])
 }
 
+/// A challenged read and a checkpoint CAS must identify the exact signed request.
+/// Their embedded IDs must not diverge from the certificate subject even when a caller uses
+/// the general `verify` entrypoint instead of the fresh-read or journal owner.
+fn request_identity_matches_transaction_v1(
+    request_id: [u8; 32],
+    transaction: &KagemushaHardwareTransactionV1,
+) -> bool {
+    match transaction {
+        KagemushaHardwareTransactionV1::CurrentCheckpoint { challenge, .. } => {
+            *challenge == request_id
+        }
+        KagemushaHardwareTransactionV1::RecoveryCheckpoint(value) => {
+            value.operation_id == request_id
+        }
+        _ => true,
+    }
+}
+
 fn valid_anchor(value: &DurabilityAnchorStatementV1) -> bool {
     value.version == 1
         && nonzero(&[
@@ -355,6 +373,7 @@ impl KagemushaHardwareTransactionVerifierV1 {
             || subject.domain != DOMAIN
             || subject.request_id == [0; 32]
             || request_id.is_some_and(|id| id != subject.request_id)
+            || !request_identity_matches_transaction_v1(subject.request_id, expected)
             || subject.release_id != self.release.release_id()
             || subject.hardware_policy_digest != self.release.hardware_policy_digest()
             || &subject.transaction != expected
@@ -402,11 +421,6 @@ impl KagemushaHardwareTransactionVerifierV1 {
         if staged_at.is_some_and(|time| time != subject.committed_at_ms) {
             return Err("Kagemusha staging time differs from hardware commit time".to_owned());
         }
-        if let KagemushaHardwareTransactionV1::RecoveryCheckpoint(value) = expected {
-            if value.operation_id != subject.request_id {
-                return Err("Kagemusha checkpoint operation identity mismatch".to_owned());
-            }
-        }
         certificate
             .signature
             .verify(&credential.device_public_key, &subject.signing_bytes()?)
@@ -437,5 +451,70 @@ impl KagemushaHardwareTransactionVerifierV1 {
             },
             &bytes,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{NetworkId, asset::AssetDefinitionId, block::BlockHeader};
+    use iroha_model_base::domain::DomainId;
+
+    #[test]
+    fn checkpoint_read_challenge_must_equal_certificate_request_identity() {
+        let anchor = DurabilityAnchorStatementV1 {
+            metadata_revision: 1,
+            version: 1,
+            lane: KagemushaLaneIdV1 {
+                network_id: NetworkId::from_genesis_hash(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"checkpoint-read")),
+                ),
+                device_lane_id: [1; 32],
+                asset: AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("audit", "universal").expect("test domain"),
+                    "cash".parse().expect("test asset"),
+                ),
+                scale: 2,
+            },
+            state_commitment: [2; 32],
+            hardware_epoch: crate::zk::kagemusha_v1_state::HardwareEpochV1 {
+                generation: 1,
+                epoch_id: [3; 32],
+            },
+            device_policy_binding: crate::zk::kagemusha_v1_state::DevicePolicyBindingV1 {
+                device_key_reference: [4; 32],
+                hardware_policy_id: [5; 32],
+            },
+            state_nonce_commitment: [6; 32],
+            logical_sequence: 1,
+            journal_revision: 1,
+            inbox_revision: 1,
+            snapshot_commitment: [7; 32],
+        };
+        let prefix = crate::zk::kagemusha_v1_state::KagemushaRecoveryJournalPrefixV1 {
+            sequence: 1,
+            head: [8; 32],
+            byte_len: 1,
+        };
+        let transaction = KagemushaHardwareTransactionV1::CurrentCheckpoint {
+            statement: anchor,
+            journals: KagemushaRecoveryJournalsV1 {
+                coordinator: prefix,
+                responses: prefix,
+                response_history_root: [9; 32],
+                retirement_transition_id: [10; 32],
+            },
+            challenge: [11; 32],
+        };
+        assert!(transaction.validate().is_ok());
+        assert!(request_identity_matches_transaction_v1(
+            [11; 32],
+            &transaction
+        ));
+        assert!(!request_identity_matches_transaction_v1(
+            [12; 32],
+            &transaction
+        ));
     }
 }

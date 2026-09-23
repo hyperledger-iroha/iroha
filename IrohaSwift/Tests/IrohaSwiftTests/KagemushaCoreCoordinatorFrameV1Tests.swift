@@ -3,7 +3,7 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
-  func testAllNativeMethodsMatchSharedCurrentSchemaVectors() throws {
+  func testPaymentMethodsMatchSharedCurrentSchemaVectors() throws {
     let cases = try fixtures()
     XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(11)))
     XCTAssertEqual(cases.count, 18)
@@ -56,9 +56,42 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
 
   func testOversizedFieldsAndFramesFailClosed() throws {
     let id = Data(repeating: 7, count: 32)
-    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.reserveOperationID, fields: [KagemushaCoreCoordinatorFrameV1.u32(22), id, Data(repeating: 0, count: 65537)]))
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.reserveOperationID, fields: [KagemushaCoreCoordinatorFrameV1.u32(22), id, Data(repeating: 0, count: KagemushaCoreCoordinatorFrameV1.maximumFieldBytes + 1)]))
     XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.acceptInstalledTerminal, fields: Array(repeating: Data(repeating: 0, count: 65536), count: 5)))
     XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.decodeRequest(.reserveOperationID, frame: Data(repeating: 0, count: 262145)))
+  }
+
+  func testInitialEnrollmentBoundsTicketAndProofRetryCorrelation() throws {
+    let ticket = KagemushaCoreCoordinatorFrameV1.u32(7) + KagemushaCoreCoordinatorFrameV1.u32(0)
+    let begin = [KagemushaCoreCoordinatorFrameV1.u32(1), Data("i105example".utf8)]
+    let beginFrame = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment, fields: begin)
+    let response = [ticket, Data(repeating: 0x44, count: 32),
+      Data(repeating: 0x45, count: 32), Data(repeating: 0x46, count: 32),
+      Data(repeating: 0x47, count: 32)]
+    let responseFrame = try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
+      requestFrame: beginFrame, fields: response)
+    XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeResponse(.initialEnrollment,
+      requestFrame: beginFrame, responseFrame: responseFrame), response)
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
+      requestFrame: beginFrame, fields: [ticket, response[1], response[2], response[3], Data([0x45])]))
+    let challenge = [KagemushaCoreCoordinatorFrameV1.u32(2), ticket,
+      Data(repeating: 0x51, count: 273), Data([0x52]), Data([0x53]), Data([0x54]),
+      Data(repeating: 0x55, count: 32), Data(repeating: 0x56, count: 32),
+      Data(repeating: 0x57, count: 32), Data([0x58]), ticket]
+    XCTAssertNoThrow(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment, fields: challenge))
+    var shortPreparation = challenge
+    shortPreparation[2].removeLast()
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment, fields: shortPreparation))
+    let prepare = [KagemushaCoreCoordinatorFrameV1.u32(3), ticket,
+      Data(repeating: 0x46, count: 64), Data(repeating: 0x47, count: 65_716)]
+    XCTAssertNoThrow(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment, fields: prepare))
+    var oversize = prepare
+    oversize[3].append(0x48)
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment, fields: oversize))
+    let read = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment,
+      fields: [KagemushaCoreCoordinatorFrameV1.u32(4), ticket])
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
+      requestFrame: read, fields: [Data(repeating: 0, count: 8), Data(repeating: 1, count: 32), Data([1])]))
   }
 
   func testAuthenticatedReplyRequiresFullLowSAuthenticatorAndRetiresNineFields() throws {

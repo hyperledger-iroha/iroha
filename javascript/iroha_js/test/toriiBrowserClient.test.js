@@ -1525,7 +1525,7 @@ test("ToriiBrowserClient treats contract stream EOF as a terminal non-replayable
   assert.equal(fetchCalls, 1);
 });
 
-test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope", async () => {
+test("ToriiBrowserClient queryTransactions posts a browser-safe envelope", async () => {
   let capturedUrl;
   let capturedInit;
   const fetchImpl = async (url, init) => {
@@ -1535,25 +1535,23 @@ test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope"
   };
   const client = new ToriiBrowserClient("https://torii.example", {
     fetchImpl,
-    defaultHeaders: { Authorization: "Bearer jwt" },
     networkId: QUERY_NETWORK_ID,
   });
 
-  const payload = await client.queryVisibleTransactions({
+  const payload = await client.queryTransactions({
     ...canonicalReadOptions(),
     assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
     select: [" entrypoint_hash ", { authority: true }],
     sort: "newest",
     limit: 25,
     fetch_size: 50,
-    queryName: "VisibleTransactions",
+    queryName: "Transactions",
     countMode: " BOUNDED ",
   });
 
-  assert.equal(capturedUrl, "https://torii.example/v1/transactions/visible/query");
+  assert.equal(capturedUrl, "https://torii.example/v1/transactions/query");
   assert.equal(capturedInit.method, "POST");
   assert.equal(capturedInit.redirect, "error");
-  assert.equal(capturedInit.headers.Authorization, "Bearer jwt");
   assert.equal(
     capturedInit.headers["X-Iroha-Account"],
     AccountAddress.parseEncoded(FIXTURE_ALICE_ID).address.canonicalHex(),
@@ -1570,7 +1568,7 @@ test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope"
     },
     select: ["entrypoint_hash", { authority: true }],
     fetch_size: 50,
-    query: "VisibleTransactions",
+    query: "Transactions",
     count_mode: "bounded",
   });
   assert.deepEqual(payload, { items: [], total: 0 });
@@ -1650,31 +1648,31 @@ test("ToriiBrowserClient rejects adversarial query options before fetch", async 
     /contains unsupported option page/,
   );
   assert.throws(
-    () => client.queryVisibleTransactions({ sort: "timestamp_ms:drop" }),
+    () => client.queryTransactions({ sort: "timestamp_ms:drop" }),
     /asc or desc/,
   );
   assert.throws(
-    () => client.queryVisibleTransactions({ sort: "timestamp_ms:desc:extra" }),
+    () => client.queryTransactions({ sort: "timestamp_ms:desc:extra" }),
     /key:asc\/key:desc/,
   );
   assert.throws(
-    () => client.queryVisibleTransactions({ sort: [{ key: "timestamp ms", order: "desc" }] }),
+    () => client.queryTransactions({ sort: [{ key: "timestamp ms", order: "desc" }] }),
     /ASCII field name/,
   );
   assert.throws(
-    () => client.queryVisibleTransactions({ select: "entrypoint_hash" }),
+    () => client.queryTransactions({ select: "entrypoint_hash" }),
     /select must be an array/,
   );
   assert.throws(
-    () => client.queryVisibleTransactions({ select: ["entrypoint_hash", []] }),
+    () => client.queryTransactions({ select: ["entrypoint_hash", []] }),
     /select\[1] must be a field-path string or plain object/,
   );
   assert.throws(
-    () => client.queryVisibleTransactions({ select: ["entrypoint_hash", " "] }),
+    () => client.queryTransactions({ select: ["entrypoint_hash", " "] }),
     /select\[1] must be a non-empty field path/,
   );
   assert.throws(
-    () => client.queryVisibleTransactions({ count_mode: "full" }),
+    () => client.queryTransactions({ count_mode: "full" }),
     /countMode must be bounded or exact/,
   );
   assert.throws(
@@ -1935,14 +1933,18 @@ test("ToriiBrowserClient submits multisig Norito payloads to registered routes",
   await client.submitMultisigContractCallPropose({
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
-    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    contractAlias: "apps_review::universal",
     entrypoint: "execute",
+    payload: { probe: true },
     feePayment: AUTHORITY_FEE_PAYMENT,
   });
   await client.submitMultisigContractCallApprove({
     multisigAccountId: FIXTURE_ALICE_ID,
     signerAccountId: FIXTURE_BOB_ID,
     proposalId: "e".repeat(64),
+    contract_alias: "apps_mint_request::sbp",
+    entrypoint: "create_mint_request",
+    payload: { amount: 111 },
     feePayment: AUTHORITY_FEE_PAYMENT,
   });
 

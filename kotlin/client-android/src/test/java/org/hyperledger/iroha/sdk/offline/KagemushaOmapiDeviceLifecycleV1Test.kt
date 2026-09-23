@@ -10,13 +10,16 @@ import org.junit.jupiter.api.Test
 
 class KagemushaOmapiDeviceLifecycleV1Test {
     @Test
-    fun `default discovery admits every reader class but an explicit pin stays exact`() {
-        for (candidate in listOf("eSE1", "SIM1", "SD1", "vendor-secure-element")) {
+    fun `default discovery admits only embedded readers and explicit pins stay exact`() {
+        for (candidate in listOf("eSE", "eSE1", "eSE2", "eSE10")) {
             assertTrue(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName(candidate, null))
         }
-        assertTrue(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName("SIM2", "SIM2"))
-        assertFalse(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName("SIM1", "SIM2"))
-        assertFalse(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName("sim2", "SIM2"))
+        for (candidate in listOf("SIM1", "SD1", "vendor-secure-element", "eSE0", "eSE01", "eSE1junk")) {
+            assertFalse(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName(candidate, null))
+        }
+        assertTrue(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName("eSE2", "eSE2"))
+        assertFalse(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName("eSE1", "eSE2"))
+        assertFalse(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName("ese2", "eSE2"))
     }
 
     @Test
@@ -34,6 +37,9 @@ class KagemushaOmapiDeviceLifecycleV1Test {
         )
         assertFailsWith<IllegalArgumentException> {
             KagemushaOmapiDeviceLifecycleV1.Configuration(" eSE1 ")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaOmapiDeviceLifecycleV1.Configuration("SIM1")
         }
         assertFailsWith<IllegalArgumentException> {
             KagemushaOmapiDeviceLifecycleV1.Configuration(appletAid = ByteArray(8))

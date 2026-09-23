@@ -68,6 +68,7 @@ fn mint_fold_abandon_preserves_credit_and_requires_a_fresh_bound_attempt() {
         lane.clone(),
         0,
         0,
+        0,
         old_epoch,
         old_policy,
         snapshot_digest(b"snapshot-old-state-nonce", 8),

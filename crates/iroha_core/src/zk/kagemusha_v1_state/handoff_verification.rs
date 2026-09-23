@@ -544,6 +544,7 @@ mod tests {
             },
             balance,
             sequence,
+            sequence,
             HardwareEpochV1 {
                 generation: 1,
                 epoch_id: digest(lane_id[0].wrapping_add(0x40)),

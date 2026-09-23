@@ -12,7 +12,7 @@ import kotlin.test.assertFailsWith
 
 class KagemushaCoreCoordinatorFrameV1Test {
     @Test
-    fun `all native methods agree with the shared current schema vectors`() {
+    fun `payment methods agree with the shared current schema vectors`() {
         val cases = fixtures()
         assertEquals((1..11).toSet(), cases.map { it.method.code }.toSet())
         assertEquals(18, cases.size)
@@ -103,7 +103,8 @@ class KagemushaCoreCoordinatorFrameV1Test {
         assertContentEquals(case.request, encoded)
         val valid = KagemushaCoreCoordinatorFrameV1.decodeRequest(case.method, case.request)
         assertFailsWith<IllegalArgumentException> {
-            KagemushaCoreCoordinatorFrameV1.encodeRequest(case.method, valid.take(2) + listOf(ByteArray(65537)))
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(case.method,
+                valid.take(2) + listOf(ByteArray(KagemushaCoreCoordinatorFrameV1.MAXIMUM_FIELD_BYTES + 1)))
         }
         assertFailsWith<IllegalArgumentException> {
             KagemushaCoreCoordinatorFrameV1.decodeRequest(case.method, ByteArray(262145))
@@ -115,6 +116,45 @@ class KagemushaCoreCoordinatorFrameV1Test {
         val prove = fixtures().single { it.name == "prove" }
         assertFailsWith<IllegalArgumentException> {
             KagemushaCoreCoordinatorFrameV1.decodeResponse(prove.method, prove.request, ByteArray(131073))
+        }
+    }
+
+    @Test
+    fun `initial enrollment bounds full device response and correlates native ticket`() {
+        val method = KagemushaCoreCoordinatorMethodV1.INITIAL_ENROLLMENT
+        val ticket = KagemushaCoreCoordinatorFrameV1.u32(7) + KagemushaCoreCoordinatorFrameV1.u32(0)
+        val begin = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(1), "i105example".toByteArray(Charsets.UTF_8)))
+        val response = listOf(ticket, ByteArray(32) { 0x44 }, ByteArray(32) { 0x45 },
+            ByteArray(32) { 0x46 }, ByteArray(32) { 0x47 })
+        val responseFrame = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin, response)
+        val decoded = KagemushaCoreCoordinatorFrameV1.decodeResponse(method, begin, responseFrame)
+        decoded.zip(response).forEach { (left, right) -> assertContentEquals(right, left) }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin,
+                listOf(ticket, response[1], response[2], response[3], byteArrayOf(0x45)))
+        }
+        val challenge = listOf(KagemushaCoreCoordinatorFrameV1.u32(2), ticket,
+            ByteArray(273) { 0x51 }, byteArrayOf(0x52), byteArrayOf(0x53), byteArrayOf(0x54),
+            ByteArray(32) { 0x55 }, ByteArray(32) { 0x56 }, ByteArray(32) { 0x57 },
+            byteArrayOf(0x58), ticket)
+        KagemushaCoreCoordinatorFrameV1.encodeRequest(method, challenge)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+                challenge.take(2) + listOf(ByteArray(272) { 0x51 }) + challenge.drop(3))
+        }
+        val prepare = listOf(KagemushaCoreCoordinatorFrameV1.u32(3), ticket,
+            ByteArray(64) { 0x46 }, ByteArray(65_716) { 0x47 })
+        KagemushaCoreCoordinatorFrameV1.encodeRequest(method, prepare)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+                prepare.dropLast(1) + listOf(ByteArray(65_717) { 0x47 }))
+        }
+        val read = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(4), ticket))
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, read,
+                listOf(ByteArray(8), ByteArray(32) { 1 }, byteArrayOf(1)))
         }
     }
 

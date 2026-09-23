@@ -240,6 +240,7 @@ use crate::{json_array, json_entry, json_object, json_value};
 pub(crate) struct DataspaceReadVisibility {
     visible_dataspaces: BTreeSet<DataSpaceId>,
     can_read_all: bool,
+    exact_account: Option<AccountId>,
 }
 
 #[cfg(feature = "app_api")]
@@ -248,13 +249,29 @@ impl DataspaceReadVisibility {
         Self {
             visible_dataspaces,
             can_read_all,
+            exact_account: None,
         }
+    }
+
+    /// Restrict an authorized account-assets route to one exact account.
+    /// The account grant opens its balance routes, not the caller's siblings.
+    pub(crate) fn exact_account(dataspace: DataSpaceId, account: AccountId) -> Self {
+        Self {
+            visible_dataspaces: BTreeSet::from([dataspace]),
+            can_read_all: false,
+            exact_account: Some(account),
+        }
+    }
+
+    pub(crate) fn exact_account_id(&self) -> Option<&AccountId> {
+        self.exact_account.as_ref()
     }
 
     pub(crate) fn all() -> Self {
         Self {
             visible_dataspaces: BTreeSet::new(),
             can_read_all: true,
+            exact_account: None,
         }
     }
 
@@ -310,6 +327,9 @@ impl DataspaceReadVisibility {
         world: &impl WorldReadOnly,
         account_id: &AccountId,
     ) -> bool {
+        if let Some(exact_account) = &self.exact_account {
+            return exact_account == account_id && world.accounts().get(account_id).is_some();
+        }
         if self.can_read_all {
             return true;
         }
@@ -21285,21 +21305,17 @@ fn derive_multisig_contract_call_trigger_id(
     multisig_account_id: &iroha_data_model::account::AccountId,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
-    payload: Option<&IrohaJson>,
+    payload: &IrohaJson,
     code_hash: &Hash,
 ) -> Result<iroha_data_model::trigger::TriggerId> {
-    let payload_repr = payload
-        .map(|value| norito::json::to_json(value).unwrap_or_else(|_| "<payload>".to_owned()))
-        .unwrap_or_default();
-    let seed = format!(
-        "{multisig_account_id}|{contract_address}|{entrypoint}|{payload_repr}|{}",
-        hex::encode(code_hash.as_ref())
-    );
-    let digest = blake3_hash(seed.as_bytes());
-    let trigger_name = format!("msig_cc_{}", &hex::encode(digest.as_bytes())[..24]);
-    let trigger_name = Name::from_str(&trigger_name)
-        .map_err(|err| conversion_error(format!("failed to derive trigger id: {err}")))?;
-    Ok(iroha_data_model::trigger::TriggerId::new(trigger_name))
+    iroha_data_model::smart_contract::multisig_call::derive_multisig_contract_call_trigger_id(
+        multisig_account_id,
+        contract_address,
+        entrypoint,
+        payload,
+        code_hash,
+    )
+    .map_err(conversion_error)
 }
 fn build_multisig_contract_call_instructions(
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -21314,62 +21330,32 @@ fn build_multisig_contract_call_instructions(
     Vec<iroha_data_model::isi::InstructionBox>,
     HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
 )> {
-    let descriptor = advertised_contract_entrypoint(manifest, entrypoint)?;
-    if matches!(
-        descriptor.kind,
-        manifest::EntryPointKind::Hajimari | manifest::EntryPointKind::Kaizen
-    ) {
-        return Err(conversion_error(format!(
-            "`{entrypoint}` is a hajimari/始まり or kaizen/改善 entrypoint and cannot be invoked through a multisig trigger"
-        )));
-    }
+    ensure_contract_entrypoint_kind(manifest, entrypoint, manifest::EntryPointKind::Kotoage)?;
+    let contract_alias = contract_alias.ok_or_else(|| {
+        multisig_selector_conflict_error(
+            "multisig_contract_alias_required",
+            "contract multisig proposals require an exact contract_alias",
+        )
+    })?;
+    let payload = payload.ok_or_else(|| {
+        multisig_selector_conflict_error(
+            "multisig_contract_object_payload_required",
+            "contract multisig proposals require an exact object payload",
+        )
+    })?;
     let arguments =
         bound_signed_contract_arguments(arguments.map(<[u8]>::to_vec)).map_err(conversion_error)?;
-    let trigger_id = derive_multisig_contract_call_trigger_id(
+    let call = iroha_data_model::smart_contract::multisig_call::build_multisig_contract_call(
         multisig_account_id,
         contract_address,
+        contract_alias,
         entrypoint,
         payload,
+        arguments,
         code_hash,
-    )?;
-    let trigger_metadata = build_contract_call_metadata(
-        manifest,
-        contract_address,
-        code_hash,
-        contract_alias,
-        Some(entrypoint),
-        payload,
-    );
-    let filter = iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
-        .for_trigger(trigger_id.clone());
-    let action = iroha_data_model::trigger::action::Action::new(
-        iroha_data_model::transaction::Executable::ContractCall(
-            iroha_data_model::transaction::executable::ContractInvocation {
-                contract_address: contract_address.clone(),
-                expected_code_hash: *code_hash,
-                entrypoint: entrypoint.to_owned(),
-                arguments,
-            },
-        ),
-        iroha_data_model::trigger::action::Repeats::Exactly(1),
-        multisig_account_id.clone(),
-        filter,
     )
-    .map_err(|error| conversion_error(format!("invalid multisig trigger action: {error}")))?
-    .with_metadata(trigger_metadata);
-    let trigger = iroha_data_model::trigger::Trigger::new(trigger_id.clone(), action);
-    let execute_trigger = payload.cloned().map_or_else(
-        || iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone()),
-        |payload| iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone()).with_args(payload),
-    );
-    let instructions = vec![
-        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Register::trigger(
-            trigger,
-        )),
-        iroha_data_model::isi::InstructionBox::from(execute_trigger),
-    ];
-    let instructions_hash = HashOf::new(&instructions);
-    Ok((instructions, instructions_hash))
+    .map_err(conversion_error)?;
+    Ok((call.instructions, call.instructions_hash))
 }
 const MULTISIG_SPEC_METADATA_KEY: &str = "multisig/spec";
 fn multisig_account_state_contract_key(
@@ -23178,7 +23164,7 @@ mod multisig_contract_call_tests {
             &multisig,
             &contract_address,
             "main",
-            Some(&payload),
+            &payload,
             &code_hash,
         )
         .expect("trigger id");
@@ -23186,7 +23172,7 @@ mod multisig_contract_call_tests {
             &multisig,
             &contract_address,
             "main",
-            Some(&payload),
+            &payload,
             &code_hash,
         )
         .expect("trigger id");
@@ -23195,7 +23181,7 @@ mod multisig_contract_call_tests {
             &multisig,
             &contract_address,
             "alternate",
-            Some(&payload),
+            &payload,
             &code_hash,
         )
         .expect("trigger id");
@@ -23230,10 +23216,13 @@ mod multisig_contract_call_tests {
         }]));
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "invoice_id": "INV-1" }));
+        let contract_alias = "review_invoice::universal"
+            .parse()
+            .expect("contract alias");
         let (instructions, instructions_hash) = build_multisig_contract_call_instructions(
             &multisig,
             &contract_address,
-            None,
+            Some(&contract_alias),
             "main",
             Some(&payload),
             None,
@@ -25899,7 +25888,6 @@ mod multisig_selector_tests {
             &authority_keypair,
             &derived_universal_contract_address(&authority_account_id, 1),
         );
-        let contract_address = derived_universal_contract_address(&authority_account_id, 1);
         let outsider =
             checked_multisig_selector_account_id(0x6b, "derive multisig outsider signer key");
         let err = handle_post_contract_call_multisig_propose(
@@ -25915,10 +25903,9 @@ mod multisig_selector_tests {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_234),
-                contract_address: Some(contract_address),
-                contract_alias: None,
+                contract_alias: "review_signer::universal".parse().expect("contract alias"),
                 entrypoint: "main".to_owned(),
-                payload: None,
+                payload: IrohaJson::new(norito::json!({ "probe": true })),
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000)),
             }),
         )
@@ -27054,58 +27041,34 @@ mod multisig_selector_tests {
         );
         assert_exact_unsigned_transaction_draft(&payload);
     }
-    #[tokio::test]
-    async fn multisig_propose_prepares_with_concrete_selector_and_returns_resolved_account_id() {
-        let (
-            state,
-            multisig_account_id,
-            authority_account_id,
-            signer_two_id,
-            _alias_literal,
-            authority_keypair,
-        ) = multisig_contract_test_fixture();
-        install_contract_instance(
-            state.as_ref(),
-            &authority_account_id,
-            &authority_keypair,
-            &derived_universal_contract_address(&authority_account_id, 1),
+    routing_test! { sync multisig_contract_propose_wire_requires_alias_and_payload
+        let account = checked_multisig_selector_account_id(
+            0x76,
+            "derive strict contract-call DTO fixture account",
         );
-        let contract_address = derived_universal_contract_address(&authority_account_id, 1);
-        let response = handle_post_contract_call_multisig_propose(
-            build_queue(),
-            state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(MultisigContractCallProposeDto {
-                selector: concrete_selector(multisig_account_id.clone()),
-                signer_account_id: signer_two_id,
-                public_key_hex: None,
-                signature_b64: None,
-                creation_time_ms: Some(1_700_000_000_234),
-                contract_address: Some(contract_address),
-                contract_alias: None,
-                entrypoint: "main".to_owned(),
-                payload: None,
-                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000)),
-            }),
-        )
-        .await
-        .expect("propose response");
-        let payload = decode_json_response(response).await;
-        assert_eq!(payload["ok"].as_bool(), Some(true));
-        assert_eq!(payload["submitted"].as_bool(), Some(false));
-        assert_eq!(
-            payload["resolved_multisig_account_id"].as_str(),
-            Some(multisig_account_id.to_string().as_str())
+        let valid = format!(
+            r#"{{"multisig_account_id":"{account}","signer_account_id":"{account}","contract_alias":"review_zero_param::universal","entrypoint":"main","payload":{{}},"fee_payment":{{"payer":"authority","value":{{"charge_limits":[],"gas_limit":10000}}}}}}"#,
         );
-        let proposal_id = payload["proposal_id"]
-            .as_str()
-            .expect("proposal id")
-            .to_owned();
-        assert_eq!(
-            payload["instructions_hash"].as_str(),
-            Some(proposal_id.as_str())
-        );
-        assert_exact_unsigned_transaction_draft(&payload);
+        assert!(norito::json::from_str::<MultisigContractCallProposeDto>(&valid).is_ok());
+        for (label, malformed) in [
+            (
+                "missing alias",
+                valid.replace("\"contract_alias\":\"review_zero_param::universal\",", ""),
+            ),
+            (
+                "missing payload",
+                valid.replace("\"payload\":{},", ""),
+            ),
+            (
+                "address-only target",
+                valid.replace("\"contract_alias\":\"review_zero_param::universal\",", "\"contract_address\":\"address-only\","),
+            ),
+        ] {
+            assert!(
+                norito::json::from_str::<MultisigContractCallProposeDto>(&malformed).is_err(),
+                "{label} must fail wire decoding",
+            );
+        }
     }
     routing_test! { async multisig_contract_propose_validates_payload_before_hashing
         let (
@@ -27126,13 +27089,16 @@ seiyaku BytesPayloadNormalizeTest {
 "#,
             )
             .expect("compile bytes contract");
+        let contract_alias = "review_blob::universal"
+            .parse::<iroha_data_model::smart_contract::ContractAlias>()
+            .expect("contract alias");
         install_contract_instance_with_code(
             state.as_ref(),
             &authority_account_id,
             &authority_keypair,
             &derived_universal_contract_address(&authority_account_id, 1),
             code,
-            None,
+            Some(contract_alias.clone()),
         );
         let contract_address = derived_universal_contract_address(&authority_account_id, 1);
         let request_payload = IrohaJson::new(norito::json!({
@@ -27148,10 +27114,9 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
-                contract_address: Some(contract_address.clone()),
-                contract_alias: None,
+                contract_alias: contract_alias.clone(),
                 entrypoint: "create".to_owned(),
-                payload: Some(request_payload.clone()),
+                payload: request_payload.clone(),
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000)),
             }),
         )
@@ -27183,7 +27148,7 @@ seiyaku BytesPayloadNormalizeTest {
         let (_, expected_hash) = build_multisig_contract_call_instructions(
             &multisig_account_id,
             &contract_address,
-            None,
+            Some(&contract_alias),
             "create",
             Some(&normalized_payload),
             arguments.as_deref(),
@@ -27967,7 +27932,6 @@ pub async fn handle_post_contract_call_multisig_propose(
         public_key_hex,
         signature_b64,
         creation_time_ms,
-        contract_address,
         contract_alias,
         entrypoint,
         payload,
@@ -27992,8 +27956,7 @@ pub async fn handle_post_contract_call_multisig_propose(
             ),
         ));
     }
-    let prepared =
-        resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
+    let prepared = resolve_contract_call_target(&state, None, Some(&contract_alias))?;
     let PreparedContractCall {
         program,
         code_hash,
@@ -28004,7 +27967,18 @@ pub async fn handle_post_contract_call_multisig_propose(
         contract_alias,
     } = prepared;
     let entrypoint_descriptor = ensure_callable_contract_entrypoint(&manifest, &entrypoint)?;
-    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
+    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, Some(&payload))?;
+    if !normalized_payload
+        .as_ref()
+        .cloned()
+        .and_then(|value| value.try_into_any_norito::<Value>().ok())
+        .is_some_and(|value| value.as_object().is_some())
+    {
+        return Err(multisig_selector_conflict_error(
+            "multisig_contract_object_payload_required",
+            "contract multisig proposals require an exact object payload",
+        ));
+    }
     let mint_request_alias: iroha_data_model::smart_contract::ContractAlias =
         "apps_mint_request::cbsi"
             .parse()
@@ -31940,17 +31914,12 @@ pub struct MultisigContractCallProposeDto {
     /// Optional fixed creation timestamp for deterministic detached flows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
-    /// Optional canonical contract address.
-    #[norito(default)]
-    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
-    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
-    #[norito(default)]
-    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Exact on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
     /// Entrypoint selector.
     pub entrypoint: String,
-    /// Optional payload forwarded to the contract.
-    #[norito(default)]
-    pub payload: Option<IrohaJson>,
+    /// Exact object payload forwarded to the contract.
+    pub payload: IrohaJson,
     /// Explicit signature-bound payer, sponsor revision, fee limits, and gas bound.
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 }
@@ -32028,14 +31997,11 @@ mod multisig_native_norito_dto_tests {
             public_key_hex: None,
             signature_b64: None,
             creation_time_ms: Some(1_700_000_000_234),
-            contract_address: None,
-            contract_alias: Some(
-                "apps_mint_request::sbp"
-                    .parse::<ContractAlias>()
-                    .expect("contract alias"),
-            ),
+            contract_alias: "apps_mint_request::sbp"
+                .parse::<ContractAlias>()
+                .expect("contract alias"),
             entrypoint: "create_mint_request".to_owned(),
-            payload: Some(IrohaJson::new(norito::json::Value::from(111_u64))),
+            payload: IrohaJson::new(norito::json!({ "amount": 111_u64 })),
             fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
                 std::num::NonZeroU64::new(10_000),
@@ -32060,9 +32026,9 @@ mod multisig_native_norito_dto_tests {
             Some("cbdc@hbl.sbp")
         );
         assert_eq!(decoded.entrypoint, "create_mint_request");
-        let payload = decoded.payload.expect("payload");
+        let payload = decoded.payload;
         let payload: norito::json::Value = payload.try_into_any_norito().expect("json payload");
-        assert_eq!(payload.as_u64(), Some(111));
+        assert_eq!(payload["amount"].as_u64(), Some(111));
         assert_eq!(
             decoded
                 .fee_payment
@@ -38687,7 +38653,6 @@ pub const ENDPOINT_ACCOUNT_RECOVERY_STATUS: &str = "/v1/accounts/recovery/status
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
 pub const ENDPOINT_TRANSACTIONS_QUERY: &str = "/v1/transactions/query";
-pub const ENDPOINT_TRANSACTIONS_VISIBLE_QUERY: &str = "/v1/transactions/visible/query";
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS: &str = "/v1/accounts/{account_id}/transactions";
 pub const ENDPOINT_ACCOUNTS_HISTORY: &str = "/v1/accounts/{account_id}/history";
 pub const ENDPOINT_CONTRACTS_ACTIVITY: &str = "/v1/contracts/activity";
@@ -39810,26 +39775,6 @@ pub(crate) async fn handle_v1_transactions_query_with_visibility_policy(
         ENDPOINT_TRANSACTIONS_QUERY,
         None,
         Some(visibility),
-    )
-    .await
-}
-/// POST `/v1/transactions/visible/query` with server-side viewer visibility.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_transactions_visible_query_with_policy(
-    state: Arc<CoreState>,
-    NoritoJson(envelope): NoritoJson<QueryEnvelope>,
-    telemetry: MaybeTelemetry,
-    visibility: TxHistoryVisibilityScope,
-    allowed_asset_definition_id: Option<AssetDefinitionId>,
-) -> Result<impl IntoResponse> {
-    handle_v1_transactions_query_scoped_with_policy(
-        state,
-        NoritoJson(envelope),
-        telemetry,
-        allowed_asset_definition_id,
-        ENDPOINT_TRANSACTIONS_VISIBLE_QUERY,
-        Some(visibility),
-        None,
     )
     .await
 }
@@ -51457,6 +51402,9 @@ pub struct AccountTransactionsGetParams {
     pub offset: u64,
     /// Filter transactions by asset definition selector.
     pub asset_id: Option<String>,
+    /// Exact dataspace alias selected by the signed history-feed query.
+    #[norito(default)]
+    pub dataspace_id: Option<String>,
     /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
     #[norito(default)]
     pub count_mode: Option<String>,
@@ -52273,6 +52221,10 @@ fn contract_activity_projections_to_json(
             if let Some(ts) = it.timestamp_ms {
                 m.insert("timestamp_ms".into(), norito::json::Value::from(ts));
             }
+            m.insert(
+                "entrypoint_kind".into(),
+                norito::json::Value::from(it.entrypoint_kind.clone()),
+            );
             m.insert(
                 "entrypoint_hash".into(),
                 norito::json::Value::from(it.entrypoint_hash.clone()),
@@ -54857,6 +54809,21 @@ mod tx_projection_display_tests {
             .expect("authority field");
         assert_eq!(authority, account.to_string());
     }
+    routing_test! { sync projections_emit_entrypoint_kind
+        for kind in ["external", "sealed_commitment", "sealed_reveal"] {
+            let projection = TxProjection {
+                authority: None,
+                timestamp_ms: Some(123),
+                entrypoint_kind: kind.to_owned(),
+                entrypoint_hash: "feedbabe".into(),
+                result_ok: true,
+                memo: None,
+            };
+            let items = tx_projections_to_json(&[projection]);
+            assert_eq!(items[0]["entrypoint_kind"].as_str(), Some(kind));
+            assert_eq!(items[0]["entrypoint_hash"].as_str(), Some("feedbabe"));
+        }
+    }
     routing_test! { sync projections_emit_memo_when_present
         let projection = TxProjection {
             authority: None,
@@ -56407,7 +56374,10 @@ pub(crate) async fn handle_v1_account_assets_with_visibility(
     let fetch_cap = limits
         .clamp_fetch_size(None)?
         .map(|cap| cap.min(pagination.cap));
-    let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
+    let scoped_accounts = visibility.exact_account_id().map_or_else(
+        || scoped_accounts_for_subject_sorted(&world, &acct),
+        |account| vec![account.clone()],
+    );
     let projected_assets = collect_projected_account_assets(
         state.as_ref(),
         &world,
@@ -71494,7 +71464,10 @@ pub(crate) async fn handle_v1_account_assets_query_with_visibility(
         ENDPOINT_ACCOUNTS_ASSETS_QUERY,
     )?;
     let world = state.world_view();
-    let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
+    let scoped_accounts = visibility.exact_account_id().map_or_else(
+        || scoped_accounts_for_subject_sorted(&world, &acct),
+        |account| vec![account.clone()],
+    );
     let projected_assets = collect_projected_account_assets(
         state.as_ref(),
         &world,

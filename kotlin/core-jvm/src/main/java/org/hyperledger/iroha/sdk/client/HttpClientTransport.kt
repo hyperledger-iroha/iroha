@@ -3071,8 +3071,8 @@ class HttpClientTransport private constructor(
             expectedNetworkId: NetworkId,
         ): MultisigResponse {
             check(response.ok) { "multisig response.ok must be true" }
-            check(request.feePayment.hasSamePayerAndGasBound(response.feePayment)) {
-                "multisig response fee_payment changed the requested payer, sponsor revision, or gas bound"
+            check(request.feePayment == response.feePayment) {
+                "multisig response fee_payment changed the exact requested fee intent"
             }
             request.creationTimeMs?.let { expected ->
                 check(response.creationTimeMs == expected) {
@@ -3088,15 +3088,14 @@ class HttpClientTransport private constructor(
             ) {
                 "multisig response proposal hash does not match the exact requested instructions"
             }
-            if (response.submitted) return response
-
             val requestedMultisigAccount = requestPayload["multisig_account_id"] as? String
                 ?: throw IllegalStateException(
-                    "unsigned multisig alias drafts require a caller-trusted resolved account",
+                    "multisig aliases require a caller-trusted resolved account",
                 )
             check(response.resolvedMultisigAccountId == requestedMultisigAccount) {
                 "multisig response resolved account does not match the requested account"
             }
+            if (response.submitted) return response
             val transactionBytes = Base64.getDecoder().decode(
                 checkNotNull(response.transactionPayloadB64) {
                     "unsigned multisig response omitted transaction_payload_b64"

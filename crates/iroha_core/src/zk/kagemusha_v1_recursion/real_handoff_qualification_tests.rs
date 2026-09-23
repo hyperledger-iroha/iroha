@@ -571,7 +571,7 @@ fn state_component<F: KagemushaPoseidonFieldV1>(
     replay_root: DigestV1,
 ) -> DigestV1 {
     let replay_root = decode_pasta::<F>(replay_root).expect("canonical replay root");
-    let mut inputs = Vec::with_capacity(36);
+    let mut inputs = Vec::with_capacity(37);
     inputs.push(F::from(u64::from(state.version)));
     inputs.push(F::from(u64::from(state.protocol_version)));
     inputs.extend(digest_limbs::<F>(state.suite_id));
@@ -589,6 +589,7 @@ fn state_component<F: KagemushaPoseidonFieldV1>(
     inputs.extend(digest_limbs::<F>(state.lane.device_lane_id));
     inputs.push(from_u128(state.balance));
     inputs.push(from_u128(state.logical_sequence));
+    inputs.push(from_u128(state.secure_index));
     inputs.push(from_u128(state.hardware_epoch.generation));
     inputs.extend(digest_limbs::<F>(state.hardware_epoch.epoch_id));
     inputs.extend(digest_limbs::<F>(
@@ -637,6 +638,7 @@ pub(super) fn aggregate_state_with_balance(
         lane,
         balance,
         logical_sequence,
+        secure_index: logical_sequence,
         hardware_epoch: HardwareEpochV1 {
             generation: credential.hardware_epoch_generation,
             epoch_id: credential.hardware_epoch_id,

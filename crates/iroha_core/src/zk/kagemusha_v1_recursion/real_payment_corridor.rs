@@ -2419,6 +2419,7 @@ fn recursive_state_generation_witness<'a>(
         mint_authorization: &funded.authorization.authorization,
         mint_credit: &funded.mint_credit,
         guard_relation: guard.relation.clone(),
+        hardware_selection: None,
         eq_parent_protocol,
         ep_parent_protocol,
         eq_parent_instances: &parent.eq_instances,

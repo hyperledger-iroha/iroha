@@ -48,6 +48,8 @@ pub(super) struct TerminalSemanticAssignmentV1<F: KagemushaPoseidonFieldV1> {
     pub(super) public_cells: Vec<AssignedValue<F>>,
     pub(super) history_cells: Vec<AssignedValue<F>>,
     pub(super) assigned_terminal_guard: KagemushaAssignedGuardBundleV1<F>,
+    /// SHA-derived and Guard-linked sources retained for the future durable prepared opening.
+    pub(super) prepared_source_cells: KagemushaTerminalPreparedSourceCellsV1<F>,
     pub(super) candidate_instances: Vec<Vec<AssignedValue<F>>>,
     pub(super) sha_jobs: PastaSha256JobsV1<F>,
 }
@@ -80,7 +82,7 @@ pub(super) fn assign_terminal_semantic_pipeline_v1<F: KagemushaPoseidonFieldV1>(
         inputs.terminal_guard_relation,
     )?;
     constrain_terminal_relation_domain_v1(builder, range, inputs.relation);
-    constrain_terminal_commit_semantics_v1(
+    let prepared_source_cells = constrain_terminal_commit_semantics_v1(
         builder,
         &mut sha_jobs,
         &public_cells,
@@ -128,6 +130,7 @@ pub(super) fn assign_terminal_semantic_pipeline_v1<F: KagemushaPoseidonFieldV1>(
         public_cells,
         history_cells,
         assigned_terminal_guard,
+        prepared_source_cells,
         candidate_instances,
         sha_jobs,
     })

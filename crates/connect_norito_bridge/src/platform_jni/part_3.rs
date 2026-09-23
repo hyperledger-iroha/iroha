@@ -88,6 +88,43 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jboolean {
     java_native_verify_detached(&mut env, algorithm_code, public_key, message, signature)
 }
+android: fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeAccountReadPermissionMultisigPayloadHash();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeAccountReadPermissionMultisigPayloadHash(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    reporting_account: jni::objects::JByteArray<'_>,
+    change: jni::sys::jint,
+    creation_time_ms: jni::sys::jlong,
+    fee_payment_json: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_account_read_permission_multisig_payload_hash(
+        &mut env, network_id, authority, reporting_account, change, creation_time_ms,
+        fee_payment_json,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeFinalizeAccountReadPermissionMultisig();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeFinalizeAccountReadPermissionMultisig(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    reporting_account: jni::objects::JByteArray<'_>,
+    change: jni::sys::jint,
+    creation_time_ms: jni::sys::jlong,
+    fee_payment_json: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_finalize_account_read_permission_multisig(
+        &mut env, network_id, authority, reporting_account, change, creation_time_ms,
+        fee_payment_json, signature,
+    )
+}
 android:
 #[allow(clippy::too_many_arguments)]
 fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeRegisterZkAssetSignedTransaction();

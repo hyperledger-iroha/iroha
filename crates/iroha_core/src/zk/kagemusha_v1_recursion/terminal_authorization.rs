@@ -12,10 +12,10 @@ use iroha_data_model::kagemusha::{
     KAGEMUSHA_CREDIT_ID_DOMAIN_V1, KAGEMUSHA_PAYMENT_OUTBOX_MIN_BYTES_V1,
     KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
     KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1, KagemushaHardwareCredentialV1,
-    KagemushaHardwareProfileV1, KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
-    KagemushaOutboxReservationV1, KagemushaPaymentOutputV1, KagemushaPaymentRequestV1,
-    kagemusha_asset_identity_digest_v1, kagemusha_payment_body_digest_from_digests_v1,
-    kagemusha_prepared_transfer_digest_v1,
+    KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1, KagemushaLifecycleBindingV1,
+    KagemushaOperationKindV1, KagemushaOutboxReservationV1, KagemushaPaymentOutputV1,
+    KagemushaPaymentRequestV1, kagemusha_asset_identity_digest_v1,
+    kagemusha_payment_body_digest_from_digests_v1, kagemusha_prepared_transfer_digest_v1,
 };
 use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use sha2::{Digest as _, Sha256};
@@ -89,6 +89,7 @@ use iroha_data_model::kagemusha::{
     KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_FIELD_RANGES_V1,
     KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1,
     KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1,
+    KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
     kagemusha_hardware_credential_id_preimage_layout_v1,
     kagemusha_hardware_profile_id_preimage_layout_v1,
 };
@@ -106,6 +107,18 @@ pub(crate) const TERMINAL_SEND_OUTPUT_BINDING_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:terminal-send-output-binding\0";
 const PREDECESSOR_CONFLICT_NULLIFIER_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:predecessor-conflict-nullifier\0";
+
+fn require_terminal_assertion_fold_v1(
+    platform_class: KagemushaHardwarePlatformClassV1,
+) -> Result<(), String> {
+    // TODO: admit these classes only after the attested assertion and exact
+    // one-use key lineage are constrained in both terminal parities.
+    if platform_class.is_ordinary_app() {
+        Err("Kagemusha ordinary-app terminal assertion fold is unavailable".to_owned())
+    } else {
+        Ok(())
+    }
+}
 
 const OUTBOX_RESERVATION_CANONICAL_BYTES_V1: usize = 56;
 const COMMIT_CERTIFICATE_ID_CANONICAL_BYTES_V1: usize = 238;
@@ -459,6 +472,7 @@ impl KagemushaTerminalAuthorizationPrivateTransitionV1 {
             .map_err(|error| {
                 format!("invalid terminal-authorization hardware credential: {error}")
             })?;
+        require_terminal_assertion_fold_v1(self.hardware_profile.platform_class)?;
         let lifecycle_digest = self
             .lifecycle
             .canonical_digest()
@@ -1167,6 +1181,41 @@ pub(crate) fn kagemusha_candidate_envelope_digest_v1(
         return Err("normalized Eq/Ep candidate envelope digests differ".to_owned());
     }
     Ok(eq_digest)
+}
+
+/// Hash the exact candidate envelope from already assigned state public cells.
+///
+/// The caller must pass the recursive state relation's authenticated 85-cell public column.
+/// Each retained field is constrained to its canonical little-endian `u128` bytes before it
+/// enters the ordinary Pasta SHA job queue. The two parity-native state components use the
+/// same fixed zero markers as [`canonical_terminal_authorization_candidate_digest_v1`]. The
+/// returned digest bytes remain tied to that queued SHA relation; the consuming circuit must
+/// authenticate its complete SHA queue before treating the digest as a monetary authority.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn constrain_candidate_envelope_digest_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    public: &[AssignedValue<F>],
+) -> Result<[PastaSha256ByteV1<F>; 32], String> {
+    if public.len() != state_relation::PUBLIC_INSTANCE_COUNT {
+        return Err("candidate envelope requires the exact state public column".to_owned());
+    }
+    let range = builder.range_chip();
+    let ctx = builder.main(0);
+    let mut transcript = constant_bytes(CANDIDATE_BINDING_DOMAIN_V1);
+    transcript.reserve(state_relation::PUBLIC_INSTANCE_COUNT * 16);
+    for (index, value) in public.iter().enumerate() {
+        if matches!(
+            index,
+            state_relation::public_instance::PREDECESSOR_STATE
+                | state_relation::public_instance::SUCCESSOR_STATE
+        ) {
+            transcript.extend(constant_bytes(&[0_u8; 16]));
+        } else {
+            transcript.extend(assigned_value_to_bytes_v1(ctx, &range, *value, 128));
+        }
+    }
+    hash(ctx, jobs, transcript)
 }
 
 /// Eq/Fp recursive inputs consumed by one terminal-authorization proof.
@@ -2555,6 +2604,7 @@ where
         public_cells,
         history_cells,
         assigned_terminal_guard,
+        prepared_source_cells: _prepared_source_cells,
         candidate_instances: assigned_candidate_instances,
         sha_jobs,
     } = terminal_semantic_pipeline::assign_terminal_semantic_pipeline_v1(
@@ -3050,6 +3100,30 @@ fn constrain_equal_if_v1<F: KagemushaPoseidonFieldV1>(
     range.gate().assert_is_const(ctx, &selected, &F::ZERO);
 }
 
+/// Bind the terminal's prepared-authorization preimage to the verified Guard statement.
+///
+/// The terminal private witness is assigned independently from the Guard opening. Native
+/// validation alone cannot prove that its predecessor and durable revision are the values in the
+/// recursively verified Guard proof. The pairs passed here must contain the actual cells used
+/// by the terminal SHA message and the Guard relation, never fresh copies of their host values.
+#[cfg(feature = "zk-halo2-ipa")]
+fn constrain_terminal_prepared_source_pairs_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    active: AssignedValue<F>,
+    digest_pairs: [([AssignedValue<F>; 2], [AssignedValue<F>; 2]); 5],
+    scalar_pairs: [(AssignedValue<F>, AssignedValue<F>); 3],
+) {
+    for (private, authenticated) in digest_pairs {
+        for (private, authenticated) in private.into_iter().zip(authenticated) {
+            constrain_equal_if_v1(ctx, range, active, private, authenticated);
+        }
+    }
+    for (private, authenticated) in scalar_pairs {
+        constrain_equal_if_v1(ctx, range, active, private, authenticated);
+    }
+}
+
 #[cfg(feature = "zk-halo2-ipa")]
 fn constrain_zero_if_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
@@ -3258,6 +3332,18 @@ fn constrain_terminal_sender_credential_v1<F: KagemushaPoseidonFieldV1>(
     let c = |index: usize| {
         &credential[KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_FIELD_RANGES_V1[index].clone()]
     };
+    // A terminal proof is independently verifiable from Guard's host API.
+    // Until assertion folding is installed, its authenticated profile opening
+    // must prove an OEM checkpoint class and its complete lower-16-bit mask.
+    let platform_class = transcript_uint_v1(ctx, range, p(3));
+    let oem_checkpoint = range.is_less_than_safe(ctx, platform_class, 4);
+    let one = ctx.load_constant(F::ONE);
+    constrain_equal_if_v1(ctx, range, enabled, oem_checkpoint, one);
+    let guarantees = transcript_uint_v1(ctx, range, p(11));
+    let oem_guarantees = ctx.load_constant(F::from(u64::from(
+        KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+    )));
+    constrain_equal_if_v1(ctx, range, enabled, guarantees, oem_guarantees);
     for version in [p(0), c(0)] {
         constrain_transcript_bytes_if_v1(
             ctx,
@@ -3760,13 +3846,30 @@ fn constrain_terminal_send_opening_v1<F: KagemushaPoseidonFieldV1>(
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+/// Existing terminal relation cells available to a future prepared-intent opening.
+///
+/// These are derived in the circuit and linked to the recursively verified candidate and Guard
+/// on the terminal branch. The current candidate/Guard proof schema authenticates neither the
+/// canonical preparation ID nor sealed recovery bytes, so the ID remains absent.
+#[derive(Clone, Copy)]
+pub(super) struct KagemushaTerminalPreparedSourceCellsV1<F: KagemushaPoseidonFieldV1> {
+    pub(super) terminal_branch: AssignedValue<F>,
+    /// Only a future recursively verified prepared-intent relation may populate this field.
+    pub(super) verified_preparation_id: Option<[AssignedValue<F>; 2]>,
+    pub(super) candidate_envelope_digest: [AssignedValue<F>; 2],
+    pub(super) outbox_reservation_commitment: [AssignedValue<F>; 2],
+    pub(super) prepared_one_use_authorization_digest: [PastaSha256ByteV1<F>; 32],
+    pub(super) journal_revision_after: AssignedValue<F>,
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,
     public: &[AssignedValue<F>],
     private: &KagemushaTerminalAuthorizationPrivateTransitionV1,
     guard: &KagemushaAssignedGuardBundleV1<F>,
-) -> Result<(), String> {
+) -> Result<KagemushaTerminalPreparedSourceCellsV1<F>, String> {
     if public.len() != TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1 {
         return Err("terminal-authorization public prefix is truncated".to_owned());
     }
@@ -3903,6 +4006,36 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
     );
     let predecessor_sequence =
         assign_fixed_uint_v1(ctx, &range, private.predecessor.logical_sequence, 128);
+    let prepared_source_digests = [
+        (
+            digest_limbs_assigned(ctx, &predecessor_state),
+            guard.predecessor_state,
+        ),
+        (
+            digest_limbs_assigned(ctx, &predecessor_nonce),
+            guard.predecessor_nonce,
+        ),
+        (digest_limbs_assigned(ctx, &predecessor_lane), guard.lane_id),
+        (
+            digest_limbs_assigned(ctx, &predecessor_epoch),
+            guard.predecessor_epoch,
+        ),
+        (
+            digest_limbs_assigned(ctx, &predecessor_key),
+            guard.predecessor_key,
+        ),
+    ];
+    constrain_terminal_prepared_source_pairs_v1(
+        ctx,
+        &range,
+        terminal_branch,
+        prepared_source_digests,
+        [
+            (predecessor_sequence.value, guard.predecessor_sequence),
+            (journal_revision_before.value, guard.journal_before),
+            (journal_revision_after.value, guard.journal_after),
+        ],
+    );
     let prepared_message = [
         constant_bytes(PREPARED_ONE_USE_AUTHORIZATION_DOMAIN_V1),
         constant_bytes(&1_u16.to_le_bytes()),
@@ -4437,7 +4570,22 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
     {
         constrain_equal_if_v1(ctx, &range, terminal_branch, actual, expected);
     }
-    Ok(())
+    Ok(KagemushaTerminalPreparedSourceCellsV1 {
+        terminal_branch,
+        // TODO: a release-pinned prepared-intent proof must constrain the canonical preparation
+        // SHA over both private states, the transition digest and statement, operation projection,
+        // reservation, this one-use authorization, both sealed streams, and the Guard digest.
+        // Its exported ID must be linked to this verified candidate/Guard pair before `Some` is
+        // allowed. The current 85-cell candidate proof and terminal witness expose no such ID.
+        verified_preparation_id: None,
+        candidate_envelope_digest: [
+            public[public_instance::CANDIDATE_LO],
+            public[public_instance::CANDIDATE_LO + 1],
+        ],
+        outbox_reservation_commitment: reservation_commitment_limbs,
+        prepared_one_use_authorization_digest: prepared_authorization,
+        journal_revision_after: guard.journal_after,
+    })
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -4495,6 +4643,63 @@ mod tests {
         canonical_terminal_authorization_candidate_digest_v1,
         canonical_terminal_send_output_binding_v1, validate_enabled_hardware_profiles_v1,
     };
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn prepared_authorization_uses_authenticated_guard_sources_in_both_parities() {
+        use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+        use halo2_proofs::{
+            dev::MockProver,
+            halo2curves::pasta::{Fp, Fq},
+        };
+
+        fn verify<F: super::KagemushaPoseidonFieldV1>(changed: Option<usize>) -> bool {
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(9)
+                .use_lookup_bits(8)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let ctx = builder.main(0);
+            let digest_pairs = core::array::from_fn(|index| {
+                let private =
+                    [0_u64, 1].map(|limb| ctx.load_witness(F::from(10 + index as u64 * 2 + limb)));
+                let authenticated = [0_u64, 1].map(|limb| {
+                    ctx.load_witness(F::from(
+                        10 + index as u64 * 2 + limb + u64::from(changed == Some(index)),
+                    ))
+                });
+                (private, authenticated)
+            });
+            let scalar_pairs = core::array::from_fn(|index| {
+                let value = 30 + index as u64;
+                (
+                    ctx.load_witness(F::from(value)),
+                    ctx.load_witness(F::from(value + u64::from(changed == Some(index + 5)))),
+                )
+            });
+            let active = ctx.load_constant(F::from(1));
+            super::constrain_terminal_prepared_source_pairs_v1(
+                ctx,
+                &range,
+                active,
+                digest_pairs,
+                scalar_pairs,
+            );
+            builder.assigned_instances = vec![Vec::new()];
+            builder.calculate_params(Some(9));
+            MockProver::run(9, &builder, vec![Vec::new()])
+                .expect("terminal prepared source binding circuit")
+                .verify()
+                .is_ok()
+        }
+
+        assert!(verify::<Fp>(None));
+        assert!(verify::<Fq>(None));
+        for index in 0..8 {
+            assert!(!verify::<Fp>(Some(index)), "Eq source {index}");
+            assert!(!verify::<Fq>(Some(index)), "Ep source {index}");
+        }
+    }
 
     fn terminal_public() -> super::KagemushaTerminalAuthorizationPublicInputsV1 {
         use halo2_proofs::halo2curves::pasta::{Fp, Fq};
@@ -4738,6 +4943,193 @@ mod tests {
         assert!(canonical_terminal_authorization_candidate_digest_v1::<Fq>(&[]).is_err());
         assert!(canonical_terminal_authorization_candidate_digest_v1(&[eq.clone(), eq]).is_err());
         assert!(canonical_terminal_authorization_candidate_digest_v1(&[ep.clone(), ep]).is_err());
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[derive(Clone, Debug)]
+    struct CandidateDigestTestConfigV1<F: halo2_base::utils::ScalarField> {
+        base: halo2_base::gates::circuit::BaseConfig<F>,
+        sha: super::PastaSha256ConfigV1,
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[derive(Clone)]
+    struct CandidateDigestTestCircuitV1<
+        F: crate::zk::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
+    > {
+        builder: halo2_base::gates::circuit::builder::BaseCircuitBuilder<F>,
+        jobs: crate::zk::pasta_sha256::PastaSha256JobsV1<F>,
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    impl<F: crate::zk::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1>
+        halo2_proofs::plonk::Circuit<F> for CandidateDigestTestCircuitV1<F>
+    {
+        type Config = CandidateDigestTestConfigV1<F>;
+        type FloorPlanner = halo2_proofs::circuit::V1;
+        type Params = halo2_base::gates::circuit::BaseCircuitParams;
+
+        fn params(&self) -> Self::Params {
+            self.builder.config_params.clone()
+        }
+
+        fn without_witnesses(&self) -> Self {
+            Self {
+                builder: self.builder.deep_clone().unknown(true),
+                jobs: self.jobs.unknown(),
+            }
+        }
+
+        fn configure_with_params(
+            meta: &mut halo2_proofs::plonk::ConstraintSystem<F>,
+            params: Self::Params,
+        ) -> Self::Config {
+            use halo2_proofs::plonk::Circuit as _;
+
+            let usable_rows = (1_usize << params.k) - super::MINIMUM_UNUSABLE_ROWS;
+            let mut base = halo2_base::gates::circuit::BaseConfig::configure(meta, params);
+            base.set_usable_rows(usable_rows);
+            Self::Config {
+                base,
+                sha: super::PastaSha256ConfigV1::configure(meta),
+            }
+        }
+
+        fn configure(_: &mut halo2_proofs::plonk::ConstraintSystem<F>) -> Self::Config {
+            unreachable!("candidate digest test uses parameterized Base config")
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl halo2_proofs::circuit::Layouter<F>,
+        ) -> Result<(), halo2_proofs::plonk::Error> {
+            use halo2_proofs::plonk::Circuit as _;
+
+            self.builder.synthesize(
+                config.base,
+                layouter.namespace(|| "candidate envelope Base"),
+            )?;
+            self.jobs.synthesize(
+                &config.sha,
+                &mut layouter,
+                &self.builder.core().copy_manager,
+                (1_usize << self.builder.config_params.k) - super::MINIMUM_UNUSABLE_ROWS,
+            )
+        }
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn candidate_digest_test_circuit_v1<
+        F: crate::zk::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
+    >(
+        values: Vec<F>,
+        expected: super::DigestV1,
+    ) -> CandidateDigestTestCircuitV1<F> {
+        use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+        use halo2_base::gates::{GateInstructions as _, RangeInstructions as _};
+
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(16)
+            .use_lookup_bits(15);
+        let public = builder.main(0).assign_witnesses(values);
+        let mut jobs = crate::zk::pasta_sha256::PastaSha256JobsV1::default();
+        let actual =
+            super::constrain_candidate_envelope_digest_v1(&mut builder, &mut jobs, &public)
+                .expect("fixed candidate envelope transcript");
+        let expected_limbs = crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(expected);
+        for (actual, expected) in super::digest_limbs_assigned(builder.main(0), &actual)
+            .into_iter()
+            .zip(expected_limbs)
+        {
+            builder
+                .range_chip()
+                .gate()
+                .assert_is_const(builder.main(0), &actual, &expected);
+        }
+        let message = jobs
+            .canonical_messages()
+            .expect("assigned candidate SHA job");
+        assert_eq!(message.len(), 1);
+        assert_eq!(
+            message[0].len(),
+            super::CANDIDATE_BINDING_DOMAIN_V1.len() + state_relation::PUBLIC_INSTANCE_COUNT * 16
+        );
+        assert_eq!(
+            &message[0][..super::CANDIDATE_BINDING_DOMAIN_V1.len()],
+            super::CANDIDATE_BINDING_DOMAIN_V1
+        );
+        builder.calculate_params(Some(super::MINIMUM_UNUSABLE_ROWS));
+        CandidateDigestTestCircuitV1 { builder, jobs }
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn assigned_candidate_digest_binds_both_parities_and_rejects_mutation() {
+        use halo2_proofs::{
+            dev::MockProver,
+            halo2curves::pasta::{Fp, Fq},
+        };
+
+        fn check<F: crate::zk::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1>() {
+            let baseline = (0..state_relation::PUBLIC_INSTANCE_COUNT)
+                .map(|index| F::from((index + 1) as u64))
+                .collect::<Vec<_>>();
+            let expected =
+                canonical_terminal_authorization_candidate_digest_v1(&[baseline.clone()])
+                    .expect("native candidate digest");
+            let valid = candidate_digest_test_circuit_v1(baseline.clone(), expected);
+            MockProver::run(16, &valid, vec![])
+                .expect("candidate digest circuit")
+                .assert_satisfied();
+
+            let mut changed = baseline.clone();
+            changed[state_relation::public_instance::NETWORK_LO] += F::from(1);
+            let invalid = candidate_digest_test_circuit_v1(changed, expected);
+            assert!(
+                MockProver::run(16, &invalid, vec![])
+                    .expect("changed candidate digest circuit")
+                    .verify()
+                    .is_err(),
+                "changed authenticated state public cell preserved signed candidate digest"
+            );
+
+            let mut parity_native = baseline;
+            parity_native[state_relation::public_instance::PREDECESSOR_STATE] += F::from(1);
+            parity_native[state_relation::public_instance::SUCCESSOR_STATE] += F::from(1);
+            let normalized = candidate_digest_test_circuit_v1(parity_native, expected);
+            MockProver::run(16, &normalized, vec![])
+                .expect("normalized parity-native candidate circuit")
+                .assert_satisfied();
+        }
+
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn assigned_candidate_digest_rejects_wrong_public_shape() {
+        use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+        use halo2_proofs::halo2curves::pasta::Fp;
+
+        let mut builder = BaseCircuitBuilder::<Fp>::new(false)
+            .use_k(16)
+            .use_lookup_bits(15);
+        let mut jobs = crate::zk::pasta_sha256::PastaSha256JobsV1::default();
+        for length in [
+            0,
+            state_relation::PUBLIC_INSTANCE_COUNT - 1,
+            state_relation::PUBLIC_INSTANCE_COUNT + 1,
+        ] {
+            let public = builder.main(0).assign_witnesses(vec![Fp::from(0); length]);
+            assert!(
+                super::constrain_candidate_envelope_digest_v1(&mut builder, &mut jobs, &public)
+                    .is_err(),
+                "accepted malformed candidate public column of length {length}"
+            );
+        }
+        assert_eq!(jobs.canonical_messages().expect("empty SHA queue").len(), 0);
     }
 
     #[test]

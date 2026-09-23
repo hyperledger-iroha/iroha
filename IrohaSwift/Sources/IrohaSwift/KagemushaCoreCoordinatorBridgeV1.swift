@@ -18,7 +18,7 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
   private let endpoint: any KagemushaCoreCoordinatorEndpointV1
   private var handle: UInt64
   private let lock = NSLock()
-  private static let expectedContract: [UInt32] = [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1]
+  private static let expectedContract: [UInt32] = [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 12]
 
   private init(endpoint: any KagemushaCoreCoordinatorEndpointV1, handle: UInt64) {
     self.endpoint = endpoint
@@ -115,9 +115,9 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
     }
 
     func contract() throws -> [UInt32] {
-      var words = [UInt32](repeating: 0, count: 11)
+      var words = [UInt32](repeating: 0, count: 12)
       let status = words.withUnsafeMutableBufferPointer { contractFunction($0.baseAddress, $0.count) }
-      guard status == 11 else { throw KagemushaCoreCoordinatorErrorV1.nativeFailure(status) }
+      guard status == 12 else { throw KagemushaCoreCoordinatorErrorV1.nativeFailure(status) }
       return words
     }
 

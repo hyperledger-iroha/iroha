@@ -3930,6 +3930,28 @@ def test_account_permission_listing_accepts_configured_chain_discriminant() -> N
     ]
 
 
+def test_account_assets_sdk_uses_native_asset_filter_key() -> None:
+    account = account_address(0x45)
+    asset = "ds#boi.is2"
+    session = FakeSession(
+        [
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    assert client.list_account_assets(account, asset_id=asset) == {"items": [], "total": 0}
+    assert client.find_account_assets(account, asset_id=asset) == []
+    assert client.find_account_asset_items(account, asset) == []
+    assert [call["params"] for call in session.calls] == [
+        {"asset": asset},
+        {"asset": asset},
+        {"asset": asset},
+    ]
+
+
 def test_dataspace_visible_account_reads_use_configured_canonical_signer() -> None:
     account = account_address(0x46)
     session = FakeSession(

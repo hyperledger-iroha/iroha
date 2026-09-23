@@ -15,7 +15,7 @@ use iroha_core::privacy_profiles::{
 };
 use iroha_crypto::{
     Algorithm, EcdsaSecp256k1Sha256, Error as CryptoError, Hash, KeyGenOption, KeyPair, PrivateKey,
-    PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
+    PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature, SignatureOf,
     confidential_memo::{ConfidentialMemoKemSuiteV1, generate_confidential_memo_keypair_v1},
     kex::KeyExchangeScheme,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
@@ -38,8 +38,8 @@ use iroha_data_model::{
     },
     identifier::{IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload},
     isi::{
-        InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
-        decode_instruction_from_pair, framed_instruction_payload,
+        Grant, InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, Revoke, SetAssetKeyValue,
+        SetKeyValue, decode_instruction_from_pair, framed_instruction_payload,
         governance::{CastPlainBallot, CastZkBallot, ProposeDeployContract},
         identifier::ClaimIdentifier,
         mint_burn::{Burn, Mint},
@@ -68,10 +68,12 @@ use iroha_data_model::{
     smart_contract::manifest::ManifestProvenance,
     transaction::{
         Executable, FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent,
-        TransactionSubmissionReceipt, signed::TransactionBuilder,
+        TransactionSubmissionReceipt,
+        signed::{MultisigSignature, MultisigSignatures, TransactionBuilder},
     },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
+use iroha_executor_data_model::permission::query::CanReadAccountData;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -127,6 +129,13 @@ use std::{
 use zeroize::{Zeroize, Zeroizing};
 mod account_onboarding;
 pub use account_onboarding::connect_norito_encode_account_onboarding_plan_body_v1;
+mod committed_transaction_inclusion;
+pub use committed_transaction_inclusion::connect_norito_verify_committed_transaction_inclusion_v1;
+mod committed_transaction_query;
+pub use committed_transaction_query::{
+    connect_norito_committed_transaction_query_finalize_v1,
+    connect_norito_committed_transaction_query_payload_hash_v1,
+};
 mod kagemusha_contract_vector_v1;
 pub use kagemusha_contract_vector_v1::{
     KAGEMUSHA_NATIVE_CONTRACT_VECTOR_DIGEST_V1, KAGEMUSHA_NATIVE_CONTRACT_VECTOR_DOMAIN_V1,
@@ -137,10 +146,12 @@ pub use kagemusha_contract_vector_v1::{
 };
 mod kagemusha_core_coordinator_v1;
 pub use kagemusha_core_coordinator_v1::{
-    KAGEMUSHA_CORE_COORDINATOR_ARCHIVE_MAX_BYTES_V1, KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1,
-    KAGEMUSHA_CORE_COORDINATOR_FRAME_HEADER_BYTES_V1, KAGEMUSHA_CORE_COORDINATOR_FRAME_MAGIC_V1,
-    KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1, KAGEMUSHA_CORE_COORDINATOR_MAX_FIELD_BYTES_V1,
-    KAGEMUSHA_CORE_COORDINATOR_MAX_FIELDS_V1, KAGEMUSHA_CORE_COORDINATOR_MAX_REQUEST_BYTES_V1,
+    AcceptedIssuerChallengeV1, FreshIssuerAdmissionV1, InitialEnrollmentErrorV1,
+    IssuerChallengeProjectionV1, KAGEMUSHA_CORE_COORDINATOR_ARCHIVE_MAX_BYTES_V1,
+    KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1, KAGEMUSHA_CORE_COORDINATOR_FRAME_HEADER_BYTES_V1,
+    KAGEMUSHA_CORE_COORDINATOR_FRAME_MAGIC_V1, KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1,
+    KAGEMUSHA_CORE_COORDINATOR_MAX_FIELD_BYTES_V1, KAGEMUSHA_CORE_COORDINATOR_MAX_FIELDS_V1,
+    KAGEMUSHA_CORE_COORDINATOR_MAX_REQUEST_BYTES_V1,
     KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1,
     KAGEMUSHA_CORE_COORDINATOR_MAX_STORAGE_PATH_BYTES_V1,
     KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_OPERATION_ID_V1,
@@ -151,12 +162,19 @@ pub use kagemusha_core_coordinator_v1::{
     KagemushaCoreCoordinatorMethodV1, KagemushaCoreSenderCandidateArchiveV1,
     KagemushaCoreSenderPreparationArchiveV1, KagemushaCoreSenderPreparationSelectorV1,
     KagemushaCoreSenderRecoveryArchiveV1, KagemushaCoreSenderWalletContextV1,
-    KagemushaExclusiveCoordinatorBackendV1, install_kagemusha_core_coordinator_backend_v1,
-    kagemusha_core_coordinator_decode_request_v1, kagemusha_core_coordinator_decode_response_v1,
-    kagemusha_core_coordinator_encode_request_v1, kagemusha_core_coordinator_encode_response_v1,
+    KagemushaEnrollmentAttemptJournalV1, KagemushaEnrollmentJournalDispatchV1,
+    KagemushaEnrollmentJournalErrorV1, KagemushaEnrollmentJournalPinsV1,
+    KagemushaEnrollmentJournalReservationV1, KagemushaEnrollmentJournalResultV1,
+    KagemushaEnrollmentJournalSelectionV1, KagemushaEnrollmentJournalStoreV1,
+    KagemushaEnrollmentLiveSelectionV1, KagemushaExclusiveCoordinatorBackendV1,
+    PendingIssuerEnrollmentV1, PreparedIssuerProofV1, SignedAppPreparationErrorV1,
+    SignedAppPreparationPinsV1, VerifiedSignedAppPreparationV1,
+    install_kagemusha_core_coordinator_backend_v1, kagemusha_core_coordinator_decode_request_v1,
+    kagemusha_core_coordinator_decode_response_v1, kagemusha_core_coordinator_encode_request_v1,
+    kagemusha_core_coordinator_encode_response_v1,
     kagemusha_core_coordinator_validate_method_request_v1,
     kagemusha_core_coordinator_validate_method_response_v1,
-    kagemusha_core_coordinator_validate_storage_path_v1,
+    kagemusha_core_coordinator_validate_storage_path_v1, verify_signed_app_preparation_v1,
 };
 mod kagemusha_device_bridge_v1;
 mod kagemusha_reserve_finality_v1;
@@ -216,7 +234,7 @@ const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
     target_os = "macos",
     windows
 ))]
-const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 5;
+const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 6;
 const CANONICAL_NETWORK_ID_LITERAL_BYTES: usize = 74;
 const DETACHED_TRANSACTION_SCAFFOLD_MAX_BYTES: usize = 16 * 1024 * 1024;
 const DETACHED_TRANSACTION_JSON_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -1481,7 +1499,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
         return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
     };
     let response_frame = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.invoke(handle, method, &request_frame)
+        if method == KagemushaCoreCoordinatorMethodV1::InitialEnrollment {
+            backend.invoke_initial_enrollment(handle, &request_frame)
+        } else {
+            backend.invoke(handle, method, &request_frame)
+        }
     })) {
         Ok(Ok(response_frame)) => response_frame,
         Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)) => {
@@ -3762,8 +3784,55 @@ fn decode_signed_transaction(bytes: &[u8]) -> Result<SignedTransaction, norito::
 fn detached_transaction_hash_hex(bytes: &[u8; 32]) -> JsonValue {
     JsonValue::from(hex::encode(bytes))
 }
-fn detached_transaction_executable_json(tx: &SignedTransaction) -> BridgeResult<JsonValue> {
+fn detached_asset_transfer_json(instruction: &InstructionBox) -> BridgeResult<JsonValue> {
     use iroha_data_model::prelude::TransferBox;
+    let transfer_box = instruction
+        .as_any()
+        .downcast_ref::<TransferBox>()
+        .ok_or(BridgeError::DetachedTransactionScaffold)?;
+    let TransferBox::Asset(transfer) = transfer_box else {
+        return Err(BridgeError::DetachedTransactionScaffold);
+    };
+    let scope = match transfer.source.scope() {
+        AssetBalanceScope::Global => JsonValue::Object(JsonMap::from_iter([(
+            "kind".into(),
+            JsonValue::from("global"),
+        )])),
+        AssetBalanceScope::Dataspace(dataspace_id) => JsonValue::Object(JsonMap::from_iter([
+            ("kind".into(), JsonValue::from("dataspace")),
+            (
+                "dataspace_id".into(),
+                JsonValue::from(dataspace_id.as_u64()),
+            ),
+        ])),
+    };
+    Ok(JsonValue::Object(JsonMap::from_iter([
+        ("kind".into(), JsonValue::from("asset_transfer")),
+        (
+            "asset_definition_id".into(),
+            JsonValue::from(transfer.source.definition().to_string()),
+        ),
+        ("asset_scope".into(), scope),
+        (
+            "source_asset_id".into(),
+            JsonValue::from(transfer.source.canonical_literal()),
+        ),
+        (
+            "source_account_id".into(),
+            JsonValue::from(transfer.source.account().to_string()),
+        ),
+        (
+            "destination_account_id".into(),
+            JsonValue::from(transfer.destination.to_string()),
+        ),
+        (
+            "amount".into(),
+            JsonValue::from(transfer.object.to_string()),
+        ),
+    ])))
+}
+
+fn detached_transaction_executable_json(tx: &SignedTransaction) -> BridgeResult<JsonValue> {
     match tx.instructions() {
         Executable::ContractCall(invocation) => {
             let arguments = invocation
@@ -3794,51 +3863,24 @@ fn detached_transaction_executable_json(tx: &SignedTransaction) -> BridgeResult<
                 .iter()
                 .next()
                 .ok_or(BridgeError::DetachedTransactionScaffold)?;
-            let transfer_box = instruction
-                .as_any()
-                .downcast_ref::<TransferBox>()
-                .ok_or(BridgeError::DetachedTransactionScaffold)?;
-            let TransferBox::Asset(transfer) = transfer_box else {
-                return Err(BridgeError::DetachedTransactionScaffold);
-            };
-            let scope = match transfer.source.scope() {
-                AssetBalanceScope::Global => JsonValue::Object(JsonMap::from_iter([(
-                    "kind".into(),
-                    JsonValue::from("global"),
-                )])),
-                AssetBalanceScope::Dataspace(dataspace_id) => {
-                    JsonValue::Object(JsonMap::from_iter([
-                        ("kind".into(), JsonValue::from("dataspace")),
-                        (
-                            "dataspace_id".into(),
-                            JsonValue::from(dataspace_id.as_u64()),
-                        ),
-                    ]))
-                }
-            };
+            detached_asset_transfer_json(instruction)
+        }
+        Executable::Batch(entries) if entries.len() == 2 => {
+            let transfers = entries
+                .iter()
+                .map(|entry| {
+                    let iroha_data_model::transaction::ExecutableBatchItem::Instruction(
+                        instruction,
+                    ) = entry
+                    else {
+                        return Err(BridgeError::DetachedTransactionScaffold);
+                    };
+                    detached_asset_transfer_json(instruction)
+                })
+                .collect::<BridgeResult<Vec<_>>>()?;
             Ok(JsonValue::Object(JsonMap::from_iter([
-                ("kind".into(), JsonValue::from("asset_transfer")),
-                (
-                    "asset_definition_id".into(),
-                    JsonValue::from(transfer.source.definition().to_string()),
-                ),
-                ("asset_scope".into(), scope),
-                (
-                    "source_asset_id".into(),
-                    JsonValue::from(transfer.source.canonical_literal()),
-                ),
-                (
-                    "source_account_id".into(),
-                    JsonValue::from(transfer.source.account().to_string()),
-                ),
-                (
-                    "destination_account_id".into(),
-                    JsonValue::from(transfer.destination.to_string()),
-                ),
-                (
-                    "amount".into(),
-                    JsonValue::from(transfer.object.to_string()),
-                ),
+                ("kind".into(), JsonValue::from("asset_transfer_batch")),
+                ("transfers".into(), JsonValue::Array(transfers)),
             ])))
         }
         _ => Err(BridgeError::DetachedTransactionScaffold),
@@ -6059,6 +6101,76 @@ mod detached_transaction_scaffold_tests {
         norito::json::from_slice_value(&json).expect("inspection JSON")
     }
     #[test]
+    fn atomic_transfer_batch_inspection_binds_two_exact_ordered_native_transfers() {
+        use iroha_data_model::transaction::ExecutableBatchItem;
+        let keypair = fixture_keypair(0x41);
+        let principal = transfer_scaffold(&keypair, true);
+        let fee = transfer_scaffold(&keypair, false);
+        let Executable::Instructions(principal) = principal.instructions() else {
+            panic!("transfer fixture");
+        };
+        let Executable::Instructions(fee) = fee.instructions() else {
+            panic!("transfer fixture");
+        };
+        let entries = vec![
+            ExecutableBatchItem::Instruction(principal[0].clone()),
+            ExecutableBatchItem::Instruction(fee[0].clone()),
+        ];
+        let tx = scaffold_transaction(&keypair, Executable::Batch(entries.clone().into()), |_| {});
+        let value = inspect_value(&tx);
+        let executable = value
+            .as_object()
+            .unwrap()
+            .get("executable")
+            .unwrap()
+            .as_object()
+            .unwrap();
+        assert_eq!(
+            executable.get("kind").and_then(JsonValue::as_str),
+            Some("asset_transfer_batch")
+        );
+        let transfers = executable.get("transfers").unwrap().as_array().unwrap();
+        assert_eq!(transfers.len(), 2);
+        assert_ne!(
+            transfers[0], transfers[1],
+            "native balance scope is retained on each ordered leg"
+        );
+        let payload_hash = iroha_crypto::HashOf::new(tx.payload());
+        let mut reversed = entries.clone();
+        reversed.reverse();
+        let reverse_tx = scaffold_transaction(&keypair, Executable::Batch(reversed.into()), |_| {});
+        assert_ne!(
+            payload_hash,
+            iroha_crypto::HashOf::new(reverse_tx.payload())
+        );
+        for invalid in [vec![], entries[..1].to_vec(), vec![entries[0].clone(); 3]] {
+            let invalid = scaffold_transaction(&keypair, Executable::Batch(invalid.into()), |_| {});
+            assert!(inspect_detached_transaction_scaffold(&invalid.encode_versioned()).is_err());
+        }
+        let wrong_kind = InstructionBox::from(iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "not a transfer",
+        ));
+        let invalid = scaffold_transaction(
+            &keypair,
+            Executable::Batch(
+                vec![
+                    entries[0].clone(),
+                    ExecutableBatchItem::Instruction(wrong_kind),
+                ]
+                .into(),
+            ),
+            |_| {},
+        );
+        assert!(inspect_detached_transaction_scaffold(&invalid.encode_versioned()).is_err());
+        let (wire_id, frame) = framed_instruction_payload(&principal[0]).unwrap();
+        assert_eq!(
+            decode_instruction_from_pair(wire_id, &frame).unwrap(),
+            principal[0]
+        );
+    }
+
+    #[test]
     fn inspector_binds_every_contract_call_field_and_exact_metadata() {
         let keypair = fixture_keypair(0x31);
         let tx = contract_scaffold(&keypair);
@@ -6254,6 +6366,25 @@ mod detached_transaction_scaffold_tests {
         );
         assert!(inspect_detached_transaction_scaffold(&empty.encode_versioned()).is_err());
     }
+    fn atomic_transfer_batch_scaffold(keypair: &KeyPair) -> SignedTransaction {
+        use iroha_data_model::transaction::ExecutableBatchItem;
+        let single = transfer_scaffold(keypair, true);
+        let Executable::Instructions(instructions) = single.instructions() else {
+            panic!("transfer fixture");
+        };
+        scaffold_transaction(
+            keypair,
+            Executable::Batch(
+                vec![
+                    ExecutableBatchItem::Instruction(instructions[0].clone()),
+                    ExecutableBatchItem::Instruction(instructions[0].clone()),
+                ]
+                .into(),
+            ),
+            |_| {},
+        )
+    }
+
     #[test]
     fn finalizer_binds_key_verifies_signature_and_emits_versioned_transaction() {
         let keypair = fixture_keypair(0x36);
@@ -6302,10 +6433,100 @@ mod detached_transaction_scaffold_tests {
         );
     }
     #[test]
+    fn atomic_batch_finalizer_binds_key_verifies_signature_and_exact_payload() {
+        let keypair = fixture_keypair(0x36);
+        let scaffold = atomic_transfer_batch_scaffold(&keypair);
+        let scaffold_bytes = scaffold.encode_versioned();
+        let signing_hash = iroha_crypto::HashOf::new(scaffold.payload());
+        let signature = Signature::try_new(keypair.private_key(), signing_hash.as_ref())
+            .expect("detached signature");
+        let public_key = keypair.public_key().to_bytes().1;
+        let mut signed_ptr = ptr::null_mut();
+        let mut signed_len = 0;
+        let mut json_ptr = ptr::null_mut();
+        let mut json_len = 0;
+        let status = unsafe {
+            connect_norito_detached_transaction_scaffold_finalize_ed25519_v1(
+                scaffold_bytes.as_ptr(),
+                scaffold_bytes.len() as c_ulong,
+                public_key.as_ptr(),
+                public_key.len() as c_ulong,
+                signature.payload().as_ptr(),
+                signature.payload().len() as c_ulong,
+                &mut signed_ptr,
+                &mut signed_len,
+                &mut json_ptr,
+                &mut json_len,
+            )
+        };
+        assert_eq!(status, 0);
+        let signed_bytes =
+            unsafe { slice::from_raw_parts(signed_ptr, signed_len as usize) }.to_vec();
+        let json = unsafe { slice::from_raw_parts(json_ptr, json_len as usize) }.to_vec();
+        connect_norito_free(signed_ptr);
+        connect_norito_free(json_ptr);
+        let signed =
+            SignedTransaction::decode_all_versioned(&signed_bytes).expect("versioned signed tx");
+        signed.verify_signature().expect("verified final signature");
+        assert_eq!(signed.authority(), scaffold.authority());
+        assert_eq!(signed.payload(), scaffold.payload());
+        let value = norito::json::from_slice_value(&json).expect("finalization JSON");
+        assert_eq!(
+            value
+                .as_object()
+                .and_then(|object| object.get("transaction_hash_hex"))
+                .and_then(JsonValue::as_str),
+            Some(hex::encode(signed.hash().as_ref()).as_str())
+        );
+    }
+    #[test]
     fn finalizer_rejects_wrong_key_tampering_and_malformed_signature_without_outputs() {
         let keypair = fixture_keypair(0x37);
         let wrong = fixture_keypair(0x38);
         let scaffold = contract_scaffold(&keypair);
+        let scaffold_bytes = scaffold.encode_versioned();
+        let signing_hash = iroha_crypto::HashOf::new(scaffold.payload());
+        let mut signature = Signature::try_new(keypair.private_key(), signing_hash.as_ref())
+            .unwrap()
+            .payload()
+            .to_vec();
+        let invoke = |public_key: &[u8], signature: &[u8]| {
+            let mut signed_ptr = ptr::dangling_mut::<u8>();
+            let mut signed_len = 99;
+            let mut json_ptr = ptr::dangling_mut::<u8>();
+            let mut json_len = 99;
+            let status = unsafe {
+                connect_norito_detached_transaction_scaffold_finalize_ed25519_v1(
+                    scaffold_bytes.as_ptr(),
+                    scaffold_bytes.len() as c_ulong,
+                    public_key.as_ptr(),
+                    public_key.len() as c_ulong,
+                    signature.as_ptr(),
+                    signature.len() as c_ulong,
+                    &mut signed_ptr,
+                    &mut signed_len,
+                    &mut json_ptr,
+                    &mut json_len,
+                )
+            };
+            assert_ne!(status, 0);
+            assert!(signed_ptr.is_null());
+            assert_eq!(signed_len, 0);
+            assert!(json_ptr.is_null());
+            assert_eq!(json_len, 0);
+        };
+        invoke(wrong.public_key().to_bytes().1, &signature);
+        signature[17] ^= 0x80;
+        invoke(keypair.public_key().to_bytes().1, &signature);
+        invoke(keypair.public_key().to_bytes().1, &[1; 63]);
+        invoke(keypair.public_key().to_bytes().1, &[0; 64]);
+    }
+    #[test]
+    fn atomic_batch_finalizer_rejects_wrong_key_tampering_and_malformed_signature_without_outputs()
+    {
+        let keypair = fixture_keypair(0x37);
+        let wrong = fixture_keypair(0x38);
+        let scaffold = atomic_transfer_batch_scaffold(&keypair);
         let scaffold_bytes = scaffold.encode_versioned();
         let signing_hash = iroha_crypto::HashOf::new(scaffold.payload());
         let mut signature = Signature::try_new(keypair.private_key(), signing_hash.as_ref())
@@ -6922,6 +7143,247 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_sign_result_err(
         write_encoded_result(encode_envelope_framed(&env), out_ptr, out_len, -3)
     }
 }
+fn account_read_permission_multisig_builder(
+    network_id: NetworkId,
+    authority: AccountId,
+    reporting: AccountId,
+    change: u8,
+    creation_time_ms: u64,
+    fee_payment: FeePaymentIntent,
+) -> BridgeResult<TransactionBuilder> {
+    if creation_time_ms == 0 || reporting == authority {
+        return Err(BridgeError::Authority);
+    }
+    let policy = authority.multisig_policy().ok_or(BridgeError::Authority)?;
+    if policy.threshold() != 1 || policy.members().len() != 1 {
+        return Err(BridgeError::Authority);
+    }
+    if fee_payment.charge_limits().is_empty() {
+        return Err(BridgeError::FeePayment);
+    }
+    let permission = CanReadAccountData {
+        account: authority.clone(),
+    };
+    let instruction = match change {
+        1 => InstructionBox::from(Grant::account_permission(permission, reporting)),
+        2 => InstructionBox::from(Revoke::account_permission(permission, reporting)),
+        _ => return Err(BridgeError::Authority),
+    };
+    let mut builder = TransactionBuilder::new(network_id, authority, fee_payment)
+        .with_instructions([instruction])
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
+    builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    builder.set_ttl(Duration::from_millis(120_000));
+    Ok(builder)
+}
+unsafe fn account_read_permission_multisig_builder_from_c(
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    reporting_account_ptr: *const c_char,
+    reporting_account_len: c_ulong,
+    change: c_uchar,
+    creation_time_ms: u64,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
+) -> BridgeResult<TransactionBuilder> {
+    let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
+    let authority = parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
+    let reporting = parse_account_id(unsafe {
+        read_string_bridge(reporting_account_ptr, reporting_account_len)
+    }?)?;
+    let fee_payment =
+        unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len) }?;
+    account_read_permission_multisig_builder(
+        network_id,
+        authority,
+        reporting,
+        change,
+        creation_time_ms,
+        fee_payment,
+    )
+}
+/// Prepare the exact payload prehash for a wallet-controlled 1-of-1 multisig
+/// permission change. The application must independently authenticate the
+/// reporter identity before passing it here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_account_read_permission_multisig_payload_hash(
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    reporting_account_ptr: *const c_char,
+    reporting_account_len: c_ulong,
+    change: c_uchar,
+    creation_time_ms: u64,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    if !out_hash_ptr.is_null() {
+        let clear_len = usize::try_from(out_hash_len)
+            .unwrap_or(usize::MAX)
+            .min(Hash::LENGTH);
+        unsafe { ptr::write_bytes(out_hash_ptr, 0, clear_len) };
+    }
+    let result = (|| {
+        let builder = unsafe {
+            account_read_permission_multisig_builder_from_c(
+                network_id_ptr,
+                network_id_len,
+                authority_ptr,
+                authority_len,
+                reporting_account_ptr,
+                reporting_account_len,
+                change,
+                creation_time_ms,
+                fee_payment_json_ptr,
+                fee_payment_json_len,
+            )
+        }?;
+        write_hash(out_hash_ptr, out_hash_len, &builder.payload_hash_bytes())
+    })();
+    bridge_result_to_code(result)
+}
+/// Finalize one exact wallet permission change from an external Ed25519
+/// signature over the prehash above. The signer key comes solely from the
+/// authority's encoded one-member policy; verification is mandatory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_account_read_permission_multisig_finalize(
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    reporting_account_ptr: *const c_char,
+    reporting_account_len: c_ulong,
+    change: c_uchar,
+    creation_time_ms: u64,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
+    signature_ptr: *const c_uchar,
+    signature_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
+    let result = (|| {
+        if out_signed_ptr.is_null() || out_signed_len.is_null() || signature_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        if signature_len != 64 {
+            return Err(BridgeError::TransactionSign);
+        }
+        let builder = unsafe {
+            account_read_permission_multisig_builder_from_c(
+                network_id_ptr,
+                network_id_len,
+                authority_ptr,
+                authority_len,
+                reporting_account_ptr,
+                reporting_account_len,
+                change,
+                creation_time_ms,
+                fee_payment_json_ptr,
+                fee_payment_json_len,
+            )
+        }?;
+        let signer = builder
+            .payload()
+            .authority
+            .multisig_policy()
+            .ok_or(BridgeError::Authority)?
+            .members()[0]
+            .public_key()
+            .clone();
+        if signer.algorithm() != Algorithm::Ed25519 {
+            return Err(BridgeError::UnsupportedAlgorithm);
+        }
+        let signature_bytes = unsafe { slice::from_raw_parts(signature_ptr, 64) };
+        let signature = Signature::from_bytes(signature_bytes);
+        let multisig_signatures = MultisigSignatures::new(vec![MultisigSignature::new(
+            signer,
+            SignatureOf::from_signature(signature.clone()),
+        )]);
+        let signed = builder
+            .with_multisig_signatures(multisig_signatures)
+            .build_with_signature(signature);
+        signed
+            .verify_signature()
+            .map_err(|_| BridgeError::TransactionSign)?;
+        let signed_bytes = signed.encode_versioned();
+        let mut hash = [0_u8; 32];
+        hash.copy_from_slice(signed.hash().as_ref());
+        write_hash(out_hash_ptr, out_hash_len, &hash)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }
+    })();
+    bridge_result_to_code(result)
+}
+define_ed25519_signed_transaction_wrapper! {
+    connect_norito_encode_account_read_permission_multisig_signed_transaction =>
+        connect_norito_encode_account_read_permission_multisig_signed_transaction_alg(
+            network_id_ptr: *const c_char,
+            network_id_len: c_ulong,
+            authority_ptr: *const c_char,
+            authority_len: c_ulong,
+            reporting_account_ptr: *const c_char,
+            reporting_account_len: c_ulong,
+            change: c_uchar,
+            creation_time_ms: u64,
+            fee_payment_json_ptr: *const c_uchar,
+            fee_payment_json_len: c_ulong,
+            private_key_ptr: *const c_uchar,
+            private_key_len: c_ulong,
+        )
+    identifiers: (algorithm_code, signed_bytes, hash_bytes);
+    clear_outputs: clear_signed_transaction_outputs;
+    {
+        if private_key_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let algorithm = parse_algorithm_code(algorithm_code)?;
+        if algorithm != Algorithm::Ed25519 {
+            return Err(BridgeError::UnsupportedAlgorithm);
+        }
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
+        let authority =
+            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
+        let reporting = parse_account_id(unsafe {
+            read_string_bridge(reporting_account_ptr, reporting_account_len)
+        }?)?;
+        let private_key_len =
+            usize::try_from(private_key_len).map_err(|_| BridgeError::PrivateKey)?;
+        if private_key_len != 32 && private_key_len != 64 {
+            return Err(BridgeError::PrivateKey);
+        }
+        let private_key_bytes = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len) };
+        let private_key = parse_private_key_with_algorithm(private_key_bytes, algorithm)?;
+        let fee_payment = unsafe {
+            parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)
+        }?;
+        let builder = account_read_permission_multisig_builder(
+            network_id,
+            authority,
+            reporting,
+            change,
+            creation_time_ms,
+            fee_payment,
+        )?;
+        let policy = builder.payload().authority.multisig_policy().ok_or(BridgeError::Authority)?;
+        if policy.members()[0].public_key() != &PublicKey::from(private_key.clone()) {
+            return Err(BridgeError::Authority);
+        }
+        let signed = builder
+            .try_sign_multisig([&private_key])
+            .map_err(|_| BridgeError::TransactionSign)?;
+        let signed_bytes = signed.encode_versioned();
+        let mut hash_bytes = [0u8; 32];
+        hash_bytes.copy_from_slice(signed.hash().as_ref());
+    }
+}
 define_ed25519_signed_transaction_wrapper! {
     connect_norito_encode_transfer_signed_transaction =>
         connect_norito_encode_transfer_signed_transaction_alg(
@@ -7033,6 +7495,56 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_box(
             InstructionBox::from(Transfer::asset_quantity(asset_id, quantity, destination));
         let instruction_bytes =
             norito::core::to_bytes(&instruction).map_err(|_| BridgeError::JsonSerialize)?;
+        unsafe {
+            write_bytes_bridge(out_instruction_ptr, out_instruction_len, &instruction_bytes)
+        }?;
+        Ok(())
+    })();
+    bridge_result_to_code(result)
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_frame_v1(
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    asset_definition_ptr: *const c_char,
+    asset_definition_len: c_ulong,
+    quantity_ptr: *const c_char,
+    quantity_len: c_ulong,
+    destination_ptr: *const c_char,
+    destination_len: c_ulong,
+    out_instruction_ptr: *mut *mut c_uchar,
+    out_instruction_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_instruction_ptr, out_instruction_len)?;
+        let authority =
+            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
+        let asset_definition =
+            unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
+        let quantity =
+            parse_public_quantity(unsafe { read_string_bridge(quantity_ptr, quantity_len) }?)?;
+        let destination =
+            parse_destination(unsafe { read_string_bridge(destination_ptr, destination_len) }?)?;
+        let (asset_definition, asset_scope) =
+            parse_asset_definition_with_balance_scope(asset_definition)?;
+        let asset_id = AssetId::with_scope(asset_definition, authority, asset_scope);
+        let instruction =
+            InstructionBox::from(Transfer::asset_quantity(asset_id, quantity, destination));
+        let (wire_name, frame) =
+            framed_instruction_payload(&instruction).ok_or(BridgeError::JsonSerialize)?;
+        let value = JsonValue::Object(JsonMap::from_iter([
+            (
+                "schema".into(),
+                JsonValue::from("iroha.transfer_instruction_frame.v1"),
+            ),
+            ("wire_name".into(), JsonValue::from(wire_name)),
+            (
+                "framed_payload_b64".into(),
+                JsonValue::from(b64_encode(&frame)),
+            ),
+        ]));
+        let instruction_bytes =
+            norito::json::to_vec(&value).map_err(|_| BridgeError::JsonSerialize)?;
         unsafe {
             write_bytes_bridge(out_instruction_ptr, out_instruction_len, &instruction_bytes)
         }?;
@@ -7877,6 +8389,7 @@ mod accel_tests {
         let compact_source: String = bridge_source().split_whitespace().collect();
         let header = include_str!("../include/connect_norito_bridge.h");
         let families = [
+            "account_read_permission_multisig",
             "transfer",
             "register_zk_asset",
             "set_key_value",
@@ -7890,7 +8403,7 @@ mod accel_tests {
             "claim_identifier",
         ];
         let macro_marker = ["define_ed25519_signed_", "transaction_wrapper!{"].concat();
-        assert_eq!(compact_source.matches(macro_marker.as_str()).count(), 11);
+        assert_eq!(compact_source.matches(macro_marker.as_str()).count(), 12);
         for family in families {
             let default = format!("connect_norito_encode_{family}_signed_transaction");
             let with_algorithm = format!("{default}_alg");
@@ -7909,6 +8422,257 @@ mod accel_tests {
                 "C ABI pair differs by more than algorithm_code for {family}",
             );
         }
+    }
+    #[test]
+    fn account_read_permission_multisig_signer_emits_only_exact_wallet_grant_or_revoke() {
+        use iroha_data_model::{
+            account::{MultisigMember, MultisigPolicy},
+            asset::AssetDefinitionId,
+            nexus::FeeSponsorProgramId,
+            transaction::{FeeChargeKind, FeeChargeLimit},
+        };
+
+        let _chain = super::test_support::ChainDiscriminantScope::enter(0xA2F0);
+        let network = network_id_cstring("account-read-permission");
+        let signer = fixture_key_pair(72);
+        let member = MultisigMember::new(signer.public_key().clone(), 1).expect("member");
+        let wallet = AccountId::new_multisig(MultisigPolicy::new(1, vec![member]).expect("policy"));
+        let wallet_literal = cstring(&wallet.to_string());
+        let reporter = AccountId::new(fixture_key_pair(73).public_key().clone());
+        let reporter_literal = cstring(&reporter.to_string());
+        let (_, private_key) = signer.private_key().to_bytes();
+        let mut fee_asset_bytes = [0_u8; 16];
+        fee_asset_bytes[6] = 0x40;
+        fee_asset_bytes[8] = 0x80;
+        let fee_payment = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                AssetDefinitionId::from_uuid_bytes(fee_asset_bytes).expect("fee asset"),
+                Quantity::from(10_u64),
+            )],
+            None,
+        );
+        let fee_payment_json = norito::json::to_vec(&fee_payment).expect("fee payment JSON");
+
+        for change in [1_u8, 2_u8] {
+            let mut signed_ptr = ptr::null_mut();
+            let mut signed_len = 0;
+            let mut hash = [0_u8; 32];
+            let code = unsafe {
+                connect_norito_encode_account_read_permission_multisig_signed_transaction(
+                    network.as_ptr(),
+                    network.as_bytes().len() as c_ulong,
+                    wallet_literal.as_ptr(),
+                    wallet_literal.as_bytes().len() as c_ulong,
+                    reporter_literal.as_ptr(),
+                    reporter_literal.as_bytes().len() as c_ulong,
+                    change,
+                    1_700_000_000_000,
+                    fee_payment_json.as_ptr(),
+                    fee_payment_json.len() as c_ulong,
+                    private_key.as_ptr(),
+                    private_key.len() as c_ulong,
+                    &mut signed_ptr,
+                    &mut signed_len,
+                    hash.as_mut_ptr(),
+                    hash.len() as c_ulong,
+                )
+            };
+            assert_eq!(code, 0, "exact wallet permission signer failed");
+            let bytes = unsafe { slice::from_raw_parts(signed_ptr, signed_len as usize) };
+            let signed = decode_signed_transaction(bytes).expect("current signed transaction");
+            assert_eq!(signed.encode_versioned(), bytes);
+            assert_eq!(signed.authority(), &wallet);
+            assert_eq!(signed.signature_count(), 1);
+            assert_eq!(signed.fee_payment_intent(), &fee_payment);
+            signed.verify_signature().expect("wallet signature");
+            assert_eq!(signed.hash().as_ref(), hash.as_slice());
+            let permission = CanReadAccountData {
+                account: wallet.clone(),
+            };
+            let expected = if change == 1 {
+                InstructionBox::from(Grant::account_permission(permission, reporter.clone()))
+            } else {
+                InstructionBox::from(Revoke::account_permission(permission, reporter.clone()))
+            };
+            let Executable::Instructions(instructions) = signed.instructions() else {
+                panic!("permission transaction must be a native instruction");
+            };
+            assert_eq!(instructions, &[expected]);
+            let expected_wire = bytes.to_vec();
+            let mut payload_hash = [0_u8; 32];
+            let prepared = unsafe {
+                connect_norito_account_read_permission_multisig_payload_hash(
+                    network.as_ptr(),
+                    network.as_bytes().len() as c_ulong,
+                    wallet_literal.as_ptr(),
+                    wallet_literal.as_bytes().len() as c_ulong,
+                    reporter_literal.as_ptr(),
+                    reporter_literal.as_bytes().len() as c_ulong,
+                    change,
+                    1_700_000_000_000,
+                    fee_payment_json.as_ptr(),
+                    fee_payment_json.len() as c_ulong,
+                    payload_hash.as_mut_ptr(),
+                    payload_hash.len() as c_ulong,
+                )
+            };
+            assert_eq!(prepared, 0);
+            let external_signature = Signature::try_new(signer.private_key(), &payload_hash)
+                .expect("external signer can sign the exact prehash");
+            let mut external_ptr = ptr::null_mut();
+            let mut external_len = 0;
+            let mut external_hash = [0_u8; 32];
+            let finalized = unsafe {
+                connect_norito_account_read_permission_multisig_finalize(
+                    network.as_ptr(),
+                    network.as_bytes().len() as c_ulong,
+                    wallet_literal.as_ptr(),
+                    wallet_literal.as_bytes().len() as c_ulong,
+                    reporter_literal.as_ptr(),
+                    reporter_literal.as_bytes().len() as c_ulong,
+                    change,
+                    1_700_000_000_000,
+                    fee_payment_json.as_ptr(),
+                    fee_payment_json.len() as c_ulong,
+                    external_signature.payload().as_ptr(),
+                    external_signature.payload().len() as c_ulong,
+                    &mut external_ptr,
+                    &mut external_len,
+                    external_hash.as_mut_ptr(),
+                    external_hash.len() as c_ulong,
+                )
+            };
+            assert_eq!(finalized, 0);
+            let external_wire =
+                unsafe { slice::from_raw_parts(external_ptr, external_len as usize) };
+            assert_eq!(external_wire, expected_wire.as_slice());
+            assert_eq!(external_hash, hash);
+            connect_norito_free(external_ptr);
+
+            let mut altered_signature = external_signature.payload().to_vec();
+            altered_signature[0] ^= 1;
+            let mut rejected_ptr = ptr::dangling_mut();
+            let mut rejected_len = c_ulong::MAX;
+            let mut rejected_hash = [0xA5_u8; 32];
+            let rejected = unsafe {
+                connect_norito_account_read_permission_multisig_finalize(
+                    network.as_ptr(),
+                    network.as_bytes().len() as c_ulong,
+                    wallet_literal.as_ptr(),
+                    wallet_literal.as_bytes().len() as c_ulong,
+                    reporter_literal.as_ptr(),
+                    reporter_literal.as_bytes().len() as c_ulong,
+                    change,
+                    1_700_000_000_000,
+                    fee_payment_json.as_ptr(),
+                    fee_payment_json.len() as c_ulong,
+                    altered_signature.as_ptr(),
+                    altered_signature.len() as c_ulong,
+                    &mut rejected_ptr,
+                    &mut rejected_len,
+                    rejected_hash.as_mut_ptr(),
+                    rejected_hash.len() as c_ulong,
+                )
+            };
+            assert_ne!(
+                rejected, 0,
+                "altered signature must not become a signed grant"
+            );
+            assert!(rejected_ptr.is_null());
+            assert_eq!(rejected_len, 0);
+            assert_eq!(rejected_hash, [0_u8; 32]);
+            connect_norito_free(signed_ptr);
+        }
+
+        let mut signed_ptr = ptr::dangling_mut();
+        let mut signed_len = c_ulong::MAX;
+        let mut hash = [0xA5_u8; 32];
+        let bad_change = unsafe {
+            connect_norito_encode_account_read_permission_multisig_signed_transaction(
+                network.as_ptr(),
+                network.as_bytes().len() as c_ulong,
+                wallet_literal.as_ptr(),
+                wallet_literal.as_bytes().len() as c_ulong,
+                reporter_literal.as_ptr(),
+                reporter_literal.as_bytes().len() as c_ulong,
+                0,
+                1_700_000_000_000,
+                fee_payment_json.as_ptr(),
+                fee_payment_json.len() as c_ulong,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut signed_ptr,
+                &mut signed_len,
+                hash.as_mut_ptr(),
+                hash.len() as c_ulong,
+            )
+        };
+        assert_ne!(bad_change, 0);
+        assert!(signed_ptr.is_null());
+        assert_eq!(signed_len, 0);
+        assert_eq!(hash, [0_u8; 32]);
+
+        let empty_fee_payment_json =
+            norito::json::to_vec(&FeePaymentIntent::authority(Vec::new(), None))
+                .expect("empty fee payment JSON");
+        let mut rejected_hash = [0xA5_u8; 32];
+        let missing_cap = unsafe {
+            connect_norito_account_read_permission_multisig_payload_hash(
+                network.as_ptr(),
+                network.as_bytes().len() as c_ulong,
+                wallet_literal.as_ptr(),
+                wallet_literal.as_bytes().len() as c_ulong,
+                reporter_literal.as_ptr(),
+                reporter_literal.as_bytes().len() as c_ulong,
+                1,
+                1_700_000_000_000,
+                empty_fee_payment_json.as_ptr(),
+                empty_fee_payment_json.len() as c_ulong,
+                rejected_hash.as_mut_ptr(),
+                rejected_hash.len() as c_ulong,
+            )
+        };
+        assert_ne!(missing_cap, 0, "wallet permission requires signed fee caps");
+        assert_eq!(rejected_hash, [0_u8; 32]);
+
+        let sponsored_fee_payment = FeePaymentIntent::sponsor(
+            FeeSponsorProgramId::new(reporter, "retail".parse().expect("program name")),
+            1,
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                AssetDefinitionId::from_uuid_bytes(fee_asset_bytes).expect("fee asset"),
+                Quantity::from(10_u64),
+            )],
+            None,
+        );
+        let sponsored_fee_json =
+            norito::json::to_vec(&sponsored_fee_payment).expect("sponsor fee JSON");
+        let mut authority_prehash = [0_u8; 32];
+        let mut sponsor_prehash = [0_u8; 32];
+        for (fee_json, result) in [
+            (&fee_payment_json, &mut authority_prehash),
+            (&sponsored_fee_json, &mut sponsor_prehash),
+        ] {
+            let code = unsafe {
+                connect_norito_account_read_permission_multisig_payload_hash(
+                    network.as_ptr(),
+                    network.as_bytes().len() as c_ulong,
+                    wallet_literal.as_ptr(),
+                    wallet_literal.as_bytes().len() as c_ulong,
+                    reporter_literal.as_ptr(),
+                    reporter_literal.as_bytes().len() as c_ulong,
+                    1,
+                    1_700_000_000_000,
+                    fee_json.as_ptr(),
+                    fee_json.len() as c_ulong,
+                    result.as_mut_ptr(),
+                    result.len() as c_ulong,
+                )
+            };
+            assert_eq!(code, 0);
+        }
+        assert_ne!(authority_prehash, sponsor_prehash);
     }
     #[test]
     fn governance_deploy_v1_boundary_requires_exact_hashes_and_explicit_provenance() {
@@ -12438,8 +13202,8 @@ mod tests {
     }
 
     #[test]
-    fn native_signer_jni_contract_revision_is_the_v5_network_id_hard_cut() {
-        assert_eq!(native_signer_jni_contract_revision(), 5);
+    fn native_signer_jni_contract_revision_is_the_v6_reporting_permission_hard_cut() {
+        assert_eq!(native_signer_jni_contract_revision(), 6);
     }
 
     #[test]

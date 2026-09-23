@@ -553,7 +553,9 @@ class _TranscriptBuilder:
                 "lane_commitment": _digest("sender-lane"), "hardware_epoch_id": _digest("sender-epoch"),
                 "hardware_epoch_generation": last_fold["epoch_after"], "device_public_key": _p256_public(2),
                 "device_key_reference": hashlib.sha256(b"iroha:kagemusha:v1:device-key-reference\0" + bytes.fromhex(_p256_public(2))).hexdigest(),
-                "issued_at_ms": issued, "expires_at_ms": end, "governance_signature": "00" * 64,
+                "issued_at_ms": issued, "expires_at_ms": end,
+                "app_policy_binding_digest": _digest("sender-app-policy-binding"),
+                "governance_signature": "00" * 64,
             }
             credential["credential_id"] = physical.credential_identity(credential)
             credential["governance_signature"] = _p256_sign(physical.credential_signing_bytes(credential), 1)
@@ -971,13 +973,13 @@ class PhysicalDeviceEvidenceTest(unittest.TestCase):
             return result
 
         request = fields(bytes.fromhex(fixture["payment_request"]["norito_hex"])[40:])
-        encoded = next(value for value in request if len(value) == 434)
+        encoded = next(value for value in request if len(value) == 467)
         raw = fields(encoded)
         self.assertEqual(len(raw), len(physical.CREDENTIAL_FIELDS))
         numeric = {"version", "policy_epoch", "hardware_epoch_generation", "issued_at_ms", "expires_at_ms"}
         credential = {name: int.from_bytes(value, "little") if name in numeric else value.hex() for name, value in zip(physical.CREDENTIAL_FIELDS, raw)}
         self.assertEqual(physical.credential_identity(credential), credential["credential_id"])
-        self.assertEqual(len(release._norito_frame("iroha.kagemusha.v1.hardware-credential-id-preimage", physical._credential_payload(credential))), 376)
+        self.assertEqual(len(release._norito_frame("iroha.kagemusha.v1.hardware-credential-id-preimage", physical._credential_payload(credential))), 409)
         # Rust's fixture issuer uses the explicit [8; 32] scalar seed; verify its signature
         # independently of our synthetic signing helper.
         issuer = _p256_public(int.from_bytes(bytes([8]) * 32, "big"))

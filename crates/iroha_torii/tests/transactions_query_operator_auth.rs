@@ -27,7 +27,7 @@ fn query_request(path: &'static str, body: Vec<u8>) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn dataspace_transaction_query_is_optional_but_visible_query_is_account_scoped() {
+async fn dataspace_transaction_query_accepts_signed_and_anonymous_public_readers() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id).build(&ALICE_ID);
@@ -58,16 +58,11 @@ async fn dataspace_transaction_query_is_optional_but_visible_query_is_account_sc
     assert_ne!(anonymous_response.status(), StatusCode::UNAUTHORIZED);
     assert_ne!(anonymous_response.status(), StatusCode::FORBIDDEN);
 
-    let visible_response = app
+    let retired_response = app
         .router()
         .oneshot(query_request("/v1/transactions/visible/query", body))
         .await
-        .expect("missing account-auth visible query response");
-    assert_eq!(visible_response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(
-        visible_response.headers().get(header::WWW_AUTHENTICATE),
-        Some(&header::HeaderValue::from_static("Signature")),
-        "viewer-scoped query must retain canonical account authentication"
-    );
+        .expect("retired route response");
+    assert_eq!(retired_response.status(), StatusCode::NOT_FOUND);
     app.shutdown().await;
 }
