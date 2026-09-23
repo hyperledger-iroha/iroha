@@ -2941,6 +2941,12 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
             kinds = target.get("kind")
             if not isinstance(kinds, list):
                 continue
+            # Cargo can report a checked example as a test-profile artifact;
+            # only the normal Core library must have profile.test=False.
+            if (normal_core_library_probe
+                    and target.get("name") == CORE_NORMAL_LIBRARY_PROBE_EXAMPLE
+                    and "example" in kinds):
+                observed_probe_example = True
             if normal_core_library_probe and profile.get("test") is False:
                 if target.get("name") == "iroha_core" and "lib" in kinds:
                     observed_normal_core_library = True
@@ -2948,8 +2954,6 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
                     if (isinstance(features, list)
                             and CORE_NORMAL_LIBRARY_PROBE_FEATURE_NAME in features):
                         observed_featured_normal_core_library = True
-                if target.get("name") == CORE_NORMAL_LIBRARY_PROBE_EXAMPLE and "example" in kinds:
-                    observed_probe_example = True
             if profile.get("test") is not True:
                 continue
             for harness in harnesses:

@@ -318,7 +318,7 @@ impl KuraSeed {
         input: &str,
     ) -> Result<Box<State>, StateRestoreError> {
         let map = SnapshotJsonMap::parse(input, "state")?;
-        self.into_state_from_snapshot_map(map, true)
+        self.into_state_from_snapshot_map(map, true, None)
     }
     /// Construct the deliberately minimal State authenticated by a compact emergency manifest.
     ///
@@ -408,7 +408,20 @@ impl KuraSeed {
         input: &str,
     ) -> Result<Box<State>, StateRestoreError> {
         let map = SnapshotJsonMap::parse(input, "state")?;
-        self.into_state_from_snapshot_map(map, false)
+        self.into_state_from_snapshot_map(map, false, None)
+    }
+    /// Decode the original live State into a private replay probe. Process-local
+    /// Nexus fields, including governance modules, are not snapshot fields;
+    /// the probe needs the original configuration before rebinding active lane
+    /// manifests. Authenticated runtime owner and catalog fields still replace
+    /// their configured baseline during decoding.
+    pub(crate) fn into_state_for_replay_prevalidation(
+        self,
+        input: &str,
+        nexus: iroha_config::parameters::actual::Nexus,
+    ) -> Result<Box<State>, StateRestoreError> {
+        let map = SnapshotJsonMap::parse(input, "state")?;
+        self.into_state_from_snapshot_map(map, false, Some(nexus))
     }
     #[cfg(test)]
     fn into_state_from_json_with_recovery_mode(
@@ -423,12 +436,17 @@ impl KuraSeed {
             })
             .into());
         };
-        self.into_state_from_snapshot_map(SnapshotJsonMap::from_owned(map), allow_durable_recovery)
+        self.into_state_from_snapshot_map(
+            SnapshotJsonMap::from_owned(map),
+            allow_durable_recovery,
+            None,
+        )
     }
     fn into_state_from_snapshot_map(
         self,
         mut map: SnapshotJsonMap<'_>,
         allow_durable_recovery: bool,
+        replay_nexus: Option<iroha_config::parameters::actual::Nexus>,
     ) -> Result<Box<State>, StateRestoreError> {
         const WITHOUT_BOOTSTRAP: &[&str] = &[
             "chain_id",
@@ -658,8 +676,11 @@ impl KuraSeed {
             field: "state.world.privacy_activations".to_owned(),
             message,
         })?;
-        let (mut restored_nexus, lane_incarnations, _, _, _) =
-            nexus_from_snapshot_runtime(snapshot_nexus_runtime, &block_hashes)?;
+        let (mut restored_nexus, lane_incarnations, _, _, _) = nexus_from_snapshot_runtime(
+            snapshot_nexus_runtime,
+            &block_hashes,
+            replay_nexus.as_ref(),
+        )?;
         let world_catalog = runtime_catalog_from_world(&world.view()).map_err(|error| {
             json::Error::InvalidField {
                 field: "nexus_runtime.blocks".to_owned(),
@@ -734,8 +755,11 @@ impl KuraSeed {
                     message: "height-zero runtime cannot retain predecessor undo".to_owned(),
                 }
             })?;
-            let (mut prior_nexus, prior_incarnations, _, _, _) =
-                nexus_from_snapshot_runtime(previous.clone(), &block_hashes[..predecessor_len])?;
+            let (mut prior_nexus, prior_incarnations, _, _, _) = nexus_from_snapshot_runtime(
+                previous.clone(),
+                &block_hashes[..predecessor_len],
+                replay_nexus.as_ref(),
+            )?;
             let prior_world = world.block_and_revert();
             let prior_catalog = runtime_catalog_from_world(&prior_world).map_err(|error| {
                 json::Error::InvalidField {
@@ -927,6 +951,7 @@ fn emergency_fast_block_hashes(
 fn nexus_from_snapshot_runtime(
     runtime: SnapshotNexusRuntime,
     committed_block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
+    replay_nexus: Option<&iroha_config::parameters::actual::Nexus>,
 ) -> Result<
     (
         iroha_config::parameters::actual::Nexus,
@@ -1116,7 +1141,7 @@ fn nexus_from_snapshot_runtime(
             ),
         });
     }
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut nexus = replay_nexus.cloned().unwrap_or_default();
     restore_snapshot_nexus_owner_policy(&mut nexus, runtime.owner_policy)?;
     nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
     nexus.lane_catalog = catalog;
